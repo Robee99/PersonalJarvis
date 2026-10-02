@@ -259,3 +259,29 @@ def test_bench_stops_after_repeated_failures() -> None:
     )
     assert summary["turns"] == 0
     assert summary["errors"] == 3
+
+
+def test_startup_file_starts_the_exact_command_minimized(tmp_path: Path) -> None:
+    from scripts.local_llm_lab import STARTUP_FILE, install_startup, remove_startup
+
+    cmd = [r"C:\llama\llama-server.exe", "-m", r"D:\my models\q.gguf", "--alias", "a%b"]
+
+    target = install_startup(tmp_path, cmd)
+
+    assert target == tmp_path / STARTUP_FILE
+    raw = target.read_bytes().decode("utf-8")
+    assert raw.startswith("@echo off\r\n")
+    # The path with a space stays one argument; a literal % survives cmd.exe.
+    assert 'start "llama-server" /min C:\\llama\\llama-server.exe -m "D:\\my models\\q.gguf"' in raw
+    assert "--alias a%%b\r\n" in raw
+    assert remove_startup(tmp_path) is True
+    assert remove_startup(tmp_path) is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_startup_refuses_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts import local_llm_lab
+
+    monkeypatch.setattr(local_llm_lab.sys, "platform", "linux")
+    with pytest.raises(SystemExit, match="Windows"):
+        local_llm_lab.windows_startup_dir()

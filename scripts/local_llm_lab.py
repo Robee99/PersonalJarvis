@@ -26,10 +26,16 @@ hardware's ceiling". This script replaces guessing with four read-mostly steps:
               last one so thermal throttling shows up as a number.
 ``sweep``     repeats launch + a short bench over several ``--n-cpu-moe`` and
               thread values and ranks them by sustained generation speed.
+``startup``   (Windows) writes the chosen command as ``jarvis-llama-server.cmd``
+              into the user's Start-up folder, so the server is up before
+              Jarvis connects to it; ``--remove`` deletes that one file again.
+              llama-server stays an external process Jarvis only connects to,
+              so it never competes with a second runtime Jarvis supervises.
 
 Nothing here changes drivers, services, power plans or Jarvis' config. The
 only process it starts is ``llama-server`` (``command --launch`` and ``sweep``),
-and ``sweep`` stops each server it started.
+and ``sweep`` stops each server it started. ``startup`` touches exactly one
+file, in the user's own Start-up folder, and only when asked.
 
 Usage
 -----
@@ -38,6 +44,7 @@ Usage
     python scripts/local_llm_lab.py command --model ... --n-cpu-moe 34 --launch
     python scripts/local_llm_lab.py bench --url http://127.0.0.1:11435 --minutes 10 --out data/perf
     python scripts/local_llm_lab.py sweep --model ... --n-cpu-moe 40,36,32 --threads 8,16
+    python scripts/local_llm_lab.py startup --model ... --n-cpu-moe 34 --mmproj ...
 """
 
 from __future__ import annotations
@@ -302,6 +309,44 @@ def find_server_binary(explicit: str | None) -> str:
             "llama-server not found on PATH: pass --server-bin (winget install ggml.llamacpp)"
         )
     return found
+
+
+# ── Start with Windows ───────────────────────────────────────────────────
+STARTUP_FILE = "jarvis-llama-server.cmd"
+
+
+def windows_startup_dir() -> Path:
+    """The signed-in user's Start-up folder (no admin rights, no service)."""
+    appdata = os.environ.get("APPDATA")
+    if sys.platform != "win32" or not appdata:
+        raise SystemExit("startup is for Windows; elsewhere use your service manager")
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+
+
+def startup_script(cmd: list[str]) -> str:
+    """A ``.cmd`` that starts the server minimized, its log window kept."""
+    # In a batch file a single % starts a variable, so a literal one doubles.
+    line = subprocess.list2cmdline(cmd).replace("%", "%%")
+    return (
+        "@echo off\r\n"
+        "rem Written by scripts/local_llm_lab.py startup. Delete this file to stop it.\r\n"
+        f'start "llama-server" /min {line}\r\n'
+    )
+
+
+def install_startup(folder: Path, cmd: list[str]) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / STARTUP_FILE
+    target.write_text(startup_script(cmd), encoding="utf-8", newline="")
+    return target
+
+
+def remove_startup(folder: Path) -> bool:
+    target = folder / STARTUP_FILE
+    if not target.is_file():
+        return False
+    target.unlink()
+    return True
 
 
 # ── Machine sampling ─────────────────────────────────────────────────────
@@ -650,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
     _add_server_args(c)
     c.add_argument("--launch", action="store_true")
 
+    st = sub.add_parser("startup", help="(Windows) start this server at sign-in")
+    st.add_argument("--remove", action="store_true", help="delete the start-up file again")
+    _add_server_args(st)
+
     be = sub.add_parser("bench", help="sustained benchmark against a running server")
     be.add_argument("--url", default="http://127.0.0.1:11435")
     be.add_argument("--minutes", type=float, default=10.0)
@@ -709,6 +758,15 @@ def main(argv: list[str] | None = None) -> int:
             print(subprocess.list2cmdline(cmd))
             return 0
         return _launch(cmd).wait()
+
+    if args.cmd == "startup":
+        folder = windows_startup_dir()
+        if args.remove:
+            print("removed" if remove_startup(folder) else "nothing to remove")
+            return 0
+        cmd = build_command(find_server_binary(args.server_bin), _profile_from_args(args))
+        print(f"[lab] wrote {install_startup(folder, cmd)}")
+        return 0
 
     if args.cmd == "bench":
         summary = run_bench(
