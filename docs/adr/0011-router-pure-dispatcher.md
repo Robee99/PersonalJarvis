@@ -1428,3 +1428,46 @@ Mission workers lose the `awareness-recall` grant (ADR-0030).
 - `tests/unit/brain/test_routing.py` (exact router set)
 - `tests/unit/brain/test_evidence_gate.py`, `tests/unit/brain/test_evidence_gate_wiring.py` (honest refusal for the `activity` domain)
 - `tests/missions/test_worker_capability_parity.py` (the worker grant)
+
+## Amendment 2026-10-02 — Camera still
+
+`camera-snapshot` joins `ROUTER_TOOLS`. It registers the `camera` tool, which
+takes one still from the webcam and returns it as an image artifact in the same
+shape as `screenshot`. Before this, a voice turn like "look at what I'm holding"
+had no route at all. The router either refused or spawned a worker that could
+not see either.
+
+The capture backend is chosen per platform when the tool runs:
+
+- Windows uses WinRT `MediaCapture` in video-only mode, from the MIT PyWinRT
+  family that the media session already uses. Its three namespace packages are
+  not in `[desktop]` yet. Until a `uv lock` adds them, the tool names them in
+  its error.
+- Linux uses OpenCV only when the user installed it. OpenCV is not a dependency
+  because its wheels bundle FFmpeg under the LGPL.
+- macOS refuses honestly. The bundle still ships without
+  `NSCameraUsageDescription`.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `ask`, because a camera frame shows the person. `ToolExecutor`
+  confirms every call unless the user whitelists the tool (AP-3).
+- Nothing opens the camera at boot (AP-26). The tool opens the device inside
+  `execute` and releases it on every path.
+- A black frame (covered lens or closed privacy shutter) is an error, never a
+  success.
+- A blind brain is never offered the tool. `_hide_screenshot_for_blind_brain`
+  drops `camera` together with `screenshot`. This gate is on capability, not
+  on the provider (AP-21).
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_camera_snapshot.py` covers both backends,
+  device release, black frames, the Windows privacy block and the macOS
+  refusal.
+- `tests/unit/brain/test_screen_narration_guard.py` checks that blind brains
+  never see the tool.

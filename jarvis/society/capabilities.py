@@ -60,6 +60,9 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
     {
         "spawn-worker",
         "spawn-subagents",
+        # A camera frame shows the person; an unattended agent never takes one.
+        "camera",
+        "camera-snapshot",
         "multi-spawn",
         "dispatch-to-harness",
         "dispatch-to-admin",

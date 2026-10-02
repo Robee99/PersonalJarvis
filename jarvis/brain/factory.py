@@ -61,6 +61,12 @@ BrainCallback = Callable[[str], Awaitable[str]]
 ROUTER_TOOLS = frozenset({
     "run-shell",
     "screen-snapshot",
+    # Camera still (2026-10-02): one webcam photo for vision when the user asks
+    # Jarvis to look at them or at something they hold up. Risk "ask" (the
+    # frame shows the person), hidden from blind brains like screenshot, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14). See
+    # ADR-0011 amendment "Camera still".
+    "camera-snapshot",
     # NB: ``dispatch-to-harness`` deliberately absent (removed 2026-06-28) —
     # see the header comment above. Heavy work → spawn-worker; desktop →
     # computer-use. The tool remains for the internal local-action fast path.

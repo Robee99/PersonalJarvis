@@ -682,6 +682,11 @@ spotify = "jarvis.plugins.tool.spotify_rest:SpotifyRestTool"
 # key "youtube_music".
 youtube_music = "jarvis.plugins.tool.youtube_music_rest:YouTubeMusicRestTool"
 screen-snapshot = "jarvis.plugins.tool.screen_snapshot:ScreenSnapshotTool"
+# One webcam still for vision (2026-10-02). Router-tier, risk_tier "ask": a
+# camera frame shows the person, so every call is confirmed unless whitelisted.
+# Never a spawn and never in a worker or society tool set (AP-5/AP-14). See
+# ADR-0011 amendment "Camera still".
+camera-snapshot = "jarvis.plugins.tool.camera_snapshot:CameraSnapshotTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"
 switch-window = "jarvis.plugins.tool.switch_window:SwitchWindowTool"
 read-visible-ui-state = "jarvis.plugins.tool.read_visible_ui_state:ReadVisibleUIStateTool"
