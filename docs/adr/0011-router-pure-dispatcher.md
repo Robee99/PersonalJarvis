@@ -1510,3 +1510,45 @@ five seconds.
   errors.
 - `tests/unit/cu/indicator/` covers the protocol command, the controller, the
   arrow geometry and a real offscreen sidecar round trip.
+
+## Amendment 2026-10-02 — Laptop power
+
+`laptop-power` joins `ROUTER_TOOLS`. It registers the `laptop_power` tool,
+which handles requests like "turbo mode", "silent mode" or "cap the battery at
+80". It controls three settings:
+
+- the Windows 11 power mode slider, through the `powrprof` overlay calls
+- the ASUS operating mode (Armoury Crate's balanced, turbo or silent)
+- the ASUS battery charge limit
+
+Armoury Crate has no public API. `jarvis/platform/laptop_power.py` sends one
+DeviceIoControl to the ASUS System Control Interface driver (`\\.\ATKACPI`) for
+each request. The buffer layout and device IDs are hardware facts. atrofac
+(MIT/Apache-2.0), G-Helper and Linux `asus-wmi` all document them, and no code
+was copied from the GPL sources. Before every write, the tool checks the
+device's presence bit, so a setting the laptop does not report is never
+written.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `monitor`. Every change is audited, and one more sentence
+  undoes it.
+- These settings are deliberately left out: fan curves (overheating), GPU Eco
+  (kills apps holding the dGPU) and the MUX switch (needs a reboot).
+- Charge limits below 60 % are refused before the driver is touched.
+- When Armoury Crate's own service is running, the reply says that it may
+  switch the setting back.
+- Off Windows, and on laptops without the ASUS driver, the tool says what is
+  unavailable instead of failing silently.
+- Nothing is opened at boot (AP-26). Win32 prototypes are bound on private
+  `WinDLL` instances.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_laptop_power.py` checks the exact driver
+  bytes, the slider GUIDs, the presence check, charge-limit bounds and the
+  off-Windows refusals.

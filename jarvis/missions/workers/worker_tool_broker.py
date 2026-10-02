@@ -66,6 +66,8 @@ _FORBIDDEN_EXACT = frozenset(
         "drag",
         "hotkey",
         "jarvisctl",
+        "laptop-power",
+        "laptop_power",
         "jctl",
         "manage-mcp-server",
         "manage_mcp_server",

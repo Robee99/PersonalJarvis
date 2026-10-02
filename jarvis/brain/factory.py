@@ -83,6 +83,11 @@ ROUTER_TOOLS = frozenset({
     # Read-only on the app, risk safe, never a spawn and never in a worker or
     # society tool set (AP-5/AP-14). See ADR-0011 amendment "Point at".
     "point-at",
+    # Laptop power (2026-10-02): "turbo mode", "silent mode", "cap the battery
+    # at 80" - the Windows power slider plus ASUS Armoury Crate's operating
+    # mode and charge limit. Risk monitor, never a spawn and never in a worker
+    # or society tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
+    "laptop-power",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —

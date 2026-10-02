@@ -65,6 +65,8 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
         "camera-snapshot",
         # The arrow speaks to the person at the screen, so only Jarvis aims it.
         "point-at",
+        # Hardware power settings stay with Jarvis, like app control.
+        "laptop-power",
         "multi-spawn",
         "dispatch-to-harness",
         "dispatch-to-admin",

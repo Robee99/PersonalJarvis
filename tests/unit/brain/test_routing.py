@@ -2011,6 +2011,9 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # Point at (2026-10-02): an arrow on one UI element, never a
             # click (risk safe). See ADR-0011 amendment "Point at".
             "point-at",
+            # Laptop power (2026-10-02): power slider, ASUS operating mode,
+            # charge limit (risk monitor). See ADR-0011 amendment "Laptop power".
+            "laptop-power",
         }
     )
     assert ROUTER_TOOLS == expected, (
