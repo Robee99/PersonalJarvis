@@ -485,6 +485,29 @@ def _antigravity_install() -> InstallMethods:
     return InstallMethods(script_url=url, recommended="script")
 
 
+def _hermes_install() -> InstallMethods:
+    """Official Hermes Agent installer for the OS that will run it.
+
+    Nous Research ships ``install.ps1`` for Windows and ``install.sh`` for
+    macOS, Linux and WSL; both install into the user's own profile and put a
+    ``hermes`` launcher on the user PATH.
+    """
+    url = (
+        "https://hermes-agent.nousresearch.com/install.ps1"
+        if sys.platform == "win32"
+        else "https://hermes-agent.nousresearch.com/install.sh"
+    )
+    return InstallMethods(script_url=url, recommended="script")
+
+
+#: Where those installers publish ``hermes``: ``%LOCALAPPDATA%\hermes\bin`` on
+#: Windows (its default ``HERMES_HOME``), ``~/.local/bin`` elsewhere. Neither is
+#: on the PATH a GUI-launched process inherits until the next sign-in.
+_HERMES_BIN_DIRS = (
+    ("~/AppData/Local/hermes/bin",) if sys.platform == "win32" else ("~/.local/bin",)
+)
+
+
 def _cursor_cli_install() -> InstallMethods:
     """Official Cursor CLI installer for the OS that will run it.
 
@@ -1049,6 +1072,25 @@ _AGENTS: dict[str, WorkspaceAgent] = {
             "deep sick",
             "dsh",
         ),
+    ),
+    "hermes": make_cli_agent(
+        "hermes",
+        "Hermes Agent",
+        binary="hermes",
+        homepage="https://github.com/NousResearch/hermes-agent",
+        description="Nous Research's open-source agent — any model, its own skills and memory.",
+        install=_hermes_install(),
+        # Its banner reads "Hermes Agent v<version> (<date>)".
+        version_regex=_LOOSE_SEMVER_RE,
+        # No folder-trust dialog: the working directory is simply where it
+        # runs, and its own approval prompts gate commands.
+        needs_trust=False,
+        extra_path_dirs=_HERMES_BIN_DIRS,
+        instruction_filename="AGENTS.md",
+        # DELIBERATELY no AccountSpec: ``HERMES_HOME`` moves the whole install
+        # (code, config, skills and memory), not just a login, so a seat
+        # switcher over it would swap far more than an account.
+        spoken_aliases=("hermes", "hermes agent", "hermies", "hermis"),
     ),
     PLAIN_TERMINAL: WorkspaceAgent(
         name=PLAIN_TERMINAL,
