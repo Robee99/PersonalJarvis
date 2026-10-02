@@ -725,6 +725,8 @@ async def _switch_subagent(
             CODEX_SUBAGENT_SLUGS,
             GROK_BUILD_SUBAGENT_CANONICAL,
             GROK_BUILD_SUBAGENT_SLUGS,
+            HERMES_SUBAGENT_CANONICAL,
+            HERMES_SUBAGENT_SLUGS,
             JARVIS_TO_WORKER_SLUG,
             canonical_worker_provider,
         )
@@ -860,6 +862,26 @@ async def _switch_subagent(
             old=old,
         )
 
+    if canon in HERMES_SUBAGENT_SLUGS:
+        from jarvis.missions.workers.hermes_direct_worker import resolve_hermes_binary
+
+        if await asyncio.to_thread(resolve_hermes_binary) is None:
+            return {
+                "ok": False,
+                "error_kind": "subagent_unavailable",
+                "error": (
+                    "Hermes Agent is not installed. Install it from the Agentic IDE "
+                    "(or hermes-agent.nousresearch.com) and pick its model with "
+                    f"hermes model, then switch the {brand}."
+                ),
+            }
+        return _complete_agent_switch(
+            HERMES_SUBAGENT_CANONICAL,
+            cfg=cfg,
+            persist=persist,
+            old=old,
+        )
+
     if canon not in JARVIS_TO_WORKER_SLUG:
         # List EVERY worker-capable provider, not just the API/harness ones —
         # Codex and Antigravity route through their own workers, so omitting them
@@ -872,6 +894,7 @@ async def _switch_subagent(
                     CODEX_SUBAGENT_CANONICAL,
                     ANTIGRAVITY_SUBAGENT_CANONICAL,
                     GROK_BUILD_SUBAGENT_CANONICAL,
+                    HERMES_SUBAGENT_CANONICAL,
                 }
             )
         )

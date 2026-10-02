@@ -242,7 +242,16 @@ PROVIDER_ALIASES = {
 }
 
 SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
-    {"antigravity", "codex", "openai-codex", "grok-build", "grok-cli", "grokbuild"}
+    {
+        "antigravity",
+        "codex",
+        "openai-codex",
+        "grok-build",
+        "grok-cli",
+        "grokbuild",
+        "hermes",
+        "hermes-agent",
+    }
 )
 
 _MAIN_BRAIN_FALLBACK_PROVIDER_ORDER: tuple[str, ...] = (
@@ -275,6 +284,7 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "gemini": "Google Gemini",
     "antigravity": "Google Antigravity (Gemini)",
     "grok-build": "Grok Build (xAI subscription)",
+    "hermes": "Hermes Agent",
 }
 
 

@@ -2790,6 +2790,8 @@ def worker_provider_changed(previous: str | None, selected: str | None) -> bool:
     from jarvis.missions.worker_runtime.provider_map import (
         CODEX_SUBAGENT_SLUGS,
         GROK_BUILD_SUBAGENT_SLUGS,
+        HERMES_SUBAGENT_CANONICAL,
+        HERMES_SUBAGENT_SLUGS,
         canonical_worker_provider,
     )
 
@@ -2799,6 +2801,8 @@ def worker_provider_changed(previous: str | None, selected: str | None) -> bool:
             return "openai-codex"
         if canonical in GROK_BUILD_SUBAGENT_SLUGS:
             return "grok-build"
+        if canonical in HERMES_SUBAGENT_SLUGS:
+            return HERMES_SUBAGENT_CANONICAL
         return canonical
 
     return identity(previous) != identity(selected)

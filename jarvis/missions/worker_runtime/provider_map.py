@@ -40,6 +40,8 @@ __all__ = [
     "ANTIGRAVITY_SUBAGENT_CANONICAL",
     "GROK_BUILD_SUBAGENT_SLUGS",
     "GROK_BUILD_SUBAGENT_CANONICAL",
+    "HERMES_SUBAGENT_SLUGS",
+    "HERMES_SUBAGENT_CANONICAL",
 ]
 
 
@@ -79,6 +81,12 @@ GROK_BUILD_SUBAGENT_SLUGS: Final[frozenset[str]] = frozenset(
     {"grok-build", "grok-cli", "grokbuild"}
 )
 GROK_BUILD_SUBAGENT_CANONICAL: Final[str] = "grok-build"
+
+# Hermes Agent (Nous Research) runs through the DIRECT HermesDirectWorker
+# (``hermes -z``) with its own configured models, so it has no worker-harness
+# slug either. Single source of truth for routing, readiness and the switch.
+HERMES_SUBAGENT_SLUGS: Final[frozenset[str]] = frozenset({"hermes", "hermes-agent"})
+HERMES_SUBAGENT_CANONICAL: Final[str] = "hermes"
 
 
 @dataclass(frozen=True, slots=True)

@@ -52,6 +52,9 @@ from jarvis.missions.worker_runtime.provider_map import (
 from jarvis.missions.worker_runtime.provider_map import (
     GROK_BUILD_SUBAGENT_SLUGS as _GROK_BUILD_SUBAGENT_SLUGS,
 )
+from jarvis.missions.worker_runtime.provider_map import (
+    HERMES_SUBAGENT_SLUGS as _HERMES_SUBAGENT_SLUGS,
+)
 from jarvis.setup.wizard import SECRETS as WIZARD_SECRETS
 
 from .provider_spec import (
@@ -1797,6 +1800,12 @@ def _worker_usable(provider: str) -> bool:
             from jarvis.grok_build_auth import GrokBuildAuthService, grok_build_provider_ready
 
             return grok_build_provider_ready(GrokBuildAuthService().status())
+        if p in _HERMES_SUBAGENT_SLUGS:
+            # Hermes keeps its own providers and keys; an installed launcher is
+            # all Jarvis can vouch for.
+            from jarvis.missions.workers.hermes_direct_worker import resolve_hermes_binary
+
+            return resolve_hermes_binary() is not None
         if p in {"claude-api", "claude"}:
             from jarvis.claude_auth import ClaudeAuthService
 

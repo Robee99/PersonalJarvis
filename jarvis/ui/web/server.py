@@ -1511,6 +1511,41 @@ class WebServer:
                 }
             )
 
+            # Hermes Agent is a DIRECT worker too (HermesDirectWorker over
+            # ``hermes -z``). It brings its own providers and keys, so the
+            # installed launcher is the readiness Jarvis can see.
+            try:
+                from jarvis.missions.workers.hermes_direct_worker import (
+                    resolve_hermes_binary,
+                )
+
+                hermes_ready = resolve_hermes_binary() is not None
+            except Exception:  # noqa: BLE001
+                # Same reading as the Grok Build row: unknown is "not ready" on
+                # this overview, never a page that fails to load.
+                hermes_ready = False
+            mapping_rows.append(
+                {
+                    "jarvis": "hermes",
+                    "openclaw": "hermes (direct)",
+                    "env_var": "Hermes config",
+                    "env_fallback": None,
+                    "key_set": hermes_ready,
+                    "api_key_set": False,
+                    "dedicated_key_set": False,
+                    "shared_key_set": False,
+                    "oauth_connected": False,
+                    "credential_source": "none",
+                    "secret_key": None,
+                    "dashboard_url": None,
+                    "credential_help": None,
+                    "is_active_brain": primary == "hermes",
+                    # Usually an API key or a local server, as configured in Hermes.
+                    "billing": "api",
+                    "label": "Hermes Agent",
+                }
+            )
+
             return {
                 "configured": oc_cfg is not None,
                 "enabled": bool(oc_cfg.enabled) if oc_cfg else False,
