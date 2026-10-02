@@ -103,6 +103,9 @@ const ClisHubView = lazyView(["clis", "cli-test-hub"], () =>
 const DocsView = lazyView(["docs"], () =>
   import("@/views/DocsView").then((m) => ({ default: m.DocsView })),
 );
+const MissionDeckView = lazyPropView<{ dock?: boolean }>(["deck"], () =>
+  import("@/views/MissionDeckView").then((m) => ({ default: m.MissionDeckView })),
+);
 const BoardView = lazyView(["board"], () =>
   import("@/views/BoardView").then((m) => ({ default: m.BoardView })),
 );
@@ -369,6 +372,10 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <RunInspectorView />;
     case "board":
       return <BoardView />;
+    // The HUD. The sidebar is the navigation here, so the deck's own dock
+    // stays out.
+    case "deck":
+      return <MissionDeckView dock={false} />;
     case "memory":
       return <WikiView />;
     // The merged voice section: Dictation (default landing) + Dictionary +

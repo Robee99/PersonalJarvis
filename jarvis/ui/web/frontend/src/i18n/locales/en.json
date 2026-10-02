@@ -177,6 +177,7 @@
     "nav_forward": "Go forward"
   },
   "nav": {
+    "deck": "HUD",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agents",

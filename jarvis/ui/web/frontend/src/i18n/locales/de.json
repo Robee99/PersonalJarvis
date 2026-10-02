@@ -177,6 +177,7 @@
     "nav_forward": "Vor"
   },
   "nav": {
+    "deck": "HUD",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agenten",

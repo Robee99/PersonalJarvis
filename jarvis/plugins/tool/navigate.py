@@ -76,6 +76,8 @@ KNOWN: frozenset[str] = frozenset(
         "pets",
         # Keyboard shortcuts: every shortcut in one place, with a key tester.
         "shortcuts",
+        # The HUD: the mission deck as a section of its own.
+        "deck",
     }
 )
 
@@ -273,6 +275,9 @@ _ALIASES: dict[str, str] = {
     "claves de entrada de voz": "voice-api-keys",  # i18n-allow: input vocab
     # The marketplace. "store"/"shop" are the words people actually reach for,
     # and none of these names anything else in the app.
+    "hud": "deck",
+    "mission deck": "deck",
+    "deck": "deck",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",

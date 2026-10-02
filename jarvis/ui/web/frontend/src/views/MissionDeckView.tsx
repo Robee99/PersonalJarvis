@@ -97,9 +97,12 @@ import { useT } from "@/i18n";
  */
 export function MissionDeckView({
   headerAccessory,
+  dock = true,
 }: {
   /** The surface switch, handed down by the shell that owns the mode. */
   headerAccessory?: ReactNode;
+  /** Its own section dock; off where the app's sidebar already navigates. */
+  dock?: boolean;
 }) {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
@@ -327,7 +330,7 @@ export function MissionDeckView({
 
       {/* Stage */}
       <div className="flex min-h-0 flex-1">
-        <DockRail />
+        {dock && <DockRail />}
 
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {phase === "board" && (
