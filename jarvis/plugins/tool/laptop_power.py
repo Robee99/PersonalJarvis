@@ -92,7 +92,7 @@ class LaptopPowerTool:
             )
         try:
             output = await asyncio.to_thread(self._run, action, args or {})
-        except (LaptopPowerUnavailable, ValueError) as exc:
+        except (LaptopPowerUnavailable, ValueError) as exc:  # returned as the tool error
             return ToolResult(success=False, output=None, error=str(exc))
         except OSError as exc:
             log.warning("laptop_power: %s failed", action, exc_info=True)
@@ -123,7 +123,7 @@ class LaptopPowerTool:
         parts: list[str] = []
         try:
             parts.append(f"Windows power mode: {self._windows_mode().current()}.")
-        except (LaptopPowerUnavailable, OSError) as exc:
+        except (LaptopPowerUnavailable, OSError) as exc:  # reported in the status text
             parts.append(f"Windows power mode: unavailable ({exc}).")
         try:
             asus = self._asus_control()
@@ -134,6 +134,6 @@ class LaptopPowerTool:
             )
             if self._armoury_running():
                 parts.append("Armoury Crate is running and may overwrite changes.")
-        except (LaptopPowerUnavailable, OSError) as exc:
+        except (LaptopPowerUnavailable, OSError) as exc:  # reported in the status text
             parts.append(f"ASUS controls: unavailable ({exc}).")
         return " ".join(parts)

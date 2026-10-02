@@ -181,7 +181,7 @@ class CameraSnapshotTool:
         reason = (args or {}).get("reason") or ""
         try:
             from PIL import Image, ImageStat  # noqa: PLC0415
-        except ImportError as exc:
+        except ImportError as exc:  # the reason goes back to the user as the tool error
             return ToolResult(
                 success=False, output=None, error=f"Missing dependency: {exc.name or exc}"
             )

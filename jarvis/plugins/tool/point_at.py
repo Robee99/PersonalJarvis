@@ -111,7 +111,7 @@ class PointAtTool:
         role = str((args or {}).get("role") or "").strip()
         try:
             nth = max(int((args or {}).get("nth", 0)), 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # a non-numeric index means the first match
             nth = 0
         if not needle:
             return ToolResult(success=False, output=None, error="Provide the element's 'name'")
