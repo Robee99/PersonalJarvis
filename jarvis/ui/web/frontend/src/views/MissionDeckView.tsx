@@ -28,7 +28,7 @@ import {
   RunsCard,
   TerminalsCard,
 } from "@/components/deck/DeckActivityCards";
-import { ApiStatsCard, CaptureCard, LiveCounter } from "@/components/deck/DeckSignalCards";
+import { ApiStatsCard, CaptureCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
 import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
 import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
@@ -56,7 +56,7 @@ import { useT } from "@/i18n";
  *   ┌ gigi · voice bars · lamps · counter ── name · brain · switch · chrome ┐
  *   │ dock │ [log — the     [response][api]        [ WIKI — 3D, tall    ] │
  *   │      │  terminal]     (      ORB      )       [                    ] │
- *   │      │ [outputs][run]   [capture]            [terminals] [ide grid] │
+ *   │      │ [outputs][run]   [capture][vitals]    [terminals] [ide grid] │
  *   └──────┴───────────────────────────────────────────────────────────────┘
  *
  * Two of the sketch's cards were re-thought on 2026-08-18 (maintainer): the
@@ -396,15 +396,17 @@ export function MissionDeckView({
                 <RunsCard className="min-h-0" />
               </DeckReveal>
 
-              {/* CENTRE bottom: the last capture (briefly), then the ledger; centred and not too wide */}
+              {/* CENTRE bottom: the last capture (briefly), then the ledger, beside
+                  the machine's vitals; each centred and not too wide */}
               <DeckReveal
                 slot="centre-bottom"
                 reveal={revealBoard}
                 className={cn("min-h-[8rem]", depthSlot("centre-bottom").className)}
                 style={depthSlot("centre-bottom").style}
-                bodyClassName="flex items-stretch justify-center"
+                bodyClassName="flex items-stretch justify-center gap-3"
               >
-                <CaptureCard className="w-full max-w-[28rem]" />
+                <CaptureCard className="w-full min-w-0 max-w-[24rem]" />
+                <VitalsCard className="w-full min-w-0 max-w-[24rem]" />
               </DeckReveal>
 
               {/* RIGHT bottom: terminals and the coding workspace */}
