@@ -1391,12 +1391,16 @@ def set_voice_engine_settings(
     *,
     tts: str | None = None,
     llm_model: str | None = None,
+    llm_api: str | None = None,
+    llm_base_url: str | None = None,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
     """Persist the Local voice card's choices to ``[voice_engine]``.
 
     ``tts`` must be one of ``config.VOICE_ENGINE_VOICES``; ``llm_model`` is an
-    Ollama tag, and an empty string means "automatic". Both land in ONE atomic
+    Ollama tag (or the served model's id), and an empty string means
+    "automatic". ``llm_api`` is ``ollama`` or ``openai``; ``llm_base_url`` is
+    an ``http://`` server root, empty for automatic. All land in ONE atomic
     write. Read by ``jarvis/plugins/realtime/local_voice.py``; the running
     engine picks them up on its next start.
     """
@@ -1411,6 +1415,16 @@ def set_voice_engine_settings(
         if any(ch.isspace() for ch in model) or len(model) > 200:
             raise ValueError(f"not an Ollama model tag: {llm_model!r}")
         values["llm_model"] = model
+    if llm_api is not None:
+        api = llm_api.strip().lower()
+        if api not in ("ollama", "openai"):
+            raise ValueError(f"unknown model API {llm_api!r}; expected ollama or openai")
+        values["llm_api"] = api
+    if llm_base_url is not None:
+        url = llm_base_url.strip()
+        if url and not url.startswith("http://"):
+            raise ValueError(f"not an http:// server root: {llm_base_url!r}")
+        values["llm_base_url"] = url
     if not values:
         return
     first_key, *rest = values

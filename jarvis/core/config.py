@@ -4478,6 +4478,24 @@ class VoiceEngineConfig(BaseModel):
     llm_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
+    #: Model server API: ``ollama`` (default) or ``openai`` for any
+    #: OpenAI-compatible server. With ``openai`` and no ``llm_base_url`` the
+    #: engine answers with the ``local-openai`` brain's server and model, so a
+    #: llama-server already running for the brain is the only resident model.
+    llm_api: str = "ollama"
+    #: Model server root. Empty = automatic: Ollama's configured root, or the
+    #: ``local-openai`` card's server for ``llm_api = "openai"``.
+    llm_base_url: str = ""
+
+    @field_validator("llm_api", mode="before")
+    @classmethod
+    def _known_api(cls, value: object) -> str:
+        return "openai" if str(value or "").strip().lower() == "openai" else "ollama"
+
+    @field_validator("llm_base_url", mode="before")
+    @classmethod
+    def _strip_url(cls, value: object) -> str:
+        return str(value or "").strip()
 
     @field_validator("tts", mode="before")
     @classmethod
