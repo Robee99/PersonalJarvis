@@ -8,7 +8,7 @@ order: 7
 diataxis: howto
 status: active
 owner: maintainers
-last_reviewed: 2026-08-09
+last_reviewed: 2026-10-02
 phase: "-"
 audience: end-user
 tags: [providers, local-ai, ollama, speech-recognition, text-to-speech, privacy, self-hosting]
@@ -101,6 +101,33 @@ the single llama.cpp slot above and budget any co-resident Ollama profile
 explicitly. If inference becomes unstable, inspect `ollama ps` and stop
 unrelated runners with `ollama stop <model>`; unbounded contexts can exhaust
 VRAM even when the model weights appear to fit.
+
+### A large MoE model on an 8 GB GPU
+
+A mixture-of-experts model such as `Qwen3.6-35B-A3B` can run on an 8 GB
+laptop GPU when its experts live in system RAM. Its speed then depends almost
+entirely on where each part of the model sits, so measure instead of guessing.
+`scripts/local_llm_lab.py` runs the whole drill from a repository checkout:
+
+```text
+python scripts/local_llm_lab.py baseline --out data/perf
+python scripts/local_llm_lab.py plan --model <file.gguf>
+python scripts/local_llm_lab.py command --model <file.gguf> --n-cpu-moe <N from plan> --mmproj <mmproj.gguf> --launch
+python scripts/local_llm_lab.py bench --url http://127.0.0.1:11435 --minutes 10 --out data/perf
+```
+
+`plan` reads the file's tensor table (`pip install gguf`) and reports whether
+the experts left on the CPU fit in free RAM. When they do not, llama.cpp reads
+them from disk on every token and the speed becomes slow and erratic; a smaller
+quantization that fits is usually faster. `bench` reports prompt and generation
+speed separately, peak against sustained, and the change between the first and
+last minute, together with GPU temperature and memory. Pass the model's
+`mmproj` file so screen questions can use it: the provider card detects image
+input from a single-model llama.cpp server automatically.
+
+Jarvis starts Ollama only while Ollama is the active brain or voice, so
+choosing the local server card is enough. Quit any Ollama or LM Studio window
+you started yourself: two model servers compete for the same memory.
 
 ## Install Local Speech
 
