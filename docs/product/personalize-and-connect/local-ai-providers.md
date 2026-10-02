@@ -129,6 +129,25 @@ Jarvis starts Ollama only while Ollama is the active brain or voice, so
 choosing the local server card is enough. Quit any Ollama or LM Studio window
 you started yourself: two model servers compete for the same memory.
 
+Two more lab commands turn the measured server into the everyday setup:
+
+```text
+python scripts/local_llm_lab.py startup --model <file.gguf> --n-cpu-moe <N> --mmproj <mmproj.gguf>
+python scripts/local_llm_lab.py profile --url http://127.0.0.1:11435 --voice --voice-fallback gemini-live
+```
+
+`startup` (Windows) starts that exact server minimized at sign-in. `profile`
+makes it the brain that answers first and switches Ollama's autostart off, so
+only one model stays resident. Any cloud key you already saved stays the
+automatic fallback when the local server is down or busy. With `--voice`, live
+calls use the local voice engine (`[voice_engine] llm_api = "openai"`), which
+answers with the same server and model instead of a second model in Ollama;
+`--voice-fallback` names the realtime provider used when the local engine
+cannot start. Run the local voice setup once on its card first; it then skips
+the Ollama download. When the server's chat template can switch reasoning off
+(Qwen3.6 can), quick turns skip the thinking and harder turns keep it, with
+the same loaded model.
+
 ## Install Local Speech
 
 1. Select **Pipeline**, open **Voice Input**, and choose Whisper or Nemotron.

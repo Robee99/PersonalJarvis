@@ -31,11 +31,18 @@ hardware's ceiling". This script replaces guessing with four read-mostly steps:
               Jarvis connects to it; ``--remove`` deletes that one file again.
               llama-server stays an external process Jarvis only connects to,
               so it never competes with a second runtime Jarvis supervises.
+``profile``   makes Jarvis local-first on that server, through the app's own
+              config writers: the ``local-openai`` brain leads every turn, any
+              cloud key the user already saved stays the automatic fallback
+              (the brain manager's cross-provider chain), Ollama is no longer
+              started beside it, and with ``--voice`` the local voice engine
+              answers live calls with the same model.
 
-Nothing here changes drivers, services, power plans or Jarvis' config. The
-only process it starts is ``llama-server`` (``command --launch`` and ``sweep``),
-and ``sweep`` stops each server it started. ``startup`` touches exactly one
-file, in the user's own Start-up folder, and only when asked.
+Nothing here changes drivers, services or power plans. The only process it
+starts is ``llama-server`` (``command --launch`` and ``sweep``), and ``sweep``
+stops each server it started. ``startup`` touches exactly one file, in the
+user's own Start-up folder, and only when asked. ``profile`` is the only
+command that changes Jarvis' config, and prints every change it made.
 
 Usage
 -----
@@ -45,6 +52,7 @@ Usage
     python scripts/local_llm_lab.py bench --url http://127.0.0.1:11435 --minutes 10 --out data/perf
     python scripts/local_llm_lab.py sweep --model ... --n-cpu-moe 40,36,32 --threads 8,16
     python scripts/local_llm_lab.py startup --model ... --n-cpu-moe 34 --mmproj ...
+    python scripts/local_llm_lab.py profile --url http://127.0.0.1:11435 --voice
 """
 
 from __future__ import annotations
@@ -347,6 +355,41 @@ def remove_startup(folder: Path) -> bool:
         return False
     target.unlink()
     return True
+
+
+# ── Local-first profile ──────────────────────────────────────────────────
+def apply_local_first(
+    writer: Any,
+    url: str,
+    *,
+    model: str = "",
+    voice: bool = False,
+    voice_fallback: str = "",
+) -> list[str]:
+    """Point Jarvis at this llama-server through ``writer`` (``config_writer``).
+
+    Each step is one of the app's own atomic writers, the same ones its cards
+    call; returns a line per change. Cloud fallback needs no write: the brain
+    manager already tries every provider with a saved key after the primary.
+    """
+    done: list[str] = []
+    writer.set_provider_base_url("local-openai", url)
+    done.append(f"local-openai server: {url}")
+    if model:
+        writer.set_brain_provider_model("local-openai", model=model)
+        done.append(f"local-openai model: {model}")
+    writer.set_brain_primary("local-openai")
+    done.append("brain primary: local-openai (saved cloud keys stay the fallback)")
+    writer.set_ollama_autostart(False)
+    done.append("Ollama autostart: off (one resident model on this machine)")
+    if voice:
+        writer.set_voice_engine_settings(llm_api="openai", llm_base_url="")
+        writer.set_realtime_voice_selection("local-voice", profile="", mode="realtime")
+        done.append("live voice: local-voice engine on the same server")
+        if voice_fallback:
+            writer.set_realtime_fallback_provider(voice_fallback)
+            done.append(f"live voice fallback: {voice_fallback}")
+    return done
 
 
 # ── Machine sampling ─────────────────────────────────────────────────────
@@ -699,6 +742,13 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--remove", action="store_true", help="delete the start-up file again")
     _add_server_args(st)
 
+    pr = sub.add_parser("profile", help="make Jarvis answer with this server first")
+    pr.add_argument("--url", default="http://127.0.0.1:11435")
+    pr.add_argument("--model", default="", help="served model id (default: the first served)")
+    pr.add_argument("--voice", action="store_true", help="answer live voice with it too")
+    pr.add_argument("--voice-fallback", default="",
+                    help="realtime provider when the local engine cannot start")
+
     be = sub.add_parser("bench", help="sustained benchmark against a running server")
     be.add_argument("--url", default="http://127.0.0.1:11435")
     be.add_argument("--minutes", type=float, default=10.0)
@@ -766,6 +816,20 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         cmd = build_command(find_server_binary(args.server_bin), _profile_from_args(args))
         print(f"[lab] wrote {install_startup(folder, cmd)}")
+        return 0
+
+    if args.cmd == "profile":
+        from jarvis.core import config_writer  # noqa: PLC0415 — only this command needs the app
+
+        for line in apply_local_first(
+            config_writer,
+            args.url.rstrip("/"),
+            model=args.model,
+            voice=args.voice,
+            voice_fallback=args.voice_fallback,
+        ):
+            print(f"[profile] {line}")
+        print("[profile] restart Jarvis (or start a new call) to use it")
         return 0
 
     if args.cmd == "bench":

@@ -14,6 +14,7 @@ from scripts.local_llm_lab import (
     MIB,
     ServerProfile,
     Turn,
+    apply_local_first,
     build_command,
     layout_from_tensors,
     parse_nvidia_csv,
@@ -285,3 +286,54 @@ def test_startup_refuses_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(local_llm_lab.sys, "platform", "linux")
     with pytest.raises(SystemExit, match="Windows"):
         local_llm_lab.windows_startup_dir()
+
+
+class _RecordingWriter:
+    """Records each config_writer call and checks it against the real signature."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def __getattr__(self, name: str):
+        import inspect
+
+        from jarvis.core import config_writer
+
+        real = inspect.signature(getattr(config_writer, name))
+
+        def record(*args, **kwargs) -> None:
+            real.bind(*args, **kwargs)  # a renamed writer or keyword fails here
+            self.calls.append((name, args, kwargs))
+
+        return record
+
+
+def test_profile_makes_the_server_lead_and_keeps_cloud_as_fallback() -> None:
+    writer = _RecordingWriter()
+    lines = apply_local_first(writer, "http://127.0.0.1:11435", model="local-moe")
+
+    assert [c[0] for c in writer.calls] == [
+        "set_provider_base_url",
+        "set_brain_provider_model",
+        "set_brain_primary",
+        "set_ollama_autostart",
+    ]
+    assert writer.calls[2][1] == ("local-openai",)
+    assert writer.calls[3][1] == (False,)
+    assert len(lines) == 4
+
+
+def test_profile_voice_shares_the_server_and_takes_a_fallback() -> None:
+    writer = _RecordingWriter()
+    apply_local_first(writer, "http://127.0.0.1:11435", voice=True, voice_fallback="gemini-live")
+
+    names = [c[0] for c in writer.calls]
+    assert "set_brain_provider_model" not in names  # no model given: the first served
+    assert names[-3:] == [
+        "set_voice_engine_settings",
+        "set_realtime_voice_selection",
+        "set_realtime_fallback_provider",
+    ]
+    assert writer.calls[-3][2] == {"llm_api": "openai", "llm_base_url": ""}
+    assert writer.calls[-2][1] == ("local-voice",)
+    assert writer.calls[-2][2] == {"profile": "", "mode": "realtime"}
