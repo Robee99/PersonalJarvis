@@ -66,15 +66,15 @@ class CameraUnavailable(RuntimeError):
 async def _capture_windows() -> bytes:
     """One JPEG still through WinRT ``MediaCapture``; the device is always closed."""
     try:
-        from winrt.windows.media.capture import (  # noqa: PLC0415
+        from winrt.windows.media.capture import (  # type: ignore[import-not-found]  # noqa: PLC0415
             MediaCapture,
             MediaCaptureInitializationSettings,
             StreamingCaptureMode,
         )
-        from winrt.windows.media.mediaproperties import (  # noqa: PLC0415
+        from winrt.windows.media.mediaproperties import (  # type: ignore[import-not-found]  # noqa: PLC0415
             ImageEncodingProperties,
         )
-        from winrt.windows.storage.streams import (  # noqa: PLC0415
+        from winrt.windows.storage.streams import (  # type: ignore[import-not-found]  # noqa: PLC0415
             DataReader,
             InMemoryRandomAccessStream,
         )
@@ -118,7 +118,7 @@ async def _capture_windows() -> bytes:
 def _grab_opencv() -> bytes:
     """One JPEG still through a user-installed OpenCV; blocking, run in a thread."""
     try:
-        import cv2  # noqa: PLC0415
+        import cv2  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError as exc:
         raise CameraUnavailable(
             "Missing dependency: cv2. The camera on this platform needs OpenCV "
