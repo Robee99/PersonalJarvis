@@ -76,6 +76,35 @@ def _declared_vision_support(model: str) -> bool:
         return False
 
 
+def _declared_thinking_switch(model: str) -> bool:
+    """Whether the selected model's server takes ``chat_template_kwargs``.
+
+    Cache-only like the vision probe; ``False`` when unknown, so a generic
+    server is never sent a field it did not declare.
+    """
+    if not model:
+        return False
+    try:
+        from jarvis.brain.model_catalog import model_thinking_switch  # noqa: PLC0415 — lazy (AP-26)
+
+        return model_thinking_switch("local-openai", model)
+    except Exception:  # noqa: BLE001 — a probe must never break construction
+        log.debug("local-openai: thinking-switch probe failed — leaving thinking as served")
+        return False
+
+
+def thinking_extra_body(effort: str | None) -> dict[str, Any] | None:
+    """``chat_template_kwargs`` for a turn's reasoning effort.
+
+    ``None`` (no preference) sends nothing, so the server's own default
+    applies. ``none``/``minimal`` switch thinking off; any real effort keeps
+    it on.
+    """
+    if effort is None:
+        return None
+    return {"chat_template_kwargs": {"enable_thinking": effort not in ("none", "minimal")}}
+
+
 class LocalOpenAIBrain:
     name: str = "local-openai"
     # Conservative floor — the real window depends on the served model; the
@@ -83,6 +112,9 @@ class LocalOpenAIBrain:
     context_window: int = 32_768
     supports_tools: bool = True
     supports_vision: bool = False
+    # Set per selected model from the catalog: the server takes
+    # ``chat_template_kwargs``, so the manager may ask for a no-think turn.
+    supports_thinking_switch: bool = False
 
     def __init__(self, model: str | None = None) -> None:
         self._model = (model or "").strip()
@@ -90,6 +122,7 @@ class LocalOpenAIBrain:
         self._server_root: str | None = None
         self._credential: str | None = None
         self.supports_vision = _declared_vision_support(self._model)
+        self.supports_thinking_switch = _declared_thinking_switch(self._model)
 
     def can_call_tools(self) -> bool:
         return self.supports_tools
@@ -149,6 +182,8 @@ class LocalOpenAIBrain:
             )
         self._model = names[0]
         log.info("local-openai: no model configured — using first served: %s", self._model)
+        # The capability is per model; with none configured it is only known now.
+        self.supports_thinking_switch = _declared_thinking_switch(self._model)
         return self._model
 
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
@@ -158,8 +193,11 @@ class LocalOpenAIBrain:
             # the event loop (BUG-189; see claude_api.py for the measurement).
             client = await asyncio.to_thread(self._ensure_client)
         model = await self._resolve_model()
+        extra_body = (
+            thinking_extra_body(req.reasoning_effort) if self.supports_thinking_switch else None
+        )
         async for delta in stream_complete(
-            client, model, req, supports_vision=self.supports_vision
+            client, model, req, extra_body=extra_body, supports_vision=self.supports_vision
         ):
             yield delta
 

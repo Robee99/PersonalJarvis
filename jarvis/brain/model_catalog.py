@@ -1036,6 +1036,29 @@ def model_capabilities(provider: str, model_id: str) -> dict[str, bool | None]:
     return {"vision": None, "tools": None}
 
 
+def model_thinking_switch(provider: str, model_id: str) -> bool:
+    """Whether the cached catalog says this model's server takes
+    ``chat_template_kwargs`` (so ``enable_thinking`` can be set per request).
+
+    Read synchronously from the same cache as :func:`model_capabilities`;
+    unknown is ``False``, so a server nobody vouched for is never sent a field
+    it may reject.
+    """
+    from jarvis.core import config as _cfg
+
+    cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
+    mid = (model_id or "").strip()
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # no cache yet means unknown, which means off
+        return False
+    for m in data.get(provider, {}).get("models", []):
+        if m.get("id") == mid:
+            params = m.get("supported_parameters")
+            return isinstance(params, list) and "chat_template_kwargs" in params
+    return False
+
+
 def pick_vision_model(provider: str) -> str | None:
     """The best vision-capable brain model of ``provider``, from the cached
     ``/v1/models`` catalog — or ``None`` when the catalog carries no modality
@@ -2121,6 +2144,15 @@ class ModelCatalog:
             declared.append("image")
         if mods.get("audio") is True:
             declared.append("audio")
+        # llama-server passes ``chat_template_kwargs`` into the template on every
+        # request (documented in tools/server/README.md), which is how a
+        # thinking model's reasoning is switched off for a fast turn. The
+        # template's own caps say whether it calls tools; without caps the
+        # entry keeps claiming tools, as an unknown one did before.
+        caps = props.get("chat_template_caps")
+        params = ["chat_template_kwargs"]
+        if not isinstance(caps, dict) or caps.get("supports_tool_calls", True) is not False:
+            params.append("tools")
         meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
         n_ctx = meta.get("n_ctx")
         if not isinstance(n_ctx, int) or n_ctx <= 0:
@@ -2131,6 +2163,7 @@ class ModelCatalog:
                 models[0],
                 input_modalities=tuple(declared),
                 context_length=n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None,
+                supported_parameters=models[0].supported_parameters or tuple(params),
             )
         ]
 

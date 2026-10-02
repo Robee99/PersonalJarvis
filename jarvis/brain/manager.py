@@ -3787,6 +3787,26 @@ class BrainManager:
             kwargs["loop_control"] = override.loop_control
         return kwargs
 
+    @staticmethod
+    def _fast_turn_skips_thinking(
+        brain: Any, level: str, *, delegated: bool, override: TurnOverride | None
+    ) -> bool:
+        """Whether a classic turn asks its brain for no thinking at all.
+
+        A fast turn on a brain that can switch its model's thinking off per
+        request (a local llama-server with a thinking template) skips the
+        thinking: one model, two speeds, no second resident model. Deep turns
+        keep the server's default, and delegated or caller-picked turns carry
+        their own effort. Gated on the brain's declared capability, never on a
+        provider name (AP-21).
+        """
+        return (
+            not delegated
+            and override is None
+            and level == "fast"
+            and getattr(brain, "supports_thinking_switch", False) is True
+        )
+
     async def render_surface_prompt(self, *, user_text: str) -> tuple[str, str]:
         """(system prompt, turn context) for an external agent that should BE Jarvis.
 
@@ -12196,6 +12216,10 @@ class BrainManager:
                 if prefer_tool_model
                 else self._override_dispatch_kwargs(turn_override)
             )
+            if self._fast_turn_skips_thinking(
+                brain, decision.level, delegated=prefer_tool_model, override=turn_override
+            ):
+                _disp_kwargs["reasoning_effort"] = "none"
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )

@@ -138,3 +138,37 @@ async def test_http_error_on_props_stays_unknown() -> None:
     [model] = await _enrich(_PropsClient({}, status_code=404), _single())
 
     assert model.input_modalities is None
+
+
+async def test_template_kwargs_and_tools_are_declared() -> None:
+    [model] = await _enrich(_PropsClient({"modalities": {"vision": True}}), _single())
+
+    assert model.supported_parameters == ("chat_template_kwargs", "tools")
+
+
+async def test_a_template_without_tool_calls_drops_tools() -> None:
+    props = {"modalities": {}, "chat_template_caps": {"supports_tool_calls": False}}
+
+    [model] = await _enrich(_PropsClient(props), _single())
+
+    assert model.supported_parameters == ("chat_template_kwargs",)
+
+
+def test_thinking_switch_reads_the_cache(monkeypatch, tmp_path) -> None:
+    import json
+
+    import jarvis.core.config as cfg
+    from jarvis.brain.model_catalog import model_thinking_switch
+
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    assert model_thinking_switch("local-openai", "qwen") is False
+
+    models = [
+        {"id": "qwen", "supported_parameters": ["chat_template_kwargs", "tools"]},
+        {"id": "plain", "supported_parameters": ["tools"]},
+    ]
+    (tmp_path / "model_catalog_cache.json").write_text(
+        json.dumps({"local-openai": {"fetched_at": 0, "models": models}}), encoding="utf-8"
+    )
+    assert model_thinking_switch("local-openai", "qwen") is True
+    assert model_thinking_switch("local-openai", "plain") is False
