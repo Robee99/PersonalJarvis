@@ -687,6 +687,11 @@ screen-snapshot = "jarvis.plugins.tool.screen_snapshot:ScreenSnapshotTool"
 # Never a spawn and never in a worker or society tool set (AP-5/AP-14). See
 # ADR-0011 amendment "Camera still".
 camera-snapshot = "jarvis.plugins.tool.camera_snapshot:CameraSnapshotTool"
+# "Where do I click?" (2026-10-02): a glowing arrow on one UI element of the
+# foreground window, drawn by the CU indicator sidecar. Never clicks. Router
+# tier, risk_tier "safe"; never a spawn and never in a worker or society tool
+# set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+point-at = "jarvis.plugins.tool.point_at:PointAtTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"
 switch-window = "jarvis.plugins.tool.switch_window:SwitchWindowTool"
 read-visible-ui-state = "jarvis.plugins.tool.read_visible_ui_state:ReadVisibleUIStateTool"

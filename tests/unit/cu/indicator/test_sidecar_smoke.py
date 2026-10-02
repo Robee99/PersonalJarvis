@@ -104,3 +104,36 @@ def test_macos_tool_window_stays_visible_while_sidecar_is_inactive() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_sidecar_draws_and_blanks_a_pointing_arrow() -> None:
+    """``point`` acks after the arrow window is up; ``blank`` clears it."""
+    # Linux runners without libEGL cannot load QtGui at all (see the CI baseline).
+    pytest.importorskip("PySide6.QtGui")
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "jarvis.cu.indicator"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        creationflags=NO_WINDOW_CREATIONFLAGS,
+        env=env,
+    )
+    try:
+        assert proc.stdin is not None
+        point = {"monitor": [0, 0, 800, 600], "rect": [0.9, 0.0, 0.1, 0.05], "label": "Save"}
+        proc.stdin.write(protocol.encode_command(protocol.CMD_POINT, **point))
+        proc.stdin.write(protocol.encode_command(protocol.CMD_POINT, **point))
+        proc.stdin.write(protocol.encode_command(protocol.CMD_BLANK))
+        proc.stdin.write(protocol.encode_command(protocol.CMD_QUIT))
+        proc.stdin.flush()
+        out, err = proc.communicate(timeout=30)
+    except Exception:
+        proc.kill()
+        raise
+    acks = [protocol.decode_ack(line) for line in out.splitlines()]
+    assert proc.returncode == 0, f"sidecar exited {proc.returncode}: {err}"
+    assert [a for a in acks if a] == ["point", "point", "blank", "quit"], err

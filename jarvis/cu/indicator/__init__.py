@@ -13,6 +13,7 @@ Architecture (2026-07, replaces the removed OS-Level edge-glow):
   arms the global Escape hotkey while a mission runs, and cancels the
   CU-scoped tokens on Escape.
 - ``protocol`` — the JSON-lines stdin/stdout vocabulary between the two.
+- ``geometry`` — where the ``point_at`` arrow goes; plain arithmetic, no Qt.
 - ``capture_guard`` — hides the border for the split second of CU's own
   frame grabs on platforms without a capture-exclusion API (non-Windows).
 - ``self_input`` — suppression stamps so a synthetic Esc typed BY Jarvis

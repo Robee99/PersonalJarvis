@@ -2008,6 +2008,9 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # vision (risk ask) - never a spawn, never in a worker set. See
             # ADR-0011 amendment "Camera still".
             "camera-snapshot",
+            # Point at (2026-10-02): an arrow on one UI element, never a
+            # click (risk safe). See ADR-0011 amendment "Point at".
+            "point-at",
         }
     )
     assert ROUTER_TOOLS == expected, (

@@ -77,6 +77,12 @@ ROUTER_TOOLS = frozenset({
     # never a spawn — never in a worker set (AP-5/AP-14). See
     # docs/plans/ai-pointer/DESIGN.md.
     "inspect-pointer",
+    # Point at (2026-10-02): the push direction of the AI Pointer. A glowing
+    # arrow lands on the named element of the foreground window ("where do I
+    # click to export?"), drawn by the CU indicator sidecar; it never clicks.
+    # Read-only on the app, risk safe, never a spawn and never in a worker or
+    # society tool set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+    "point-at",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —

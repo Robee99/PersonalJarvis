@@ -76,6 +76,8 @@ _FORBIDDEN_EXACT = frozenset(
         "navigate",
         "open-app",
         "open_app",
+        "point-at",
+        "point_at",
         "run-shell",
         "run_shell",
         "run-skill",

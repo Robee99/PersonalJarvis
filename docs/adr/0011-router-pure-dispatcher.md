@@ -1471,3 +1471,42 @@ The capture backend is chosen per platform when the tool runs:
   refusal.
 - `tests/unit/brain/test_screen_narration_guard.py` checks that blind brains
   never see the tool.
+
+## Amendment 2026-10-02 — Point at
+
+`point-at` joins `ROUTER_TOOLS`. It registers the `point_at` tool, which answers
+"where do I click to ...?" with a glowing arrow on the named element of the
+foreground window. Until now the router could only describe the place in words,
+or hand the task to `computer-use`, which also clicks.
+
+The tool is the push direction of the AI Pointer. `inspect-pointer` reads the
+element under the mouse; `point_at` shows the user an element. It reads the UI
+tree through `make_ui_tree_source()` and matches with the rules
+`click_element` uses (`matching_nodes`), so the arrow lands on exactly the
+element a click would press. An exact label wins over a substring match. The
+arrow is drawn by the Computer-Use indicator sidecar through a new `point`
+protocol command. That window is click-through, excluded from capture on
+Windows and blanked before every grab elsewhere, and it fades out after about
+five seconds.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`. The tool reads the same tree `inspect-pointer` reads and
+  draws a transient overlay. Nothing in any app changes, and nothing is
+  clicked.
+- Nothing starts at boot (AP-26). The sidecar is spawned on the first arrow and
+  quits on its own when no effect or mission holds it.
+- Headless, Wayland or missing-PySide6 hosts get the indicator's own reason
+  back as the tool error.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_point_at.py` covers matching parity with
+  `click_element`, monitor placement, the no-overlay case and the honest
+  errors.
+- `tests/unit/cu/indicator/` covers the protocol command, the controller, the
+  arrow geometry and a real offscreen sidecar round trip.

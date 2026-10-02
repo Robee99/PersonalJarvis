@@ -63,6 +63,8 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
         # A camera frame shows the person; an unattended agent never takes one.
         "camera",
         "camera-snapshot",
+        # The arrow speaks to the person at the screen, so only Jarvis aims it.
+        "point-at",
         "multi-spawn",
         "dispatch-to-harness",
         "dispatch-to-admin",
