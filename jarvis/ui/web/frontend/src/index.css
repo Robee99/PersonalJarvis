@@ -1989,6 +1989,17 @@ body {
     filter: drop-shadow(0 0 1.2px hsl(var(--background) / 0.85));
     animation: deck-orb-turn 10.8s linear infinite;
   }
+  /* The reactor avatar's coils (ReactorCore.tsx): they turn while a voice
+     state is live and stand still at rest, like the rest of the centre. */
+  .deck-reactor-coils {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    animation: deck-orb-turn 14s linear infinite;
+  }
+  .deck-reactor-coils[data-voice="idle"] {
+    animation: none;
+  }
   @keyframes deck-orb-turn {
     to {
       transform: rotate(360deg);
@@ -2000,6 +2011,7 @@ body {
     .deck-orb-corona,
     .deck-orb-ripple,
     .deck-orb-sweep,
+    .deck-reactor-coils,
     .deck-ring-orbit {
       animation: none !important;
     }

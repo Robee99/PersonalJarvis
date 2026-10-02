@@ -40,6 +40,7 @@ import { useElementSize } from "@/hooks/useElementSize";
 import { orbSizeFor, stageVignette, stageWashSize } from "@/lib/deckStage";
 import { HANDOFF, autoLaunchAfterMs, resolvePhase, type BoardSlot } from "@/lib/deckStandby";
 import { writeDeckMode } from "@/lib/deckMode";
+import { useDeckAvatar, writeDeckAvatar } from "@/lib/deckAvatar";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
@@ -116,6 +117,7 @@ export function MissionDeckView({
   const boardOpen = useDeckStore((s) => s.boardOpen);
   const openBoard = useDeckStore((s) => s.openBoard);
   const { warming } = useVoiceReadiness();
+  const avatar = useDeckAvatar();
   // Header + orb name the engine that will answer the next spoken turn, not
   // the dormant sibling. Pipeline and realtime are independent picks; the
   // sidebar footer already followed this rule and the deck was still showing
@@ -296,6 +298,12 @@ export function MissionDeckView({
             value={engine.model || "—"}
             testId="deck-stat-model"
             onClick={() => setActiveSection("apikeys")}
+          />
+          <HeaderStat
+            label={t("deck.stat_avatar")}
+            value={t(`deck.avatar_${avatar}`)}
+            testId="deck-stat-avatar"
+            onClick={() => writeDeckAvatar(avatar === "gigi" ? "reactor" : "gigi")}
           />
           {headerAccessory}
         </div>
