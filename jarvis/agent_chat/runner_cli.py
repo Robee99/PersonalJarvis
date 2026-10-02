@@ -112,6 +112,7 @@ CLI_BINARIES: Final[dict[str, tuple[str, ...]]] = {
     # (``jarvis.workspace.agents``), so its seat stands on Claude Code's.
     "glm-cli": ("claude", "claude.cmd", "claude.exe"),
     "dsh-cli": ("dsh", "dsh.cmd", "dsh.exe"),
+    "hermes-cli": ("hermes", "hermes.exe", "hermes.cmd"),
     # Documented command is ``agent``; the Windows installer also drops
     # ``cursor-agent`` so the generic name does not collide with another
     # product. Prefer the unambiguous name when both are present.
@@ -217,6 +218,13 @@ def dsh_argv_prefix() -> list[str]:
     binary = _which(*CLI_BINARIES["dsh-cli"])
     if not binary:
         raise CliUnavailable("DeepSeek Harness (dsh) is not installed or not on PATH.")
+    return [binary]
+
+
+def hermes_argv_prefix() -> list[str]:
+    binary = _which(*CLI_BINARIES["hermes-cli"])
+    if not binary:
+        raise CliUnavailable("Hermes Agent (hermes) is not installed or not on PATH.")
     return [binary]
 
 
@@ -1178,6 +1186,31 @@ def plan_dsh(
     return CliPlan(argv, env, None, "text", None)
 
 
+def plan_hermes(
+    *,
+    prompt: str,
+    cwd: Path,
+    model: str,
+    effort: str,
+    permission_mode: str,
+    resume: str | None,
+    identity: jarvis_harness.Identity | None = None,
+) -> CliPlan:
+    """Hermes Agent's one-shot mode: one task in, the final message out.
+
+    ``-z`` prints only the answer and approves Hermes's own tool prompts, the
+    same contract as the DeepSeek Harness seat. A picked model goes to
+    ``-m``; without one Hermes answers with the model configured in Hermes.
+    """
+    prompt = _with_identity(prompt, identity, None, compact=True)
+    argv = [*hermes_argv_prefix()]
+    if model:
+        argv += ["-m", model]
+    argv += ["-z", prompt]
+    env = _registry_env("hermes", _account_env("hermes"))
+    return CliPlan(argv, env, None, "text", None)
+
+
 def plan_cursor(
     *,
     prompt: str,
@@ -1278,6 +1311,7 @@ _PLANNERS: Final[dict[str, Any]] = {
     "kimi-cli": plan_kimi,
     "glm-cli": plan_glm,
     "dsh-cli": plan_dsh,
+    "hermes-cli": plan_hermes,
     "cursor-cli": plan_cursor,
 }
 

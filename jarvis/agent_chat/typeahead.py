@@ -66,6 +66,7 @@ TRIGGERS_BY_RUNNER: Final[dict[str, tuple[str, ...]]] = {
     "cursor-cli": (MENTION,),
     # One task in, one answer out — nothing to complete against.
     "dsh-cli": (),
+    "hermes-cli": (),
     "api": (MENTION,),
     "brain": (SLASH,),
 }

@@ -70,12 +70,12 @@ files they wrote remain.
 
 Chat mode's provider picker lists the same coding CLIs the pane step does —
 Claude Code, Codex, OpenCode, Kimi Code, GLM Coding Plan, Grok Build,
-Antigravity and DeepSeek Harness — under **Coding CLIs**, each with the
+Antigravity, DeepSeek Harness and Hermes Agent — under **Coding CLIs**, each with the
 models, effort levels and permission modes that CLI actually takes. Every one
 of them answers in the chat itself: the reply, the model's reasoning where the
 CLI shares it, and each tool call with its result appear as rows in the
 conversation, never as a terminal. A CLI that keeps its own login (OpenCode,
-Kimi Code, DeepSeek Harness) shows as available once it is installed; GLM
+Kimi Code, DeepSeek Harness, Hermes Agent) shows as available once it is installed; GLM
 Coding Plan needs the Z.ai key from the API Keys page. A CLI you added
 yourself opens in a pane — it has no headless mode this app could read.
 
