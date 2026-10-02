@@ -858,6 +858,9 @@ jarvis = [
     # Node bot scripts shipped alongside their Python bridge tools (e.g. the
     # google_calendar bot). Not Python, so packages.find won't pick them up.
     "plugins/tool/*.mjs",
+    # The HOLO hand-gesture deck (MIT, jarvis/ui/web/holo_routes.py): one page
+    # plus its licence, served as-is from the package directory.
+    "ui/web/holo/*",
     # AP-23 wave-2 finding 6: runtime data files read via `Path(__file__)` at
     # first use, missing from wheel installs — masked today only because
     # every dev install is editable (source tree == package tree).

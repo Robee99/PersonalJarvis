@@ -3197,6 +3197,14 @@
     "no_hits_suffix": ". Prueba otras palabras clave o consulta el grafo.",
     "hits_heading": "Coincidencias"
   },
+  "wiki_holo": {
+    "open": "Vista de manos",
+    "open_title": "Abrir el panel HOLO: tu memoria como orbes que agarras con las manos (usa la cámara)",
+    "preparing": "Preparando…",
+    "close": "Cerrar",
+    "install_failed": "No se pudo preparar el seguimiento de manos",
+    "frame_title": "Panel de gestos HOLO"
+  },
   "wiki_graph": {
     "empty_prefix": "Tu grafo de memoria aún está vacío. En cuanto ",
     "empty_suffix": " cree notas, los nodos se conectarán aquí automáticamente.",

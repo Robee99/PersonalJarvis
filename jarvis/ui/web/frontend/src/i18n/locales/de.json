@@ -3197,6 +3197,14 @@
     "no_hits_suffix": ". Versuche andere Stichworte oder schau in den Graph.",
     "hits_heading": "Treffer"
   },
+  "wiki_holo": {
+    "open": "Handansicht",
+    "open_title": "HOLO-Deck öffnen: dein Gedächtnis als Kugeln, die du mit den Händen greifst (nutzt die Kamera)",
+    "preparing": "Wird vorbereitet…",
+    "close": "Schließen",
+    "install_failed": "Handerkennung konnte nicht vorbereitet werden",
+    "frame_title": "HOLO-Handgesten-Deck"
+  },
   "wiki_graph": {
     "empty_prefix": "Dein Memory-Graph ist noch leer. Sobald ",
     "empty_suffix": " Notizen anlegt, verbinden sich die Knoten hier automatisch.",

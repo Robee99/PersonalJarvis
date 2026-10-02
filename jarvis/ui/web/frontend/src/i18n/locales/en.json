@@ -3197,6 +3197,14 @@
     "no_hits_suffix": ". Try other keywords or look in the graph.",
     "hits_heading": "Matches"
   },
+  "wiki_holo": {
+    "open": "Hands view",
+    "open_title": "Open the HOLO deck: your memory as orbs you grab with your hands (uses the camera)",
+    "preparing": "Preparing…",
+    "close": "Close",
+    "install_failed": "Could not prepare hand tracking",
+    "frame_title": "HOLO hand-gesture deck"
+  },
   "wiki_graph": {
     "empty_prefix": "Your memory graph is still empty. As soon as ",
     "empty_suffix": " creates notes, the nodes will connect here automatically.",

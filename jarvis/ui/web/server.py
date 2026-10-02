@@ -382,6 +382,8 @@ class WebServer:
         from .friends_routes import router as friends_router
         from .frontier_routes import router as frontier_router
         from .grok_build_routes import router as grok_build_router
+        from .holo_routes import api_router as holo_api_router
+        from .holo_routes import router as holo_router
         from .live_routes import router as live_router
         from .local_voice_routes import router as local_voice_router
         from .local_models_assistant_routes import (
@@ -594,6 +596,9 @@ class WebServer:
         # The mission deck's pictures: the last Screen-Context capture (one
         # frame, in memory, TTL) and Computer-Use frames by content hash.
         app.include_router(deck_router)
+        # The HOLO hand-gesture deck (MIT page) with orbs from the wiki vault.
+        app.include_router(holo_router)
+        app.include_router(holo_api_router)
         # Voice-session transcription view (sidebar -> "Transcription").
         # Returns 503 as long as app.state.session_store isn't set.
         app.include_router(sessions_router)
