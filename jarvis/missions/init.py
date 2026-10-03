@@ -50,6 +50,7 @@ from .worker_runtime.provider_map import (
     ANTIGRAVITY_SUBAGENT_SLUGS,
     CODEX_SUBAGENT_SLUGS,
     GROK_BUILD_SUBAGENT_SLUGS,
+    HERMES_SUBAGENT_SLUGS,
 )
 from .workers.api_agent_worker import ApiAgentWorker
 from .workers.capabilities import (
@@ -62,6 +63,7 @@ from .workers.codex_direct_worker import CodexDirectWorker
 from .workers.gemini_worker import GeminiWorker
 from .workers.google_cli_worker import GoogleCliWorker
 from .workers.grok_build_direct_worker import GrokBuildDirectWorker
+from .workers.hermes_direct_worker import HermesDirectWorker
 
 logger = logging.getLogger(__name__)
 
@@ -374,7 +376,7 @@ def _select_subagent_worker_kind(sub_jarvis_provider: str | None, step_model: st
     """Pure routing decision for the Heavy-Task subagent worker.
 
     Returns one of ``"claude_direct"`` | ``"codex_direct"`` | ``"antigravity"``
-    | ``"grok_build"`` | ``"subjarvis"`` | ``"gemini"``.
+    | ``"grok_build"`` | ``"hermes"`` | ``"subjarvis"`` | ``"gemini"``.
 
     Defense-in-depth (2026-05-29, user mandate: heavy tasks run on the
     configured provider — claude-api -> Claude Max OAuth — and Gemini must
@@ -402,6 +404,10 @@ def _select_subagent_worker_kind(sub_jarvis_provider: str | None, step_model: st
         return "antigravity"
     if sub_jarvis_provider in GROK_BUILD_SUBAGENT_SLUGS:
         return "grok_build"
+    # Hermes Agent answers with the models configured in Hermes itself; a
+    # per-step model cannot divert it either.
+    if sub_jarvis_provider in HERMES_SUBAGENT_SLUGS:
+        return "hermes"
     # openai / openrouter / grok / nvidia run on their own provider via the in-process
     # ApiAgentWorker (OpenAI-compatible chat API + tool-use loop writing files
     # into the worktree). They used to fall through to "subjarvis" ->
@@ -1253,6 +1259,12 @@ async def bootstrap_missions(
                 "subscription (grok -p, OAuth login, no API key)."
             )
             return GrokBuildDirectWorker(capability_inventory=capability_inventory)
+        if kind == "hermes":
+            logger.info(
+                "Mission worker -> HermesDirectWorker (hermes -z in the mission "
+                "worktree, on the models configured in Hermes)."
+            )
+            return HermesDirectWorker(capability_inventory=capability_inventory)
         if kind == "api_agent":
             # openai / openrouter / grok / nvidia: run on the selected
             # provider via the in-process ApiAgentWorker — see

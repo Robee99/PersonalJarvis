@@ -30,7 +30,11 @@ _command_origin: ContextVar[CommandRequest | None] = ContextVar("chat_command_or
 def supports_restricted_turn(session: Any) -> bool:
     from .service import resolve_runner
 
-    return resolve_runner(session.provider, surface=session.surface) not in ("kimi-cli", "dsh-cli")
+    return resolve_runner(session.provider, surface=session.surface) not in (
+        "kimi-cli",
+        "dsh-cli",
+        "hermes-cli",
+    )
 
 
 class ChatControls:

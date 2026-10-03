@@ -11,6 +11,9 @@ One JSON object per line on the sidecar's stdin::
     {"cmd": "snap", "monitor": [l, t, w, h],   # appshot shutter effect:
      "rect": [fx, fy, fw, fh],                 # flash the captured rect and
      "thumb": "<base64 jpeg>"}                 # fly its thumbnail to a corner
+    {"cmd": "point", "monitor": [l, t, w, h],  # glowing arrow at one element,
+     "rect": [fx, fy, fw, fh],                 # never a click; fades out on
+     "label": "Save"}                          # its own after a few seconds
 
 The sidecar answers each command with one JSON line on stdout::
 
@@ -32,9 +35,10 @@ CMD_BLANK = "blank"
 CMD_UNBLANK = "unblank"
 CMD_QUIT = "quit"
 CMD_SNAP = "snap"
+CMD_POINT = "point"
 
 ALL_COMMANDS = frozenset(
-    {CMD_SHOW, CMD_HIDE, CMD_BLANK, CMD_UNBLANK, CMD_QUIT, CMD_SNAP}
+    {CMD_SHOW, CMD_HIDE, CMD_BLANK, CMD_UNBLANK, CMD_QUIT, CMD_SNAP, CMD_POINT}
 )
 
 #: Sidecar exit code when no usable GUI stack exists (PySide6 missing or
@@ -83,6 +87,7 @@ __all__ = [
     "ALL_COMMANDS",
     "CMD_BLANK",
     "CMD_HIDE",
+    "CMD_POINT",
     "CMD_QUIT",
     "CMD_SHOW",
     "CMD_SNAP",

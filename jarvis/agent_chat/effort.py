@@ -74,6 +74,7 @@ _LADDERS: Final[dict[str, tuple[tuple[str, ...], str]]] = {
     "kimi": (("",), ""),
     "glm": (("",), ""),
     "deepseek-harness": (("",), ""),
+    "hermes": (("",), ""),
     "cursor": (("",), ""),
     "nvidia": (("", "none", "low", "medium", "high"), ""),
     "ollama": (("", "none", "low", "medium", "high", "max"), ""),

@@ -1036,6 +1036,29 @@ def model_capabilities(provider: str, model_id: str) -> dict[str, bool | None]:
     return {"vision": None, "tools": None}
 
 
+def model_thinking_switch(provider: str, model_id: str) -> bool:
+    """Whether the cached catalog says this model's server takes
+    ``chat_template_kwargs`` (so ``enable_thinking`` can be set per request).
+
+    Read synchronously from the same cache as :func:`model_capabilities`;
+    unknown is ``False``, so a server nobody vouched for is never sent a field
+    it may reject.
+    """
+    from jarvis.core import config as _cfg
+
+    cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
+    mid = (model_id or "").strip()
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # no cache yet means unknown, which means off
+        return False
+    for m in data.get(provider, {}).get("models", []):
+        if m.get("id") == mid:
+            params = m.get("supported_parameters")
+            return isinstance(params, list) and "chat_template_kwargs" in params
+    return False
+
+
 def pick_vision_model(provider: str) -> str | None:
     """The best vision-capable brain model of ``provider``, from the cached
     ``/v1/models`` catalog — or ``None`` when the catalog carries no modality
@@ -2010,6 +2033,10 @@ class ModelCatalog:
             models = parse_models_response(provider, resp.json())
             if provider == "ollama":
                 models = await self._enrich_ollama_capabilities(client, url, models)
+            elif provider == "local-openai":
+                models = await self._enrich_llamacpp_capabilities(
+                    client, url, resp.json(), models, headers
+                )
             return models
 
     @staticmethod
@@ -2070,6 +2097,75 @@ class ModelCatalog:
 
         probed = await asyncio.gather(*(probe(m) for m in models))
         return [m for m in probed if m is not None]
+
+    @staticmethod
+    async def _enrich_llamacpp_capabilities(
+        client: httpx.AsyncClient,
+        models_url: str,
+        payload: dict,
+        models: list[ModelInfo],
+        headers: dict[str, str],
+    ) -> list[ModelInfo]:
+        """Attach a single-model llama.cpp server's modalities from ``/props``.
+
+        In router mode ``llama-server`` lists ``architecture.input_modalities``
+        per model, but in the far more common single-model mode its
+        ``/v1/models`` entry carries only ``owned_by: "llamacpp"`` and a
+        ``meta`` block. The model's image input is published on ``/props``
+        (``modalities.vision``) instead, so without this probe a vision model
+        served with its mmproj (Qwen3.6, Gemma 4) reached every consumer as
+        blind and Screen Context / Computer Use skipped the local brain.
+
+        Detection is on what the SERVER says it is (``owned_by``), never on a
+        model or provider name (AP-21). Only the one-model shape is probed:
+        ``/props`` describes the loaded model, so it cannot be attributed to an
+        entry of a multi-model list. Fail-open: a server that does not answer
+        keeps the entry unknown, exactly as before.
+        """
+        entries = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(entries, list) or len(entries) != 1 or len(models) != 1:
+            return models
+        entry = entries[0] if isinstance(entries[0], dict) else {}
+        if entry.get("owned_by") != "llamacpp" or models[0].input_modalities is not None:
+            return models
+        root = models_url[: -len("/v1/models")] if models_url.endswith("/v1/models") else models_url
+        try:
+            resp = await client.get(f"{root}/props", headers=headers, params={})
+            resp.raise_for_status()
+            props = resp.json()
+        except Exception as exc:  # noqa: BLE001 — unknown stays unknown (fail-open)
+            log.debug("llama.cpp: /props probe failed at %s: %s", root, exc)
+            return models
+        mods = props.get("modalities") if isinstance(props, dict) else None
+        if not isinstance(mods, dict):
+            return models
+        declared = ["text"]
+        if mods.get("vision") is True:
+            declared.append("image")
+        if mods.get("audio") is True:
+            declared.append("audio")
+        # llama-server passes ``chat_template_kwargs`` into the template on every
+        # request (documented in tools/server/README.md), which is how a
+        # thinking model's reasoning is switched off for a fast turn. The
+        # template's own caps say whether it calls tools; without caps the
+        # entry keeps claiming tools, as an unknown one did before.
+        caps = props.get("chat_template_caps")
+        params = ["chat_template_kwargs"]
+        if not isinstance(caps, dict) or caps.get("supports_tool_calls", True) is not False:
+            params.append("tools")
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        n_ctx = meta.get("n_ctx")
+        if not isinstance(n_ctx, int) or n_ctx <= 0:
+            settings = props.get("default_generation_settings")
+            n_ctx = settings.get("n_ctx") if isinstance(settings, dict) else None
+        return [
+            replace(
+                models[0],
+                input_modalities=tuple(declared),
+                context_length=n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None,
+                supported_parameters=models[0].supported_parameters or tuple(params),
+            )
+        ]
 
     # -- static fallback ----------------------------------------------
 

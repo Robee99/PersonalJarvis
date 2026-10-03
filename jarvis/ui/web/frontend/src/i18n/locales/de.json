@@ -94,6 +94,7 @@
     "title": "Diktier- und Tipphilfen erreichen dieses Fenster nicht",
     "impact": "Diese App läuft mit Administratorrechten, deshalb lässt Windows andere Programme nicht in ihr Fenster schreiben. Diktier-Apps, Textbausteine, Zwischenablage-Tools und das automatische Ausfüllen von Passwort-Managern scheinen hier nichts zu tun, während sie in jeder anderen App weiterhin funktionieren.",
     "manual_hint": "Die App kann die Administratorrechte auf diesem Windows-Konto nicht selbst ablegen. Schließe sie und starte sie normal neu — ohne „Als Administrator ausführen“.",
+    "uac_off_hint": "Die Benutzerkontensteuerung (UAC) ist auf diesem PC ausgeschaltet, deshalb läuft jede App mit Administratorrechten und ein Neustart kann sie nicht ablegen. Schalte die UAC in den Windows-Einstellungen wieder ein, um das aufzuheben.",
     "restart_now": "Ohne Administratorrechte neu starten",
     "restarting": "Wird neu gestartet…",
     "restart_failed": "Die App konnte nicht ohne Administratorrechte neu gestartet werden.",
@@ -177,6 +178,9 @@
     "nav_forward": "Vor"
   },
   "nav": {
+    "deck": "HUD",
+    "orb": "Gedächtnis-Orb",
+    "armory": "Werkzeug-Arsenal",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agenten",
@@ -572,6 +576,7 @@
   },
   "voice_state": {
     "idle": "Bereit",
+    "unavailable": "Sprache nicht verfügbar",
     "listening": "Hört zu",
     "thinking": "Denkt",
     "speaking": "Spricht",
@@ -2690,6 +2695,7 @@
       "dark": "Dunkel",
       "light": "Hell",
       "system": "System",
+      "jarvis": "Jarvis",
       "system_now_dark": "Folgt Ihrem System, das derzeit dunkel ist.",
       "system_now_light": "Folgt Ihrem System, das derzeit hell ist."
     }
@@ -3197,6 +3203,14 @@
     "no_hits_suffix": ". Versuche andere Stichworte oder schau in den Graph.",
     "hits_heading": "Treffer"
   },
+  "wiki_holo": {
+    "open": "Handansicht",
+    "open_title": "HOLO-Deck öffnen: dein Gedächtnis als Kugeln, die du mit den Händen greifst (nutzt die Kamera)",
+    "preparing": "Wird vorbereitet…",
+    "close": "Schließen",
+    "install_failed": "Handerkennung konnte nicht vorbereitet werden",
+    "frame_title": "HOLO-Handgesten-Deck"
+  },
   "wiki_graph": {
     "empty_prefix": "Dein Memory-Graph ist noch leer. Sobald ",
     "empty_suffix": " Notizen anlegt, verbinden sich die Knoten hier automatisch.",
@@ -3676,7 +3690,8 @@
     "prompt_not_submitted": "der Prompt steht im Eingabefeld, abgeschickt wurde er nicht",
     "prompt_unconfirmed": "der Prompt wurde eingetippt, aber das Pane hat den Empfang nicht sichtbar gezeigt – bitte dort nachsehen",
     "dictation_nowhere": "Es war kein Textfeld aktiv, deshalb wurde das Diktat nicht eingefügt. Es steht in der Diktat-Historie.",
-    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem."
+    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem.",
+    "tts_no_audio": "Jarvis hat geantwortet, aber die Stimme konnte es nicht sprechen. Wähle in den Einstellungen eine funktionierende Stimme."
   },
   "chat_thread": {
     "message_to": "Nachricht an",
@@ -4677,6 +4692,9 @@
     "stat_brain": "Hirn",
     "stat_realtime": "Realtime",
     "stat_model": "Modell",
+    "stat_avatar": "Avatar",
+    "avatar_gigi": "Gigi",
+    "avatar_reactor": "Reaktor",
     "stat_running": "Läuft",
     "switch_to_classic": "Klassischer Chat",
     "switch_to_deck": "Deck",
@@ -4694,6 +4712,19 @@
     "shot_empty": "Gerade keine Aufnahme.",
     "shot_redacted": "{0} geschwärzt",
     "card_api": "API diese Sitzung",
+    "card_vitals": "System",
+    "vitals_cpu": "CPU",
+    "vitals_ram": "RAM",
+    "vitals_gpu": "GPU",
+    "vitals_vram": "VRAM",
+    "vitals_temp": "GPU-Temp.",
+    "vitals_power": "GPU-Leistung",
+    "vitals_battery": "Akku",
+    "vitals_plugged": "am Netz",
+    "vitals_on_battery": "im Akkubetrieb",
+    "vitals_mode": "Energiemodus",
+    "vitals_loading": "Rechner wird gelesen…",
+    "vitals_error": "Keine Werte von diesem Rechner.",
     "api_empty": "Noch keine Hirn-Antworten.",
     "api_in": "Rein",
     "api_out": "Raus",

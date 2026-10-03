@@ -94,6 +94,7 @@
     "title": "Las herramientas de dictado y escritura no alcanzan esta ventana",
     "impact": "Esta aplicación se está ejecutando con permisos de administrador, por lo que Windows impide que otros programas escriban en ella. Las apps de dictado, los expansores de texto, los gestores de portapapeles y el autocompletado de los gestores de contraseñas parecerán no hacer nada aquí, aunque sigan funcionando en el resto de aplicaciones.",
     "manual_hint": "La aplicación no puede renunciar por sí misma a los permisos de administrador en esta cuenta de Windows. Ciérrala y vuelve a abrirla con normalidad, sin «Ejecutar como administrador».",
+    "uac_off_hint": "El Control de cuentas de usuario (UAC) está desactivado en este PC, así que todas las aplicaciones se ejecutan como administrador y un reinicio no puede quitar esos permisos. Vuelve a activar el UAC en la configuración de Windows para solucionarlo.",
     "restart_now": "Reiniciar sin permisos de administrador",
     "restarting": "Reiniciando…",
     "restart_failed": "No se pudo reiniciar la aplicación sin permisos de administrador.",
@@ -177,6 +178,9 @@
     "nav_forward": "Adelante"
   },
   "nav": {
+    "deck": "HUD",
+    "orb": "Orbe de memoria",
+    "armory": "Arsenal de herramientas",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agentes",
@@ -572,6 +576,7 @@
   },
   "voice_state": {
     "idle": "Listo",
+    "unavailable": "Voz no disponible",
     "listening": "Escuchando",
     "thinking": "Pensando",
     "speaking": "Hablando",
@@ -2690,6 +2695,7 @@
       "dark": "Oscuro",
       "light": "Claro",
       "system": "Sistema",
+      "jarvis": "Jarvis",
       "system_now_dark": "Sigue a su sistema, que actualmente está en modo oscuro.",
       "system_now_light": "Sigue a su sistema, que actualmente está en modo claro."
     }
@@ -3197,6 +3203,14 @@
     "no_hits_suffix": ". Prueba otras palabras clave o consulta el grafo.",
     "hits_heading": "Coincidencias"
   },
+  "wiki_holo": {
+    "open": "Vista de manos",
+    "open_title": "Abrir el panel HOLO: tu memoria como orbes que agarras con las manos (usa la cámara)",
+    "preparing": "Preparando…",
+    "close": "Cerrar",
+    "install_failed": "No se pudo preparar el seguimiento de manos",
+    "frame_title": "Panel de gestos HOLO"
+  },
   "wiki_graph": {
     "empty_prefix": "Tu grafo de memoria aún está vacío. En cuanto ",
     "empty_suffix": " cree notas, los nodos se conectarán aquí automáticamente.",
@@ -3676,7 +3690,8 @@
     "prompt_not_submitted": "el prompt está en su campo de entrada, no se envió",
     "prompt_unconfirmed": "el prompt se escribió, pero el panel no mostró que llegara: revisa ese panel",
     "dictation_nowhere": "Ningún campo de texto tenía el foco, así que el dictado no se insertó. Está en el historial de dictados.",
-    "realtime_provider_issue": "El proveedor Realtime informó de un problema."
+    "realtime_provider_issue": "El proveedor Realtime informó de un problema.",
+    "tts_no_audio": "Jarvis respondió, pero la voz no pudo decirlo. Elige una voz que funcione en Ajustes."
   },
   "chat_thread": {
     "message_to": "Mensaje a",
@@ -4677,6 +4692,9 @@
     "stat_brain": "Cerebro",
     "stat_realtime": "Tiempo real",
     "stat_model": "Modelo",
+    "stat_avatar": "Avatar",
+    "avatar_gigi": "Gigi",
+    "avatar_reactor": "Reactor",
     "stat_running": "Activos",
     "switch_to_classic": "Chat clásico",
     "switch_to_deck": "Panel",
@@ -4694,6 +4712,19 @@
     "shot_empty": "Sin captura ahora.",
     "shot_redacted": "{0} ocultos",
     "card_api": "API en esta sesión",
+    "card_vitals": "Sistema",
+    "vitals_cpu": "CPU",
+    "vitals_ram": "RAM",
+    "vitals_gpu": "GPU",
+    "vitals_vram": "VRAM",
+    "vitals_temp": "Temp. GPU",
+    "vitals_power": "Potencia GPU",
+    "vitals_battery": "Batería",
+    "vitals_plugged": "enchufado",
+    "vitals_on_battery": "con batería",
+    "vitals_mode": "Modo de energía",
+    "vitals_loading": "Leyendo el equipo…",
+    "vitals_error": "Sin lecturas de este equipo.",
     "api_empty": "Aún sin respuestas del cerebro.",
     "api_in": "Entrada",
     "api_out": "Salida",

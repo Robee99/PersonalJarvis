@@ -682,6 +682,21 @@ spotify = "jarvis.plugins.tool.spotify_rest:SpotifyRestTool"
 # key "youtube_music".
 youtube_music = "jarvis.plugins.tool.youtube_music_rest:YouTubeMusicRestTool"
 screen-snapshot = "jarvis.plugins.tool.screen_snapshot:ScreenSnapshotTool"
+# One webcam still for vision (2026-10-02). Router-tier, risk_tier "ask": a
+# camera frame shows the person, so every call is confirmed unless whitelisted.
+# Never a spawn and never in a worker or society tool set (AP-5/AP-14). See
+# ADR-0011 amendment "Camera still".
+camera-snapshot = "jarvis.plugins.tool.camera_snapshot:CameraSnapshotTool"
+# "Where do I click?" (2026-10-02): a glowing arrow on one UI element of the
+# foreground window, drawn by the CU indicator sidecar. Never clicks. Router
+# tier, risk_tier "safe"; never a spawn and never in a worker or society tool
+# set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+point-at = "jarvis.plugins.tool.point_at:PointAtTool"
+# Laptop power (2026-10-02): Windows power mode, ASUS Armoury Crate operating
+# mode and battery charge limit. Router tier, risk_tier "monitor" (every change
+# is one sentence from undone); never a spawn and never in a worker or society
+# tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
+laptop-power = "jarvis.plugins.tool.laptop_power:LaptopPowerTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"
 switch-window = "jarvis.plugins.tool.switch_window:SwitchWindowTool"
 read-visible-ui-state = "jarvis.plugins.tool.read_visible_ui_state:ReadVisibleUIStateTool"
@@ -843,6 +858,9 @@ jarvis = [
     # Node bot scripts shipped alongside their Python bridge tools (e.g. the
     # google_calendar bot). Not Python, so packages.find won't pick them up.
     "plugins/tool/*.mjs",
+    # The HOLO hand-gesture deck (MIT, jarvis/ui/web/holo_routes.py): one page
+    # plus its licence, served as-is from the package directory.
+    "ui/web/holo/*",
     # AP-23 wave-2 finding 6: runtime data files read via `Path(__file__)` at
     # first use, missing from wheel installs — masked today only because
     # every dev install is editable (source tree == package tree).

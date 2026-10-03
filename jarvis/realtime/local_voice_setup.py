@@ -296,6 +296,9 @@ class SetupDeps:
     languages: Callable[[], list[str]]
     selftest: Callable[[], dict[str, Any]] | None = None
     unsupported: Callable[[], str] = unsupported_reason
+    # "openai": the model is served elsewhere (llama-server), so setup neither
+    # starts Ollama nor downloads a tag; the self-test proves the server.
+    llm_api: Callable[[], str] = lambda: "ollama"
     package_source: Path = field(
         default_factory=lambda: Path(__file__).resolve().parent.parent / "voice_engine")
 
@@ -439,21 +442,8 @@ def _run_setup(deps: SetupDeps) -> None:
     _progress("llm", 0.0, "Checking the local language model")
     machine = deps.machine()
     model = deps.configured_llm()
-    installed, error = deps.installed_llms()
-    if error:
-        started, detail = deps.start_ollama()
-        if not started:
-            raise SetupError(f"The local language model server is not available: {detail}")
-        installed, error = deps.installed_llms()
-        if error:
-            raise SetupError(error)
-    if model:
-        present = any(_same_tag(model, name) for name in installed)
-    else:
-        model, present = choose_llm(machine, installed)
-    if not present:
-        _progress("llm", 0.0, f"Downloading {model}")
-        deps.pull_llm(model, lambda pct: _progress("llm", pct / 100.0, f"Downloading {model}"))
+    if deps.llm_api() != "openai":
+        model = _ensure_ollama_model(deps, machine, model)
 
     _write_json(home / _SETUP_STATE, {
         "engine_version": engine_version(),
@@ -472,6 +462,26 @@ def _run_setup(deps: SetupDeps) -> None:
         if not report.get("ok"):
             raise SetupError(str(report.get("reason") or "The self-test did not pass."))
     _progress("selftest", 1.0, "Done")
+
+
+def _ensure_ollama_model(deps: SetupDeps, machine: str, model: str) -> str:
+    """Start Ollama if needed and download the voice model; returns its tag."""
+    installed, error = deps.installed_llms()
+    if error:
+        started, detail = deps.start_ollama()
+        if not started:
+            raise SetupError(f"The local language model server is not available: {detail}")
+        installed, error = deps.installed_llms()
+        if error:
+            raise SetupError(error)
+    if model:
+        present = any(_same_tag(model, name) for name in installed)
+    else:
+        model, present = choose_llm(machine, installed)
+    if not present:
+        _progress("llm", 0.0, f"Downloading {model}")
+        deps.pull_llm(model, lambda pct: _progress("llm", pct / 100.0, f"Downloading {model}"))
+    return model
 
 
 # ---------------------------------------------------------------- self-test
@@ -629,6 +639,12 @@ async def card_status(
         llm_model, _present = choose_llm(machine, names)
         llm_source = "default"
     llm_installed = None if llm_error else any(_same_tag(llm_model, n) for n in names)
+    if settings.llm_api == "openai":
+        # The model lives on the OpenAI-compatible server; whether it answers
+        # is the self-test's verdict, not Ollama's tag list.
+        llm_model = settings.llm_model
+        llm_source = "config" if llm_model else "default"
+        llm_installed = None
 
     blocked = unsupported_reason()
     engine = LocalVoiceProvider._engine  # noqa: SLF001 - never create one for a status read
@@ -779,6 +795,7 @@ def real_deps(*, loop: asyncio.AbstractEventLoop | None,
         machine=machine_class,
         configured_llm=lambda: str(getattr(section(), "llm_model", "") or ""),
         configured_voice=lambda: str(getattr(section(), "tts", "") or "pocket"),
+        llm_api=lambda: str(getattr(section(), "llm_api", "") or "ollama"),
         languages=lambda: list(getattr(section(), "languages", None) or ["de", "en"]),
         selftest=selftest,
     )

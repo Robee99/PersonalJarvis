@@ -2284,11 +2284,16 @@ def _main(argv: list[str] | None = None) -> int:
 
             import jarvis as _jarvis
             from jarvis.platform.deescalate import maybe_relaunch_unelevated
-            from jarvis.ui.relauncher import detached_creationflags, fresh_user_env
+            from jarvis.ui.relauncher import (
+                detached_creationflags,
+                fresh_user_env,
+                restart_workdir,
+                self_launch_command,
+            )
 
             _drop = maybe_relaunch_unelevated(
-                [sys.executable, "-m", "jarvis.ui.web.launcher", *_raw_argv],
-                cwd=str(_Path(_jarvis.__file__).resolve().parent.parent),
+                self_launch_command(list(_raw_argv)),
+                cwd=restart_workdir(str(_Path(_jarvis.__file__).resolve().parent.parent)),
                 env=fresh_user_env(),
                 creationflags=detached_creationflags(),
             )

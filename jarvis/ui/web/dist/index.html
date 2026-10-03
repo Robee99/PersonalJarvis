@@ -29,12 +29,18 @@
       // HTTP; ThemeProvider reconciles it once it does, and mirrors it back
       // here so the NEXT launch is instant.
       (function () {
+        // This build's default is the Jarvis look: dark under the reactor palette.
         var mode = "dark";
+        var jarvisLook = true;
         try {
           var stored = (localStorage.getItem("jarvis.theme") || "").trim();
           if (stored === "light" || stored === "dark") {
             mode = stored;
+            jarvisLook = false;
+          } else if (stored === "jarvis") {
+            mode = "dark";
           } else if (stored === "system") {
+            jarvisLook = false;
             mode = window.matchMedia("(prefers-color-scheme: light)").matches
               ? "light"
               : "dark";
@@ -44,6 +50,7 @@
         }
         var root = document.documentElement;
         root.classList.toggle("dark", mode === "dark");
+        root.classList.toggle("jarvis", jarvisLook);
         root.style.colorScheme = mode;
         window.__JARVIS_BOOT_STARTED_AT = performance.now();
       })();
@@ -208,8 +215,8 @@
         #jarvis-boot-splash .name { margin-top: 16px; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-D_JNtbx8.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BVF5feNl.css">
+    <script type="module" crossorigin src="/assets/index-C_mFmEb-.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BLpC6Yxa.css">
   </head>
   <body>
     <div id="root">
@@ -606,6 +613,6 @@
           report();
         }, POLL_MS);
       })();
-    </script>
+    </script>
   </body>
 </html>

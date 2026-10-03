@@ -2275,6 +2275,54 @@
         "next_action": "Run the no-login connection and real telemetry read on a supported Linux AMD host, then verify lifecycle.",
         "evidence": "Plugins\nSkills\nPlugins\nMCPs\nPlugins\nAMD GPU Status\n\nUnsupported on this device\n· Home & Devices\n\nConnect\n\nAMD GPU telemetry is unavailable on this operating system. This connector requires a compatible Linux AMD host with AMD SMI.\n\nRead AMD GPU utilization, temperature and driver data through AMD SMI\n\nStatus\nUnsupported on this device\nSign-in\nLocal device\nConnection\nStays connected\n—\n0 files\namd_gpu\nLoading…"
       }
+    },
+    {
+      "plugin_id": "paperclip",
+      "result": "PASS",
+      "config_fingerprint": "f6778f0d5de75ba7c11f7dbdc025c95e0a01400342f305902887bc0a231edbae",
+      "initial_state": "clean_unconnected",
+      "evidence": {
+        "ui": {
+          "status": "PASS",
+          "detail": "Tool armory card clicked; the token dialog asked for the Paperclip address and a pcp_board_ key; Connect turned the card to CONNECTED. A wrong key was refused with HTTP 401.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        },
+        "browser": {
+          "status": "NOT_APPLICABLE",
+          "detail": "Paperclip issues API access as board keys from its own CLI or dashboard; there is no provider browser page to reach.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        },
+        "callback": {
+          "status": "NOT_APPLICABLE",
+          "detail": "No OAuth redirect exists for a pasted board key, so there is no callback to complete.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        },
+        "connected": {
+          "status": "PASS",
+          "detail": "Catalog listing reported status connected and live_callable true; 41 paperclip/* tools were registered in the live tool list.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        },
+        "smoke": {
+          "status": "PASS",
+          "detail": "Through Jarvis' own spawn path (saved token and address -> npx @paperclipai/mcp-server) the connector listed the company and its agents and created issue ROB-2 assigned to agent dan.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03",
+          "real_action": true
+        },
+        "reconnect": {
+          "status": "PASS",
+          "detail": "Disconnected through DELETE /api/marketplace/plugins/paperclip (status not_connected), then connected again through the UI dialog; tools returned.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        },
+        "restart": {
+          "status": "PASS",
+          "detail": "After a full jarvis serve restart the plugin still read connected and its 41 tools were registered again in the background after boot.",
+          "reference": "docs/marketplace/plugin-auth-audit.md#paperclip-2026-10-03"
+        }
+      },
+      "provider_exception": {
+        "reason": "Paperclip authenticates API clients only with bearer board or agent keys; its official MCP server reads PAPERCLIP_API_KEY and offers no OAuth flow.",
+        "source": "https://www.npmjs.com/package/@paperclipai/mcp-server"
+      }
     }
   ]
 }

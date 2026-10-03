@@ -36,6 +36,9 @@ class RuntimeConfig:
     tts_options: dict[str, Any] = field(default_factory=dict)
     llm_model: str = "qwen3.5:4b-voice-8k"
     llm_base_url: str = "http://127.0.0.1:11434"
+    # "ollama" (the default) or "openai": any OpenAI-compatible server, such
+    # as the llama-server the local brain already runs.
+    llm_api: str = "ollama"
     llm_num_ctx: int = 8192
     llm_keep_alive: str = "30m"
     # Low, like the bench's tool runs: a voice turn wants the same tool for the
@@ -54,6 +57,7 @@ class RuntimeConfig:
             tts_options=dict(message.get("tts_options") or {}),
             llm_model=str(llm.get("model") or cls.llm_model),
             llm_base_url=str(llm.get("base_url") or cls.llm_base_url),
+            llm_api=str(llm.get("api") or cls.llm_api),
             llm_num_ctx=int(llm.get("num_ctx") or cls.llm_num_ctx),
             llm_keep_alive=str(llm.get("keep_alive") or cls.llm_keep_alive),
             llm_temperature=float(llm.get("temperature", cls.llm_temperature)),
@@ -63,7 +67,7 @@ class RuntimeConfig:
 
 def build_models(config: RuntimeConfig, progress: Progress) -> tuple[EngineModels, dict[str, Any]]:
     """Load every component; returns the models and a description of what loaded."""
-    from jarvis.voice_engine.llm import OllamaChat  # noqa: PLC0415
+    from jarvis.voice_engine.llm import make_chat  # noqa: PLC0415
     from jarvis.voice_engine.stt import ParakeetStt  # noqa: PLC0415
     from jarvis.voice_engine.tts import load_tts  # noqa: PLC0415
     from jarvis.voice_engine.turn import SmartTurn  # noqa: PLC0415
@@ -113,8 +117,9 @@ def build_models(config: RuntimeConfig, progress: Progress) -> tuple[EngineModel
         return voices[config.languages[0]]
 
     progress("llm", 0.8)
-    llm = OllamaChat(config.llm_model, base_url=config.llm_base_url, num_ctx=config.llm_num_ctx,
-                     keep_alive=config.llm_keep_alive, temperature=config.llm_temperature)
+    llm = make_chat(config.llm_api, config.llm_model, base_url=config.llm_base_url,
+                    num_ctx=config.llm_num_ctx, keep_alive=config.llm_keep_alive,
+                    temperature=config.llm_temperature)
     timings["llm_load"] = round(llm.warm(), 2)
     models = EngineModels(
         vad_factory=lambda: SileroVad(vad_path), turn=turn, stt=stt, tts_for=tts_for, llm=llm

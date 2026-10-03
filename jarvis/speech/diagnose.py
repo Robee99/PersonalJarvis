@@ -93,6 +93,38 @@ def step_devices() -> None:
             print(f"  {marker} #{i:2d}  {d['name']}  (ch={d['max_output_channels']}, rate={int(d['default_samplerate'])})")
 
 
+# Below the quiet line a mic needs more gain; below the silence line it is not
+# delivering sound at all. Any real microphone has electrical self-noise around
+# -70 to -55 dBFS even in a silent room, so a level under -80 dBFS means the
+# operating system is handing over zeros: a hardware mute key, a disabled mic,
+# or an audio effect that outputs silence (live case 2026-10-03: a Lenovo
+# Realtek array at -90 dBFS while Windows showed it unmuted at 80 %).
+MIC_QUIET_DBFS = -40.0
+MIC_DIGITAL_SILENCE_DBFS = -80.0
+MIC_NO_DEVICE_DBFS = -119.9
+MIC_SILENT_HINT = (
+    "The microphone delivers pure silence, so volume is not the problem. Check "
+    "the laptop's mic-mute key and its light, turn off Audio enhancements for "
+    "this microphone in the system sound settings, and check that no privacy "
+    "switch or BIOS setting disables it."
+)
+
+
+def classify_mic_level(max_dbfs: float) -> str:
+    """One verdict for a measured peak: no_device / silent / quiet / ok.
+
+    The single owner of these thresholds: the CLI diagnosis, the wake-word
+    readiness route and ``jarvis --doctor`` all read their verdict here.
+    """
+    if max_dbfs <= MIC_NO_DEVICE_DBFS:
+        return "no_device"
+    if max_dbfs < MIC_DIGITAL_SILENCE_DBFS:
+        return "silent"
+    if max_dbfs < MIC_QUIET_DBFS:
+        return "quiet"
+    return "ok"
+
+
 async def measure_mic_dbfs(
     duration_s: float = 3.0,
     *,
@@ -184,7 +216,9 @@ async def step_mic_level(duration_s: float = 10.0) -> float | None:
     print(f"→ Samples received: {samples_seen}   Max level: {max_dbfs:.1f} dBFS")
     if samples_seen == 0:
         print("  ⚠ NO audio! Check mic selection in Windows.")
-    elif max_dbfs < -40:
+    elif classify_mic_level(max_dbfs) == "silent":
+        print(f"  ⚠ {MIC_SILENT_HINT}")
+    elif max_dbfs < MIC_QUIET_DBFS:
         print("  ⚠ Very quiet mic level. Turn up the Windows mic volume or move the headset closer.")
     elif max_dbfs > -3:
         print("  ⚠ Clipping! Reduce the mic volume in Windows.")

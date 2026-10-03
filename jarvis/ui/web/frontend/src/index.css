@@ -867,6 +867,41 @@ label,
     --info-foreground: 0 0% 100%;
 
   }
+
+  /* --- The Jarvis look: the dark theme under an arc-reactor palette --------
+     Opt-in (Settings > Appearance > Jarvis). Same ladder and the same ink
+     contrast as dark; the neutral greys take a deep-navy cast and the one
+     signal hue becomes reactor cyan, so focus, links and selection glow. */
+  .dark.jarvis {
+    --background: 216 45% 5%; /* #070C13 */
+    --sidebar: 216 40% 7%;
+    --card: 214 34% 10%;
+    --secondary: 213 30% 14%;
+    --muted: 213 30% 14%;
+    --input: 213 30% 14%;
+    --popover: 214 34% 11%;
+    --user-bubble: 205 40% 18%;
+    --surface-raised: 212 28% 17%;
+    --border: 210 30% 17%;
+    --border-strong: 195 40% 28%;
+    --muted-foreground: 205 18% 66%;
+    --foreground-secondary: 205 20% 76%;
+    --accent: 188 92% 52%; /* #13D3EC — reactor cyan */
+    --accent-foreground: 216 45% 5%;
+    --ring: 188 92% 52%;
+    --chat-bubble-out: 188 85% 42%;
+    --accent-rgb: 19 211 236;
+    --shell-rgb: 7 12 19;
+    --stage-bg: 216 45% 5%;
+    --info: 188 92% 52%;
+  }
+
+  .dark.jarvis body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgb(19 211 236 / 0.10), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 110%, rgb(19 211 236 / 0.06), transparent 60%);
+    background-attachment: fixed;
+  }
 }
 
 @layer base {
@@ -1989,6 +2024,17 @@ body {
     filter: drop-shadow(0 0 1.2px hsl(var(--background) / 0.85));
     animation: deck-orb-turn 10.8s linear infinite;
   }
+  /* The reactor avatar's coils (ReactorCore.tsx): they turn while a voice
+     state is live and stand still at rest, like the rest of the centre. */
+  .deck-reactor-coils {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    animation: deck-orb-turn 14s linear infinite;
+  }
+  .deck-reactor-coils[data-voice="idle"] {
+    animation: none;
+  }
   @keyframes deck-orb-turn {
     to {
       transform: rotate(360deg);
@@ -2000,6 +2046,7 @@ body {
     .deck-orb-corona,
     .deck-orb-ripple,
     .deck-orb-sweep,
+    .deck-reactor-coils,
     .deck-ring-orbit {
       animation: none !important;
     }

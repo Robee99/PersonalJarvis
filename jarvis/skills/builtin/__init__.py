@@ -46,6 +46,7 @@ _PLUGIN_PAIRED_SKILLS: tuple[str, ...] = (
     "plugin-airtable",
     "plugin-cal_com",
     "plugin-home_assistant",
+    "plugin-paperclip",
     "plugin-spotify",
     "plugin-youtube_music",
     "plugin-higgsfield",

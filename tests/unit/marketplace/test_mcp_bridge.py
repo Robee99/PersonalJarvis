@@ -56,6 +56,23 @@ def test_vercel_official_hosted_mcp_is_available() -> None:
     assert servers["vercel"]["url"] == "https://mcp.vercel.com"
 
 
+def test_paperclip_gets_its_own_address_and_board_key() -> None:
+    # Paperclip is self-hosted: the address saved at connect reaches the
+    # official MCP server through PAPERCLIP_API_URL, next to the board key.
+    ts = TokenStore(InMemoryBackend())
+    ts.save(
+        "paperclip",
+        Tokens(access="pcp_board_SECRET", extra={"instance_url": "http://127.0.0.1:3100"}),
+    )
+    pc = assemble_claude_mcp_servers(load_catalog(), ts)["paperclip"]
+    assert pc["command"] == "npx"
+    assert pc["args"] == ["-y", "@paperclipai/mcp-server"]
+    assert pc["env"] == {
+        "PAPERCLIP_API_URL": "http://127.0.0.1:3100",
+        "PAPERCLIP_API_KEY": "pcp_board_SECRET",
+    }
+
+
 def test_unconnected_plugin_is_skipped() -> None:
     # slack has an http mcp_server but no saved token -> not connected -> skip
     servers = assemble_claude_mcp_servers(load_catalog(), _store(github="ghp_X"))

@@ -74,6 +74,7 @@ Runner = Literal[
     "kimi-cli",
     "glm-cli",
     "dsh-cli",
+    "hermes-cli",
     "cursor-cli",
 ]
 
@@ -328,6 +329,18 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
         # model flag, no session to resume, no tool stream.
         default_model="",
         agent="deepseek-harness",
+    ),
+    ProviderRow(
+        id="hermes",
+        label="Hermes Agent",
+        family="hermes",
+        runner="hermes-cli",
+        models_source="curated",
+        # One-shot mode answers with its final message only, on the model the
+        # person picked in Hermes (``hermes model``); its ids are that
+        # provider's own, so nothing is shipped here.
+        default_model="",
+        agent="hermes",
     ),
     ProviderRow(id="openai", label="OpenAI", family="openai", runner="api", models_source="live"),
     ProviderRow(

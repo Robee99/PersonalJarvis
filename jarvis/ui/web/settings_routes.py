@@ -617,11 +617,11 @@ async def put_ui_language(body: UiLanguageBody, request: Request) -> dict[str, o
 # the OS preference live, so flipping the OS theme flips the app with it.
 # ----------------------------------------------------------------------
 
-_UI_THEMES: tuple[str, ...] = ("dark", "light", "system")
+_UI_THEMES: tuple[str, ...] = ("dark", "light", "system", "jarvis")
 
 
 class AppearanceBody(BaseModel):
-    theme: str = Field(..., min_length=1, description="dark | light | system")
+    theme: str = Field(..., min_length=1, description="dark | light | system | jarvis")
     persist: bool = Field(default=True, description="Persist as boot default in jarvis.toml")
 
 
@@ -1706,7 +1706,11 @@ async def wake_word_self_test(request: Request) -> dict[str, object]:
     is exactly what (1) surfaces.
     """
     from jarvis.audio.capture import MicrophoneAccessError
-    from jarvis.speech.diagnose import measure_mic_dbfs
+    from jarvis.speech.diagnose import (
+        MIC_SILENT_HINT,
+        classify_mic_level,
+        measure_mic_dbfs,
+    )
     from jarvis.speech.wake_constants import resolve_vosk_model_path
     from jarvis.speech.wake_model_fetch import resolve_wake_language
     from jarvis.speech.wake_phrase import resolve_wake_plan
@@ -1774,8 +1778,9 @@ async def wake_word_self_test(request: Request) -> dict[str, object]:
         max_dbfs = -120.0
     if not _local_microphone_capture_ready(request):
         return _blocked(phrase_in_vocab)
-    mic_ok = max_dbfs > -40.0
-    no_device = max_dbfs <= -119.9
+    mic_verdict = classify_mic_level(max_dbfs)
+    mic_ok = mic_verdict == "ok"
+    no_device = mic_verdict == "no_device"
 
     # Human-readable verdict + the single most useful next step.
     ok = bool(plan.wake_available) and phrase_in_vocab is not False and mic_ok
@@ -1788,6 +1793,8 @@ async def wake_word_self_test(request: Request) -> dict[str, object]:
         hint = "Pick a real word of your language, or use a different phrase."
     elif no_device:
         message, hint = "No microphone detected.", "Connect/enable a mic."
+    elif mic_verdict == "silent":
+        message, hint = "The microphone delivers no sound at all.", MIC_SILENT_HINT
     elif not mic_ok:
         message, hint = "Mic signal is very quiet.", "Speak louder or raise input gain."
     else:
@@ -1823,7 +1830,7 @@ async def wake_mic_level(request: Request) -> dict[str, object]:
     diagnostics and this route can never disagree on what "too quiet" means).
     """
     from jarvis.audio.capture import MicrophoneAccessError
-    from jarvis.speech.diagnose import measure_mic_dbfs
+    from jarvis.speech.diagnose import classify_mic_level, measure_mic_dbfs
 
     # A GET never asks: it reads the state silently and reports "permission
     # required" until the gesture routes (the wake switch, the self-test button)
@@ -1838,10 +1845,12 @@ async def wake_mic_level(request: Request) -> dict[str, object]:
         max_dbfs = -120.0
     if not _local_microphone_capture_ready(request):
         return _blocked_mic_level_result(request)
+    verdict = classify_mic_level(max_dbfs)
     return {
         "max_dbfs": max_dbfs,
-        "no_device": max_dbfs <= -119.9,
-        "too_quiet": -119.9 < max_dbfs < -40.0,
+        "no_device": verdict == "no_device",
+        "too_quiet": verdict in ("silent", "quiet"),
+        "silent": verdict == "silent",
         "permission_required": False,
     }
 

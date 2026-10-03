@@ -220,3 +220,13 @@ def test_a_stored_selftest_goes_stale_when_the_model_changes(_isolated_home: Pat
     assert moved["stale"] is True
     raw = json.loads((_isolated_home / "selftest.json").read_text(encoding="utf-8"))
     assert raw["fingerprint"]["engine_version"] == setup.engine_version()
+
+
+def test_a_served_model_skips_ollama_entirely(_isolated_home: Path) -> None:
+    world = _world(_isolated_home, llm_api="openai", ollama_running=False,
+                   ollama_installed=False, configured_llm="qwen3.6-35b-a3b")
+    setup.run_setup_blocking(world.deps(PACKAGE))
+
+    assert setup.setup_snapshot()["error"] == ""
+    assert world.ollama_starts == 0 and world.pulled == []
+    assert read_setup_state(_isolated_home)["llm_model"] == "qwen3.6-35b-a3b"

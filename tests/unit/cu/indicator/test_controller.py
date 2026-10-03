@@ -242,3 +242,55 @@ async def test_screen_capture_waits_for_real_show_ack_and_hides_afterward(
     assert calls == ["show:"]
     await bus.publish(ScreenCaptureIndicatorDismissed(trace_id=trace_id))
     assert calls == ["show:", "stop"]
+
+
+async def test_point_reports_why_no_arrow_can_be_drawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctl = CUIndicatorController(EventBus())
+    monkeypatch.setattr(
+        CUIndicatorController,
+        "_border_capability",
+        staticmethod(lambda: (False, "no display on this host (headless)")),
+    )
+
+    def _explode() -> None:  # pragma: no cover - the assertion IS the test
+        raise AssertionError("sidecar must not spawn on a headless host")
+
+    monkeypatch.setattr(ctl, "_spawn_sidecar", _explode)
+
+    shown, reason = await ctl.point(monitor=[0, 0, 10, 10], rect=[0, 0, 1, 1], label="Save")
+
+    assert (shown, reason) == (False, "no display on this host (headless)")
+
+
+async def test_point_sends_one_acked_command_and_keeps_the_sidecar_alive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctl = CUIndicatorController(EventBus())
+    sent: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        CUIndicatorController, "_border_capability", staticmethod(lambda: (True, ""))
+    )
+    monkeypatch.setattr(ctl, "_spawn_sidecar", lambda: setattr(ctl, "_proc", object()))
+    monkeypatch.setattr(ctl, "_schedule_idle_quit", lambda: None)
+
+    def fake_send_and_wait(cmd: str, timeout_s: float, **fields: Any) -> bool:
+        sent.append((cmd, fields))
+        return True
+
+    monkeypatch.setattr(ctl, "_send_and_wait", fake_send_and_wait)
+
+    shown, reason = await ctl.point(
+        monitor=[1920, 0, 2560, 1440], rect=[0.1, 0.2, 0.05, 0.03], label="Save"
+    )
+
+    assert (shown, reason) == (True, "")
+    assert sent == [
+        (
+            "point",
+            {"monitor": [1920, 0, 2560, 1440], "rect": [0.1, 0.2, 0.05, 0.03], "label": "Save"},
+        )
+    ]
+    assert ctl._snap_until > 0
+    controller_mod.capture_guard.unregister_hook()

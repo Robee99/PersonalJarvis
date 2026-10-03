@@ -29,7 +29,7 @@ def test_voice_status_defaults_to_false(monkeypatch) -> None:
     with TestClient(srv.app) as client:
         resp = client.get("/api/voice/status")
     assert resp.status_code == 200
-    assert resp.json() == {"ready": False}
+    assert resp.json() == {"ready": False, "detail": ""}
 
 
 @pytest.mark.parametrize("value", ["0", "off", "false", "OFF"])
@@ -43,7 +43,7 @@ def test_voice_status_ready_when_voice_disabled(monkeypatch, value: str) -> None
     assert srv._voice_ready is True
     with TestClient(srv.app) as client:
         resp = client.get("/api/voice/status")
-    assert resp.json() == {"ready": True}
+    assert resp.json() == {"ready": True, "detail": ""}
 
 
 @pytest.mark.asyncio
@@ -56,7 +56,7 @@ async def test_voice_status_flips_true_after_boot_status_event() -> None:
     assert srv._voice_ready is True
     with TestClient(srv.app) as client:
         resp = client.get("/api/voice/status")
-    assert resp.json() == {"ready": True}
+    assert resp.json() == {"ready": True, "detail": "phase-a-done"}
 
 
 @pytest.mark.asyncio
@@ -95,6 +95,11 @@ async def test_voice_ready_watchdog_releases_boot_without_claiming_usable(monkey
 
     assert srv._voice_ready is False
     assert any(e.ready and not e.voice_usable and e.detail == "watchdog_timeout" for e in seen)
+    # A tab opened after the release learns that voice gave up, so it stops
+    # promising "you'll be able to speak shortly".
+    with TestClient(srv.app) as client:
+        resp = client.get("/api/voice/status")
+    assert resp.json() == {"ready": False, "detail": "watchdog_timeout"}
 
 
 @pytest.mark.asyncio

@@ -157,6 +157,18 @@ def test_sighted_brain_keeps_the_screenshot_tool() -> None:
     )
 
 
+def test_blind_brain_never_gets_the_camera_tool_either() -> None:
+    """The camera still dead-ends on a blind model exactly like a screenshot."""
+    m = _mgr({})
+    gated = m._hide_screenshot_for_blind_brain(
+        {"camera": object(), "screenshot": object(), "search_web": object()},
+        _BlindBrain(),
+    )
+    assert set(gated) == {"search_web"}
+    sighted = {"camera": object()}
+    assert m._hide_screenshot_for_blind_brain(sighted, _SightedBrain()) == sighted
+
+
 def test_missing_capability_attribute_counts_as_blind() -> None:
     """An adapter without the flag cannot prove sight — fail closed."""
     m = _mgr({})

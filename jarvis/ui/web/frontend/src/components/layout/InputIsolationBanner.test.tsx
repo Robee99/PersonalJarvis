@@ -53,6 +53,22 @@ describe("InputIsolationBanner", () => {
     expect(screen.queryByTestId("input-isolation-banner")).toBeNull();
   });
 
+  it("uses the server's wording for a root process outside Windows", () => {
+    mockReport = blocked({
+      reason: "root",
+      platform: "linux",
+      summary: "This app is running as root.",
+      remedy: "Start the app as your normal user account instead of with sudo/root.",
+      can_restart_unelevated: false,
+    });
+    render(<InputIsolationBanner />);
+
+    expect(screen.getByText("This app is running as root.")).toBeDefined();
+    expect(screen.getByText(/instead of with sudo\/root/)).toBeDefined();
+    expect(screen.queryByText("input_isolation.impact")).toBeNull();
+    expect(screen.queryByText("input_isolation.manual_hint")).toBeNull();
+  });
+
   it("names the problem and offers the one-click repair when blocked", () => {
     mockReport = blocked();
     render(<InputIsolationBanner />);
@@ -85,6 +101,15 @@ describe("InputIsolationBanner", () => {
     render(<InputIsolationBanner />);
 
     expect(screen.getByText("input_isolation.manual_hint")).toBeDefined();
+    expect(screen.queryByText("input_isolation.restart_now")).toBeNull();
+  });
+
+  it("says UAC is off instead of offering a restart that cannot help", () => {
+    mockReport = blocked({ can_restart_unelevated: false, uac_disabled: true });
+    render(<InputIsolationBanner />);
+
+    expect(screen.getByText("input_isolation.uac_off_hint")).toBeDefined();
+    expect(screen.queryByText("input_isolation.manual_hint")).toBeNull();
     expect(screen.queryByText("input_isolation.restart_now")).toBeNull();
   });
 

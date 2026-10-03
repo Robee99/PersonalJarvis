@@ -144,7 +144,7 @@ You need Windows, macOS or Linux, plus one API key from a supported provider or 
 
 - Models: OpenAI, Anthropic Claude, Google Gemini and Vertex AI, OpenRouter, NVIDIA, Ollama and any OpenAI-compatible local server, plus your Claude Code and Codex subscriptions.
 - Speech: local Whisper, OpenAI, Gemini, Groq, Deepgram and OpenRouter for listening; Piper (local), ElevenLabs, Cartesia, Inworld, Gemini and OpenRouter voices for speaking.
-- Coding agents: Claude Code, Codex, OpenCode, Kimi Code, GLM, Grok Build and Antigravity.
+- Coding agents: Claude Code, Codex, OpenCode, Kimi Code, GLM, Grok Build, Antigravity and Hermes Agent.
 
 ## how it works
 

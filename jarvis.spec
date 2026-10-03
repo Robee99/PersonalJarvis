@@ -145,8 +145,14 @@ _PACKAGE_DATA_SKIP_ROOTS = (
     PACKAGE_ASSETS,  # collected explicitly below
 )
 _PACKAGE_DATA_SKIP_SUFFIXES = {".py", ".pyc", ".pyd", ".so", ".dylib", ".map"}
-_package_root = PROJECT_ROOT / "jarvis"
-for entry in _package_root.rglob("*"):
+# conductor (the scheduler the desktop app boots) is a top-level package beside
+# jarvis; its schema.sql and seed jobs were missing from the frozen build.
+_package_files = [
+    entry
+    for root in (PROJECT_ROOT / "jarvis", PROJECT_ROOT / "conductor")
+    for entry in root.rglob("*")
+]
+for entry in _package_files:
     if not entry.is_file():
         continue
     if _PACKAGE_DATA_SKIP_DIRS & set(entry.parts):

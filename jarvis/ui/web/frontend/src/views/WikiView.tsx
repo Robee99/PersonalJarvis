@@ -42,6 +42,7 @@ import { PageRenderer } from "@/components/wiki/PageRenderer";
 import { BacklinksPanel } from "@/components/wiki/BacklinksPanel";
 import { ObsidianStatus } from "@/components/wiki/ObsidianStatus";
 import { ObsidianSetupDialog } from "@/components/wiki/ObsidianSetupDialog";
+import { HoloDeckButton } from "@/components/wiki/HoloDeck";
 import type { ObsidianStatus as ObsidianStatusType } from "@/types/setup";
 
 // Agent C owns WikiGraph. Lazy import so the graph bundle (~120 KB minified)
@@ -332,10 +333,11 @@ export function WikiView(): JSX.Element {
                 }
                 disabled={!selectedSlug}
               />
+              {centreTab === "graph" && <HoloDeckButton />}
               {centreTab === "graph" && (
                 <button
                   type="button"
-                  className="ml-auto mr-2 my-1.5 inline-flex items-center gap-1.5 self-center rounded-md px-2.5 py-1.5 text-body text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-strong"
+                  className="mr-2 my-1.5 inline-flex items-center gap-1.5 self-center rounded-md px-2.5 py-1.5 text-body text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-strong"
                   onClick={() => setIsGraphExpanded((expanded) => !expanded)}
                   aria-controls="wiki-workspace"
                   aria-expanded={isGraphExpanded}

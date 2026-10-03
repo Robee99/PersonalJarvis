@@ -564,7 +564,10 @@ const WINDOW_CATEGORY_ORDER = [
   "Lists & Tasks", "Developer", "Media & Creativity", "Home & Devices",
 ];
 
-export function PluginsView({ inDialog = false }: { inDialog?: boolean } = {}) {
+export function PluginsView({
+  inDialog = false,
+  armory = false,
+}: { inDialog?: boolean; armory?: boolean } = {}) {
   const qc = useQueryClient();
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const [view, setView] = useState<"list" | "community">("list");
@@ -1073,7 +1076,7 @@ export function PluginsView({ inDialog = false }: { inDialog?: boolean } = {}) {
 
   const shell = (content: React.ReactNode) => (
     <div className="flex h-full min-h-0 flex-col bg-transparent">
-      {inDialog && view === "list" && !selectedId ? content : (
+      {(inDialog || armory) && view === "list" && !selectedId ? content : (
         <ScrollArea className="flex-1">
           <div className={cn("mx-auto w-full max-w-4xl px-8 py-6", inDialog && "pt-12")}>{content}</div>
         </ScrollArea>
@@ -1123,6 +1126,20 @@ export function PluginsView({ inDialog = false }: { inDialog?: boolean } = {}) {
           n: allPlugins.length,
           connected: connectedCount,
         });
+
+  if (armory) {
+    return shell(
+      <PluginArmory
+        plugins={visible} total={allPlugins.length} connected={connectedCount}
+        query={query} onQuery={setQuery}
+        category={filter} categories={categoryOrder}
+        onCategory={(value) => { setFilter(value as FilterId); setListFilter("all"); }}
+        loading={isLoading} error={error instanceof Error ? error.message : null}
+        onOpen={setSelectedId} onConnect={handleConnect}
+        onSection={setActiveSection}
+      />,
+    );
+  }
 
   if (inDialog) {
     return shell(
@@ -1397,6 +1414,208 @@ function PluginWindowCatalog({
         </div>
       </ScrollArea>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Armory: every app the assistant can reach as one wall of cards, with the MCP
+// servers and skills one click away. Same data, filters and connect flows as
+// the list above; only the presentation differs.
+// ---------------------------------------------------------------------------
+
+const ARMORY_STATUS: Record<string, { label: string; className: string }> = {
+  connected: { label: "connected", className: "border-emerald-400/40 text-emerald-300" },
+  needs_reauth: { label: "re-connect", className: "border-amber-400/50 text-amber-300" },
+  error: { label: "error", className: "border-rose-400/50 text-rose-300" },
+};
+
+function PluginArmory({
+  plugins, total, connected, query, onQuery, category, categories, onCategory,
+  loading, error, onOpen, onConnect, onSection,
+}: {
+  plugins: Plugin[]; total: number; connected: number; query: string;
+  onQuery: (value: string) => void; category: string; categories: string[];
+  onCategory: (value: string) => void; loading: boolean; error: string | null;
+  onOpen: (id: string) => void; onSection: (id: "mcps" | "skills") => void;
+} & Pick<ConnectHandlers, "onConnect">) {
+  const { data: mcps } = useQuery({
+    queryKey: ["armory", "mcps"],
+    queryFn: async () => (await fetch("/api/mcps")).json() as Promise<{ total?: number; running?: number }>,
+    staleTime: 30_000,
+  });
+  const { data: skills } = useQuery({
+    queryKey: ["armory", "skills"],
+    queryFn: async () => (await fetch("/api/skills")).json() as Promise<{ skills?: unknown[] }>,
+    staleTime: 30_000,
+  });
+  const sorted = useMemo(
+    () => [...plugins].sort((a, b) => Number(b.status === "connected") - Number(a.status === "connected")),
+    [plugins],
+  );
+  const chip = (active: boolean) =>
+    cn(
+      "rounded-full border px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      active
+        ? "border-cyan-300/60 bg-cyan-400/15 text-cyan-100"
+        : "border-white/10 text-slate-400 hover:border-white/25 hover:text-slate-200",
+    );
+  return (
+    <div
+      data-testid="tool-armory"
+      className="h-full overflow-y-auto bg-[radial-gradient(ellipse_at_top,#0d1b2a_0%,#05070b_60%)]"
+    >
+      <div className="mx-auto w-full max-w-6xl px-6 pb-16 pt-10">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-50">Tool armory</h1>
+          <span className="font-mono text-xs uppercase tracking-[0.2em] text-emerald-300/80">
+            {connected} connected
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-slate-400">
+          Everything the assistant can reach. Connect an app and it uses it mid-conversation.
+        </p>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <ArmoryStat label="Apps" value={`${connected} / ${total}`} hint="connected" />
+          <ArmoryStat
+            label="MCP servers"
+            value={`${mcps?.running ?? 0} / ${mcps?.total ?? 0}`}
+            hint="running"
+            onClick={() => onSection("mcps")}
+          />
+          <ArmoryStat
+            label="Skills"
+            value={String(skills?.skills?.length ?? 0)}
+            hint="ready to use"
+            onClick={() => onSection("skills")}
+          />
+        </div>
+
+        <label className="mt-6 flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-slate-400 focus-within:border-cyan-300/50">
+          <Search className="h-4 w-4 shrink-0" aria-hidden />
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => onQuery(event.target.value)}
+            placeholder="Search tools (calendar, email, payments, design…)"
+            aria-label="Search tools"
+            className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
+          />
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Category">
+          <button type="button" className={chip(category === "all")} onClick={() => onCategory("all")}>
+            All
+          </button>
+          {[...categories]
+            .sort((a, b) => WINDOW_CATEGORY_ORDER.indexOf(a) - WINDOW_CATEGORY_ORDER.indexOf(b))
+            .map((name) => (
+              <button key={name} type="button" className={chip(category === name)} onClick={() => onCategory(name)}>
+                {name}
+              </button>
+            ))}
+        </div>
+
+        <p className="mb-3 mt-8 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">Connect directly</p>
+        {error && <div role="alert" className="rounded-xl bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>}
+        {loading && <p role="status" className="text-sm text-slate-400">{translate("plugins_view.loading")}</p>}
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Apps">
+          {sorted.map((plugin) => (
+            <li key={plugin.id}>
+              <ArmoryCard plugin={plugin} onOpen={onOpen} onConnect={onConnect} />
+            </li>
+          ))}
+          <li>
+            <button
+              type="button"
+              onClick={() => onSection("mcps")}
+              className="flex h-full min-h-[84px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-amber-300/40 text-sm text-amber-200/90 hover:border-amber-300/80 hover:bg-amber-300/5"
+            >
+              <Plus className="h-4 w-4" aria-hidden /> Add your own tool
+              <span className="text-xs text-amber-200/50">(any MCP URL)</span>
+            </button>
+          </li>
+        </ul>
+        {!loading && plugins.length === 0 && (
+          <p className="py-10 text-center text-sm text-slate-400">{translate("plugins_view.no_hits")}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ArmoryStat({ label, value, hint, onClick }: { label: string; value: string; hint: string; onClick?: () => void }) {
+  const body = (
+    <>
+      <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">{label}</span>
+      <span className="mt-1 block text-2xl font-semibold text-slate-50">{value}</span>
+      <span className="text-xs text-slate-400">{hint}</span>
+    </>
+  );
+  const className = "block w-full rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left";
+  return onClick ? (
+    <button type="button" onClick={onClick} className={cn(className, "hover:border-cyan-300/40")}>{body}</button>
+  ) : (
+    <div className={className}>{body}</div>
+  );
+}
+
+function ArmoryCard({ plugin, onOpen, onConnect }: { plugin: Plugin; onOpen: (id: string) => void } & Pick<ConnectHandlers, "onConnect">) {
+  const [busy, setBusy] = useState(false);
+  const status = ARMORY_STATUS[plugin.status];
+  const connected = plugin.status === "connected";
+  const act = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (connected) onOpen(plugin.id);
+      else await onConnect(plugin);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      data-testid={`armory-card-${plugin.id}`}
+      className={cn(
+        "group flex min-h-[84px] items-center gap-3 rounded-xl border bg-white/[0.03] p-3 transition-colors hover:bg-white/[0.06]",
+        connected ? "border-emerald-400/25 shadow-[0_0_24px_-12px_rgba(52,211,153,0.6)]" : "border-white/10",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onOpen(plugin.id)}
+        aria-label={plugin.name}
+        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <BrandTile plugin={plugin} size="sm" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-slate-100">{plugin.name}</span>
+          <span className="line-clamp-2 text-xs leading-4 text-slate-400" title={plugin.description}>
+            {plugin.unavailableReason ? "Unsupported on this device" : plugin.description}
+          </span>
+        </span>
+      </button>
+      {status ? (
+        <button
+          type="button"
+          onClick={() => void act()}
+          className={cn("shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider", status.className)}
+        >
+          {connected && <Check className="mr-1 inline h-3 w-3" aria-hidden />}
+          {status.label}
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={busy || Boolean(plugin.unavailableReason)}
+          onClick={() => void act()}
+          aria-label={`${translate("plugins_view.connect")} ${plugin.name}`}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/15 text-slate-300 hover:border-cyan-300/60 hover:text-cyan-100 disabled:opacity-40"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-4 w-4" />}
+        </button>
+      )}
+    </div>
   );
 }
 

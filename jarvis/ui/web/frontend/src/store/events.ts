@@ -119,7 +119,14 @@ export type SectionId =
   // The Jarvis Marketplace, in the app: everything the community published —
   // plugins and skills — browsable and installable in one place instead of
   // scattered across unrelated sections.
-  | "marketplace";
+  | "marketplace"
+  // The HUD: the mission deck as a section of its own (it left the front
+  // page on 2026-08-23) — the orb, the log, the memory map and the vitals.
+  | "deck"
+  // The memory orb: notes, skills, tools, apps and MCP servers as one live map.
+  | "orb"
+  // The tool armory: every app the assistant can reach, as a wall of cards.
+  | "armory";
 
 export const SECTION_IDS = [
   "chats",
@@ -165,6 +172,9 @@ export const SECTION_IDS = [
   "chat-workspace",
   "agentic-ide-classic",
   "marketplace",
+  "deck",
+  "orb",
+  "armory",
 ] as const satisfies readonly SectionId[];
 
 export function isSectionId(value: unknown): value is SectionId {
@@ -236,6 +246,9 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   languages: "Languages",
   profile: "Profile",
   memory: "Notes",
+  deck: "HUD",
+  orb: "Memory orb",
+  armory: "Tool armory",
   apikeys: "API Keys",
   "local-models": "Local models",
   computers: "Computers",
@@ -433,6 +446,9 @@ interface EventStore {
   // readiness (VoiceBootStatus WS event / GET /api/voice/status seed) — drives
   // the sidebar "Voice starting…" indicator.
   voiceReady: boolean;
+  // The voice stack gave up warming (watchdog timeout or no usable voice path):
+  // the "starting up" surfaces must stop promising speech is coming.
+  voiceUnavailable: boolean;
   connected: boolean;
   // True while the WS keeps getting closed with code 1013 by the fast-boot
   // bootstrap (backend still warming up). Distinct from `connected`: drives the
@@ -552,7 +568,7 @@ interface EventStore {
   pendingInstallCliName: string | null;
   pushEvent: (e: EventItem) => void;
   setVoice: (v: VoiceState) => void;
-  setVoiceReady: (ready: boolean) => void;
+  setVoiceReady: (ready: boolean, detail?: unknown) => void;
   setConnected: (c: boolean) => void;
   setWarming: (warming: boolean) => void;
   clearEvents: () => void;
@@ -636,6 +652,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
   events: [],
   voiceState: "idle",
   voiceReady: false,
+  voiceUnavailable: false,
   connected: false,
   wsWarming: true,
   activeSection: initialSectionFromSearch(
@@ -684,7 +701,12 @@ export const useEventStore = create<EventStore>((set, get) => ({
     voiceState: browserPlaybackIsActive() && ["thinking", "listening", "speaking"].includes(v)
       ? "speaking" : v,
   }),
-  setVoiceReady: (ready) => set({ voiceReady: ready }),
+  setVoiceReady: (ready, detail) =>
+    set({
+      voiceReady: ready,
+      voiceUnavailable:
+        !ready && (detail === "watchdog_timeout" || detail === "voice_unavailable"),
+    }),
   setConnected: (c) => set({ connected: c }),
   setWarming: (warming) => set({ wsWarming: warming }),
   clearEvents: () => set({ events: [] }),

@@ -446,3 +446,19 @@ def test_system_prompt_carries_system_extra_after_the_manager_extra() -> None:
     assert addendum in prompt
     assert prompt.index("ROUTER DISCIPLINE BLOCK") < prompt.index(addendum)
     assert addendum not in m._build_system_prompt(), "the addendum lives for one turn only"
+
+
+class _SwitchBrain:
+    supports_thinking_switch = True
+
+
+def test_only_a_plain_fast_turn_on_a_switching_brain_skips_thinking() -> None:
+    skips = BrainManager._fast_turn_skips_thinking
+    switch = _SwitchBrain()
+
+    assert skips(switch, "fast", delegated=False, override=None) is True
+    assert skips(switch, "deep", delegated=False, override=None) is False
+    assert skips(switch, "fast", delegated=True, override=None) is False
+    picked = TurnOverride(provider=PICK, model=PICK_MODEL)
+    assert skips(switch, "fast", delegated=False, override=picked) is False
+    assert skips(FakeBrain(), "fast", delegated=False, override=None) is False

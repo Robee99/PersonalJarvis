@@ -173,6 +173,9 @@ _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
     default=None,
 )
 
+#: Tools whose whole result is a picture; a blind brain is never offered them.
+_IMAGE_CAPTURE_TOOL_NAMES: frozenset[str] = frozenset({"screenshot", "camera"})
+
 #: Bounds for the conversation-context block appended to a Computer-Use goal.
 #: The deterministic gate ships the RAW current utterance as the mission goal;
 #: a correction / follow-up turn ("that is the wrong server", "do it with
@@ -239,7 +242,16 @@ PROVIDER_ALIASES = {
 }
 
 SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
-    {"antigravity", "codex", "openai-codex", "grok-build", "grok-cli", "grokbuild"}
+    {
+        "antigravity",
+        "codex",
+        "openai-codex",
+        "grok-build",
+        "grok-cli",
+        "grokbuild",
+        "hermes",
+        "hermes-agent",
+    }
 )
 
 _MAIN_BRAIN_FALLBACK_PROVIDER_ORDER: tuple[str, ...] = (
@@ -272,6 +284,7 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "gemini": "Google Gemini",
     "antigravity": "Google Antigravity (Gemini)",
     "grok-build": "Grok Build (xAI subscription)",
+    "hermes": "Hermes Agent",
 }
 
 
@@ -3784,6 +3797,26 @@ class BrainManager:
             kwargs["loop_control"] = override.loop_control
         return kwargs
 
+    @staticmethod
+    def _fast_turn_skips_thinking(
+        brain: Any, level: str, *, delegated: bool, override: TurnOverride | None
+    ) -> bool:
+        """Whether a classic turn asks its brain for no thinking at all.
+
+        A fast turn on a brain that can switch its model's thinking off per
+        request (a local llama-server with a thinking template) skips the
+        thinking: one model, two speeds, no second resident model. Deep turns
+        keep the server's default, and delegated or caller-picked turns carry
+        their own effort. Gated on the brain's declared capability, never on a
+        provider name (AP-21).
+        """
+        return (
+            not delegated
+            and override is None
+            and level == "fast"
+            and getattr(brain, "supports_thinking_switch", False) is True
+        )
+
     async def render_surface_prompt(self, *, user_text: str) -> tuple[str, str]:
         """(system prompt, turn context) for an external agent that should BE Jarvis.
 
@@ -6683,7 +6716,7 @@ class BrainManager:
         prov_name: str = "",
         model: str | None = "",
     ) -> dict[str, Tool]:
-        """Drop the ``screenshot`` tool when the answering brain has no vision.
+        """Drop the image-capture tools when the answering brain has no vision.
 
         A blind model that calls the tool is a guaranteed dead end: the
         capture succeeds, its own protocol layer drops the image ("Provider
@@ -6691,19 +6724,20 @@ class BrainManager:
         picture came back unusable (live 2026-08-06 20:52, grok-4.5 tool
         loop). Gated on the runtime capability, never the provider name
         (AP-21); the chain-level vision skip only covers images attached
-        BEFORE the turn, not ones a mid-loop tool call produces.
+        BEFORE the turn, not ones a mid-loop tool call produces. The same
+        dead end holds for the ``camera`` still, so both names are dropped.
         """
-        if not isinstance(tools, dict) or "screenshot" not in tools:
+        if not isinstance(tools, dict) or not _IMAGE_CAPTURE_TOOL_NAMES & tools.keys():
             return tools
         if getattr(brain, "supports_vision", False) is True:
             return tools
         log.info(
-            "Hiding the screenshot tool from %s(%s): the model cannot "
+            "Hiding the image-capture tools from %s(%s): the model cannot "
             "inspect images, so a capture could only dead-end.",
             prov_name,
             model,
         )
-        return {n: t for n, t in tools.items() if n != "screenshot"}
+        return {n: t for n, t in tools.items() if n not in _IMAGE_CAPTURE_TOOL_NAMES}
 
     def _fit_tools_to_brain(
         self,
@@ -12192,6 +12226,10 @@ class BrainManager:
                 if prefer_tool_model
                 else self._override_dispatch_kwargs(turn_override)
             )
+            if self._fast_turn_skips_thinking(
+                brain, decision.level, delegated=prefer_tool_model, override=turn_override
+            ):
+                _disp_kwargs["reasoning_effort"] = "none"
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )

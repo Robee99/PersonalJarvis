@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, Compass, Monitor, Moon, Power, Sparkles, Sun, Zap } from "lucide-react";
+import { Bot, Compass, Monitor, Moon, Orbit, Power, Sparkles, Sun, Zap } from "lucide-react";
 import { FIRST_STEPS_START_EVENT, SETUP_REPLAY_EVENT } from "@/components/onboarding/tourEvents";
 import { Switch } from "@/components/ui/switch";
 import { useAutostart } from "@/hooks/useAutostart";
@@ -108,6 +108,7 @@ const THEME_OPTIONS: ReadonlyArray<{
 }> = [
   { value: "dark", icon: Moon, labelKey: "settings_view.appearance.dark" },
   { value: "light", icon: Sun, labelKey: "settings_view.appearance.light" },
+  { value: "jarvis", icon: Orbit, labelKey: "settings_view.appearance.jarvis" },
   { value: "system", icon: Monitor, labelKey: "settings_view.appearance.system" },
 ];
 

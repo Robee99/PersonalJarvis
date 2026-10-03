@@ -382,6 +382,8 @@ class WebServer:
         from .friends_routes import router as friends_router
         from .frontier_routes import router as frontier_router
         from .grok_build_routes import router as grok_build_router
+        from .holo_routes import api_router as holo_api_router
+        from .holo_routes import router as holo_router
         from .live_routes import router as live_router
         from .local_voice_routes import router as local_voice_router
         from .local_models_assistant_routes import (
@@ -594,6 +596,9 @@ class WebServer:
         # The mission deck's pictures: the last Screen-Context capture (one
         # frame, in memory, TTL) and Computer-Use frames by content hash.
         app.include_router(deck_router)
+        # The HOLO hand-gesture deck (MIT page) with orbs from the wiki vault.
+        app.include_router(holo_router)
+        app.include_router(holo_api_router)
         # Voice-session transcription view (sidebar -> "Transcription").
         # Returns 503 as long as app.state.session_store isn't set.
         app.include_router(sessions_router)
@@ -703,6 +708,9 @@ class WebServer:
             "false",
         )
         self._voice_ready = _voice_disabled
+        # The detail of the last VoiceBootStatus, so a tab that mounts after a
+        # degraded release can tell "voice is off" from "voice is still warming".
+        self._voice_detail = ""
 
         # Synchronous routes run on anyio's thread pool, which grows ON the
         # loop and shrinks after ten idle seconds — a start that blocked the
@@ -717,6 +725,7 @@ class WebServer:
             # A bus subscriber must never raise (AP-18); setting a plain
             # instance bool cannot fail, and the warm-up below only schedules.
             self._voice_ready = event.voice_usable
+            self._voice_detail = event.detail
             if event.ready:
                 self._schedule_anyio_pool_warm()
 
@@ -795,6 +804,7 @@ class WebServer:
         # Set the endpoint mirror first so /api/voice/status is correct even if
         # the bus publish below fails; the WS event then updates live tabs.
         self._voice_ready = False
+        self._voice_detail = "watchdog_timeout"
         try:
             await self.bus.publish(VoiceBootStatus(ready=True, detail="watchdog_timeout"))
         except Exception as exc:  # noqa: BLE001 — mirror already set; never crash
@@ -1120,7 +1130,10 @@ class WebServer:
             late-connecting UI would miss it. The value is maintained by the bus
             subscriber in ``_build_app`` on the server instance.
             """
-            return {"ready": bool(getattr(self, "_voice_ready", False))}
+            return {
+                "ready": bool(getattr(self, "_voice_ready", False)),
+                "detail": str(getattr(self, "_voice_detail", "")),
+            }
 
         async def _jarvis_agent_status_snapshot() -> dict[str, Any]:
             """Jarvis-Agent bridge status for the settings view (Wave 3).
@@ -1503,6 +1516,41 @@ class WebServer:
                     "is_active_brain": primary == "grok-build",
                     "billing": "subscription",
                     "label": "Grok Build",
+                }
+            )
+
+            # Hermes Agent is a DIRECT worker too (HermesDirectWorker over
+            # ``hermes -z``). It brings its own providers and keys, so the
+            # installed launcher is the readiness Jarvis can see.
+            try:
+                from jarvis.missions.workers.hermes_direct_worker import (
+                    resolve_hermes_binary,
+                )
+
+                hermes_ready = resolve_hermes_binary() is not None
+            except Exception:  # noqa: BLE001
+                # Same reading as the Grok Build row: unknown is "not ready" on
+                # this overview, never a page that fails to load.
+                hermes_ready = False
+            mapping_rows.append(
+                {
+                    "jarvis": "hermes",
+                    "openclaw": "hermes (direct)",
+                    "env_var": "Hermes config",
+                    "env_fallback": None,
+                    "key_set": hermes_ready,
+                    "api_key_set": False,
+                    "dedicated_key_set": False,
+                    "shared_key_set": False,
+                    "oauth_connected": False,
+                    "credential_source": "none",
+                    "secret_key": None,
+                    "dashboard_url": None,
+                    "credential_help": None,
+                    "is_active_brain": primary == "hermes",
+                    # Usually an API key or a local server, as configured in Hermes.
+                    "billing": "api",
+                    "label": "Hermes Agent",
                 }
             )
 
