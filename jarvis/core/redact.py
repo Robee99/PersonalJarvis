@@ -128,4 +128,22 @@ def safe_preview(value: Any, *, max_chars: int = DEFAULT_PREVIEW_CHARS) -> str:
     return text
 
 
-__all__ = ["DEFAULT_PREVIEW_CHARS", "redact_secrets", "safe_preview"]
+def redact_value(value: Any) -> Any:
+    """``redact_secrets`` applied to every string inside a JSON-like value.
+
+    Dicts, lists and tuples keep their shape (and their keys) so a consumer
+    that displays tool arguments still finds every field; only
+    credential-shaped substrings are masked. Other scalars pass through.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {key: redact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_value(item) for item in value)
+    return value
+
+
+__all__ = ["DEFAULT_PREVIEW_CHARS", "redact_secrets", "redact_value", "safe_preview"]

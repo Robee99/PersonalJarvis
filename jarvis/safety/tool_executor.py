@@ -33,7 +33,7 @@ from jarvis.core.protocols import (
     ToolResult,
     Transcript,
 )
-from jarvis.core.redact import safe_preview
+from jarvis.core.redact import redact_secrets, safe_preview
 
 from .approval import TIMEOUT_REASON, ApprovalWorkflow
 from .approval_surface import (
@@ -550,7 +550,7 @@ class ToolExecutor:
                 tool_name=tool.name,
                 success=False,
                 duration_ms=duration_ms,
-                error=str(exc),
+                error=redact_secrets(str(exc)),
             ))
             return ToolResult(success=False, output=None, error=str(exc))
 
@@ -560,7 +560,7 @@ class ToolExecutor:
             tool_name=tool.name,
             success=result.success,
             duration_ms=duration_ms,
-            error=result.error,
+            error=redact_secrets(result.error) if result.error else result.error,
             output_preview=safe_preview(result.output),
         ))
         return result
@@ -613,7 +613,7 @@ class ToolExecutor:
                 tool_name=tool.name,
                 success=False,
                 duration_ms=duration_ms,
-                error=str(exc),
+                error=redact_secrets(str(exc)),
             ))
             return ToolResult(success=False, output=None, error=str(exc))
         duration_ms = int((time.perf_counter() - t_start) * 1000)
@@ -622,7 +622,7 @@ class ToolExecutor:
             tool_name=tool.name,
             success=result.success,
             duration_ms=duration_ms,
-            error=result.error,
+            error=redact_secrets(result.error) if result.error else result.error,
             output_preview=safe_preview(result.output),
         ))
         return result
