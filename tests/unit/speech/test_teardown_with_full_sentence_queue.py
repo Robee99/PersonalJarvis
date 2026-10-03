@@ -61,8 +61,8 @@ class _LongAnswerBrain:
         self.producer_blocked = asyncio.Event()
 
     async def generate_stream(self, text: str) -> AsyncIterator[str]:
-        for i in range(6):
-            yield f"This is sentence number {i}. "
+        for i in "abcdef":
+            yield f"Here comes part {i} of the answer. "
         # Reached only if the queue never filled up.
         self.producer_blocked.set()
 
