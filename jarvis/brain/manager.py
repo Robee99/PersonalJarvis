@@ -89,7 +89,7 @@ from jarvis.core.turn_language import (
 )
 from jarvis.memory import CoreMemory, PersonStore, RecallStore, Soul, UserProfile
 from jarvis.memory.curator import Curator
-from jarvis.safety.tool_executor import ToolExecutor
+from jarvis.safety.tool_executor import ToolExecutor, recording_side_effects
 from jarvis.voice.action_phrases import (
     CU_CANCEL_EXIT_CODE,
     CU_TOOL_OUTCOME_LAYER,
@@ -2718,6 +2718,25 @@ def _provider_down_phrase(lang: str, idx: int, cause: str | None = None) -> str:
 # executed tools; the empty-response guard is (correctly) skipped when tool
 # calls exist, so the turn counted as success with empty text — the user heard
 # NOTHING. Voice-safe: no provider names, no jargon (ADR-0010).
+# Spoken when a provider attempt failed AFTER an action tool started: the action
+# may or may not have happened, so the turn is not replayed on another provider.
+_UNKNOWN_OUTCOME_PHRASES: dict[str, str] = {
+    "de": (
+        "Ich habe die Aktion gestartet, aber die Verbindung ist danach abgebrochen. "  # i18n-allow
+        "Ich weiß nicht, ob sie fertig wurde. Bitte prüf das kurz, bevor ich es "  # i18n-allow
+        "noch einmal versuche."  # i18n-allow
+    ),
+    "en": (
+        "I started that action, but the connection dropped before it finished, so I "
+        "can't tell whether it went through. Please check before I try it again."
+    ),
+    "es": (
+        "Empecé esa acción, pero la conexión se cortó antes de terminar, así que no sé "
+        "si se completó. Compruébalo antes de que lo intente otra vez."
+    ),
+}
+
+
 _MID_ANSWER_ERROR_PHRASES: dict[str, str] = {
     "de": (
         "Ich habe die Zwischenschritte ausgeführt, aber beim Formulieren der "  # i18n-allow
@@ -11963,6 +11982,7 @@ class BrainManager:
         used_provider: str | None = None
         used_model: str | None = None
         _turn_executed: set[str] = set()  # tools that REALLY ran this turn
+        unknown_outcome_actions: list[str] = []  # actions a failed attempt started
         # AI Pointer (deictic push): launch the cursor-element resolution BEFORE
         # the vision-image await so it overlaps with it instead of running serially
         # after (AP-9: keep the deictic turn off the serial hot path). The task does
@@ -12385,25 +12405,27 @@ class BrainManager:
             # the chosen talker streams the answer normally after the fall-through.
             _is_router_lead = self._router_lead_key == (prov_name, model)
             _attempt_consumer = None if _is_router_lead else text_consumer
+            attempt_actions: list[str] = []
             try:
                 # CostMeter: start per-trace tracking (idempotent if already started).
                 if self._cost_meter is not None:
                     self._cost_meter.start(trace_uuid, prov_name, model)
-                agg = await disp.dispatch(
-                    user_text,
-                    images=images,
-                    history=history,
-                    trace_id=trace_id,
-                    intent_level=decision.level,
-                    evidence_required_tool=self._evidence_required_tool,
-                    text_consumer=_attempt_consumer,
-                    ack_emitter=_tool_ack_emitter,
-                    on_progress=on_progress,
-                    turn_context=turn_context,
-                    reply_language=self._reply_language,
-                    conversation_language=self._conversation_language,
-                    voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
-                )
+                with recording_side_effects() as attempt_actions:
+                    agg = await disp.dispatch(
+                        user_text,
+                        images=images,
+                        history=history,
+                        trace_id=trace_id,
+                        intent_level=decision.level,
+                        evidence_required_tool=self._evidence_required_tool,
+                        text_consumer=_attempt_consumer,
+                        ack_emitter=_tool_ack_emitter,
+                        on_progress=on_progress,
+                        turn_context=turn_context,
+                        reply_language=self._reply_language,
+                        conversation_language=self._conversation_language,
+                        voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
+                    )
                 # Post-call cost hook: aggregated usage → meter.
                 # The meter cancels on overrun via CancelToken (see ADR-0006);
                 # the pre-call gate above catches that on the next turn.
@@ -12686,6 +12708,18 @@ class BrainManager:
                                 "weicht auf einen anderen verfuegbaren Anbieter aus. "
                                 "Setup: Sidebar -> API-Keys.", prov_name, kind)
                     provider_errors.append((prov_name, model, kind, msg[:200]))
+                if attempt_actions:
+                    # An action tool started in this attempt and the attempt then
+                    # failed, so whether the action happened is unknown. Running
+                    # the turn again on the next provider could repeat it; stop
+                    # here and say so instead.
+                    unknown_outcome_actions = list(attempt_actions)
+                    log.warning(
+                        "Brain %s(%s) failed after starting %s; not replaying the "
+                        "turn on another provider.",
+                        prov_name, model, ", ".join(unknown_outcome_actions),
+                    )
+                    break
                 # NOTE BUG-019 (2026-05-11): this generic ``continue`` does
                 # not touch the failing provider's *internal* state. For
                 # most providers that's correct (an HTTP error is purely
@@ -12735,13 +12769,23 @@ class BrainManager:
             )
             return response_text
 
+        if used_provider is None and unknown_outcome_actions:
+            self._last_turn_all_failed = True
+            response_text = _UNKNOWN_OUTCOME_PHRASES.get(
+                self._resolve_turn_lang(), _UNKNOWN_OUTCOME_PHRASES["en"]
+            )
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=response_text,
+                use_history=use_history, trace_id=trace_uuid,
+            )
+            return response_text
+
         if used_provider is None:
             escalation_cfg = getattr(route_policy, "escalation", None)
             if (
                 route_policy is not None
                 and decision.level in ("deep", "code")
                 and bool(getattr(escalation_cfg, "on_deep_failure", False))
-                and not _turn_executed
             ):
                 # Bounded, one-shot escalation of a deep turn that failed on
                 # every configured model. Skipped once any tool ran, so an

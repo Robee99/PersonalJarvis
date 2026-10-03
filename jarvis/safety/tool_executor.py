@@ -11,9 +11,11 @@ the executor fetches transcript confidence + wake age and decides whether
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
@@ -47,6 +49,34 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+
+# Consequential tools started inside the current ``recording_side_effects()``
+# block. The Brain opens one block per provider attempt: when an attempt fails
+# after an action tool already started, the action's outcome is unknown and the
+# turn must not be replayed on another provider (that would repeat the action).
+_side_effects: ContextVar[list[str] | None] = ContextVar("jarvis_side_effects", default=None)
+
+
+@contextlib.contextmanager
+def recording_side_effects() -> Iterator[list[str]]:
+    """Collect the names of non-read tools started while the block is open."""
+    started: list[str] = []
+    token = _side_effects.set(started)
+    try:
+        yield started
+    finally:
+        _side_effects.reset(token)
+
+
+def _note_side_effect(tool: Tool, args: dict[str, Any]) -> None:
+    started = _side_effects.get()
+    if started is None:
+        return
+    from jarvis.core.tool_read_only import allows_read
+
+    if not allows_read(tool, args):
+        started.append(tool.name)
 
 
 # Sentinel returned (as ``ToolResult.error``) when a confirmation-requiring tool
@@ -509,6 +539,8 @@ class ToolExecutor:
             memory_read=memory_read,
             approved_by=approved_by,
         )
+        # Recorded before the call: a tool that raises may still have acted.
+        _note_side_effect(tool, args)
         try:
             result = await tool.execute(args, ctx)
         except Exception as exc:  # noqa: BLE001
