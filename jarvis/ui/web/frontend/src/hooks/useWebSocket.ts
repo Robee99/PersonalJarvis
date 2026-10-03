@@ -332,6 +332,12 @@ export function useWebSocket(): void {
             // The live provider/model may have changed with it.
             void queryClient.invalidateQueries({ queryKey: ["voice-mode"] });
           }
+          // The answer was ready but the voice provider produced no audio for
+          // any of it. Without a toast the user only sees Jarvis go quiet.
+          if (layer === "speech.tts") {
+            const detail = typeof p.message === "string" ? p.message.trim() : "";
+            pushToast("warning", detail || translate("use_web_socket.tts_no_audio"));
+          }
         }
 
         // A society agent's derived place changed (trusted rules in the

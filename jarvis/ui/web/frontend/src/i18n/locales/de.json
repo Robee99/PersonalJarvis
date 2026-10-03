@@ -3690,7 +3690,8 @@
     "prompt_not_submitted": "der Prompt steht im Eingabefeld, abgeschickt wurde er nicht",
     "prompt_unconfirmed": "der Prompt wurde eingetippt, aber das Pane hat den Empfang nicht sichtbar gezeigt – bitte dort nachsehen",
     "dictation_nowhere": "Es war kein Textfeld aktiv, deshalb wurde das Diktat nicht eingefügt. Es steht in der Diktat-Historie.",
-    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem."
+    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem.",
+    "tts_no_audio": "Jarvis hat geantwortet, aber die Stimme konnte es nicht sprechen. Wähle in den Einstellungen eine funktionierende Stimme."
   },
   "chat_thread": {
     "message_to": "Nachricht an",
