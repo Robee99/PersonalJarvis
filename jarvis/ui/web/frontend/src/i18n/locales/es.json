@@ -573,6 +573,7 @@
   },
   "voice_state": {
     "idle": "Listo",
+    "unavailable": "Voz no disponible",
     "listening": "Escuchando",
     "thinking": "Pensando",
     "speaking": "Hablando",

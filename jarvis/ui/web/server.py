@@ -708,6 +708,9 @@ class WebServer:
             "false",
         )
         self._voice_ready = _voice_disabled
+        # The detail of the last VoiceBootStatus, so a tab that mounts after a
+        # degraded release can tell "voice is off" from "voice is still warming".
+        self._voice_detail = ""
 
         # Synchronous routes run on anyio's thread pool, which grows ON the
         # loop and shrinks after ten idle seconds — a start that blocked the
@@ -722,6 +725,7 @@ class WebServer:
             # A bus subscriber must never raise (AP-18); setting a plain
             # instance bool cannot fail, and the warm-up below only schedules.
             self._voice_ready = event.voice_usable
+            self._voice_detail = event.detail
             if event.ready:
                 self._schedule_anyio_pool_warm()
 
@@ -800,6 +804,7 @@ class WebServer:
         # Set the endpoint mirror first so /api/voice/status is correct even if
         # the bus publish below fails; the WS event then updates live tabs.
         self._voice_ready = False
+        self._voice_detail = "watchdog_timeout"
         try:
             await self.bus.publish(VoiceBootStatus(ready=True, detail="watchdog_timeout"))
         except Exception as exc:  # noqa: BLE001 — mirror already set; never crash
@@ -1125,7 +1130,10 @@ class WebServer:
             late-connecting UI would miss it. The value is maintained by the bus
             subscriber in ``_build_app`` on the server instance.
             """
-            return {"ready": bool(getattr(self, "_voice_ready", False))}
+            return {
+                "ready": bool(getattr(self, "_voice_ready", False)),
+                "detail": str(getattr(self, "_voice_detail", "")),
+            }
 
         async def _jarvis_agent_status_snapshot() -> dict[str, Any]:
             """Jarvis-Agent bridge status for the settings view (Wave 3).

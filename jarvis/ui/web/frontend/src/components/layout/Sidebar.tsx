@@ -248,7 +248,8 @@ export function Sidebar({
     (identity.data?.signed_in && identity.data.login) ||
     t("nav.profile");
   // Shared readiness derivation (same source the banner + chat empty-state use).
-  const { connected, voiceWarming, bootWarming, warming } = useVoiceReadiness();
+  const { connected, voiceWarming, voiceUnavailable, bootWarming, warming } =
+    useVoiceReadiness();
 
   // Per-section provider health (same source as the API-Keys tab dots). The
   // sidebar surfaces only a hard "error" — a provider that is set up but failing
@@ -299,7 +300,9 @@ export function Sidebar({
   const showSpinner = warming || voiceMode.connecting;
   const vs = voiceMode.connecting
     ? VOICE_STATE_STYLE.connecting
-    : VOICE_STATE_STYLE[voiceState] ?? VOICE_STATE_STYLE.idle;
+    : voiceUnavailable
+      ? VOICE_STATE_STYLE.paused
+      : VOICE_STATE_STYLE[voiceState] ?? VOICE_STATE_STYLE.idle;
   // A negotiating realtime transport outranks the pipeline's own state: the
   // subscription route needs 15-45 s before it can hear anything, and showing
   // the stale pre-call state there is what made a live handshake look frozen.
@@ -311,10 +314,13 @@ export function Sidebar({
       ? t("voice_state.starting")
       : voiceMode.connecting
         ? t("voice_state.connecting")
-        : t(`voice_state.${voiceState}`);
+        : voiceUnavailable
+          ? t("voice_state.unavailable")
+          : t(`voice_state.${voiceState}`);
   // The header spells the state out only when it is news — anything but a
   // connected, warmed-up pipeline at rest. See the header row below.
-  const voiceHasNews = !connected || showSpinner || voiceState !== "idle";
+  const voiceHasNews =
+    !connected || showSpinner || voiceUnavailable || voiceState !== "idle";
 
   // Dragged past the snap point the sidebar becomes a rail of icons. Everything
   // that only makes sense with a label beside it steps aside; the

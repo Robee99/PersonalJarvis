@@ -12,7 +12,7 @@ import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
 import { useEventStore } from "@/store/events";
 
 function set(connected: boolean, wsWarming: boolean, voiceReady: boolean) {
-  useEventStore.setState({ connected, wsWarming, voiceReady });
+  useEventStore.setState({ connected, wsWarming, voiceReady, voiceUnavailable: false });
 }
 
 describe("useVoiceReadiness (single source of truth)", () => {
@@ -41,6 +41,25 @@ describe("useVoiceReadiness (single source of truth)", () => {
     const { result } = renderHook(() => useVoiceReadiness());
     expect(result.current.warming).toBe(false);
     expect(result.current.ready).toBe(true);
+  });
+
+  it("stops warming once the voice stack gave up", () => {
+    set(true, false, false);
+    useEventStore.getState().setVoiceReady(false, "watchdog_timeout");
+    const { result } = renderHook(() => useVoiceReadiness());
+    expect(result.current.warming).toBe(false);
+    expect(result.current.voiceWarming).toBe(false);
+    expect(result.current.voiceUnavailable).toBe(true);
+    expect(result.current.ready).toBe(false);
+  });
+
+  it("warms again when a later warm-up starts", () => {
+    set(true, false, false);
+    useEventStore.getState().setVoiceReady(false, "watchdog_timeout");
+    useEventStore.getState().setVoiceReady(false, "warmup_start");
+    const { result } = renderHook(() => useVoiceReadiness());
+    expect(result.current.voiceWarming).toBe(true);
+    expect(result.current.voiceUnavailable).toBe(false);
   });
 
   it("is offline (not warming, not ready) when disconnected and not warming", () => {

@@ -29,6 +29,9 @@ export function InputIsolationBanner() {
   const [restarting, setRestarting] = useState(false);
 
   if (!report?.blocked || dismissed) return null;
+  // The Windows copy talks about "Run as administrator"; a root process on
+  // Linux or macOS gets the server's own wording, which names sudo instead.
+  const windows = report.reason === "elevated";
 
   async function restartUnelevated() {
     if (restarting) return;
@@ -71,11 +74,11 @@ export function InputIsolationBanner() {
             {t("input_isolation.title")}
           </p>
           <p className="mt-0.5 text-meta text-muted-foreground">
-            {t("input_isolation.impact")}
+            {windows ? t("input_isolation.impact") : report.summary}
           </p>
           {!report.can_restart_unelevated && (
             <p className="mt-1 text-meta text-muted-foreground">
-              {t("input_isolation.manual_hint")}
+              {windows ? t("input_isolation.manual_hint") : report.remedy}
             </p>
           )}
         </div>

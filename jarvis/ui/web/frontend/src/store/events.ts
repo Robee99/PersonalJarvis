@@ -438,6 +438,9 @@ interface EventStore {
   // readiness (VoiceBootStatus WS event / GET /api/voice/status seed) — drives
   // the sidebar "Voice starting…" indicator.
   voiceReady: boolean;
+  // The voice stack gave up warming (watchdog timeout or no usable voice path):
+  // the "starting up" surfaces must stop promising speech is coming.
+  voiceUnavailable: boolean;
   connected: boolean;
   // True while the WS keeps getting closed with code 1013 by the fast-boot
   // bootstrap (backend still warming up). Distinct from `connected`: drives the
@@ -557,7 +560,7 @@ interface EventStore {
   pendingInstallCliName: string | null;
   pushEvent: (e: EventItem) => void;
   setVoice: (v: VoiceState) => void;
-  setVoiceReady: (ready: boolean) => void;
+  setVoiceReady: (ready: boolean, detail?: unknown) => void;
   setConnected: (c: boolean) => void;
   setWarming: (warming: boolean) => void;
   clearEvents: () => void;
@@ -641,6 +644,7 @@ export const useEventStore = create<EventStore>((set, get) => ({
   events: [],
   voiceState: "idle",
   voiceReady: false,
+  voiceUnavailable: false,
   connected: false,
   wsWarming: true,
   activeSection: initialSectionFromSearch(
@@ -689,7 +693,12 @@ export const useEventStore = create<EventStore>((set, get) => ({
     voiceState: browserPlaybackIsActive() && ["thinking", "listening", "speaking"].includes(v)
       ? "speaking" : v,
   }),
-  setVoiceReady: (ready) => set({ voiceReady: ready }),
+  setVoiceReady: (ready, detail) =>
+    set({
+      voiceReady: ready,
+      voiceUnavailable:
+        !ready && (detail === "watchdog_timeout" || detail === "voice_unavailable"),
+    }),
   setConnected: (c) => set({ connected: c }),
   setWarming: (warming) => set({ wsWarming: warming }),
   clearEvents: () => set({ events: [] }),

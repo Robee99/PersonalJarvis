@@ -573,6 +573,7 @@
   },
   "voice_state": {
     "idle": "Bereit",
+    "unavailable": "Sprache nicht verfügbar",
     "listening": "Hört zu",
     "thinking": "Denkt",
     "speaking": "Spricht",

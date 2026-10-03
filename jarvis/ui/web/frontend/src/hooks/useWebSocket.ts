@@ -105,7 +105,7 @@ export function useWebSocket(): void {
           void fetch("/api/voice/status")
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
-              if (data && typeof data.ready === "boolean") setVoiceReady(data.ready);
+              if (data && typeof data.ready === "boolean") setVoiceReady(data.ready, data.detail);
             })
             .catch(() => {
               // Offline / headless: keep the current value; the live
@@ -259,8 +259,8 @@ export function useWebSocket(): void {
         // backend announces readiness over this envelope. Drives the sidebar
         // "Voice starting…" indicator. payload: { ready: boolean, detail: string }.
         if (env.event_name === "VoiceBootStatus") {
-          const ready = (env.payload as { ready?: unknown }).ready;
-          if (typeof ready === "boolean") setVoiceReady(ready);
+          const { ready, detail } = env.payload as { ready?: unknown; detail?: unknown };
+          if (typeof ready === "boolean") setVoiceReady(ready, detail);
         }
 
         if (env.event_name === "MessageSent") {
