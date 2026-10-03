@@ -343,6 +343,58 @@ def check_macos_spotlight() -> list[DoctorFinding]:
     return [DoctorFinding("macos-spotlight", "ok", f"Spotlight finds {bundle.name}")]
 
 
+def _measure_default_mic(duration_s: float) -> float:
+    """Peak dBFS of the default microphone; -120.0 when nothing was measured."""
+    import asyncio
+
+    from jarvis.speech.diagnose import measure_mic_dbfs
+
+    async def _bounded() -> float:
+        # The capture loop only checks its clock when a chunk arrives, so a
+        # device that never delivers one would hold the doctor forever.
+        return await asyncio.wait_for(measure_mic_dbfs(duration_s), duration_s + 5.0)
+
+    try:
+        return asyncio.run(_bounded())
+    except TimeoutError:
+        return -120.0
+
+
+def check_microphone(measure: Any = None, duration_s: float = 2.0) -> list[DoctorFinding]:
+    """Listen to the default microphone briefly and say whether it hears sound.
+
+    The verdict comes from ``classify_mic_level``, the same thresholds the wake
+    word test and ``python -m jarvis.speech.diagnose`` use. A mic that delivers
+    pure digital silence is a hard ``fail``: voice cannot work at all, and the
+    usual advice (raise the volume) does not help.
+    """
+    from jarvis.audio.capture import MicrophoneAccessError
+    from jarvis.speech.diagnose import MIC_SILENT_HINT, classify_mic_level
+
+    try:
+        max_dbfs = (measure or _measure_default_mic)(duration_s)
+    except MicrophoneAccessError as exc:
+        return [DoctorFinding(
+            "microphone", "warn", "Microphone access is not granted, nothing was measured",
+            hint=str(exc),
+        )]
+    verdict = classify_mic_level(max_dbfs)
+    if verdict == "no_device":
+        return [DoctorFinding(
+            "microphone", "warn", "No microphone could be opened",
+            hint="Connect or enable a microphone, then run the doctor again.",
+        )]
+    if verdict == "silent":
+        return [DoctorFinding(
+            "microphone", "fail",
+            f"The microphone delivers pure silence ({max_dbfs:.1f} dBFS)",
+            hint=MIC_SILENT_HINT,
+        )]
+    # "quiet" is not flagged here: the doctor does not ask anyone to speak, and
+    # a working mic in a silent room measures well below the speech threshold.
+    return [DoctorFinding("microphone", "ok", f"The microphone hears sound ({max_dbfs:.1f} dBFS)")]
+
+
 def run_doctor(config: Any) -> list[DoctorFinding]:
     """Run every completeness check and return a flat, ordered finding list.
 
@@ -357,6 +409,7 @@ def run_doctor(config: Any) -> list[DoctorFinding]:
         ("brain-provider", lambda: check_brain_provider(config)),
         ("computer-use", lambda: check_computer_use_prereqs(config)),
         ("macos-spotlight", lambda: check_macos_spotlight()),
+        ("microphone", lambda: check_microphone()),
     )
     for category, fn in checks:
         try:

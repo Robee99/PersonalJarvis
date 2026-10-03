@@ -31,6 +31,12 @@ def _no_live_spotlight(monkeypatch) -> None:
     monkeypatch.setattr(macos_search_index, "wait_until_indexed", lambda _b: True)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_microphone(monkeypatch) -> None:
+    """The microphone check records from the host's real device; unit tests never do."""
+    monkeypatch.setattr(doctor, "_measure_default_mic", lambda _duration: -62.0)
+
+
 def test_router_tools_ok_with_real_registry() -> None:
     """The shipped ROUTER_TOOLS set must have NO phantom — every name resolves.
 
@@ -272,3 +278,31 @@ def test_spotlight_check_is_silent_off_macos(monkeypatch) -> None:
 
     monkeypatch.setattr(sys, "platform", "linux")
     assert doctor.check_macos_spotlight() == []
+
+
+# ---------------------------------------------------------------------------
+# Microphone (live case 2026-10-03: unmuted in Windows, yet -90 dBFS of zeros)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("dbfs", "status"),
+    [(-90.3, "fail"), (-123.0, "warn"), (-62.0, "ok"), (-18.0, "ok")],
+)
+def test_microphone_verdicts(dbfs: float, status: str) -> None:
+    findings = doctor.check_microphone(measure=lambda _d: dbfs)
+    assert [f.status for f in findings] == [status]
+
+
+def test_digital_silence_points_at_mute_key_not_volume() -> None:
+    [finding] = doctor.check_microphone(measure=lambda _d: -90.3)
+    assert "mute key" in finding.hint
+    assert "Audio enhancements" in finding.hint
+
+
+def test_run_doctor_includes_the_microphone() -> None:
+    config = SimpleNamespace(
+        harness=SimpleNamespace(jarvis_agent=None),
+        brain=SimpleNamespace(primary="gemini"),
+    )
+    assert any(f.category == "microphone" for f in run_doctor(config))
