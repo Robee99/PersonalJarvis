@@ -305,6 +305,19 @@ skills:
         min_band: narrow
         source: authored
 
+  plugin-paperclip:
+    positives:
+      - text: "give my paperclip agent dan a task to research local vision models"
+        channel: trigger
+        lang: en
+        min_band: narrow
+        source: authored
+      - text: "what are my paperclip agents working on"
+        channel: trigger
+        lang: en
+        min_band: narrow
+        source: authored
+
   plugin-home_assistant:
     positives:
       - text: "mach bitte das licht im wohnzimmer aus"
