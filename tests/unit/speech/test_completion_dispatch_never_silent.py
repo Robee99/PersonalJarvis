@@ -71,7 +71,7 @@ def _make_pipe(brain: object, *, streaming: bool) -> SpeechPipeline:
 async def test_hanging_nonstreaming_brain_speaks_the_timeout_notice() -> None:
     pipe = _make_pipe(_HangingBrain(), streaming=False)
 
-    await asyncio.wait_for(pipe._handle_flushed_pending_text("Wie spät ist es", "de"), 2.0)
+    await asyncio.wait_for(pipe._handle_flushed_pending_text("What time is it", "en"), 2.0)
 
     assert pipe.events == ["timeout:completion_nonstream_cap"]
     assert pipe._turn_state is TurnTakingState.LISTENING
@@ -82,7 +82,7 @@ async def test_hanging_nonstreaming_brain_speaks_the_timeout_notice() -> None:
 async def test_empty_answer_from_a_failed_brain_is_spoken() -> None:
     pipe = _make_pipe(_EmptyFailedBrain(), streaming=False)
 
-    await pipe._handle_flushed_pending_text("Wie spät ist es", "de")
+    await pipe._handle_flushed_pending_text("What time is it", "en")
 
     assert pipe.events == ["unavailable"]
 
@@ -91,7 +91,7 @@ async def test_empty_answer_from_a_failed_brain_is_spoken() -> None:
 async def test_streaming_stall_speaks_the_timeout_notice() -> None:
     pipe = _make_pipe(_HangingBrain(), streaming=True)
 
-    await pipe._handle_flushed_pending_text("Wie spät ist es", "de")
+    await pipe._handle_flushed_pending_text("What time is it", "en")
 
     assert pipe.events == ["timeout:completion_stall"]
     assert pipe._turn_state is TurnTakingState.LISTENING

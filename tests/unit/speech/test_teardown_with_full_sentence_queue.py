@@ -62,7 +62,7 @@ class _LongAnswerBrain:
 
     async def generate_stream(self, text: str) -> AsyncIterator[str]:
         for i in range(6):
-            yield f"Satz Nummer {i} ist hier. "
+            yield f"This is sentence number {i}. "
         # Reached only if the queue never filled up.
         self.producer_blocked.set()
 
@@ -83,7 +83,7 @@ async def test_hangup_with_full_sentence_queue_unwinds_promptly() -> None:
 
     pipeline._barge_monitor = _never_barge  # type: ignore[assignment]
 
-    turn = asyncio.create_task(pipeline._brain_streaming("Erzähl was Langes.", "de"))
+    turn = asyncio.create_task(pipeline._brain_streaming("Tell me something long.", "en"))
     await asyncio.wait_for(player.play_started.wait(), timeout=2.0)
     # Let the producer run until it blocks on the full queue.
     for _ in range(20):

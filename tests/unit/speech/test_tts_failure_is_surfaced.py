@@ -58,8 +58,8 @@ class _Player:
 
 class _Brain:
     async def generate_stream(self, text: str) -> AsyncIterator[str]:
-        yield "Es ist zwölf Uhr. "
-        yield "Noch etwas?"
+        yield "It is twelve o clock. "
+        yield "Anything else?"
 
 
 @dataclass
@@ -85,7 +85,7 @@ async def _run_turn(tts: object) -> tuple[_Recorder, _Player]:
         return False
 
     pipeline._barge_monitor = _never_barge  # type: ignore[assignment]
-    await asyncio.wait_for(pipeline._brain_streaming("Wie spät ist es?", "de"), 5.0)
+    await asyncio.wait_for(pipeline._brain_streaming("What time is it?", "en"), 5.0)
     return recorder, player
 
 

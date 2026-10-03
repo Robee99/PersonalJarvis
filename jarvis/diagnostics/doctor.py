@@ -356,7 +356,7 @@ def _measure_default_mic(duration_s: float) -> float:
 
     try:
         return asyncio.run(_bounded())
-    except TimeoutError:
+    except TimeoutError:  # no chunk ever arrived: reported as "no microphone" by the caller
         return -120.0
 
 
@@ -373,7 +373,7 @@ def check_microphone(measure: Any = None, duration_s: float = 2.0) -> list[Docto
 
     try:
         max_dbfs = (measure or _measure_default_mic)(duration_s)
-    except MicrophoneAccessError as exc:
+    except MicrophoneAccessError as exc:  # a permission answer, reported as its own finding
         return [DoctorFinding(
             "microphone", "warn", "Microphone access is not granted, nothing was measured",
             hint=str(exc),
