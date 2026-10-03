@@ -5,8 +5,9 @@ its exact label, at UI-like sizes. The gate measures normalised character
 accuracy of ``ocr_supplement_with_regions`` against the label and fails below
 ``TARGET_CHAR_ACCURACY``.
 
-It needs a real OCR engine (``pytesseract`` plus the Tesseract binary), so it
-skips on machines without one, including CI. Run it on the target device:
+It needs a real OCR engine (RapidOCR, or ``pytesseract`` plus the Tesseract
+binary), so it skips on machines without one, including CI. Run it on the
+target device:
 
     pytest tests/unit/screen_context/test_ocr_accuracy_gate.py -rs
 
@@ -16,11 +17,14 @@ measured value is printed so the threshold can be set from real results.
 from __future__ import annotations
 
 import difflib
-import shutil
 
 import pytest
 
-from jarvis.screen_context.uitext import UNREADABLE_MARK, ocr_supplement_with_regions
+from jarvis.screen_context.uitext import (
+    UNREADABLE_MARK,
+    ocr_engine_status,
+    ocr_supplement_with_regions,
+)
 
 TARGET_CHAR_ACCURACY = 0.95
 
@@ -34,11 +38,7 @@ FIXTURES = [
 
 
 def _engine_available() -> bool:
-    try:
-        import pytesseract  # noqa: F401
-    except ImportError:
-        return False
-    return shutil.which("tesseract") is not None
+    return ocr_engine_status()[0]
 
 
 def _render(text: str, size: int, bg: tuple, fg: tuple):
@@ -56,7 +56,7 @@ def _normalise(text: str) -> str:
 
 
 @pytest.mark.skipif(
-    not _engine_available(), reason="no OCR engine installed (pytesseract + tesseract)"
+    not _engine_available(), reason="no OCR engine installed (RapidOCR or Tesseract)"
 )
 def test_rendered_ui_text_meets_the_accuracy_target() -> None:
     scores: list[float] = []

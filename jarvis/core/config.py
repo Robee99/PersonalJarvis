@@ -1591,10 +1591,17 @@ class EvidenceDomainsConfig(BaseModel):
 
 
 class RouteTargetConfig(BaseModel):
-    """One routing target: a configured provider id and an optional model."""
+    """One routing target: a configured provider id and an optional model.
+
+    ``local`` declares that this target runs on this machine (a local model
+    server), so images may go to it. A provider id alone cannot tell: a
+    loopback gateway can forward to a cloud model. Unset means "may leave the
+    device", the safe reading.
+    """
 
     provider: str = ""
     model: str | None = None
+    local: bool = False
 
 
 class RouteEscalationConfig(BaseModel):
@@ -1602,16 +1609,15 @@ class RouteEscalationConfig(BaseModel):
 
     ``agent`` names the Paperclip agent that takes the task (for example the
     install's Claude agent). ``trigger_phrases`` are the words that count as an
-    explicit request; ``on_deep_failure`` lets a deep turn that failed on every
-    configured model escalate once. ``deadline_s`` bounds how long a voice turn
-    waits for the delegate before it reports a recoverable timeout.
+    explicit request; nothing else escalates, so the delegate is never an
+    automatic fallback. ``deadline_s`` bounds how long a voice turn waits for
+    the delegate before it reports a recoverable timeout.
     """
 
     enabled: bool = False
     via: str = "paperclip"
     agent: str = ""
     trigger_phrases: list[str] = Field(default_factory=list)
-    on_deep_failure: bool = False
     deadline_s: float = Field(default=180.0, ge=5.0, le=3600.0)
     poll_interval_s: float = Field(default=3.0, ge=0.5, le=60.0)
     max_per_session: int = Field(default=5, ge=0, le=100)
@@ -1626,6 +1632,9 @@ class BrainRoutePolicyConfig(BaseModel):
     turn from the intent level and the targets' declared capabilities, and the
     deny lists keep listed providers or model prefixes off every chain (for
     example to make sure a delegate is the only way to reach a given family).
+    ``allow_cloud_vision`` is the explicit consent for screenshots, camera
+    frames and dropped images to reach a target not marked ``local``; while it
+    is off such a turn uses local targets only or says it cannot look.
     ``test_override_tier`` pins a tier only while JARVIS_ROUTE_POLICY_TEST_MODE=1.
     """
 
@@ -1635,6 +1644,7 @@ class BrainRoutePolicyConfig(BaseModel):
     escalation: RouteEscalationConfig = Field(default_factory=RouteEscalationConfig)
     deny_providers: list[str] = Field(default_factory=list)
     deny_model_prefixes: list[str] = Field(default_factory=list)
+    allow_cloud_vision: bool = False
     test_override_tier: str | None = None
 
 

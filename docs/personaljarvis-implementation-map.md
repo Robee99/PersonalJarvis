@@ -39,7 +39,7 @@ Companion: [implementation status](personaljarvis-implementation-status.md).
 | --- | --- | --- | --- |
 | Step 3.7 Flash | Nous inference API through Hermes OAuth (`stepfun/step-3.7-flash:free`). Exposed locally by the owner's gateway script `C:\paperclip\tools\nous-free-proxy.mjs` on `127.0.0.1:11436`: `GET /healthz`, `GET /v1/models`, `POST /v1/chat/completions`, SSE pass-through, `max_tokens` capped at 4096, 4 MB request cap, 300 s upstream timeout, free-model allowlist, no client auth (loopback only). | OpenAI chat-completions; tool calling through this route not yet verified live. HTTP 429 fair-share limits observed today. | Gateway not running (scheduled task "at logon", last run exited with code 1). |
 | Step 3.7 Flash on OpenRouter | `stepfun/step-3.7-flash` | Tools, text+image+video, 262k ctx | Paid only ($0.20 / $1.15 per M tokens): excluded by the owner's free-only rule. |
-| Qwen 3.6 35B | `qwen/qwen3.6-35b-a3b` on OpenRouter | Tools, text+image+video, 262k ctx | Paid only ($0.15 / $1.00 per M): excluded. No local GGUF anywhere on the PC; no server on 11435. Hermes ships a CUDA 13 `llama-server`. |
+| Qwen 3.6 35B | `qwen/qwen3.6-35b-a3b` on OpenRouter (paid, excluded); local `C:\models\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` | Tools, text+image (needs an mmproj, none on the PC), 262k ctx | Local file present since 2026-10-03 (20.82 GiB, SHA-256 matches the official unsloth object) with llama.cpp b11146. A 65k-context run returned empty output with 0.08 GB RAM free: not yet a stable tier. |
 | Installed Jarvis brain | `%LOCALAPPDATA%\Jarvis\jarvis.toml`: primary/fallback/router `gemini` | Gemini key set (free tier) | `local-openai` points at `127.0.0.1:8080` (nothing listening). |
 
 ## Paperclip
@@ -69,8 +69,8 @@ Companion: [implementation status](personaljarvis-implementation-status.md).
 | What | Where | Notes |
 | --- | --- | --- |
 | Screen capture to the Brain | `jarvis/screen_context/service.py`, `turn.py` (`<SCREEN_EVIDENCE>` block), `targeting.py`, `redaction.py` | Accessibility text first, OCR only when enabled and the text is sparse; secrets burned out of pixels. Master switch `[screen_context].enabled`. |
-| OCR | `jarvis/screen_context/uitext.py` `ocr_supplement_with_regions` | Tesseract via optional `pytesseract`; `[screen_context].ocr_enabled` defaults to off. Typed `OCR_UNAVAILABLE`; new `OCR_LOW_CONFIDENCE`. Engine not installed on the target device. |
-| Vision models | `BrainManager._lead_vision_chain`, `jarvis/vision/*` | Capability self-declared by providers. |
+| OCR | `jarvis/screen_context/uitext.py` `ocr_supplement_with_regions`, `ocr_engine_status` | Optional engines probed in order: RapidOCR (bundled PP-OCRv6 models on onnxruntime), then Tesseract via `pytesseract`. `[screen_context].ocr_enabled` defaults to off. Typed `OCR_UNAVAILABLE` and `OCR_LOW_CONFIDENCE`. Neither engine is installed on the target device. |
+| Vision models | `BrainManager._lead_vision_chain`, `jarvis/vision/*`; with the route policy, `route_policy.media_chain` | Capability self-declared by providers. With the policy on, images reach only targets marked `local` unless `allow_cloud_vision` is set (ADR-0040). |
 
 ## Reliability and tests
 
@@ -79,4 +79,4 @@ Companion: [implementation status](personaljarvis-implementation-status.md).
 | Test runner | `scripts/ci/run_tests_parallel.py` (markers exclude slow/live/eval) with ratchet `scripts/ci/ratchet_tests.py` against `scripts/ci/test-baseline-linux.json` |
 | Gates | `scripts/ci/check_no_new_german.py`, `check_silent_exception_handlers.py`, `check_async_routes.py`, `check_config_switches_wired.py`, `check_dist_consistency.py`, contract guards in `tests/unit/brain/test_routing.py` |
 | CI on the fork | `ci.yml` does not run on the fork's PR; only the manual "Desktop installers" workflow runs. All test evidence below is from local runs in a Linux container. |
-| Turn correlation | The voice pipeline passes no `trace_id` into the Brain; the dispatcher mints its own. There is no shared `turn_id` across STT, Brain, tools, Paperclip and TTS. |
+| Turn correlation | `SpeechPipeline._open_brain_stream` / `_open_brain_completion` pass the voice turn's `LatencyTracker.trace_id` to the Brain, and the Brain passes the turn's id to the dispatcher. The Paperclip issue carries the same turn id. |

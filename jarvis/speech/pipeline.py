@@ -16748,14 +16748,9 @@ class SpeechPipeline:
                     if not response.strip() and not barged:
                         await self._handle_silent_brain_turn(lang, text)
             else:
-                try:
-                    generate_call = self._brain.generate(
-                        text, consume_pending_voice_attachments=True
-                    )
-                except TypeError:
-                    # Compatibility for small test/provider adapters that still
-                    # expose the pre-modality Brain protocol.
-                    generate_call = self._brain.generate(text)
+                generate_call = self._open_brain_completion(
+                    text, getattr(getattr(self, "_latency_tracker", None), "trace_id", None)
+                )
                 ceiling_s = getattr(self, "_brain_hard_timeout_s", 90.0)
                 try:
                     reply = await asyncio.wait_for(generate_call, timeout=ceiling_s)
@@ -16875,6 +16870,54 @@ class SpeechPipeline:
         if perf is None or not getattr(perf, "streaming_tts", False):
             return False
         return hasattr(self._brain, "generate_stream")
+
+    def _open_brain_completion(self, text: str, trace_id: Any) -> Any:
+        """Start a buffered Brain call, carrying the turn's trace id when accepted."""
+        kwargs: dict[str, Any] = {"consume_pending_voice_attachments": True}
+        if trace_id is not None:
+            kwargs["trace_id"] = trace_id
+        try:
+            return self._brain.generate(text, **kwargs)
+        except TypeError:
+            kwargs.pop("trace_id", None)
+        try:
+            return self._brain.generate(text, **kwargs)
+        except TypeError:
+            # Compatibility for small test/provider adapters that still
+            # expose the pre-modality Brain protocol.
+            return self._brain.generate(text)
+
+    def _open_brain_stream(self, text: str, trace_id: Any) -> Any:
+        """Start the streaming Brain call with the richest signature it accepts.
+
+        ``allow_voice_confirm=True``: this is a conversational voice turn, so a
+        consequential ask-tier tool is deferred into a spoken yes/no
+        confirmation instead of blocking on a UI approval no voice user can
+        give (forensic 2026-06-18). The fallback drops the newest keyword
+        first. Older adapters that accept only ``on_progress`` must still
+        receive the stall-guard heartbeat; dropping straight to the bare call
+        loses ``on_progress`` and the no-first-frame ceiling would behead the
+        working turn (BUG-032).
+        """
+        full: dict[str, Any] = {
+            "on_progress": self._mark_brain_progress,
+            "allow_voice_confirm": True,
+            "consume_pending_voice_attachments": True,
+        }
+        attempts: list[dict[str, Any]] = []
+        if trace_id is not None:
+            attempts.append({**full, "trace_id": trace_id})
+        attempts += [
+            full,
+            {"on_progress": self._mark_brain_progress, "allow_voice_confirm": True},
+            {"on_progress": self._mark_brain_progress},
+        ]
+        for kwargs in attempts:
+            try:
+                return self._brain.generate_stream(text, **kwargs)
+            except TypeError:
+                continue  # signature does not take these keywords; try fewer
+        return self._brain.generate_stream(text)
 
     async def _brain_streaming(self, text: str, lang: str) -> tuple[str, bool]:
         """Latenz-Sprint-1 + Look-Ahead-Pipelining: Streaming-Brain mit
@@ -17099,37 +17142,11 @@ class SpeechPipeline:
                 # fakes / providers without the kwarg fall back transparently.
                 if tracker is not None:
                     tracker.mark(LatencyPhase.BRAIN_REQUEST_SENT)
-                # ``allow_voice_confirm=True``: this is a conversational voice
-                # turn, so a consequential ask-tier tool is deferred into a spoken
-                # yes/no confirmation instead of blocking on a UI approval no voice
-                # user can give (forensic 2026-06-18). Graduated fallback drops the
-                # newest attachment keyword first, preserving voice confirmation on
-                # pre-attachment adapters. Older adapters that accept only
-                # ``on_progress`` must still receive the stall-guard heartbeat —
-                # dropping straight to the bare call here loses ``on_progress`` and
-                # the no-first-frame ceiling would behead the working turn (BUG-032).
-                try:
-                    stream = self._brain.generate_stream(
-                        text,
-                        on_progress=self._mark_brain_progress,
-                        allow_voice_confirm=True,
-                        consume_pending_voice_attachments=True,
-                    )
-                except TypeError:
-                    try:
-                        stream = self._brain.generate_stream(
-                            text,
-                            on_progress=self._mark_brain_progress,
-                            allow_voice_confirm=True,
-                        )
-                    except TypeError:
-                        try:
-                            stream = self._brain.generate_stream(
-                                text,
-                                on_progress=self._mark_brain_progress,
-                            )
-                        except TypeError:
-                            stream = self._brain.generate_stream(text)
+                # The turn's latency trace id goes to the Brain too, so STT,
+                # route, tool and TTS events of one voice turn share one id.
+                stream = self._open_brain_stream(
+                    text, getattr(tracker, "trace_id", None) if tracker is not None else None
+                )
                 async for chunk in stream:
                     if not chunk:
                         continue

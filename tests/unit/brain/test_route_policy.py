@@ -8,12 +8,18 @@ from __future__ import annotations
 import pytest
 
 from jarvis.brain.route_policy import (
+    MEDIA_STAYS_LOCAL_MESSAGES,
     RECOVERY_MESSAGES,
     TEST_MODE_ENV,
     RouteFailure,
     TurnSignals,
     decide_route,
     filter_denied,
+    is_local_target,
+    is_policy_target,
+    media_allowed,
+    media_chain,
+    recovery_message,
     wants_escalation,
 )
 from jarvis.core.config import BrainRoutePolicyConfig
@@ -152,10 +158,77 @@ def test_test_override_is_ignored_outside_test_mode() -> None:
     assert pinned.reason == "test-override:deep"
 
 
-def test_every_failure_category_has_a_user_safe_message() -> None:
+def test_every_failure_category_has_a_user_safe_message_in_every_locale() -> None:
     assert set(RECOVERY_MESSAGES) == set(RouteFailure)
-    for message in RECOVERY_MESSAGES.values():
-        assert "Traceback" not in message and "Error" not in message
+    for table in (*RECOVERY_MESSAGES.values(), MEDIA_STAYS_LOCAL_MESSAGES):
+        assert set(table) == {"en", "de", "es"}
+        for message in table.values():
+            assert message and "Traceback" not in message and "Error" not in message
+
+
+def test_recovery_message_follows_the_turn_language() -> None:
+    table = RECOVERY_MESSAGES[RouteFailure.TIMEOUT]
+    assert recovery_message(RouteFailure.TIMEOUT, "es") == table["es"]
+    # An unknown locale never crashes the turn; it falls back to English.
+    assert recovery_message(RouteFailure.TIMEOUT, "xx") == table["en"]
+
+
+def _media_policy(**overrides) -> BrainRoutePolicyConfig:
+    raw = {
+        "enabled": True,
+        "fast": {"provider": FAST[0], "model": FAST[1]},
+        "deep": {"provider": DEEP[0], "model": DEEP[1], "local": True},
+    }
+    raw.update(overrides)
+    return BrainRoutePolicyConfig.model_validate(raw)
+
+
+def test_image_turn_stays_on_local_targets_without_consent() -> None:
+    chain, excluded = media_chain(_media_policy(), [FAST, DEEP], supports_vision=lambda p, m: True)
+    assert chain == [DEEP]
+    assert excluded == [(FAST[0], "cloud-vision-off")]
+
+
+def test_cloud_vision_consent_lets_a_cloud_target_lead() -> None:
+    policy = _media_policy(allow_cloud_vision=True)
+    chain, excluded = media_chain(policy, [FAST, DEEP], supports_vision=lambda p, m: True)
+    assert chain == [FAST, DEEP]
+    assert excluded == []
+
+
+def test_image_turn_puts_seeing_targets_first_and_adds_nothing() -> None:
+    policy = _media_policy(allow_cloud_vision=True)
+    chain, _ = media_chain(policy, [FAST, DEEP], supports_vision=lambda p, m: p == DEEP[0])
+    assert chain == [DEEP, FAST]
+
+
+def test_no_local_target_means_an_empty_chain_not_a_cloud_call() -> None:
+    policy = _media_policy(deep={"provider": DEEP[0], "model": DEEP[1]})
+    chain, excluded = media_chain(policy, [FAST, DEEP], supports_vision=lambda p, m: True)
+    assert chain == []
+    assert {why for _, why in excluded} == {"cloud-vision-off"}
+
+
+def test_local_flag_is_matched_on_provider_and_model() -> None:
+    policy = _media_policy()
+    assert is_local_target(policy, DEEP[0], DEEP[1])
+    assert not is_local_target(policy, DEEP[0], "another-model")
+    assert not is_local_target(policy, FAST[0], FAST[1])
+
+
+def test_media_allowed_needs_a_local_tier_or_consent() -> None:
+    policy = _media_policy()
+    assert media_allowed(policy, *DEEP)
+    assert not media_allowed(policy, *FAST)
+    assert not media_allowed(policy, "unlisted-host", None)
+    consented = _media_policy(allow_cloud_vision=True)
+    assert media_allowed(consented, *FAST)
+
+
+def test_policy_target_is_any_configured_tier() -> None:
+    policy = _media_policy()
+    assert is_policy_target(policy, *FAST) and is_policy_target(policy, *DEEP)
+    assert not is_policy_target(policy, "unlisted-host", "x")
 
 
 def test_decision_serialises_for_the_route_event() -> None:

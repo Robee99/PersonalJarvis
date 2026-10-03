@@ -112,12 +112,15 @@ from .evidence_gate import live_surface_covers
 from .intent_router import RoutingDecision, classify
 from .paperclip_delegation import DelegationRequest, delegate_from_config
 from .route_policy import (
-    RECOVERY_MESSAGES,
     RouteDecision,
     RouteFailure,
     TurnSignals,
     decide_route,
     filter_denied,
+    media_allowed,
+    media_chain,
+    media_stays_local_message,
+    recovery_message,
     wants_escalation,
 )
 from .local_action_gate import (
@@ -3523,6 +3526,10 @@ class BrainManager:
         self, chain: list[tuple[str, str | None]]
     ) -> list[tuple[str, str | None]]:
         """Filter a delegated turn to tool-capable cross-family candidates."""
+        if self._route_policy() is not None:
+            # The routing policy owns the chain: keep its order and targets,
+            # never pull in a tool model or worker pick from outside it.
+            return [(p, m) for p, m in chain if self._brain_can_call_tools(p, m)]
         from jarvis.core.model_selection import operation_model, worker_selection
 
         selection = operation_model.get() or worker_selection(self._config)
@@ -3736,6 +3743,7 @@ class BrainManager:
         delegated_voice: bool = False,
         tool_context: dict[str, Any] | None = None,
         loop_control: Any = None,
+        tool_images: bool = True,
     ) -> BrainDispatcher:
         """Builds the dispatcher with an optional tool override.
 
@@ -3788,6 +3796,8 @@ class BrainManager:
         kwargs: dict[str, Any] = {}
         if max_turns is not None:
             kwargs["max_turns"] = max_turns
+        if not tool_images:
+            kwargs["tool_images"] = False
         return BrainDispatcher(
             brain,
             tools=tools,
@@ -10750,7 +10760,7 @@ class BrainManager:
                 p for p in self._registry.available() if p not in self._dead_providers
             ],
             can_call_tools=self._brain_can_call_tools,
-            supports_vision=lambda p, m: self._provider_advertises_vision(p),
+            supports_vision=lambda p, m: self._provider_advertises_vision(p, m),
         )
         self._last_route_decision = decision
         log.info(
@@ -10811,13 +10821,13 @@ class BrainManager:
             log.info("Route policy: escalation budget for this session is spent")
             self._last_route_decision = RouteDecision("escalation", [], f"{reason};budget-spent")
             await self._publish_route(trace_uuid, level, outcome=RouteFailure.POLICY_DENIED)
-            return RECOVERY_MESSAGES[RouteFailure.POLICY_DENIED]
+            return recovery_message(RouteFailure.POLICY_DENIED, self._resolve_turn_lang())
         delegate = delegate_from_config(escalation, on_progress=on_progress)
         if delegate is None:
             log.info("Route policy: escalation requested but the delegate is not connected")
             self._last_route_decision = RouteDecision("escalation", [], f"{reason};not-connected")
             await self._publish_route(trace_uuid, level, outcome=RouteFailure.UNAVAILABLE)
-            return RECOVERY_MESSAGES[RouteFailure.UNAVAILABLE]
+            return recovery_message(RouteFailure.UNAVAILABLE, self._resolve_turn_lang())
         self._route_escalations = used + 1
         self._last_route_decision = RouteDecision("escalation", [], reason)
         context = "\n".join(
@@ -10833,7 +10843,7 @@ class BrainManager:
         )
         if result.failure is not None:
             self._last_turn_all_failed = result.failure is RouteFailure.UNAVAILABLE
-            return RECOVERY_MESSAGES[result.failure]
+            return recovery_message(result.failure, self._resolve_turn_lang())
         await self._record_response_side_effects(
             user_text=user_text,
             response_text=result.text,
@@ -12131,7 +12141,25 @@ class BrainManager:
         )
 
         vision_capable_seen = False
-        if images:
+        if images and route_policy is not None:
+            chain, media_excluded = media_chain(
+                route_policy, chain,
+                supports_vision=lambda p, m: self._provider_advertises_vision(p, m),
+            )
+            if not chain:
+                # Nothing on this device can take the image and cloud vision is
+                # not allowed: say so instead of sending it anywhere.
+                self._last_route_decision = RouteDecision(
+                    "none", [], "privacy:media-stays-local", media_excluded
+                )
+                await self._publish_route(trace_uuid, decision.level, outcome="blocked")
+                response_text = media_stays_local_message(self._resolve_turn_lang())
+                await self._record_response_side_effects(
+                    user_text=user_text, response_text=response_text,
+                    use_history=use_history, trace_id=trace_uuid,
+                )
+                return response_text
+        elif images:
             chain = self._apply_route_deny(self._lead_vision_chain(chain))
         screen_turn_t0 = time.perf_counter() if images else None
 
@@ -12392,6 +12420,10 @@ class BrainManager:
                 brain, decision.level, delegated=prefer_tool_model, override=turn_override
             ):
                 _disp_kwargs["reasoning_effort"] = "none"
+            if route_policy is not None and not media_allowed(route_policy, prov_name, model):
+                # A screenshot a tool takes mid-turn must not reach a cloud
+                # model the user has not allowed to see images.
+                _disp_kwargs["tool_images"] = False
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )
@@ -12415,7 +12447,8 @@ class BrainManager:
                         user_text,
                         images=images,
                         history=history,
-                        trace_id=trace_id,
+                        # The turn's own id, so tool events correlate with it.
+                        trace_id=trace_uuid,
                         intent_level=decision.level,
                         evidence_required_tool=self._evidence_required_tool,
                         text_consumer=_attempt_consumer,
@@ -12781,22 +12814,6 @@ class BrainManager:
             return response_text
 
         if used_provider is None:
-            escalation_cfg = getattr(route_policy, "escalation", None)
-            if (
-                route_policy is not None
-                and decision.level in ("deep", "code")
-                and bool(getattr(escalation_cfg, "on_deep_failure", False))
-            ):
-                # Bounded, one-shot escalation of a deep turn that failed on
-                # every configured model. Skipped once any tool ran, so an
-                # action is never replayed by the delegate.
-                escalated = await self._escalate_to_delegate(
-                    user_text, trace_uuid, level=decision.level,
-                    reason="escalation:deep-failed", use_history=use_history,
-                    on_progress=on_progress,
-                )
-                if escalated is not None:
-                    return escalated
             self._last_turn_all_failed = True
             log.error("Alle %d Provider-Versuche fehlgeschlagen. Letzter Fehler: %s",
                      len(chain), last_exc)

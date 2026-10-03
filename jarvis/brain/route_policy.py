@@ -43,23 +43,106 @@ class RouteFailure(StrEnum):
     CAPABILITY_UNSUPPORTED = "capability-unsupported"
 
 
-# User-safe wording per failure: no provider names, no stack traces.
-RECOVERY_MESSAGES: dict[RouteFailure, str] = {
-    RouteFailure.UNAVAILABLE: (
-        "I can't reach a model for that right now. Please try again in a moment."
+# User-safe wording per failure, per output language (de/en/es; the turn's
+# language is resolved once by the Brain): no provider names, no stack traces.
+RECOVERY_MESSAGES: dict[RouteFailure, dict[str, str]] = {
+    RouteFailure.UNAVAILABLE: {
+        "en": "I can't reach a model for that right now. Please try again in a moment.",
+        "de": (
+            "Ich erreiche gerade kein Modell dafür. Versuch es bitte "  # i18n-allow
+            "gleich noch einmal."  # i18n-allow
+        ),
+        "es": (
+            "Ahora mismo no puedo acceder a un modelo para eso. Inténtalo "
+            "de nuevo en un momento."
+        ),
+    },
+    RouteFailure.TIMEOUT: {
+        "en": "That took too long, so I stopped it. Want me to try again?",
+        "de": (
+            "Das hat zu lange gedauert, also habe ich es abgebrochen. Soll "  # i18n-allow
+            "ich es nochmal versuchen?"  # i18n-allow
+        ),
+        "es": "Tardaba demasiado, así que lo detuve. ¿Quieres que lo intente de nuevo?",
+    },
+    RouteFailure.CANCELLED: {
+        "en": "Okay, I stopped that.",
+        "de": "Okay, ich habe das gestoppt.",  # i18n-allow
+        "es": "Vale, lo he detenido.",
+    },
+    RouteFailure.INVALID_MODEL_OUTPUT: {
+        "en": "I got a garbled answer for that. Want me to try again?",
+        "de": (
+            "Ich habe dafür eine unbrauchbare Antwort bekommen. Soll ich "  # i18n-allow
+            "es nochmal versuchen?"  # i18n-allow
+        ),
+        "es": "Recibí una respuesta ilegible. ¿Quieres que lo intente de nuevo?",
+    },
+    RouteFailure.POLICY_DENIED: {
+        "en": "My routing settings don't allow that step, so I didn't run it.",
+        "de": (
+            "Meine Routing-Einstellungen erlauben diesen Schritt nicht, "  # i18n-allow
+            "also habe ich ihn nicht ausgeführt."  # i18n-allow
+        ),
+        "es": "Mi configuración de enrutamiento no permite ese paso, así que no lo ejecuté.",
+    },
+    RouteFailure.TOOL_DENIED: {
+        "en": "That action wasn't approved, so I didn't run it.",
+        "de": (
+            "Diese Aktion wurde nicht freigegeben, also habe ich sie nicht "  # i18n-allow
+            "ausgeführt."  # i18n-allow
+        ),
+        "es": "Esa acción no se aprobó, así que no la ejecuté.",
+    },
+    RouteFailure.DELEGATION_FAILED: {
+        "en": "The complex step couldn't finish. I can retry it or try a simpler version.",
+        "de": (
+            "Der komplexe Schritt konnte nicht abgeschlossen werden. Ich "  # i18n-allow
+            "kann es erneut oder einfacher versuchen."  # i18n-allow
+        ),
+        "es": (
+            "El paso complejo no pudo terminar. Puedo reintentarlo o "
+            "probar una versión más simple."
+        ),
+    },
+    RouteFailure.CAPABILITY_UNSUPPORTED: {
+        "en": "None of my configured models can do that kind of request yet.",
+        "de": (
+            "Keines meiner eingerichteten Modelle kann diese Art von "  # i18n-allow
+            "Anfrage bisher."  # i18n-allow
+        ),
+        "es": "Ninguno de mis modelos configurados puede hacer ese tipo de petición todavía.",
+    },
+}
+
+# Spoken when a turn carries a screenshot, camera frame or dropped image, cloud
+# vision is not allowed, and no local target can take it.
+MEDIA_STAYS_LOCAL_MESSAGES: dict[str, str] = {
+    "en": (
+        "I didn't send that image to a cloud model, because cloud vision is switched "
+        "off and no local model can look at it right now."
     ),
-    RouteFailure.TIMEOUT: "That took too long, so I stopped it. Want me to try again?",
-    RouteFailure.CANCELLED: "Okay, I stopped that.",
-    RouteFailure.INVALID_MODEL_OUTPUT: "I got a garbled answer for that. Want me to try again?",
-    RouteFailure.POLICY_DENIED: "My routing settings don't allow that step, so I didn't run it.",
-    RouteFailure.TOOL_DENIED: "That action wasn't approved, so I didn't run it.",
-    RouteFailure.DELEGATION_FAILED: (
-        "The complex step couldn't finish. I can retry it or try a simpler version."
+    "de": (
+        "Ich habe das Bild an kein Cloud-Modell geschickt, weil Cloud-Vision "  # i18n-allow
+        "ausgeschaltet ist und gerade kein lokales Modell es ansehen kann."  # i18n-allow
     ),
-    RouteFailure.CAPABILITY_UNSUPPORTED: (
-        "None of my configured models can do that kind of request yet."
+    "es": (
+        "No envié esa imagen a un modelo en la nube, porque la visión en la nube "
+        "está desactivada y ahora mismo ningún modelo local puede verla."
     ),
 }
+
+_FALLBACK_LANG = "en"
+
+
+def recovery_message(failure: RouteFailure, lang: str) -> str:
+    """The user-safe recovery line for ``failure`` in the turn's language."""
+    table = RECOVERY_MESSAGES[failure]
+    return table.get(lang) or table[_FALLBACK_LANG]
+
+
+def media_stays_local_message(lang: str) -> str:
+    return MEDIA_STAYS_LOCAL_MESSAGES.get(lang) or MEDIA_STAYS_LOCAL_MESSAGES[_FALLBACK_LANG]
 
 
 @dataclass(frozen=True)
@@ -195,6 +278,62 @@ def decide_route(
     if selected != order[0]:
         reason = f"{reason};fallback-from:{order[0]}"
     return RouteDecision(selected, chain, reason, excluded)
+
+
+def _matches_tier(policy: Any, provider: str, model: str | None, *, local_only: bool) -> bool:
+    for tier in (TIER_FAST, TIER_DEEP):
+        raw = getattr(policy, tier, None)
+        if local_only and not bool(getattr(raw, "local", False)):
+            continue
+        target = _target(policy, tier)
+        if target is not None and target[0] == provider and (
+            target[1] is None or model is None or target[1] == model
+        ):
+            return True
+    return False
+
+
+def is_local_target(policy: Any, provider: str, model: str | None) -> bool:
+    """True when a configured tier declares this provider/model as on-device."""
+    return _matches_tier(policy, provider, model, local_only=True)
+
+
+def is_policy_target(policy: Any, provider: str, model: str | None) -> bool:
+    """True when this provider/model is one of the configured tiers."""
+    return _matches_tier(policy, provider, model, local_only=False)
+
+
+def media_allowed(policy: Any, provider: str, model: str | None) -> bool:
+    """Whether this target may receive images (local, or cloud vision allowed)."""
+    if bool(getattr(policy, "allow_cloud_vision", False)):
+        return True
+    return is_local_target(policy, provider, model)
+
+
+def media_chain(
+    policy: Any,
+    chain: Iterable[tuple[str, str | None]],
+    *,
+    supports_vision: Callable[[str, str | None], bool],
+) -> tuple[list[tuple[str, str | None]], list[tuple[str, str]]]:
+    """Order and confine a policy chain for a turn that carries images.
+
+    Only targets already on the chain are considered, so no provider outside
+    the configured tiers can be pulled in for an image. Without
+    ``allow_cloud_vision`` every target not declared ``local`` is excluded
+    (reason ``cloud-vision-off``). Targets that can see go first; the order
+    within each group is kept.
+    """
+    kept: list[tuple[str, str | None]] = []
+    excluded: list[tuple[str, str]] = []
+    for provider, model in chain:
+        if not media_allowed(policy, provider, model):
+            excluded.append((provider, "cloud-vision-off"))
+            continue
+        kept.append((provider, model))
+    seeing = [t for t in kept if supports_vision(*t)]
+    blind = [t for t in kept if not supports_vision(*t)]
+    return seeing + blind, excluded
 
 
 def wants_escalation(policy: Any, user_text: str) -> bool:

@@ -16,7 +16,7 @@ import pytest
 from jarvis.brain import manager as manager_mod
 from jarvis.brain.manager import BrainManager
 from jarvis.brain.paperclip_delegation import DelegationResult, DelegationStatus
-from jarvis.brain.route_policy import RECOVERY_MESSAGES, RouteFailure
+from jarvis.brain.route_policy import RouteFailure, recovery_message
 from jarvis.core.bus import EventBus
 from jarvis.core.config import BrainRoutePolicyConfig, load_config
 from jarvis.core.events import BrainRouteSelected
@@ -117,7 +117,7 @@ async def test_escalation_without_a_connection_is_a_typed_recovery(monkeypatch) 
         "ask claude", uuid4(), level="fast", reason="escalation:explicit-request",
         use_history=False, on_progress=None,
     )
-    assert answer == RECOVERY_MESSAGES[RouteFailure.UNAVAILABLE]
+    assert answer == recovery_message(RouteFailure.UNAVAILABLE, mgr._resolve_turn_lang())
 
 
 @pytest.mark.asyncio
@@ -136,5 +136,5 @@ async def test_escalation_budget_is_bounded_per_session(monkeypatch) -> None:
     second = await mgr._escalate_to_delegate(
         "ask claude", uuid4(), level="fast", reason="r", use_history=False, on_progress=None)
 
-    assert first == RECOVERY_MESSAGES[RouteFailure.TIMEOUT]
-    assert second == RECOVERY_MESSAGES[RouteFailure.POLICY_DENIED]
+    assert first == recovery_message(RouteFailure.TIMEOUT, mgr._resolve_turn_lang())
+    assert second == recovery_message(RouteFailure.POLICY_DENIED, mgr._resolve_turn_lang())
