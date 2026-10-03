@@ -63,6 +63,7 @@ from jarvis.core.events import (
     ActionExecuted,
     AnnouncementRequested,
     BrainProviderSwitched,
+    BrainRouteSelected,
     BrainTurnCompleted,
     BrainTurnStarted,
     ResponseGenerated,
@@ -109,6 +110,16 @@ from .assistant_name import (
 from .dispatcher import BrainDispatcher
 from .evidence_gate import live_surface_covers
 from .intent_router import RoutingDecision, classify
+from .paperclip_delegation import DelegationRequest, delegate_from_config
+from .route_policy import (
+    RECOVERY_MESSAGES,
+    RouteDecision,
+    RouteFailure,
+    TurnSignals,
+    decide_route,
+    filter_denied,
+    wants_escalation,
+)
 from .local_action_gate import (
     HARNESS_NAME,
     LocalActionMode,
@@ -10703,6 +10714,115 @@ class BrainManager:
                 chain.insert(0, helper)
         return chain
 
+    def _route_policy(self) -> Any | None:
+        """The enabled ``[brain.route_policy]`` table, or None (normal chain)."""
+        policy = getattr(self._config.brain, "route_policy", None)
+        return policy if policy is not None and bool(getattr(policy, "enabled", False)) else None
+
+    def _policy_chain(self, policy: Any, level: str) -> list[tuple[str, str | None]]:
+        """Build the turn's chain from the configured tiers (route_policy)."""
+        decision = decide_route(
+            TurnSignals(
+                level=level,
+                needs_tools=bool(getattr(self, "_turn_needs_tools", False)),
+            ),
+            policy,
+            available=[
+                p for p in self._registry.available() if p not in self._dead_providers
+            ],
+            can_call_tools=self._brain_can_call_tools,
+            supports_vision=lambda p, m: self._provider_advertises_vision(p),
+        )
+        self._last_route_decision = decision
+        log.info(
+            "Route policy: tier=%s reason=%s chain=%s excluded=%s",
+            decision.tier, decision.reason, decision.chain, decision.excluded,
+        )
+        return list(decision.chain)
+
+    def _apply_route_deny(
+        self, chain: list[tuple[str, str | None]]
+    ) -> list[tuple[str, str | None]]:
+        """Re-apply the deny lists after a later stage reordered the chain."""
+        policy = self._route_policy()
+        return filter_denied(policy, chain) if policy is not None else chain
+
+    async def _publish_route(self, trace_uuid: UUID, level: str, **extra: Any) -> None:
+        decision = getattr(self, "_last_route_decision", None)
+        if decision is None or self._bus is None:
+            return
+        payload = decision.to_dict()
+        try:
+            await self._bus.publish(BrainRouteSelected(
+                trace_id=trace_uuid,
+                tier=extra.get("tier", payload["tier"]),
+                reason=extra.get("reason", payload["reason"]),
+                intent_level=level,
+                chain=tuple(payload["chain"]),
+                excluded=tuple(payload["excluded"]),
+                outcome=str(extra.get("outcome", "")),
+                elapsed_ms=int(extra.get("elapsed_ms", 0)),
+                source_layer="brain.route_policy",
+            ))
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break a turn
+            log.warning("BrainRouteSelected publish failed: %s", exc)
+
+    async def _escalate_to_delegate(
+        self,
+        user_text: str,
+        trace_uuid: UUID,
+        *,
+        level: str,
+        reason: str,
+        use_history: bool,
+        on_progress: Callable[[], None] | None,
+    ) -> str | None:
+        """Hand the turn to the configured delegate (Paperclip), bounded.
+
+        Returns the text to answer with, or None when escalation is not
+        possible (off, over the session budget, not connected), so the caller
+        keeps its own honest fallback.
+        """
+        policy = self._route_policy()
+        escalation = getattr(policy, "escalation", None)
+        if escalation is None or not bool(getattr(escalation, "enabled", False)):
+            return None
+        used = int(getattr(self, "_route_escalations", 0))
+        if used >= int(getattr(escalation, "max_per_session", 0)):
+            log.info("Route policy: escalation budget for this session is spent")
+            self._last_route_decision = RouteDecision("escalation", [], f"{reason};budget-spent")
+            await self._publish_route(trace_uuid, level, outcome=RouteFailure.POLICY_DENIED)
+            return RECOVERY_MESSAGES[RouteFailure.POLICY_DENIED]
+        delegate = delegate_from_config(escalation, on_progress=on_progress)
+        if delegate is None:
+            log.info("Route policy: escalation requested but the delegate is not connected")
+            self._last_route_decision = RouteDecision("escalation", [], f"{reason};not-connected")
+            await self._publish_route(trace_uuid, level, outcome=RouteFailure.UNAVAILABLE)
+            return RECOVERY_MESSAGES[RouteFailure.UNAVAILABLE]
+        self._route_escalations = used + 1
+        self._last_route_decision = RouteDecision("escalation", [], reason)
+        context = "\n".join(
+            f"{getattr(m, 'role', '')}: {getattr(m, 'content', '')}"
+            for m in (self._history[-6:] if use_history else [])
+            if isinstance(getattr(m, "content", None), str)
+        )
+        result = await delegate.delegate(
+            DelegationRequest(turn_id=str(trace_uuid), task=user_text, context=context)
+        )
+        await self._publish_route(
+            trace_uuid, level, outcome=result.status, elapsed_ms=int(result.elapsed_s * 1000)
+        )
+        if result.failure is not None:
+            self._last_turn_all_failed = result.failure is RouteFailure.UNAVAILABLE
+            return RECOVERY_MESSAGES[result.failure]
+        await self._record_response_side_effects(
+            user_text=user_text,
+            response_text=result.text,
+            use_history=use_history,
+            trace_id=trace_uuid,
+        )
+        return result.text
+
     def _build_fallback_chain(self, level: str) -> list[tuple[str, str | None]]:
         """Returns a prioritised list of (provider, model) attempts."""
         active = self._active_name
@@ -10714,8 +10834,14 @@ class BrainManager:
         tool_lead: tuple[str, str | None] | None = None
 
         override = _TURN_OVERRIDE.get()
+        policy = self._route_policy()
         if override is not None:
-            return self._override_chain(override, level)
+            chain = self._override_chain(override, level)
+            # A caller's pick still obeys the configured deny lists: a denied
+            # family gets an honest error, never a quiet direct call.
+            return filter_denied(policy, chain) if policy is not None else chain
+        if policy is not None:
+            return self._policy_chain(policy, level)
 
         # Capability-driven tool delegation (NOT a per-provider hardcode): the
         # subscription-CLI brains (Codex over the ChatGPT login, Antigravity over
@@ -11753,6 +11879,20 @@ class BrainManager:
         # 2. Router: which level applies?
         decision = self._picked_level(user_text)
         log.debug("Router-Decision: level=%s reason=%s", decision.level, decision.reason)
+        self._last_route_decision = None
+        route_policy = self._route_policy()
+        if (
+            route_policy is not None
+            and _TURN_OVERRIDE.get() is None
+            and wants_escalation(route_policy, user_text)
+        ):
+            escalated = await self._escalate_to_delegate(
+                user_text, trace_uuid, level=decision.level,
+                reason="escalation:explicit-request", use_history=use_history,
+                on_progress=on_progress,
+            )
+            if escalated is not None:
+                return escalated
 
         # 3. Build fallback chain and try each entry.
         # Provider-agnostic tool routing flags (consumed by _build_fallback_chain):
@@ -11774,6 +11914,8 @@ class BrainManager:
             # the empty-chain check so an all-dead chain keeps the honest
             # provider-down diagnostic below.
             chain = self._hoist_tool_model(chain)
+        chain = self._apply_route_deny(chain)
+        await self._publish_route(trace_uuid, decision.level)
         if not chain:
             # Empty chain means either (a) no providers registered or
             # (b) all filtered out by _dead_providers (no key set).
@@ -11970,7 +12112,7 @@ class BrainManager:
 
         vision_capable_seen = False
         if images:
-            chain = self._lead_vision_chain(chain)
+            chain = self._apply_route_deny(self._lead_vision_chain(chain))
         screen_turn_t0 = time.perf_counter() if images else None
 
         for idx, (prov_name, model) in enumerate(chain):
@@ -12594,6 +12736,23 @@ class BrainManager:
             return response_text
 
         if used_provider is None:
+            escalation_cfg = getattr(route_policy, "escalation", None)
+            if (
+                route_policy is not None
+                and decision.level in ("deep", "code")
+                and bool(getattr(escalation_cfg, "on_deep_failure", False))
+                and not _turn_executed
+            ):
+                # Bounded, one-shot escalation of a deep turn that failed on
+                # every configured model. Skipped once any tool ran, so an
+                # action is never replayed by the delegate.
+                escalated = await self._escalate_to_delegate(
+                    user_text, trace_uuid, level=decision.level,
+                    reason="escalation:deep-failed", use_history=use_history,
+                    on_progress=on_progress,
+                )
+                if escalated is not None:
+                    return escalated
             self._last_turn_all_failed = True
             log.error("Alle %d Provider-Versuche fehlgeschlagen. Letzter Fehler: %s",
                      len(chain), last_exc)

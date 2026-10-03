@@ -1590,6 +1590,54 @@ class EvidenceDomainsConfig(BaseModel):
     )
 
 
+class RouteTargetConfig(BaseModel):
+    """One routing target: a configured provider id and an optional model."""
+
+    provider: str = ""
+    model: str | None = None
+
+
+class RouteEscalationConfig(BaseModel):
+    """Bounded escalation to a delegate agent (Paperclip), never a direct call.
+
+    ``agent`` names the Paperclip agent that takes the task (for example the
+    install's Claude agent). ``trigger_phrases`` are the words that count as an
+    explicit request; ``on_deep_failure`` lets a deep turn that failed on every
+    configured model escalate once. ``deadline_s`` bounds how long a voice turn
+    waits for the delegate before it reports a recoverable timeout.
+    """
+
+    enabled: bool = False
+    via: str = "paperclip"
+    agent: str = ""
+    trigger_phrases: list[str] = Field(default_factory=list)
+    on_deep_failure: bool = False
+    deadline_s: float = Field(default=180.0, ge=5.0, le=3600.0)
+    poll_interval_s: float = Field(default=3.0, ge=0.5, le=60.0)
+    max_per_session: int = Field(default=5, ge=0, le=100)
+    max_context_chars: int = Field(default=4000, ge=200, le=50_000)
+
+
+class BrainRoutePolicyConfig(BaseModel):
+    """``[brain.route_policy]``: configured fast/deep/escalation routing.
+
+    Off by default, so an install without this table keeps the normal chain.
+    When enabled, ``jarvis.brain.route_policy.decide_route`` picks the tier per
+    turn from the intent level and the targets' declared capabilities, and the
+    deny lists keep listed providers or model prefixes off every chain (for
+    example to make sure a delegate is the only way to reach a given family).
+    ``test_override_tier`` pins a tier only while JARVIS_ROUTE_POLICY_TEST_MODE=1.
+    """
+
+    enabled: bool = False
+    fast: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    deep: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    escalation: RouteEscalationConfig = Field(default_factory=RouteEscalationConfig)
+    deny_providers: list[str] = Field(default_factory=list)
+    deny_model_prefixes: list[str] = Field(default_factory=list)
+    test_override_tier: str | None = None
+
+
 class BrainConfig(BaseModel):
     # populate_by_name=True lets callers use the Python field name alongside the
     # validation aliases (needed so both new and old TOML keys populate the fields).
@@ -1645,6 +1693,8 @@ class BrainConfig(BaseModel):
     reply_language: str = "auto"
     # Persona mandate Phase 3: deterministic spawn heuristic for the router.
     routing: BrainRoutingConfig = Field(default_factory=BrainRoutingConfig)
+    # Configured fast/deep/escalation routing (off unless the table enables it).
+    route_policy: BrainRoutePolicyConfig = Field(default_factory=BrainRoutePolicyConfig)
     # Persona mandate Phase 4: plausibility thresholds for tool execution.
     plausibility: BrainPlausibilityConfig = Field(
         default_factory=BrainPlausibilityConfig,
