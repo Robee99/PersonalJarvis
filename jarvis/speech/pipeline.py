@@ -68,6 +68,7 @@ from jarvis.core.events import (
     DictationStarted,
     DictationTranscribing,
     DictationTranscript,
+    ErrorOccurred,
     JarvisAgentAnnouncement,
     JarvisAgentBackgroundCompleted,
     LatencyTurnComplete,
@@ -16731,13 +16732,21 @@ class SpeechPipeline:
             await self._set_turn_state(TurnTakingState.PROCESSING)
             log.info("→ Brain (from completion buffer)…")
             if self._streaming_enabled():
-                # Same stall guard as the primary dispatch path — a buffered
-                # completion must not be able to hang the session either. A true
-                # stall here surfaces as TimeoutError, caught + logged below
-                # (this secondary path stays silent on stall by design).
-                await self._run_brain_with_stall_guard(
-                    self._brain_streaming(text, lang)
-                )
+                # Same stall guard and the same zero-silent-drop endings as the
+                # primary dispatch path (AD-OE6): the user finished speaking, so
+                # a stall or an empty answer must be heard, not dropped into a
+                # silent LISTENING.
+                try:
+                    response, barged = await self._run_brain_with_stall_guard(
+                        self._brain_streaming(text, lang)
+                    )
+                except TimeoutError:
+                    log.warning("Buffered-completion brain stalled — speaking fallback")
+                    if self._should_speak_stall_fallback():
+                        await self._speak_brain_timeout(lang, site="completion_stall")
+                else:
+                    if not response.strip() and not barged:
+                        await self._handle_silent_brain_turn(lang, text)
             else:
                 try:
                     generate_call = self._brain.generate(
@@ -16747,10 +16756,23 @@ class SpeechPipeline:
                     # Compatibility for small test/provider adapters that still
                     # expose the pre-modality Brain protocol.
                     generate_call = self._brain.generate(text)
-                reply = await generate_call
-                if reply:
-                    await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
-                    await self._speak(reply, language=lang, kind=SPOKEN_KIND_COMPLETION)
+                ceiling_s = getattr(self, "_brain_hard_timeout_s", 90.0)
+                try:
+                    reply = await asyncio.wait_for(generate_call, timeout=ceiling_s)
+                except TimeoutError:
+                    log.warning(
+                        "Buffered-completion brain exceeded %.0fs — speaking fallback",
+                        ceiling_s,
+                    )
+                    await self._speak_brain_timeout(lang, site="completion_nonstream_cap")
+                else:
+                    if reply:
+                        await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
+                        await self._speak(
+                            reply, language=lang, kind=SPOKEN_KIND_COMPLETION
+                        )
+                    else:
+                        await self._handle_silent_brain_turn(lang, text)
         except Exception as exc:  # noqa: BLE001 — AD-OE6: never crash the turn
             log.exception("Buffered-completion dispatch failed: %s", exc)
         finally:
@@ -16911,6 +16933,10 @@ class SpeechPipeline:
         tracker = self._latency_tracker
         tts_request_marked = False
         tts_first_chunk_marked = False
+        # Sentences whose synthesis raised. Each failure is logged where it
+        # happens; the end of the turn uses the count to tell "the voice
+        # provider is broken and nothing was heard" apart from a normal turn.
+        synth_errors: list[str] = []
 
         lang_code: str | None = None
         if lang:
@@ -16972,6 +16998,7 @@ class SpeechPipeline:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                synth_errors.append(f"{type(exc).__name__}: {exc}")
                 log.warning("TTS-Synthese fuer Satz fehlgeschlagen: %s", exc)
             finally:
                 await channel.put(None)
@@ -17064,6 +17091,7 @@ class SpeechPipeline:
 
         async def _produce() -> None:
             nonlocal sentence_buffer, paraphrase_stripped, brain_first_token_marked
+            cancelled = False
             try:
                 # Pass the stall-guard heartbeat down so the tool-use loop can
                 # ping it on each model-round + tool boundary (a vision/tool turn
@@ -17158,6 +17186,7 @@ class SpeechPipeline:
                         )
                     )
             except asyncio.CancelledError:
+                cancelled = True
                 raise
             except Exception as exc:  # noqa: BLE001
                 # Brain-stream errors must not hang the consumer; the sentinel
@@ -17166,9 +17195,20 @@ class SpeechPipeline:
             finally:
                 if reply_delta is not None:
                     await reply_delta.flush(done=True)
-                # End-of-turn sentinel — awaited so it lands even when the
-                # channel queue is at capacity (consumer keeps draining).
-                await sentence_channels.put(None)
+                if cancelled:
+                    # Torn down together with the consumer (barge-in, hangup,
+                    # stall): nobody drains the queue any more, so awaiting a
+                    # put on a full queue would never return and wedge the
+                    # teardown's ``await produce_task``. The teardown empties
+                    # the queue itself.
+                    try:
+                        sentence_channels.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass  # teardown drains the queue; no sentinel needed
+                else:
+                    # End-of-turn sentinel — awaited so it lands even when the
+                    # channel queue is at capacity (consumer keeps draining).
+                    await sentence_channels.put(None)
 
         produce_task = asyncio.create_task(_produce(), name="tts-produce-turn")
         play_task = asyncio.create_task(_play_sentences(), name="tts-play-turn")
@@ -17268,6 +17308,32 @@ class SpeechPipeline:
                 except asyncio.QueueEmpty:
                     break
 
+        if (
+            synth_errors
+            and spoken_anything
+            and not barged
+            and not getattr(self, "_brain_first_frame_played", False)
+        ):
+            # AD-OE6: the answer exists but the voice provider produced no
+            # audio for any of it. Speaking a notice would go through the same
+            # broken provider, so tell the screen instead of ending mute.
+            log.error(
+                "TTS produced no audio for this turn (%d sentence(s) failed, "
+                "last: %s) — the answer was shown but not spoken",
+                len(synth_errors), synth_errors[-1],
+            )
+            await self._publish_event(
+                ErrorOccurred(
+                    layer="speech.tts",
+                    error_type="tts_no_audio",
+                    message=(
+                        "Jarvis answered but the voice could not speak it "
+                        f"({synth_errors[-1][:160]}). Choose a working voice "
+                        "or a backup voice in Settings, Voice."
+                    ),
+                    recoverable=True,
+                )
+            )
         # Wave 0 (omni-latency): audio for this turn is fully played (or the
         # turn was barged over) — close the TTS span. Only meaningful when at
         # least one sentence reached TTS; an all-empty turn marks nothing.
