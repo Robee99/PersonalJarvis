@@ -14,7 +14,9 @@ tried in order:
 
 1. **The desktop shell's token.** Explorer always runs as the plain interactive
    user, and an elevated process may open it because access flows downward. This
-   is the primary path and the only one that also works with UAC switched off.
+   is the primary path. With UAC switched off there is nothing to drop to: an
+   administrator's shell is itself fully elevated, so the hand-off is skipped
+   (:func:`uac_disabled`).
 2. **Our own token's filtered companion** (``TokenLinkedToken``). Kept as a
    fallback, but it is *not* reliable: unless the caller holds
    ``SeTcbPrivilege``, Windows hands that token out at *identification* level,
@@ -384,6 +386,26 @@ DEESCALATION_ATTEMPTED_ENV = "JARVIS_DEESCALATION_ATTEMPTED"
 KEEP_ELEVATION_ENV = "JARVIS_KEEP_ELEVATION"
 
 
+def uac_disabled() -> bool | None:
+    """Whether User Account Control is switched off (``EnableLUA`` = 0).
+
+    With UAC off every process of an administrator, Explorer included, carries
+    the full admin token, so no unelevated token exists to relaunch with.
+    ``None`` when the policy cannot be read (not Windows, or no access).
+    """
+    try:
+        import winreg  # noqa: PLC0415 — Windows-only module
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",
+        ) as key:
+            value, _kind = winreg.QueryValueEx(key, "EnableLUA")
+    except (ImportError, OSError):  # unreadable policy is "unknown", never a guess
+        return None
+    return value == 0
+
+
 def maybe_relaunch_unelevated(
     argv: list[str],
     *,
@@ -391,6 +413,7 @@ def maybe_relaunch_unelevated(
     env: dict[str, str] | None = None,
     creationflags: int = 0,
     _elevated=current_process_is_elevated,
+    _uac_disabled=uac_disabled,
     _spawn=spawn_unelevated,
 ) -> DeescalationResult | None:
     """Hand this boot over to an unelevated copy of ourselves, before it costs.
@@ -424,6 +447,10 @@ def maybe_relaunch_unelevated(
     # relaunching on a guess would strand a user whose app is perfectly fine.
     if _elevated() is not True:
         return None
+    # With UAC off the replacement would come back just as elevated: a wasted
+    # relaunch at best, and on a frozen build a window that never appeared.
+    if _uac_disabled() is True:
+        return None
 
     child_env = dict(os.environ if env is None else env)
     child_env[DEESCALATION_ATTEMPTED_ENV] = "1"
@@ -439,4 +466,5 @@ __all__ = [
     "maybe_relaunch_unelevated",
     "spawn_unelevated",
     "token_creationflags",
+    "uac_disabled",
 ]
