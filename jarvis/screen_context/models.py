@@ -229,6 +229,7 @@ class DegradationCode(StrEnum):
     WINDOW_RECT_UNUSABLE = "window_rect_unusable"
     INDICATOR_UNAVAILABLE = "indicator_unavailable"
     OCR_UNAVAILABLE = "ocr_unavailable"
+    OCR_LOW_CONFIDENCE = "ocr_low_confidence"
 
 
 @dataclass(frozen=True, slots=True)

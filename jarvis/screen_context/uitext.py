@@ -223,6 +223,13 @@ def text_is_sparse(
     return len(text.strip()) < threshold
 
 
+# Tesseract word confidence is 0-100 (-1 marks a layout box, not a word). A word
+# below this is not passed to the model as text: it becomes UNREADABLE_MARK so
+# the model knows something was there but cannot quote it as fact.
+OCR_MIN_WORD_CONFIDENCE = 40.0
+UNREADABLE_MARK = "[unreadable]"
+
+
 @dataclass(frozen=True, slots=True)
 class OcrTextRegion:
     """One OCR line and its image-local bounding rectangle."""
@@ -238,6 +245,9 @@ class OcrSupplement:
     text: str = ""
     regions: tuple[OcrTextRegion, ...] = ()
     degradation: Degradation | None = None
+    #: Mean word confidence (0-100) of the recognised words, when the engine
+    #: reports one. ``None`` means the engine gave no confidence at all.
+    confidence: float | None = None
 
 
 def _ocr_unavailable(message: str) -> OcrSupplement:
@@ -247,6 +257,15 @@ def _ocr_unavailable(message: str) -> OcrSupplement:
             message=message,
         )
     )
+
+
+def _word_confidence(confs: list[Any], index: int) -> float | None:
+    """The engine's confidence for one word, or None when it reports none."""
+    try:
+        value = float(confs[index])
+    except (IndexError, TypeError, ValueError):  # engine gave no usable score
+        return None
+    return value if value >= 0 else None
 
 
 def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
@@ -267,11 +286,17 @@ def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
         output = getattr(getattr(pytesseract, "Output", None), "DICT", "dict")
         data = pytesseract.image_to_data(image, output_type=output)
         texts = list(data.get("text", ()))
+        confs = list(data.get("conf", ()))
         grouped: dict[tuple[int, int, int], list[tuple[str, int, int, int, int]]] = {}
+        # Per line, the words the model may read (low-confidence ones masked).
+        readable: dict[tuple[int, int, int], list[str]] = {}
+        scores: list[float] = []
+        unreadable = 0
         for index, raw_text in enumerate(texts):
             word = " ".join(str(raw_text or "").split())
             if not word:
                 continue
+            conf = _word_confidence(confs, index)
             try:
                 left = int(data["left"][index])
                 top = int(data["top"][index])
@@ -286,7 +311,15 @@ def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
                 continue
             if width <= 0 or height <= 0:
                 continue
+            # Every word, however uncertain, stays in the redaction geometry:
+            # a half-read secret must still be burned out of the pixels.
             grouped.setdefault(key, []).append((word, left, top, width, height))
+            if conf is not None:
+                scores.append(conf)
+            if conf is not None and conf < OCR_MIN_WORD_CONFIDENCE:
+                unreadable += 1
+                word = UNREADABLE_MARK
+            readable.setdefault(key, []).append(word)
 
         regions: list[OcrTextRegion] = []
         for words in grouped.values():
@@ -300,9 +333,21 @@ def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
                     bounds=(left, top, right - left, bottom - top),
                 )
             )
+        confidence = sum(scores) / len(scores) if scores else None
+        degradation = None
+        if unreadable:
+            degradation = Degradation(
+                code=DegradationCode.OCR_LOW_CONFIDENCE,
+                message=(
+                    f"Text recognition could not read {unreadable} word(s) reliably; "
+                    f"they are shown as {UNREADABLE_MARK}. Do not guess them."
+                ),
+            )
         return OcrSupplement(
-            text="\n".join(region.text for region in regions),
+            text="\n".join(" ".join(words) for words in readable.values()),
             regions=tuple(regions),
+            degradation=degradation,
+            confidence=confidence,
         )
     except Exception as exc:  # noqa: BLE001 - optional binary/backend failures
         log.debug("OCR failed", exc_info=True)
