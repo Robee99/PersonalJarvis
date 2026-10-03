@@ -104,6 +104,15 @@ describe("InputIsolationBanner", () => {
     expect(screen.queryByText("input_isolation.restart_now")).toBeNull();
   });
 
+  it("says UAC is off instead of offering a restart that cannot help", () => {
+    mockReport = blocked({ can_restart_unelevated: false, uac_disabled: true });
+    render(<InputIsolationBanner />);
+
+    expect(screen.getByText("input_isolation.uac_off_hint")).toBeDefined();
+    expect(screen.queryByText("input_isolation.manual_hint")).toBeNull();
+    expect(screen.queryByText("input_isolation.restart_now")).toBeNull();
+  });
+
   it("surfaces the backend reason when de-elevation fails, and stays up", async () => {
     mockReport = blocked();
     vi.stubGlobal(

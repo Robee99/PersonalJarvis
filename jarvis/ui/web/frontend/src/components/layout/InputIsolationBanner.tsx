@@ -78,7 +78,9 @@ export function InputIsolationBanner() {
           </p>
           {!report.can_restart_unelevated && (
             <p className="mt-1 text-meta text-muted-foreground">
-              {windows ? t("input_isolation.manual_hint") : report.remedy}
+              {windows
+                ? t(report.uac_disabled ? "input_isolation.uac_off_hint" : "input_isolation.manual_hint")
+                : report.remedy}
             </p>
           )}
         </div>

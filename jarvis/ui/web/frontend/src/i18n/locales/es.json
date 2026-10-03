@@ -94,6 +94,7 @@
     "title": "Las herramientas de dictado y escritura no alcanzan esta ventana",
     "impact": "Esta aplicación se está ejecutando con permisos de administrador, por lo que Windows impide que otros programas escriban en ella. Las apps de dictado, los expansores de texto, los gestores de portapapeles y el autocompletado de los gestores de contraseñas parecerán no hacer nada aquí, aunque sigan funcionando en el resto de aplicaciones.",
     "manual_hint": "La aplicación no puede renunciar por sí misma a los permisos de administrador en esta cuenta de Windows. Ciérrala y vuelve a abrirla con normalidad, sin «Ejecutar como administrador».",
+    "uac_off_hint": "El Control de cuentas de usuario (UAC) está desactivado en este PC, así que todas las aplicaciones se ejecutan como administrador y un reinicio no puede quitar esos permisos. Vuelve a activar el UAC en la configuración de Windows para solucionarlo.",
     "restart_now": "Reiniciar sin permisos de administrador",
     "restarting": "Reiniciando…",
     "restart_failed": "No se pudo reiniciar la aplicación sin permisos de administrador.",
