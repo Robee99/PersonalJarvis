@@ -78,6 +78,10 @@ KNOWN: frozenset[str] = frozenset(
         "shortcuts",
         # The HUD: the mission deck as a section of its own.
         "deck",
+        # The memory orb: notes, skills, tools and apps as one live map.
+        "orb",
+        # The tool armory: every app the assistant can reach, as cards.
+        "armory",
     }
 )
 
@@ -278,6 +282,12 @@ _ALIASES: dict[str, str] = {
     "hud": "deck",
     "mission deck": "deck",
     "deck": "deck",
+    "memory orb": "orb",
+    "orb": "orb",
+    "brain map": "orb",
+    "tool armory": "armory",
+    "armory": "armory",
+    "armoury": "armory",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",

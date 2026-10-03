@@ -617,11 +617,11 @@ async def put_ui_language(body: UiLanguageBody, request: Request) -> dict[str, o
 # the OS preference live, so flipping the OS theme flips the app with it.
 # ----------------------------------------------------------------------
 
-_UI_THEMES: tuple[str, ...] = ("dark", "light", "system")
+_UI_THEMES: tuple[str, ...] = ("dark", "light", "system", "jarvis")
 
 
 class AppearanceBody(BaseModel):
-    theme: str = Field(..., min_length=1, description="dark | light | system")
+    theme: str = Field(..., min_length=1, description="dark | light | system | jarvis")
     persist: bool = Field(default=True, description="Persist as boot default in jarvis.toml")
 
 

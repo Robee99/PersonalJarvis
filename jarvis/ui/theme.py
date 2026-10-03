@@ -32,7 +32,7 @@ Theme = Literal["dark", "light"]
 
 #: What the user may choose. ``system`` is an intent, not a colour — it is
 #: resolved to one of the two concrete themes by :func:`resolve_theme`.
-THEME_CHOICES: tuple[str, ...] = ("dark", "light", "system")
+THEME_CHOICES: tuple[str, ...] = ("dark", "light", "system", "jarvis")
 
 #: Window/holding-page ground per theme — ``--background`` in ``index.css``
 #: (neutral, zero saturation, v4 2026-09-02). Mirrored by the ``--jbs-bg``
@@ -168,6 +168,10 @@ def resolve_theme(configured: str | None) -> Theme:
         return value  # type: ignore[return-value]
     if value == "system":
         return detect_os_theme() or _DEFAULT_THEME
+    # The Jarvis look is the dark theme with a cyan arc-reactor palette on top;
+    # the native frame only needs to know it is dark.
+    if value == "jarvis":
+        return "dark"
     return _DEFAULT_THEME
 
 

@@ -106,6 +106,12 @@ const DocsView = lazyView(["docs"], () =>
 const MissionDeckView = lazyPropView<{ dock?: boolean }>(["deck"], () =>
   import("@/views/MissionDeckView").then((m) => ({ default: m.MissionDeckView })),
 );
+const MemoryOrbView = lazyView(["orb"], () =>
+  import("@/views/MemoryOrbView").then((m) => ({ default: m.MemoryOrbView })),
+);
+const ArmoryView = lazyPropView<{ armory?: boolean }>(["armory"], () =>
+  import("@/views/PluginsView").then((m) => ({ default: m.PluginsView })),
+);
 const BoardView = lazyView(["board"], () =>
   import("@/views/BoardView").then((m) => ({ default: m.BoardView })),
 );
@@ -376,6 +382,11 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     // stays out.
     case "deck":
       return <MissionDeckView dock={false} />;
+    case "orb":
+      return <MemoryOrbView />;
+    // The same plugin catalog and connect flows as Plugins, laid out as cards.
+    case "armory":
+      return <ArmoryView armory />;
     case "memory":
       return <WikiView />;
     // The merged voice section: Dictation (default landing) + Dictionary +

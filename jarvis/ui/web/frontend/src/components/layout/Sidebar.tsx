@@ -339,7 +339,7 @@ export function Sidebar({
   // retired "Jarvis Tools" folder used to be — it was the only entry hiding
   // behind "Show more" that users reached for daily, while the tools folder
   // duplicated exactly what "Show more" already lists.
-  const primaryIds = ["chats", "deck", "agents", "dictation", "visualization", "agentic-ide", "plugins", "marketplace"];
+  const primaryIds = ["chats", "deck", "orb", "armory", "agents", "dictation", "visualization", "agentic-ide", "plugins", "marketplace"];
   // The Settings hub owns its entries — they live in the hub's left
   // navigation now, so "Show more" must not list them a second time. The set
   // itself is named once in `navGroups` (`SETTINGS_HUB_IDS`).
@@ -552,6 +552,8 @@ export function Sidebar({
             </button></li>
             {/* The HUD: the mission deck, every instrument on one screen. */}
             {renderRow(findItem("deck"))}
+            {renderRow(findItem("orb"))}
+            {renderRow(findItem("armory"))}
             {renderRow(findItem("agents"))}
             {renderRow(findItem("dictation"))}
           </ul>

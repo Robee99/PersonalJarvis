@@ -122,7 +122,11 @@ export type SectionId =
   | "marketplace"
   // The HUD: the mission deck as a section of its own (it left the front
   // page on 2026-08-23) — the orb, the log, the memory map and the vitals.
-  | "deck";
+  | "deck"
+  // The memory orb: notes, skills, tools, apps and MCP servers as one live map.
+  | "orb"
+  // The tool armory: every app the assistant can reach, as a wall of cards.
+  | "armory";
 
 export const SECTION_IDS = [
   "chats",
@@ -169,6 +173,8 @@ export const SECTION_IDS = [
   "agentic-ide-classic",
   "marketplace",
   "deck",
+  "orb",
+  "armory",
 ] as const satisfies readonly SectionId[];
 
 export function isSectionId(value: unknown): value is SectionId {
@@ -241,6 +247,8 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   profile: "Profile",
   memory: "Notes",
   deck: "HUD",
+  orb: "Memory orb",
+  armory: "Tool armory",
   apikeys: "API Keys",
   "local-models": "Local models",
   computers: "Computers",

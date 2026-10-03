@@ -178,6 +178,8 @@
   },
   "nav": {
     "deck": "HUD",
+    "orb": "Orbe de memoria",
+    "armory": "Arsenal de herramientas",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agentes",
@@ -2692,6 +2694,7 @@
       "dark": "Oscuro",
       "light": "Claro",
       "system": "Sistema",
+      "jarvis": "Jarvis",
       "system_now_dark": "Sigue a su sistema, que actualmente está en modo oscuro.",
       "system_now_light": "Sigue a su sistema, que actualmente está en modo claro."
     }

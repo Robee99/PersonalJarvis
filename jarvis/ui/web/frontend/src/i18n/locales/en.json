@@ -178,6 +178,8 @@
   },
   "nav": {
     "deck": "HUD",
+    "orb": "Memory orb",
+    "armory": "Tool armory",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agents",
@@ -2692,6 +2694,7 @@
       "dark": "Dark",
       "light": "Light",
       "system": "System",
+      "jarvis": "Jarvis",
       "system_now_dark": "Following your system, which is currently dark.",
       "system_now_light": "Following your system, which is currently light."
     }
