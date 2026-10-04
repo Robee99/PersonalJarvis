@@ -279,6 +279,36 @@ class _OcrWord:
 
 
 _RAPIDOCR_ENGINE: Any = None
+#: Why RapidOCR could not start in this process (installed but broken: a
+#: missing native library, or a frozen build without its bundled models).
+#: Set once; the engine is then skipped instead of rebuilt on every capture.
+_RAPIDOCR_FAILURE: str | None = None
+#: One "no OCR engine" line per process, not one per capture.
+_NO_ENGINE_LOGGED = False
+
+
+def _rapidocr_engine() -> Any:
+    """The process's RapidOCR engine, or None when it is absent or broken."""
+    global _RAPIDOCR_ENGINE, _RAPIDOCR_FAILURE  # noqa: PLW0603 - one lazy engine per process
+    if _RAPIDOCR_ENGINE is not None:
+        return _RAPIDOCR_ENGINE
+    if _RAPIDOCR_FAILURE is not None:
+        return None
+    try:
+        from rapidocr import RapidOCR  # noqa: PLC0415
+    except ImportError:  # optional engine absent: the caller tries the next one
+        return None
+    try:
+        _RAPIDOCR_ENGINE = RapidOCR(params={"Global.log_level": "error"})
+    except Exception as exc:  # noqa: BLE001 - installed but unusable: fall back
+        _RAPIDOCR_FAILURE = f"{type(exc).__name__}: {exc}"
+        log.warning(
+            "screen_context: RapidOCR is installed but could not start (%s); "
+            "trying Tesseract instead.",
+            _RAPIDOCR_FAILURE,
+        )
+        return None
+    return _RAPIDOCR_ENGINE
 
 
 def _rapidocr_words(image: Any) -> list[_OcrWord] | None:
@@ -286,16 +316,14 @@ def _rapidocr_words(image: Any) -> list[_OcrWord] | None:
 
     Uses only the models bundled in the wheel, so nothing is downloaded. The
     engine's own line filter is off (``text_score=0``): an uncertain line must
-    still reach the redaction geometry; masking is decided here.
+    still reach the redaction geometry; masking is decided here. An install
+    that cannot start (see ``_RAPIDOCR_FAILURE``) counts as absent, so the
+    caller falls back to Tesseract.
     """
-    global _RAPIDOCR_ENGINE  # noqa: PLW0603 - one lazily built engine per process
-    try:
-        from rapidocr import RapidOCR  # noqa: PLC0415
-    except ImportError:  # optional engine absent: the caller tries the next one
+    engine = _rapidocr_engine()
+    if engine is None:
         return None
-    if _RAPIDOCR_ENGINE is None:
-        _RAPIDOCR_ENGINE = RapidOCR(params={"Global.log_level": "error"})
-    output = _RAPIDOCR_ENGINE(image, return_word_box=True, text_score=0.0)
+    output = engine(image, return_word_box=True, text_score=0.0)
     words: list[_OcrWord] = []
     for line_index, line in enumerate(getattr(output, "word_results", None) or ()):
         for text, score, quad in line:
@@ -424,10 +452,13 @@ def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
             "redaction was unavailable."
         )
     if words is None:
-        log.info(
-            "screen_context: OCR is enabled but no OCR engine is installed; "
-            "OCR-based pixel redaction was unavailable."
-        )
+        global _NO_ENGINE_LOGGED  # noqa: PLW0603 - one line per process
+        if not _NO_ENGINE_LOGGED:
+            _NO_ENGINE_LOGGED = True
+            log.info(
+                "screen_context: OCR is enabled but no OCR engine is installed; "
+                "OCR-based pixel redaction is unavailable."
+            )
         return _ocr_unavailable(
             "Text recognition is switched on but no OCR engine is installed, "
             "so OCR-based pixel redaction was unavailable."
@@ -445,15 +476,45 @@ def ocr_supplement(image: Any) -> tuple[str, Degradation | None]:
     return result.text, result.degradation
 
 
+def _rapidocr_problem() -> str | None:
+    """Why RapidOCR cannot run here, or None when it can. Import-free.
+
+    A package that is merely importable is not enough: a frozen build that
+    bundled RapidOCR's modules without its config and ONNX models (or a box
+    without onnxruntime) would otherwise be reported as working OCR.
+    """
+    import importlib.util  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    if _RAPIDOCR_FAILURE is not None:
+        return f"RapidOCR could not start ({_RAPIDOCR_FAILURE})."
+    spec = importlib.util.find_spec("rapidocr")
+    if spec is None:
+        return "RapidOCR is not installed."
+    if importlib.util.find_spec("onnxruntime") is None:
+        return "RapidOCR needs onnxruntime, which is not installed."
+    locations = list(getattr(spec, "submodule_search_locations", None) or ())
+    if locations:
+        root = Path(locations[0])
+        has_config = (root / "config.yaml").is_file()
+        has_models = any((root / "models").glob("*.onnx"))
+        if not (has_config and has_models):
+            return "RapidOCR is installed without its bundled models."
+    return None
+
+
 def ocr_engine_status() -> tuple[bool, str]:
     """Whether an OCR engine can run here, and why not when it cannot."""
     import importlib.util  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
-    if importlib.util.find_spec("rapidocr") is not None:
+    rapidocr_problem = _rapidocr_problem()
+    if rapidocr_problem is None:
         return True, ""
     if importlib.util.find_spec("pytesseract") is None:
-        return False, "No optional OCR engine is installed (RapidOCR or Tesseract)."
+        if rapidocr_problem == "RapidOCR is not installed.":
+            return False, "No optional OCR engine is installed (RapidOCR or Tesseract)."
+        return False, f"{rapidocr_problem} Tesseract is not installed either."
     if shutil.which("tesseract") is None:
         return False, "The optional Tesseract executable is not available."
     return True, ""
