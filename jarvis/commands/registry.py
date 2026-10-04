@@ -482,12 +482,16 @@ def _build_registry() -> tuple[AppCommand, ...]:
             title="Switch brain provider",
             description=(
                 "Switch the ACTIVE main brain (LLM) provider, e.g. from openai "
-                "to claude-api. Reversible; validated against the provider "
-                "catalog and stored credentials."
+                "to claude-api. Validated against the provider catalog and "
+                "stored credentials. Only when the user explicitly asks to "
+                "change it; to report the active provider use providers-list."
             ),
             method="POST",
             path="/api/brain/switch",
             params=_provider_switch_params("brain", brain_switchable_only=True),
+            # Provider / voice-mode switching can move the user onto a paid
+            # provider: never on the model's own initiative (ask tier).
+            dangerous=True,
             ui_section="apikeys",
             voice_aliases={
                 "de": ("wechsle den brain-provider zu claude",),  # i18n-allow: input vocab
@@ -502,6 +506,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
             method="POST",
             path="/api/tts/switch",
             params=_provider_switch_params("tts"),
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="apikeys",
             voice_aliases={
                 "de": ("wechsle die stimme zu elevenlabs",),  # i18n-allow: input vocab
@@ -519,6 +525,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
             method="POST",
             path="/api/stt/switch",
             params=_provider_switch_params("stt"),
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="apikeys",
             voice_aliases={
                 "de": ("wechsle die spracherkennung zu deepgram",),  # i18n-allow: input vocab
@@ -532,7 +540,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
             description=(
                 "Switch which realtime voice engine (speech-to-speech) is "
                 "active, including subscription- and API-backed providers. "
-                "Experimental transports require explicit acknowledgement."
+                "Experimental transports require explicit acknowledgement. "
+                "Only when the user explicitly asks to change it."
             ),
             method="POST",
             path="/api/realtime/switch",
@@ -540,6 +549,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
                 "realtime",
                 allow_experimental_ack=True,
             ),
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="apikeys",
             voice_aliases={
                 "de": ("wechsle das realtime-modell zu gemini",),  # i18n-allow: input vocab
@@ -587,6 +598,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
             method="POST",
             path="/api/computer-use/switch",
             params=_provider_switch_params("brain"),
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="apikeys",
             voice_aliases={
                 "de": ("wechsle den computer-use-provider zu gemini",),  # i18n-allow: input vocab
@@ -604,6 +617,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
             method="POST",
             path="/api/jarvis-agent/switch",
             params=_provider_switch_params("brain"),
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="agents",
             voice_aliases={
                 "de": ("wechsle den agent-provider zu openai",),  # i18n-allow: input vocab
@@ -700,6 +715,8 @@ def _build_registry() -> tuple[AppCommand, ...]:
                 },
                 "required": ["mode"],
             },
+            # Ask tier: a switch, see brain-switch.
+            dangerous=True,
             ui_section="settings",
             voice_aliases={
                 "de": ("schalte auf den realtime-modus um",),  # i18n-allow: input vocab

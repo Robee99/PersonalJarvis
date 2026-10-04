@@ -1,8 +1,8 @@
 """``switch-provider`` tool — change the active brain/TTS/STT/subagent provider.
 
-Router-tier, ``monitor`` (runs immediately, audited — no up-front confirmation).
-This is the voice/chat path for "switch the voice to Cartesia", "use Groq for
-speech recognition", "put the subagent on codex", etc.
+Router-tier, ``ask``: the ToolExecutor's two-turn confirmation runs before
+anything changes. This is the voice/chat path for "switch the voice to
+Cartesia", "use Groq for speech recognition", "put the subagent on codex", etc.
 
 NOT the brain, though the ``tier`` schema still accepts it: a ``brain`` switch is
 REFUSED here with ``provider_switch_locked`` and never reaches
@@ -12,13 +12,12 @@ and changes only through the control CLI or the desktop app's manual switch
 ``tests/unit/plugins/tool/test_switch_provider_brain_lock.py``. Jarvis itself,
 which is what calls this tool, is exactly the actor the lock excludes.
 
-A provider switch is REVERSIBLE and the tool speaks an honest post-change readback
-(old -> new), so an STT mishear of the provider name is caught *after* the fact —
-there is no need to block on an up-front yes/no, which would violate the
-anti-confirmation-fatigue mandate. Forensic 2026-06-26: with ``ask`` a voice
-"switch the subagent brain to antigravity" asked "really do that?" and the
-two-turn voice-confirm flow then ended the session before the user could answer.
-Irreversible actions (gmail send, place a call) stay ``ask``.
+Why ``ask`` and not ``monitor``: a provider switch can move the user onto a
+usage-billed provider, and a live voice model has called switch tools on its
+own initiative in a turn that asked for nothing of the kind (2026-10-04, first
+Gemini Live turn). Nothing the user did not start may bill a key, so a switch
+needs the user's explicit spoken or clicked yes. (The earlier ``monitor``
+choice, forensic 2026-06-26, traded that safety for fewer confirmations.)
 
 It switches *which provider is active* — it never sets a raw API key. The target
 provider's key must already be stored (Settings tab / wizard); if it is missing
@@ -46,17 +45,18 @@ class SwitchProviderTool:
     """Switch the active provider for one tier (brain/tts/stt/subagent)."""
 
     name: ClassVar[str] = "switch-provider"
-    # ``monitor`` → runs immediately (audited), no up-front confirmation. A
-    # provider switch is reversible and the result already carries an honest
-    # old -> new readback, so an STT mishear is caught after the fact instead of
-    # by nagging the user before every switch (anti-confirmation-fatigue mandate;
-    # ``ask`` is the one tier in ``always_confirm_tiers``). Forensic 2026-06-26.
-    risk_tier: ClassVar[str] = "monitor"
+    # ``ask`` → the ToolExecutor holds the call for the user's explicit
+    # confirmation (voice two-turn or approval card). A switch can move the
+    # user onto a paid provider, so the model may never do it unasked.
+    risk_tier: ClassVar[str] = "ask"
     description: ClassVar[str] = (
         "Switch which AI provider is active for a given tier: 'tts' (text-to-speech "
         "voice), 'stt' (speech-to-text), or 'subagent' (the heavy background "
         "worker). Use this for requests like 'change the voice to Cartesia', 'use "
         "Groq for speech recognition', or 'put the subagent on codex'. "
+        "Only when the user explicitly asks for a switch; never to check or "
+        "report the current provider (use describe-app-settings for that). "
+        "The user must confirm before anything changes. "
         "The 'brain' tier is DELIBERATELY NOT switchable this way: the active "
         "assistant model is the user's own choice and can only be changed by them "
         "in the desktop app or the CLI. Do not call this tool for 'switch to "
@@ -95,6 +95,18 @@ class SwitchProviderTool:
             {"tier": "tts", "provider": "cartesia", "reason": "user wants Cartesia voice"},
         ],
     }
+
+    def risk_tier_for_args(self, args: dict[str, Any]) -> str:
+        """``ask`` for every call that can switch; ``monitor`` for one that cannot.
+
+        A ``brain`` (or unknown) tier is refused in :meth:`execute` before
+        anything is touched, so asking the user to confirm it would only lead
+        to a refusal. Every switchable tier keeps the static ``ask``.
+        """
+        tier = str((args or {}).get("tier", "")).strip().lower()
+        if tier in _TIERS and tier != "brain":
+            return self.risk_tier
+        return "monitor"
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:  # noqa: ARG002
         if not isinstance(args, dict):
