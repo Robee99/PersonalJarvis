@@ -9,6 +9,7 @@ import {
 } from "@/lib/voiceInputLevel";
 
 import { BrowserRealtimeControl, waveformPhase } from "./BrowserRealtimeControl";
+import { MicrophoneSelectionError } from "@/lib/browserMicrophone";
 
 const fakes = vi.hoisted(() => ({
   native: false,
@@ -67,6 +68,16 @@ vi.mock("@/lib/realtimeAudio", () => ({
 }));
 
 describe("BrowserRealtimeControl", () => {
+  it("shows a selected-microphone error in the hidden desktop media host", async () => {
+    fakes.browserAudio = true;
+    fakes.connect.mockRejectedValueOnce(new MicrophoneSelectionError("Reconnect the selected microphone in Audio settings."));
+    useEventStore.setState({ events: [{
+      id: "mic-selection-failure", name: "BrowserVoiceRequested", ts: Date.now(), payload: { action: "start" },
+    }] });
+    render(<BrowserRealtimeControl controlOnly />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Reconnect the selected microphone"));
+  });
+
   beforeEach(() => {
     fakes.native = false;
     fakes.mode = "realtime";

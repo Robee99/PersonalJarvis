@@ -5,6 +5,7 @@ import { LevelMeter } from "./levelMeter";
 import { MediaActivity, type MediaLevels } from "./mediaLevels";
 import { requestConnect } from "./connectBudget";
 import { mintWsTicket } from "./ws";
+import { openBrowserMicrophone } from "./browserMicrophone";
 import pcmWorkletUrl from "./pcm-worklet.ts?worker&url";
 
 export function buildAudioSocketUrl(ticket?: string | null): string {
@@ -565,14 +566,7 @@ export class RealtimeAudioClient {
       const workletReady = this.ctx.audioWorklet
         .addModule(pcmWorkletUrl)
         .then(() => this.ctx?.resume());
-      const micReady = navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: { ideal: 1 },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      const micReady = openBrowserMicrophone();
       const ticketReady = mintWsTicket();
       const turnReady = new Promise<void>((resolve) => requestConnect(resolve));
       this.stream = await micReady;
