@@ -838,7 +838,8 @@ call-contact = "jarvis.plugins.tool.call_contact:CallContactTool"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["jarvis*"]
+# conductor is the scheduler the desktop app boots (top-level beside jarvis).
+include = ["jarvis*", "conductor*"]
 exclude = ["*.__pycache__", "*.__pycache__.*"]
 
 [tool.setuptools.exclude-package-data]
@@ -916,6 +917,9 @@ jarvis = [
     # (realtime/local_voice_setup.py reads it via Path(__file__)).
     "voice_engine/requirements-engine.txt",
 ]
+# conductor reads its schema and seed jobs via Path(__file__) (core/store.py,
+# core/seed.py).
+conductor = ["core/schema.sql", "seed/*.yaml"]
 
 [tool.setuptools.data-files]
 "share/personal-jarvis/docs" = ["docs/product/**/*.md"]

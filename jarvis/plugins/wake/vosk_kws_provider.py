@@ -110,6 +110,7 @@ import numpy as np
 
 from jarvis.core.protocols import AudioChunk
 from jarvis.plugins.wake.vosk_native import build_recognizer, native_call
+from jarvis.plugins.wake.vosk_runtime import LoadBackoff, load_vosk
 from jarvis.speech.wake_constants import (
     WAKE_PREFIXES,
     normalize_phrase_for_match,
@@ -837,6 +838,13 @@ class VoskKwsProvider:
         # Set once ``start()`` has attempted every model load — the honest
         # "warm" floor even when a broken model directory never loads.
         self._load_attempted = False
+        # A model that failed to load is retried with capped, jittered backoff,
+        # never on every audio chunk: the detect loop used to rebuild every
+        # ~30 ms and log each failure (4,353 warnings a day on one install).
+        # The backoff logs the first failure and the recovery; the set below
+        # does the same for the per-chunk recognizer rebuild.
+        self._load_backoff = LoadBackoff()
+        self._unusable_paths: set[str] = set()
         # Pre-warmed ONE-SHOT verify recognizers, keyed (model_path, kind).
         # Why: a fresh KaldiRecognizer's FIRST decode pays ~400ms lazy init
         # on top of ~100ms construction (measured 2026-07-11: fresh verify
@@ -914,18 +922,27 @@ class VoskKwsProvider:
         model = self._models.get(key)
         if model is not None:
             return model
+        # A model that just failed is not retried until its backoff expires.
+        self._load_backoff.check(key)
         # Double-checked: the fast path above stays lock-free (it runs on every
         # verify recognizer build), and only the rare actual load serialises.
         with self._model_load_lock:
             model = self._models.get(key)
             if model is not None:
                 return model
-            from vosk import Model, SetLogLevel  # lazy: keep base import light
-
-            SetLogLevel(-1)
+            self._load_backoff.check(key)
             t0 = time.perf_counter()
-            model = Model(key)
+            try:
+                # Lazy, once per process, PATH-safe (vosk_runtime): keeps the
+                # base import light and never re-runs a failed vosk import.
+                vosk = load_vosk()
+                vosk.SetLogLevel(-1)
+                model = vosk.Model(key)
+            except Exception as exc:
+                self._load_backoff.failed(key, exc)
+                raise
             self._models[key] = model
+            self._load_backoff.succeeded(key)
             log.info(
                 "vosk-kws: model loaded in %.1f s (%s)",
                 time.perf_counter() - t0,
@@ -998,6 +1015,8 @@ class VoskKwsProvider:
         # ear's hypothesis and "[unk]") instead of standing unconditionally.
         kinds = ("grammar", "free", _COMPETITION_KIND)
         for path in self._model_paths:
+            if self._load_backoff.remaining(path) > 0.0:
+                continue  # backing off after a failed load; retried later
             for kind in kinds:
                 key = (path, kind)
                 while True:
@@ -1040,12 +1059,30 @@ class VoskKwsProvider:
         still loaded for the verify and the sibling rescue.
         """
         recs: dict[str, Any] = {}
+        attempted = False
         for path in self._stage1_paths:
+            if self._load_backoff.remaining(path) > 0.0:
+                continue  # its backoff already logged the failure
+            attempted = True
             try:
                 recs[path] = self._take_verify_rec(path, "grammar")
             except Exception as exc:  # noqa: BLE001 — isolate a broken model
-                log.warning("vosk-kws: model %s unusable (%s) — skipped.", path, exc)
-        self._kick_replenish()
+                # One line per state change, never one per audio chunk. A
+                # failed model LOAD was already logged by its backoff.
+                first = path not in self._unusable_paths
+                self._unusable_paths.add(path)
+                if first and self._load_backoff.failures(path) == 0:
+                    log.warning("vosk-kws: model %s unusable (%s) — skipped.", path, exc)
+                else:
+                    log.debug("vosk-kws: model %s still unusable (%s).", path, exc)
+                continue
+            if path in self._unusable_paths:
+                self._unusable_paths.discard(path)
+                log.info("vosk-kws: model %s usable again.", path)
+        if attempted:
+            # Nothing to top up while every model is backing off; this runs on
+            # every chunk while ``recs`` is empty.
+            self._kick_replenish()
         return recs
 
     @property
@@ -1086,8 +1123,9 @@ class VoskKwsProvider:
             try:
                 await asyncio.to_thread(self._ensure_model, path)
             except Exception as exc:  # noqa: BLE001 — a broken model must not
-                # brick the working ones; _fresh_recs skips it too.
-                log.warning("vosk-kws: model %s failed to load (%s).", path, exc)
+                # brick the working ones; _fresh_recs skips it too. The
+                # backoff in _ensure_model already logged this state change.
+                log.debug("vosk-kws: model %s failed to load (%s).", path, exc)
 
         await asyncio.gather(*(_load_one(path) for path in self._model_paths))
         self._load_attempted = True
@@ -1116,6 +1154,10 @@ class VoskKwsProvider:
             self._rec_stock.clear()
         self._models.clear()
         self._load_attempted = False
+        # A new lifecycle (wake-plan reload) is a new unit of work: its first
+        # load attempt is not held back by the previous one's failures.
+        self._load_backoff.reset()
+        self._unusable_paths.clear()
         self._ring.clear()
         self._ring_len = 0
 
@@ -1345,6 +1387,10 @@ class VoskKwsProvider:
         with a demotion).
         """
         self._last_stage1_cost = (0.0, 0.0)
+        if not recs:
+            # Every model is unusable (backing off after a failed load): no
+            # decode to run, so no worker-thread hop on every audio chunk.
+            return None, recs
         found = await _in_pool(self._grammar_hit_all, recs, pcm)
         if self._note_stage1_cost(*self._last_stage1_cost):
             active = set(self._stage1_paths)
@@ -1915,8 +1961,9 @@ class VoskKwsProvider:
         for path in self._model_paths:
             try:
                 await _in_pool(self._ensure_model, path)
-            except Exception as exc:  # noqa: BLE001 — skip a broken model
-                log.warning("vosk-kws: model %s failed to load (%s).", path, exc)
+            except Exception as exc:  # noqa: BLE001 — skip a broken model; the
+                # backoff in _ensure_model already logged this state change.
+                log.debug("vosk-kws: model %s failed to load (%s).", path, exc)
         # One streaming grammar per installed model — a phrase whose language
         # differs from the speaker's still has a model that can spell it
         # (union recall measured +38% on the fixture corpus, 2026-07-11). The
@@ -2206,8 +2253,12 @@ def vosk_model_supports_phrase(model_path: str, phrase: str) -> bool:
     import tempfile
 
     try:
-        from vosk import KaldiRecognizer, Model, SetLogLevel
-    except Exception:  # noqa: BLE001 — no vosk → cannot disprove support
+        vosk = load_vosk()
+        KaldiRecognizer, Model, SetLogLevel = (  # noqa: N806 — vosk API names
+            vosk.KaldiRecognizer, vosk.Model, vosk.SetLogLevel
+        )
+    except Exception as exc:  # noqa: BLE001 — no vosk → cannot disprove support
+        log.debug("vosk-kws: vocabulary probe skipped, vosk unavailable (%s).", exc)
         return True
     tmp = None
     old = None

@@ -170,6 +170,7 @@ def _exec_spec(monkeypatch: pytest.MonkeyPatch, root: Path) -> dict:
     hooks = types.ModuleType("PyInstaller.utils.hooks")
     hooks.collect_data_files = lambda *a, **k: []  # type: ignore[attr-defined]
     hooks.collect_submodules = lambda *a, **k: []  # type: ignore[attr-defined]
+    hooks.collect_dynamic_libs = lambda *a, **k: []  # type: ignore[attr-defined]
     hooks.copy_metadata = lambda *a, **k: []  # type: ignore[attr-defined]
     for name, module in (
         ("PyInstaller", types.ModuleType("PyInstaller")),

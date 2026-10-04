@@ -25,12 +25,14 @@
 
 # ruff: noqa
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
+    collect_dynamic_libs,
     collect_submodules,
     copy_metadata,
 )
@@ -113,6 +115,10 @@ if FRONTEND_DIST.exists():
 # never reads or writes the copy inside the bundle.
 datas.append((str(PROJECT_ROOT / "jarvis.toml"), "."))
 datas.append((str(PROJECT_ROOT / "docs" / "product"), "docs/product"))
+# The onboarding terms screen reads docs/legal/TERMS.md relative to the
+# checkout root (jarvis/setup/onboarding_meta.py); without it the frozen app
+# shows the short fallback text instead of the real terms.
+datas.append((str(PROJECT_ROOT / "docs" / "legal" / "TERMS.md"), "docs/legal"))
 
 # Include build-time desktop assets such as icons and chimes when present.
 assets_dir = PROJECT_ROOT / "assets"
@@ -164,6 +170,16 @@ for entry in _package_files:
     rel = entry.relative_to(PROJECT_ROOT).parent
     datas.append((str(entry), str(rel)))
 
+# The provider/brand marks and their LOGOS.md ledgers live in the frontend
+# SOURCE tree (skipped above) but are read at runtime by
+# jarvis/artifacts/brand_marks.py through repo_root(); same layout as the
+# wheel's package-data entries for them.
+_BRAND_MARKS = PROJECT_ROOT / "jarvis" / "ui" / "web" / "frontend" / "src" / "assets"
+for _folder in ("providers", "brands"):
+    for entry in sorted((_BRAND_MARKS / _folder).glob("*")):
+        if entry.is_file():
+            datas.append((str(entry), str(entry.relative_to(PROJECT_ROOT).parent)))
+
 # Configuration profiles live beside the checkout root, and jarvis.core.config
 # resolves them relative to it.
 profiles_dir = PROJECT_ROOT / "profiles"
@@ -183,6 +199,71 @@ for pkg in ("chromadb", "sentence_transformers"):
         datas += collect_data_files(pkg)
     except Exception:
         pass
+
+
+# --- Native libraries loaded by path ----------------------------------------
+# Import analysis follows Python imports, never a dlopen. vosk (the any-word
+# wake engine, a base dependency except on Windows ARM64) loads libvosk from
+# its OWN package folder through cffi - libvosk.dll plus its MinGW runtime
+# DLLs on Windows, libvosk.so on Linux, libvosk.dyld (sic) on macOS. Without
+# them the frozen app had no _internal/vosk folder at all, every load failed,
+# and the wake word never armed. Collected only when installed on the build
+# machine, so a build without vosk still succeeds (the wake plan then picks
+# another engine: jarvis/plugins/wake/vosk_runtime.py).
+binaries = []
+_NATIVE_SUFFIXES = (".dll", ".so", ".dylib", ".dyld")
+
+
+def _collect_native_package(pkg):
+    spec = importlib.util.find_spec(pkg)
+    if spec is None or not spec.submodule_search_locations:
+        print(f"[jarvis.spec] {pkg} is not installed - its native files are not bundled")
+        return [], []
+    root = Path(list(spec.submodule_search_locations)[0])
+    found = list(collect_dynamic_libs(pkg))
+    have = {Path(src).name for src, _ in found}
+    for entry in sorted(root.iterdir()):
+        name = entry.name
+        native = entry.suffix in _NATIVE_SUFFIXES or ".so." in name
+        if entry.is_file() and native and name not in have:
+            found.append((str(entry), pkg))
+    return found, list(collect_data_files(pkg))
+
+
+for pkg in ("vosk",):
+    try:
+        _pkg_binaries, _pkg_datas = _collect_native_package(pkg)
+    except Exception as exc:
+        print(f"[jarvis.spec] WARNING: cannot collect {pkg}: {exc}")
+        continue
+    binaries += _pkg_binaries
+    datas += _pkg_datas
+
+# RapidOCR (the optional [ocr] extra, ADR-0041) reads config.yaml,
+# default_models.yaml and its bundled PP-OCR ONNX models from its own package
+# folder and runs them on onnxruntime's native libraries. Collected only when
+# installed on the build machine; without it the frozen app reports OCR as
+# unavailable (jarvis/screen_context/uitext.py) and the build still succeeds.
+# Only the onnxruntime inference engine is used, so the torch/paddle/openvino/
+# tensorrt/mnn engine modules stay out (see excludes below).
+_RAPIDOCR_UNUSED_ENGINES = tuple(
+    f"rapidocr.inference_engine.{name}"
+    for name in ("pytorch", "paddle", "openvino", "tensorrt", "mnn")
+)
+_rapidocr_hidden = []
+if importlib.util.find_spec("rapidocr") is not None:
+    try:
+        datas += collect_data_files("rapidocr")
+        _rapidocr_hidden = collect_submodules(
+            "rapidocr",
+            filter=lambda name: not name.startswith(_RAPIDOCR_UNUSED_ENGINES),
+        )
+        if importlib.util.find_spec("onnxruntime") is not None:
+            binaries += collect_dynamic_libs("onnxruntime")
+    except Exception as exc:
+        print(f"[jarvis.spec] WARNING: cannot collect rapidocr: {exc}")
+else:
+    print("[jarvis.spec] rapidocr is not installed - the frozen app reports OCR as unavailable")
 
 
 # --- Hidden imports ---------------------------------------------------------
@@ -213,6 +294,15 @@ for pkg in (
     "wsproto",
 ):
     hiddenimports.append(pkg)
+
+# RapidOCR resolves its public names and engines through import_module.
+hiddenimports += _rapidocr_hidden
+
+# vosk is imported lazily (inside the wake provider) and opens its native
+# library through cffi's ABI mode, which needs the _cffi_backend extension.
+for pkg in ("vosk", "_cffi_backend"):
+    if importlib.util.find_spec(pkg) is not None:
+        hiddenimports.append(pkg)
 
 # faster-whisper loads ctranslate2 dynamically when local voice is installed.
 for pkg in ("faster_whisper", "ctranslate2"):
@@ -289,6 +379,9 @@ excludes = [
     "mypy",
     "mypyc",
     "ruff",
+    # RapidOCR engines the app never selects (it runs onnxruntime only); their
+    # imports would otherwise pull torch/paddle/openvino into the bundle.
+    *_RAPIDOCR_UNUSED_ENGINES,
 ]
 
 
@@ -299,7 +392,7 @@ block_cipher = None
 a = Analysis(
     ["jarvis/__main__.py"],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     # Outranks pyinstaller-hooks-contrib (HOOK_PRIORITY_USER_HOOKS); see the
