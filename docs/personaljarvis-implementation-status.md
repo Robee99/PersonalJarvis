@@ -4,12 +4,13 @@ Branch `jarvis/local-qwen-build` (fork `Robee99/PersonalJarvis`, draft PR #1).
 Last updated 2026-10-03. Evidence for every code reference is in the
 [implementation map](personaljarvis-implementation-map.md).
 
-**Verdict: not shippable.** The final hardening pass (2026-10-03) is
-recorded in [final-hardening-evidence.md](research/final-hardening-evidence.md)
-and ADR-0039 to ADR-0041. The release-gate table below has the current state.
-Voice interruption and on-device vision remain blocked by the device (silent
-built-in microphone; no stable local deep model). Nothing here claims
-measured barge-in reliability or OCR accuracy on real screens.
+**Verdict: software gates pass; two device gates are blocked.** The final
+hardening pass (2026-10-03) and the freeze pass (2026-10-04) are recorded in
+[final-hardening-evidence.md](research/final-hardening-evidence.md) and
+ADR-0039 to ADR-0041. Voice interruption is HARDWARE-BLOCKED by a Windows
+audio setting on the PC, and local visual understanding is RESOURCE-BLOCKED
+(no vision projector, not enough free RAM). Nothing here claims measured
+barge-in reliability.
 
 ## Preserved architecture decisions
 
@@ -60,7 +61,8 @@ measured barge-in reliability or OCR accuracy on real screens.
 | `fc78f767` fix(brain): never replay a turn after an action tool started | Per-attempt side-effect ledger in `ToolExecutor`; Brain stops fallback and says the action may not have completed. |
 | `ac23dfff` feat(screen): keep OCR confidence and mask words it cannot read | OCR confidence policy and accuracy gate. |
 | `9c0d255e` fix(telemetry): mask credentials in flight-recorder files and tool errors | `redact_value`; recorder payloads and `ActionExecuted.error` redacted. |
-| Final hardening commit (this pass) | Images stay on local route targets unless `allow_cloud_vision` (dropped/screen images, tool screenshots, Computer Use); no automatic escalation; recovery lines per language; one trace id per voice turn into the Brain and dispatcher; RapidOCR as the first OCR engine; evidence file and ADR-0039 to ADR-0041. |
+| Freeze pass commit | Missions and their reviewer no longer land on Claude by themselves when the routing policy deny-lists it; release gates, manual steps and evidence updated with the PC findings (microphone root cause, RapidOCR on the PC). |
+| `1e56668f` feat(brain): keep images on local models, one trace id per turn, RapidOCR | Images stay on local route targets unless `allow_cloud_vision` (dropped/screen images, tool screenshots, Computer Use); no automatic escalation; recovery lines per language; one trace id per voice turn into the Brain and dispatcher; RapidOCR as the first OCR engine; evidence file and ADR-0039 to ADR-0041. |
 
 ## Tests run and results
 
@@ -97,40 +99,52 @@ non-baselined failures of the run before the P0 commits; none is new, and 8
 of the earlier ones now pass. The telemetry redaction commit (`9c0d255e`)
 came after this run and was checked with the telemetry and safety suites.
 
-## Release gates (final hardening brief, 2026-10-03)
+## Release gates (freeze pass, 2026-10-04)
+
+Statuses: PASS, FAIL, ENVIRONMENT-BLOCKED, HARDWARE-BLOCKED, UNVERIFIED. "In
+tests" means the evidence is automated tests in the Linux container, not a run
+on the PC.
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| Architecture integrity | PASS | `BrainManager` is still the only orchestration boundary; no second voice runtime, router or tool executor was added (ADR-0039). The one new external component is RapidOCR, an optional library behind `uitext` (ADR-0041). |
-| Brain routing | PASS (in tests) | Policy chain is exactly the configured tiers; deny lists on every chain; escalation only on a trigger phrase (`on_deep_failure` removed); `test_route_policy*.py` and `tests/unit/brain/test_routing.py` pass. Not enabled on the PC yet. |
-| Local-first privacy | PASS (in tests) | With the policy on, images reach only `local` targets unless `allow_cloud_vision` is set. This covers dropped files, screen context, tool screenshots and every Computer Use engine including its last resort (ADR-0040). Tests: `test_route_policy_media_trace.py`, `test_tool_use_loop_image_feedback.py`, `tests/unit/cu/test_brain_call_media_privacy.py`. Without the policy, image routing is unchanged from upstream. |
-| Tool safety | PASS (in tests) | `ToolExecutor.execute` is still the single chokepoint; no replay after an action started (`fc78f767`); models never execute OS actions directly (Agent-S-style `exec` rejected). The `tests/unit/safety` suite passes. |
-| Voice interruption | BLOCKED | Needs the device; the built-in microphone delivers digital silence. Code paths are unit-tested only. |
-| Cancellation | PASS (in tests) | Barge-in cancels the Brain task, which cancels an in-flight Paperclip issue (tested). The live Paperclip smoke completed and cleaned up (JAR-16). No on-device barge test. |
-| Vision | BLOCKED | No stable local vision model on the PC (no mmproj; the Qwen 35B run at 65k context returned empty output with 0.08 GB RAM free). OCR: RapidOCR 0.981 on synthetic fixtures in a container, not on the device. NVIDIA NIM rejected. |
-| Provider failover | PASS (in tests) | One bounded fallback to the other tier; typed recovery lines in the turn's language. The live Step route went from 7 of 11 answered to 24 consecutive 429s within an hour, so failover matters (evidence §7). Not exercised live through Jarvis. |
-| Tracing | PASS (in tests) | One id per voice turn reaches the Brain, the route event, the dispatcher (tool events) and the Paperclip issue (`test_turn_taking.py`, `test_route_policy_media_trace.py`). Not traced on the device. |
-| Regression suite | see "Tests run" | Full suite: 33545 passed; every failure is baselined or environmental (local `jarvis.toml`, no audio devices, no Tk, no twilio). Affected suites: 0 new failures. No CI runs on the fork. |
-| Live validation | PARTIAL | Step 3.7 Flash (latency, tools, image) and Paperclip delegation passed on the PC; voice and on-device vision are blocked (evidence §10). |
+| Architecture | PASS | `BrainManager` is still the only orchestration boundary. No second voice runtime, router or tool executor was added (ADR-0039). The one new external component is RapidOCR, an optional library behind `uitext` (ADR-0041). |
+| Routing | PASS (in tests) | Policy chain is exactly the configured tiers; deny lists apply on every chain; escalation only on a trigger phrase. Missions and their reviewer no longer fall back to Claude when the policy deny-lists it (`_without_automatic_claude`, `_claude_cli_critic_viable`). Routing gate: 363 passed. Not enabled on the PC yet. |
+| Privacy | PASS (in tests) | With the policy on, images reach only `local` targets unless `allow_cloud_vision` is set (default false). This covers dropped files, screen context, tool screenshots and every Computer Use engine, including its last resort (ADR-0040). Redaction in the recorder and in pixels. Privacy gate: 63 passed. |
+| Tool safety | PASS (in tests) | `ToolExecutor.execute` is the single chokepoint; live voice tools go through it too (`jarvis/realtime/tools.py`). No replay after an action started. Tool-safety gate: 89 passed. |
+| Cancellation | PASS (in tests) | Barge-in or hangup cancels the Brain task and an in-flight Paperclip issue; teardown with a full sentence queue does not hang. Cancellation gate: 86 passed. The live Paperclip smoke completed and cleaned up (JAR-16). |
+| Failover | PASS (in tests) | One bounded fallback to the other tier; typed recovery lines in the turn's language; no replay of actions. Failover gate: 42 passed. The live free Step route swung from 7 of 11 answered to 24 consecutive 429s, so this path matters. |
+| Tracing | PASS (in tests) | One id per voice turn reaches the Brain, the route event, the dispatcher (tool events) and the Paperclip issue. Tracing gate: 44 passed (2 expected failures pre-existing). |
+| Regression | PASS | Full suite in the Linux container: 33554 passed, 282 failed, 251 skipped. 164 failures are in the Linux baseline; the other 118 are a subset of the 125 that already failed on `1e56668f` and need Windows, audio devices, Tk or a real git remote. No failure is new to this commit. |
+| Voice interruption | HARDWARE-BLOCKED | Root cause found on the PC: Windows audio effects on the Realtek Microphone Array. The raw driver path (WDM-KS) hears the room at -36 dBFS peak, while the shared paths Jarvis uses (WASAPI shared, MME) deliver -130 / -90 dBFS. Privacy permission is Allow, the endpoint is unmuted at 54 %, and the Jarvis log shows -96 dBFS on every heartbeat. The toggle is a protected setting the owner must flip (procedure below). Not application code. |
+| Local vision | RESOURCE-BLOCKED (OCR PASS) | Local OCR passes on the PC: RapidOCR 0.981 on the fixtures, about 0.9 s per small image and 3.0 s for a full 1920x1080 screen on the CPU, no downloads, 320 screen-context tests pass. Local visual understanding is blocked: no mmproj on the PC, and about 3.9 GB RAM is free beside the apps while Qwen 35B needs about 21 GB. Cloud vision stays off. |
+
+## Manual steps to close the hardware gates
+
+**Voice (about 2 minutes, at the PC):**
+1. Settings > System > Sound > Input: choose "Microphone Array (Realtek(R) Audio)" and set it as the default input (the default is now the silent "Steam Streaming Microphone").
+2. Open it > Audio enhancements: Off.
+3. "Test your microphone": the bar must move when you speak.
+4. Restart Jarvis; the log heartbeat must show `max-rms` above 0, then run the voice checks: say the wake word, ask a long question, interrupt it while it speaks (repeat 10 times), and confirm it stops talking each time and answers the new question.
+5. If the bar still does not move: set NahimicService to Manual and start it, or uninstall the Nahimic components (that changes a service, so it is the owner's call).
+
+**Local vision:** needs a vision projector (Qwen3.6 mmproj-F16, 0.84 GB) and a Qwen configuration that runs beside Windows (small context, experts on the CPU, other apps closed), measured before marking the deep tier `local = true`. Until then, image turns with the policy on are answered without a model.
 
 ## Remaining blockers
 
-1. Microphone: the built-in Realtek array returns digital silence; suspected Nahimic audio enhancement, the F4 mute key or the BIOS microphone setting. Needs the owner at the PC.
-2. Step 3.7 Flash free route: the Nous gateway on `127.0.0.1:11436` must start reliably (its logon task last exited with code 1) before `fast` can point at it. Its free tier rate-limits heavily at times.
-3. Qwen 3.6 35B: the weights are now on the PC, but no configuration has run stably yet (see 6).
-4. Paperclip starts only at its scheduled time after a reboot (decision 6 below). The live smoke test with the free agent `dan` passed (JAR-16, 46 s).
-5. Device voice/barge-in benchmark and latency baseline (gates 4 and 9).
-6. Qwen 35B needs a configuration that fits beside Windows and the apps (small context, experts on the CPU), measured with the other apps closed; until then the deep tier has no stable local model.
-7. Per-tool deadline and in-flight cancellation in the tool executor; tool argument schema validation.
+1. Microphone: Windows audio effects silence the shared capture path (see above). Owner action.
+2. Step 3.7 Flash free route: the Nous gateway on `127.0.0.1:11436` must be started before `fast` can point at it; its free tier rate-limits heavily at times.
+3. Qwen 3.6 35B: the weights are on the PC (checksum verified) but no configuration has run stably. The 65k-context envelope is unverified (the one run returned empty output with 0.08 GB RAM free). The quant is unchanged.
+4. Paperclip starts only at its scheduled time after a reboot (decision 5).
+5. RapidOCR is validated on the PC in a scratch environment but is not bundled in the installer. Adding it as an extra needs a lockfile refresh, which the container cannot do because the project's custom package index is unreachable from it.
+6. Per-tool deadline and in-flight cancellation in the tool executor; tool argument schema validation (upstream gaps, not part of this branch).
 
 ## Decisions needed from the owner
 
-1. **Qwen 3.6 35B route.** Options: run it locally (the 35B-A3B model at 4-bit is roughly 20 GB, more than the 8 GB GPU plus free RAM on this laptop holds comfortably, so it would be slow); use a smaller local Qwen as the deep tier; or keep a free hosted model (for example Gemini, already configured) as `deep` until hardware allows. Paid OpenRouter Qwen is excluded by the free-only rule.
-2. **Escalation allowance.** Which phrases trigger Paperclip, the per-session budget (default 5) and the deadline (default 180 s). A failed deep turn no longer escalates on its own.
-3. **OCR.** Whether to install RapidOCR on the PC (`pip install rapidocr` in the Jarvis environment) and turn `ocr_enabled` on, and the accuracy target for the gate (provisional 0.95).
-5. **Cloud vision.** Whether images may go to the hosted fast tier (`allow_cloud_vision = true`). Until a local deep model with an mmproj runs stably, the alternative is that image turns are answered without a model.
-6. **Paperclip at startup.** Its scheduled task has only a time trigger, so after a reboot Paperclip is down until that time (escalation then returns a typed "unavailable" in about 2 s). An at-startup trigger would change a Windows task.
-4. **Mission workers.** Whether missions should also be barred from direct Claude workers.
+1. **Qwen 3.6 35B configuration.** Run it with a small context and experts on the CPU, measured with other apps closed, or keep a free hosted model as `deep` until hardware allows. Paid OpenRouter Qwen is excluded by the free-only rule.
+2. **Escalation allowance.** Which phrases trigger Paperclip, the per-session budget (default 5) and the deadline (default 180 s). Nothing escalates on its own.
+3. **OCR.** Whether to turn `ocr_enabled` on once RapidOCR is bundled, and the accuracy target for the gate (provisional 0.95).
+4. **Cloud vision.** Whether images may go to the hosted fast tier (`allow_cloud_vision = true`). Default and recommendation: off.
+5. **Paperclip at startup.** Its scheduled task has only a time trigger; an at-startup trigger would change a Windows task.
 
 ## Enabling and rolling back
 

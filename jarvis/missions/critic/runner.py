@@ -2173,13 +2173,20 @@ def _claude_cli_critic_viable() -> bool:
     ``claude --print`` critic exits 1 — two attempts per mission →
     ``critic_unavailable`` kills a mission whose worker already delivered.
     Reuses the worker factory's shared auth probe so worker and critic agree.
+    Never viable while ``[brain.route_policy]`` reserves Claude for explicit
+    requests.
     """
     try:
-        from jarvis.missions.init import _claude_cli_auth_viable
+        from jarvis.missions.init import (
+            _claude_cli_auth_viable,
+            _route_policy_reserves_claude,
+        )
         from jarvis.missions.workers.claude_direct_worker import (
             _resolve_claude_binary,
         )
 
+        if _route_policy_reserves_claude():
+            return False
         return _resolve_claude_binary() is not None and _claude_cli_auth_viable()
     except Exception:  # noqa: BLE001 — unreadable probe => not viable
         return False
@@ -2260,13 +2267,15 @@ def _resolve_api_critic_provider(
     # Viability-gated, not existence-gated (BUG-042 defect 3, critic edition):
     # a stale sk-ant-oat claude-api credential or a family a worker just
     # proved quota-depleted must be walked past here too.
-    from jarvis.missions.init import _api_key_family_viable
+    from jarvis.missions.init import _api_key_family_viable, _route_policy_reserves_claude
 
     order: list[str] = []
     if primary_provider in _API_CRITIC_PROVIDERS:
         order.append(primary_provider)  # type: ignore[arg-type]
     order += [p for p in _API_CRITIC_PROVIDERS if p not in order]
     excluded = set(excluded_providers)
+    if _route_policy_reserves_claude():
+        excluded.add("claude-api")
     for prov in order:
         if prov in excluded:
             continue

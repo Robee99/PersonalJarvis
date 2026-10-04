@@ -46,7 +46,7 @@ Companion: [implementation status](personaljarvis-implementation-status.md).
 
 | What | Evidence |
 | --- | --- |
-| Instance | `http://127.0.0.1:3100/api`, `local_trusted` (no auth header needed on the PC). Company "CALI CARTEL", issue prefix `JAR`. |
+| Instance | `http://127.0.0.1:3100/api`, `local_trusted` (no auth header needed on the PC). The owner's company, issue prefix `JAR`. |
 | Agents | `claude` (claude_local, idle), `dan` / `pi-free` / `opencode-free` (hermes_local, step-3.7-flash free), `hermes` (error state), `gemini`, plus paused ones. |
 | Create | `POST /api/companies/:companyId/issues`; `@paperclipai/shared` `createIssueBaseSchema` (title, description, status, assigneeAgentId, ...) extended with `createIssueDuplicateGuardSchema.idempotencyKey` ("idempotency keys always replay their original issue") in 2026.916.1. The base object is not `.strict()`, so an older server ignores the key. |
 | Read / result | `GET /api/issues/:id` (status), `GET /api/issues/:id/comments` (agent reply: `authorAgentId` / `authorType`). Also `/runs`, `/api/heartbeat-runs/:runId`. |
@@ -62,7 +62,7 @@ Companion: [implementation status](personaljarvis-implementation-status.md).
 | Cancellation and deadlines | `CancelToken` checked before evaluate and before execute; turn-level no-progress deadline in `ToolUseLoop` (`deadline_s`) | No per-tool deadline in the executor; no in-flight cancel of a running tool. |
 | Schema validation | Not in the executor | Arguments reach `tool.execute` as the model produced them. |
 | Idempotency | None for tools | New: per-attempt side-effect ledger (`recording_side_effects`) prevents provider fallback from replaying an action. |
-| Mission workers | `jarvis/missions/init.py` (`ClaudeDirectWorker` default) | Not covered by the routing deny list; a mission can still run on a direct Claude worker. |
+| Mission workers | `jarvis/missions/init.py` `_worker_factory`, `_without_automatic_claude`; critic `jarvis/missions/critic/runner.py` | Upstream falls back to a Claude worker or critic. When `[brain.route_policy]` deny-lists the Claude family, a Claude pick is swapped for another reachable family, or the mission fails with a reason (`ClaudeReservedError`). |
 
 ## Vision and OCR
 

@@ -45,6 +45,9 @@ fail three of the brief's six conditions:
    the policy's tiers. If the policy cannot be read, nothing gets the image.
 5. Escalation to Paperclip happens only on an explicit trigger phrase.
    `on_deep_failure` is removed; old configs still load and the key is ignored.
+   When the deny lists cover the Claude family, missions and their reviewer
+   never pick a Claude worker or critic by themselves either (amended
+   2026-10-04).
 6. NVIDIA NIM is not added: no provider, adapter or configuration.
 
 ## Consequences
