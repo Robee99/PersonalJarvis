@@ -145,8 +145,9 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
 
     Precedence:
       1. the step's explicit model (the decomposer pinned one) — always wins;
-      2. ``[brain.sub_jarvis].model`` but ONLY when its provider matches this
-         worker (a pin set for antigravity must never run on the openrouter key);
+      2. ``[brain.worker].model`` but ONLY when its provider (or the inherited
+         ``brain.primary``) matches this worker (a pin set for antigravity must
+         never run on the openrouter key);
       3. ``[brain.providers[provider]].model`` — the user's own pick for this
          provider (e.g. the free OpenRouter model);
       4. the documented per-provider ``_DEFAULT_MODEL`` (non-paid for openrouter).
@@ -160,14 +161,12 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
     try:
         from jarvis.core import config as _cfg
 
+        from jarvis.missions.worker_runtime.provider_map import pinned_worker_model
+
         root = _cfg.load_config()
-        sub = getattr(root.brain, "worker", None)
-        if (
-            sub is not None
-            and (getattr(sub, "provider", "") or "").strip().lower() == prov
-            and (getattr(sub, "model", "") or "").strip()
-        ):
-            return sub.model.strip()
+        pinned = pinned_worker_model(root, prov)
+        if pinned:
+            return pinned
         pc = (root.brain.providers or {}).get(prov)
         picked = (getattr(pc, "model", "") or "").strip()
         if picked:

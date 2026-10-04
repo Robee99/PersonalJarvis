@@ -64,3 +64,39 @@ def test_openrouter_default_without_any_pick_is_not_paid_anthropic(
     _patch_config(monkeypatch, JarvisConfig())  # nothing configured
     got = m._resolve_worker_model("openrouter", "") or ""
     assert "anthropic/claude" not in got
+
+
+def test_pin_applies_when_the_worker_inherits_the_primary_brain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no [brain.worker].provider the worker runs on brain.primary, and the
+    model picked in the Assistant-Agents tab must run there too."""
+    config = JarvisConfig()
+    config.brain.primary = "openrouter"
+    config.brain.worker = BrainTierConfig(provider="", model=_FREE)
+    _patch_config(monkeypatch, config)
+
+    assert m._resolve_worker_model("openrouter", "") == _FREE
+
+
+def test_inherited_pin_does_not_leak_to_another_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = JarvisConfig()
+    config.brain.primary = "gemini"
+    config.brain.worker = BrainTierConfig(provider="", model="gemini-3.5-flash")
+    config.brain.providers["openrouter"] = BrainProviderConfig(model=_FREE)
+    _patch_config(monkeypatch, config)
+
+    assert m._resolve_worker_model("openrouter", "") == _FREE
+
+
+def test_gemini_worker_runs_the_picked_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.missions.workers import gemini_worker
+
+    config = JarvisConfig()
+    config.brain.primary = "gemini"
+    config.brain.worker = BrainTierConfig(provider="", model="gemini-3.5-flash")
+    _patch_config(monkeypatch, config)
+
+    assert gemini_worker._resolve_gemini_model(None) == "gemini-3.5-flash"

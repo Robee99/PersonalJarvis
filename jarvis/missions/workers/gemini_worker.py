@@ -176,9 +176,11 @@ def _resolve_gemini_model(requested: str | None) -> str:
     Resolution rules (highest priority first):
         1. If `requested` is a Gemini slug already (starts with "gemini"),
            pass it through verbatim.
-        2. Otherwise read `cfg.brain.providers.gemini.deep_model` from
+        2. The model picked in the Assistant-Agents tab
+           (``[brain.worker].model``) when the worker runs on Gemini.
+        3. Otherwise read `cfg.brain.providers.gemini.deep_model` from
            jarvis.toml — that's the Frontier slot the user owns.
-        3. As a last resort (config unreachable, e.g. test environment
+        4. As a last resort (config unreachable, e.g. test environment
            without a project layout), fall back to the documented
            Frontier model at the time this code was written.
 
@@ -192,8 +194,12 @@ def _resolve_gemini_model(requested: str | None) -> str:
         return requested
     try:
         from jarvis.core.config import load_config
+        from jarvis.missions.worker_runtime.provider_map import pinned_worker_model
 
         cfg = load_config()
+        pinned = pinned_worker_model(cfg, "gemini")
+        if pinned:
+            return pinned
         providers = cfg.brain.providers or {}
         gemini_cfg = providers.get("gemini")
         if gemini_cfg is not None:
