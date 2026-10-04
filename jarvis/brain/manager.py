@@ -10743,6 +10743,15 @@ class BrainManager:
                 chain.insert(0, helper)
         return chain
 
+    def set_route_policy(self, policy: Any) -> None:
+        """Apply a new ``[brain.route_policy]`` table from the next turn on.
+
+        The in-app routing controls persist through ``config_writer`` and then
+        call this, so a change needs no restart. The policy is read per turn
+        (``_route_policy``), so swapping the object is the whole switch.
+        """
+        self._config.brain.route_policy = policy
+
     def _route_policy(self) -> Any | None:
         """The enabled ``[brain.route_policy]`` table, or None (normal chain)."""
         policy = getattr(self._config.brain, "route_policy", None)
