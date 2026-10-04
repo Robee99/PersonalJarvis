@@ -14,6 +14,16 @@ from jarvis.core.capabilities import get_registry
 
 
 @pytest.fixture(autouse=True)
+def _isolate_drift_baseline(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Config writers also sync the repo's drift baseline; never let a test edit it."""
+    from jarvis.core import config_writer
+
+    monkeypatch.setattr(
+        config_writer, "_config_soll_path", lambda: tmp_path / "config-soll.json"  # i18n-allow
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_capability_registry():
     reg = get_registry()
     with reg._lock:  # noqa: SLF001 — test-only snapshot of the singleton

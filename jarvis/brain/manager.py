@@ -2341,7 +2341,9 @@ _SELF_CONTROL_STANDING = (
     "yourself with the registry command tools in your tool set (e.g. "
     "`wake-word-set`, `brain-switch`, `provider-test`, `tts-volume-set`, "
     "`app-restart`); `set_config_value` covers a plain config key, "
-    "`cli_jarvisctl` is the fallback for anything not covered. NEVER state "
+    "`cli_jarvisctl` is the fallback for anything not covered. Switch a "
+    "provider or the voice mode only when the user explicitly asks for that "
+    "switch, never to work around a problem on your own. NEVER state "
     "or imply that a change or action happened unless a tool call actually "
     "returned success in THIS turn; without such a result, say honestly that "
     "you have not done it yet."
@@ -2750,6 +2752,15 @@ _UNKNOWN_OUTCOME_PHRASES: dict[str, str] = {
         "Empecé esa acción, pero la conexión se cortó antes de terminar, así que no sé "
         "si se completó. Compruébalo antes de que lo intente otra vez."
     ),
+}
+
+
+# Spoken between a reply that broke off mid-stream and the next provider's
+# full answer, so the listener does not hear half a sentence glued to it.
+_STREAM_RESTART_PHRASES: dict[str, str] = {
+    "de": " … Die Verbindung ist abgebrochen, hier noch einmal: ",  # i18n-allow
+    "en": " … Sorry, the connection dropped. Here it is again: ",
+    "es": " … Perdón, se cortó la conexión. Otra vez: ",
 }
 
 
@@ -12459,6 +12470,21 @@ class BrainManager:
             # the chosen talker streams the answer normally after the fall-through.
             _is_router_lead = self._router_lead_key == (prov_name, model)
             _attempt_consumer = None if _is_router_lead else text_consumer
+            # Whether this attempt already spoke part of an answer: if it then
+            # fails, the next provider's answer is introduced as a restart
+            # instead of being glued to the broken-off fragment.
+            _attempt_streamed = [False]
+            if _attempt_consumer is not None:
+                _speak = _attempt_consumer
+
+                def _attempt_consumer(
+                    chunk: str, _speak: Callable[[str], None] = _speak,
+                    _seen: list[bool] = _attempt_streamed,
+                ) -> None:
+                    if chunk:
+                        _seen[0] = True
+                    _speak(chunk)
+
             attempt_actions: list[str] = []
             try:
                 # CostMeter: start per-trace tracking (idempotent if already started).
@@ -12775,6 +12801,12 @@ class BrainManager:
                         prov_name, model, ", ".join(unknown_outcome_actions),
                     )
                     break
+                if _attempt_streamed[0] and text_consumer is not None and idx + 1 < len(chain):
+                    text_consumer(
+                        _STREAM_RESTART_PHRASES.get(
+                            self._resolve_turn_lang(), _STREAM_RESTART_PHRASES["en"]
+                        )
+                    )
                 # NOTE BUG-019 (2026-05-11): this generic ``continue`` does
                 # not touch the failing provider's *internal* state. For
                 # most providers that's correct (an HTTP error is purely

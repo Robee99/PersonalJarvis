@@ -600,15 +600,6 @@ async def test_mid_stream_disconnect_falls_back_and_returns_the_complete_answer(
     _assert_contained(rig)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Defect in BrainManager._generate: each attempt streams into the same "
-        "text_consumer, so after a mid-stream disconnect the voice path speaks the "
-        "failed tier's half sentence glued to the fallback tier's full answer, "
-        "with nothing that tells the listener the first answer broke off."
-    ),
-)
 @pytest.mark.asyncio
 async def test_spoken_stream_does_not_glue_a_cut_fragment_to_the_fallback(monkeypatch) -> None:
     fragment = "Good morning, the"
