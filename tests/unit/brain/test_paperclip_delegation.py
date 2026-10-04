@@ -217,3 +217,53 @@ def test_config_builder_needs_an_enabled_paperclip_connection() -> None:
     assert isinstance(delegate_from_config(on, token_loader=lambda: tokens), PaperclipDelegate)
     other = SimpleNamespace(enabled=True, via="somewhere-else")
     assert delegate_from_config(other, token_loader=lambda: tokens) is None
+
+
+@pytest.mark.asyncio
+async def test_timeout_with_failing_polls_is_bounded_and_creates_one_issue() -> None:
+    """Every poll drops: the deadline still ends it, with one issue and no reply."""
+    fake, clock = FakePaperclip(statuses=["todo", "in_progress"]), _Clock()
+    real_request = fake.request
+
+    async def _polls_drop(method: str, path: str, json: dict[str, Any] | None = None):
+        if (method, path) == ("GET", "/api/issues/i-1"):
+            fake.calls.append((method, path, json))
+            raise ConnectionError("poll dropped")
+        return await real_request(method, path, json)
+
+    delegate = PaperclipDelegate(
+        SimpleNamespace(request=_polls_drop), agent_name="claude", deadline_s=10.0,
+        poll_interval_s=2.0, max_context_chars=50, clock=clock, sleep=clock.sleep,
+    )
+    result = await delegate.delegate(REQUEST)
+
+    assert result.status is DelegationStatus.TIMEOUT
+    assert result.failure is RouteFailure.TIMEOUT
+    assert result.text == ""
+    assert sum(1 for c in fake.calls if c[0] == "POST") == 1
+    polls = [c for c in fake.calls if c[:2] == ("GET", "/api/issues/i-1")]
+    assert len(polls) <= 10.0 / 2.0 + 1
+    assert clock.now <= 10.0 + 2.0
+    assert [c for c in fake.calls if c[0] == "PATCH"][-1][2]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_retrying_a_timed_out_turn_replays_the_same_issue_key() -> None:
+    """A retry of the same turn carries the same idempotency key, a new turn a new one."""
+    fake, clock = FakePaperclip(statuses=["todo", "in_progress"]), _Clock()
+    delegate = _delegate(fake, clock, deadline_s=6.0)
+
+    first = await delegate.delegate(REQUEST)
+    clock.now = 0.0
+    second = await delegate.delegate(REQUEST)
+    clock.now = 0.0
+    other = await delegate.delegate(DelegationRequest(turn_id="t-43", task="Review this plan"))
+
+    assert first.status is DelegationStatus.TIMEOUT
+    # The replayed key lands on the issue the timeout cancelled: an honest
+    # failure, never a second live issue and never a claimed completion.
+    assert second.status is DelegationStatus.FAILED
+    assert second.issue_id == first.issue_id
+    assert all(r.text == "" for r in (first, second, other))
+    keys = [c[2]["idempotencyKey"] for c in fake.calls if c[0] == "POST"]
+    assert keys == ["jarvis-turn-t-42", "jarvis-turn-t-42", "jarvis-turn-t-43"]

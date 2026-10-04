@@ -38,7 +38,7 @@ import httpx
 from jarvis.core import config as cfg
 from jarvis.core.protocols import BrainDelta, BrainRequest
 
-from ._openai_base import stream_complete
+from ._openai_base import bounded_retry_client, stream_complete
 from .ollama import normalize_server_root
 
 log = logging.getLogger(__name__)
@@ -146,9 +146,7 @@ class LocalOpenAIBrain:
     def _ensure_client(self) -> Any:
         if self._client is None:
             root = self._resolve_root()
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(
+            self._client = bounded_retry_client(
                 api_key=self._credential or "local",
                 base_url=f"{root}/v1",
                 timeout=CLIENT_TIMEOUT,

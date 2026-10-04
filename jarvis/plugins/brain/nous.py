@@ -30,7 +30,7 @@ from typing import Any
 from jarvis.core import config as cfg
 from jarvis.core.protocols import BrainDelta, BrainRequest
 
-from ._openai_base import CLIENT_TIMEOUT, stream_complete
+from ._openai_base import CLIENT_TIMEOUT, bounded_retry_client, stream_complete
 
 # Nous Portal's OpenAI-compatible endpoint. Passed as the vendor default so an
 # explicit ``[brain.providers.nous].base_url`` override (the card's server-URL
@@ -105,9 +105,7 @@ class NousBrain:
                         "or point the server URL at a local gateway on this machine."
                     )
                 credential = LOOPBACK_PLACEHOLDER_KEY
-            from openai import AsyncOpenAI
-
-            self._client = AsyncOpenAI(
+            self._client = bounded_retry_client(
                 api_key=credential,
                 base_url=base_url,
                 timeout=CLIENT_TIMEOUT,
