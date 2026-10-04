@@ -56,16 +56,51 @@ def resolve_hermes_binary() -> str | None:
     return None
 
 
-def build_hermes_cmd(*, binary: str, prompt: str, usage_file: Path) -> list[str]:
+def build_hermes_cmd(
+    *, binary: str, prompt: str, usage_file: Path, model: str = ""
+) -> list[str]:
     """Headless Hermes argv: one ``-z`` prompt and a usage report.
 
-    The Windows installer falls back to a command file when it cannot write an
-    executable launcher, and cmd.exe ends an argument at a line break, so the
-    prompt is flattened onto one line only for that launcher.
+    ``model`` is the Assistant-Agents pick for Hermes (``-m``); "" keeps the
+    model configured in Hermes itself. The Windows installer falls back to a
+    command file when it cannot write an executable launcher, and cmd.exe ends
+    an argument at a line break, so the prompt is flattened onto one line only
+    for that launcher.
     """
     if binary.lower().endswith((".cmd", ".bat")):
         prompt = " ".join(prompt.split())
-    return [binary, "-z", prompt, "--usage-file", str(usage_file)]
+    model_args = ["-m", model] if model else []
+    return [binary, *model_args, "-z", prompt, "--usage-file", str(usage_file)]
+
+
+def _redacted_argv(cmd: list[str]) -> list[str]:
+    """``cmd`` for the log, with the prompt after ``-z`` replaced."""
+    out = list(cmd)
+    if "-z" in out:
+        index = out.index("-z") + 1
+        if index < len(out):
+            out[index] = "<prompt>"
+    return out
+
+
+def hermes_pinned_model() -> str:
+    """The model picked for Hermes on the Assistant-Agents tab, else "".
+
+    Only a ``[brain.worker].model`` that belongs to Hermes counts: the
+    ``model`` a mission passes is a Jarvis id for another provider, which
+    Hermes would reject, so it is never forwarded.
+    """
+    try:
+        from jarvis.core.config import load_config
+        from jarvis.missions.worker_runtime.provider_map import (
+            HERMES_SUBAGENT_CANONICAL,
+            pinned_worker_model,
+        )
+
+        return pinned_worker_model(load_config(), HERMES_SUBAGENT_CANONICAL)
+    except Exception as exc:  # noqa: BLE001 - a broken config keeps Hermes's own model
+        logger.warning("HermesDirectWorker: model pin unreadable (%s); using Hermes's own", exc)
+        return ""
 
 
 def read_usage(path: Path) -> dict[str, Any]:
@@ -111,7 +146,7 @@ class HermesDirectWorker:
         _broker_binding: Any | None = None,
         **_unused: Any,
     ) -> AsyncIterator[Any]:
-        del model  # Hermes answers with the model configured in Hermes itself
+        del model  # a Jarvis id for another provider; see hermes_pinned_model
         broker_binding = _broker_binding
         issued_here = broker_binding is None
         if issued_here:
@@ -181,7 +216,9 @@ class HermesDirectWorker:
             )
             return
 
-        cmd = build_hermes_cmd(binary=binary, prompt=prompt, usage_file=usage_file)
+        cmd = build_hermes_cmd(
+            binary=binary, prompt=prompt, usage_file=usage_file, model=hermes_pinned_model()
+        )
         run_env = dict(env)
         if broker_binding is not None:
             run_env = broker_binding.apply_environment(run_env)
@@ -189,7 +226,7 @@ class HermesDirectWorker:
             "HermesDirectWorker[%s] spawn: cwd=%s argv=%s",
             worker_id,
             worktree,
-            [*cmd[:2], "<prompt>", *cmd[3:]],
+            _redacted_argv(cmd),
         )
 
         t0 = time.perf_counter()

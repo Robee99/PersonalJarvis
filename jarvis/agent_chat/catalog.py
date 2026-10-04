@@ -214,6 +214,24 @@ CODEX_FALLBACK_MODELS: Final[tuple[CuratedModel, ...]] = (
 )
 
 
+#: The free models Hermes Agent's own picker curates on Nous Portal (its
+#: ``hermes model`` list, all priced free). Hermes reaches them with its own
+#: Nous login; the ids are Nous Portal's. A ``:free`` route or a stealth
+#: preview never bills, so a pick here cannot surprise anyone with a charge.
+HERMES_FREE_MODELS: Final[tuple[CuratedModel, ...]] = (
+    CuratedModel("stepfun/step-3.7-flash:free", "Step 3.7 Flash", note="free"),
+    CuratedModel("meituan/longcat-2.5-preview:free", "LongCat 2.5 Preview", note="free"),
+    CuratedModel("inclusionai/ling-3.0-flash-sante:free", "Ling 3.0 Flash", note="free"),
+    CuratedModel("poolside/laguna-s-2.1:free", "Laguna S 2.1", note="free"),
+    CuratedModel("poolside/laguna-xs-2.1:free", "Laguna XS 2.1", note="free"),
+    CuratedModel(
+        "stealth/space-bunny-alpha",
+        "Space Bunny (stealth)",
+        note="free · unknown provider, keep personal data out",
+    ),
+)
+
+
 # Order = the order the picker shows. The coding CLIs first, in the Agentic
 # IDE registry's own order (``jarvis.workspace.agents._AGENTS``) so the two
 # pickers read alike, then the API families, then the local servers.
@@ -336,9 +354,9 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
         family="hermes",
         runner="hermes-cli",
         models_source="curated",
-        # One-shot mode answers with its final message only, on the model the
-        # person picked in Hermes (``hermes model``); its ids are that
-        # provider's own, so nothing is shipped here.
+        # One-shot mode answers with its final message only. A picked model
+        # goes to ``-m``; "" keeps the model configured in Hermes itself.
+        curated_models=HERMES_FREE_MODELS,
         default_model="",
         agent="hermes",
     ),
