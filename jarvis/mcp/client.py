@@ -429,8 +429,13 @@ def _tool_to_dict(tool: Any) -> dict[str, Any]:
     """
     if isinstance(tool, dict):
         return dict(tool)
+    annotations = getattr(tool, "annotations", None)
+    dump = getattr(annotations, "model_dump", None)
     return {
         "name": getattr(tool, "name", ""),
         "description": getattr(tool, "description", "") or "",
         "inputSchema": getattr(tool, "inputSchema", None) or {},
+        # The server's own hints (readOnlyHint, destructiveHint): the adapter
+        # asks before a call the server itself marks as destructive.
+        "annotations": dump(exclude_none=True) if callable(dump) else {},
     }
