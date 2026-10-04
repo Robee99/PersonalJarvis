@@ -92,8 +92,10 @@ def _spawn_boot_cleanup(coro: Any, *, name: str) -> asyncio.Task[Any]:
 # vertex: Google Cloud Vertex AI runs the SAME in-process tool loop as the
 # other API providers, on the VertexBrain — so picking it as the subagent
 # actually runs the mission on Vertex instead of silently falling back to Claude.
+# nous (Nous Portal) runs only when selected: it is deliberately absent from the
+# cross-family last-resort walks below, so a saved key never pulls it in.
 _API_AGENT_SLUGS: frozenset[str] = frozenset(
-    {"openai", "openrouter", "grok", "nvidia", "ollama", "local-openai", "vertex"}
+    {"openai", "openrouter", "grok", "nvidia", "nous", "ollama", "local-openai", "vertex"}
 )
 
 
@@ -602,6 +604,15 @@ def _api_key_family_viable(provider: str) -> bool:
 
     key = get_jarvis_agent_secret(provider)
     if not key:
+        # An API-key card pointed at a loopback server (a local gateway that
+        # signs upstream itself) runs keyless; viability is then reachability,
+        # exactly like the local families above.
+        from jarvis.brain.app_control import loopback_keyless_ready
+
+        if loopback_keyless_ready(provider):
+            from jarvis.api_family_quota_state import api_family_in_cooldown
+
+            return not api_family_in_cooldown(provider)
         return False
     # A family a worker just proved quota-depleted / auth-dead is skipped
     # until its cooldown self-expires — fingerprinted, so saving a NEW key in

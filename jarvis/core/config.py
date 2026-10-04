@@ -174,6 +174,9 @@ PROVIDER_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
     # NVIDIA NIM (OpenAI-compatible). Only the build.nvidia.com key (nvapi-),
     # not the legacy NGC key. One key, many NVIDIA-hosted models.
     "nvidia": (("nvidia_api_key", "NVIDIA_API_KEY"),),
+    # Nous Portal (OpenAI-compatible cloud host, portal.nousresearch.com).
+    # One sk-nous- key reaches the Hermes family and the :free routes.
+    "nous": (("nous_api_key", "NOUS_API_KEY"),),
     "gemini": (
         ("gemini_api_key", "GEMINI_API_KEY"),
         ("google_aistudio_api_key", "GOOGLE_AIStudio_API_KEY"),
@@ -266,6 +269,10 @@ JARVIS_AGENT_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
     "nvidia": (
         ("jarvis_agent_nvidia_api_key", "JARVIS_AGENT_NVIDIA_API_KEY"),
         *PROVIDER_SECRET_CANDIDATES["nvidia"],
+    ),
+    "nous": (
+        ("jarvis_agent_nous_api_key", "JARVIS_AGENT_NOUS_API_KEY"),
+        *PROVIDER_SECRET_CANDIDATES["nous"],
     ),
     "vertex": (
         ("jarvis_agent_vertex_api_key", "JARVIS_AGENT_VERTEX_API_KEY"),
@@ -5820,6 +5827,7 @@ _SECRET_BASE_FAMILIES: tuple[str, ...] = (
     "openrouter",
     "groq",
     "nvidia",
+    "nous",
     "gemini",
     "vertex",
     "grok",
@@ -6189,6 +6197,44 @@ def resolve_provider_endpoint(
         return ResolvedEndpoint(base_url=route.base_url, credential=token, via_proxy=True)
     credential = get_provider_secret(provider_id)
     return ResolvedEndpoint(base_url=route.base_url, credential=credential, via_proxy=False)
+
+
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_loopback_url(url: str | None) -> bool:
+    """True when ``url`` points at this machine (localhost, 127.0.0.0/8, ::1).
+
+    A server on the loopback interface is the user's own process, so it can
+    legitimately run without a client key (e.g. a local gateway that forwards
+    with its own login). Anything else — including a LAN address — is remote.
+    """
+    from urllib.parse import urlsplit
+
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    try:
+        host = (urlsplit(raw).hostname or "").lower()
+    except ValueError:  # a malformed URL is simply not loopback; callers then require a key
+        return False
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+
+
+def configured_base_url_is_loopback(provider_id: str) -> bool:
+    """Whether ``provider_id``'s own base-URL override points at loopback.
+
+    Only the user's ``[brain.providers.<id>].base_url`` counts: the vendor
+    default is never loopback, and a team-proxy route is remote by definition.
+    Never raises.
+    """
+    try:
+        ep = resolve_provider_endpoint(provider_id)
+    except Exception:  # noqa: BLE001 — an unreadable config is "not configured"
+        return False
+    return not ep.via_proxy and is_loopback_url(ep.base_url)
 
 
 def set_secret(key: str, value: str) -> bool:

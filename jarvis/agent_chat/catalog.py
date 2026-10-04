@@ -375,6 +375,10 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
     ProviderRow(
         id="nvidia", label="NVIDIA NIM", family="nvidia", runner="api", models_source="live"
     ),
+    # Nous Portal (cloud model host) — not the "hermes" CLI row above.
+    ProviderRow(
+        id="nous", label="Nous Portal", family="nous", runner="api", models_source="live"
+    ),
     ProviderRow(
         id="vertex",
         label="Google Vertex AI",

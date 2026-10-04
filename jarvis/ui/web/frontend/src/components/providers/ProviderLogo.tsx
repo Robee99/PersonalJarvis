@@ -42,6 +42,7 @@ const PROVIDER_FAMILY_LOGOS: Record<string, FamilyLogo> = {
   inworld: { file: "inworld.png", render: "own" },
   ionos: { file: "ionos.svg", render: "mono" },
   linode: { file: "linode.svg", render: "mono" },
+  nous: { file: "nous.svg", render: "mono" },
   nvidia: { file: "nvidia.svg", render: "colour" },
   ollama: { file: "ollama.svg", render: "mono" },
   openai: { file: "openai.svg", render: "mono" },
@@ -90,6 +91,8 @@ export function providerFamily(providerId: string): string | null {
   if (id.includes("cartesia")) return "cartesia";
   if (id.includes("inworld")) return "inworld";
   if (id.includes("nvidia") || id.includes("nemotron")) return "nvidia";
+  // Exact id: a substring test would claim unrelated ids such as "autonomous".
+  if (id === "nous") return "nous";
   // Hosting providers (Settings -> Computers cloud import).
   if (id.includes("hostinger")) return "hostinger";
   if (id.includes("hetzner")) return "hetzner";

@@ -67,6 +67,7 @@ CATALOG_PROVIDERS: tuple[str, ...] = (
     "openrouter",
     "grok",
     "nvidia",
+    "nous",
     # Keyless local providers (2026-07-25): their "catalog" is the live list of
     # models the user's own server holds — ollama via the native /api/tags,
     # local-openai via the standard /v1/models.
@@ -100,6 +101,10 @@ class _CatalogEndpoint:
     path: str
     auth: str
     secret_slot: tuple[str, str] | None = None
+    #: The override is a bare server root (a pasted ``/v1`` is normalized
+    #: away) and ``path`` carries the full API path — the convention of a
+    #: card with a server-URL field.
+    server_root: bool = False
 
 
 # Every fetch resolves the provider's EFFECTIVE base URL through
@@ -127,6 +132,16 @@ _ENDPOINTS: dict[str, _CatalogEndpoint] = {
     # list), so ``bearer_opt`` like OpenRouter — the picker fills in before a key
     # is entered, and the key is attached when present.
     "nvidia": _CatalogEndpoint("https://integrate.api.nvidia.com/v1", "/models", "bearer_opt"),
+    # Nous Portal: OpenAI-compatible ``data[].id`` roster. ``bearer`` (key
+    # required) because an anonymous listing is not documented; without a key
+    # the picker shows the curated fallback below — except on a loopback
+    # gateway, which is fetched keyless (see ``_fetch_raw``). Server-root
+    # convention: the card's server-URL field stores a bare root, so the
+    # catalog appends ``/v1/models`` to it. ``:free`` ids get the free tag
+    # from ``is_free_model`` like OpenRouter's.
+    "nous": _CatalogEndpoint(
+        "https://inference-api.nousresearch.com", "/v1/models", "bearer", server_root=True
+    ),
     # Ollama: server-root convention (the plugin appends /v1 / /api itself);
     # vendor default resolves dynamically (OLLAMA_HOST → localhost:11434).
     "ollama": _CatalogEndpoint(None, "/api/tags", "none"),
@@ -301,6 +316,19 @@ CURATED_MODELS: dict[str, list[ModelInfo]] = {
             ("qwen/qwen3.5-397b-a17b", "Qwen3.5 397B A17B"),
             ("meta/llama-4-maverick-17b-128e-instruct", "Llama 4 Maverick"),
             ("mistralai/mistral-large-3-675b-instruct-2512", "Mistral Large 3"),
+        ]
+    ),
+    # Nous Portal — the offline fallback when the live catalog is unreachable
+    # (no key yet). The free routes lead because they work on a free account;
+    # a valid key replaces this with the live /v1/models list.
+    "nous": _curated(
+        [
+            ("stepfun/step-3.7-flash:free", "Step 3.7 Flash (free)"),
+            ("poolside/laguna-s-2.1:free", "Laguna S 2.1 (free)"),
+            ("poolside/laguna-xs-2.1:free", "Laguna XS 2.1 (free)"),
+            ("inclusionai/ling-3.0-flash-sante:free", "Ling 3.0 Flash (free)"),
+            ("meituan/longcat-2.0:free", "LongCat 2.0 (free)"),
+            ("Hermes-4-70B", "Hermes 4 70B"),
         ]
     ),
 }
@@ -1434,8 +1462,10 @@ STARRED_MODELS: frozenset[str] = frozenset(
 def is_free_model(model_id: str, label: str = "") -> bool:
     """True for a zero-cost model. OpenRouter marks these with a ``:free`` id
     suffix and a ``(free)`` label; both are checked so the flag survives whichever
-    signal a future catalog keeps."""
-    return ":free" in model_id.lower() or "(free)" in label.lower()
+    signal a future catalog keeps. A ``stealth/`` id is an unannounced preview
+    model (Nous Portal lists one among its free routes), served at no cost."""
+    low = model_id.lower()
+    return ":free" in low or low.startswith("stealth/") or "(free)" in label.lower()
 
 
 def is_starred_model(model_id: str) -> bool:
@@ -1981,6 +2011,10 @@ class ModelCatalog:
 
         resolved = cfg.resolve_provider_endpoint(provider, vendor_default_base_url=ep.vendor_base)
         base = (resolved.base_url or "").rstrip("/")
+        if ep.server_root and base and not resolved.via_proxy:
+            from jarvis.plugins.brain.ollama import normalize_server_root
+
+            base = normalize_server_root(base)
         return base + ep.path
 
     async def _fetch_raw(self, provider: str) -> list[ModelInfo]:
@@ -1992,7 +2026,10 @@ class ModelCatalog:
         ep = _ENDPOINTS[provider]
         url = self._resolve_catalog_url(provider, ep)
         key = cfg.get_provider_secret(provider)
-        if not key and ep.auth in ("x-api-key", "bearer", "query"):
+        # A server on this machine (a local gateway) is listed without a key;
+        # a remote catalog that requires one still refuses honestly.
+        needs_key = ep.auth in ("x-api-key", "bearer", "query")
+        if not key and needs_key and not cfg.is_loopback_url(url):
             raise RuntimeError(f"No API key configured for {provider}.")
         auth = ep.auth
 
@@ -2001,7 +2038,8 @@ class ModelCatalog:
         if auth == "x-api-key":
             headers = {"x-api-key": key or "", "anthropic-version": "2023-06-01"}
         elif auth == "bearer":
-            headers = {"Authorization": f"Bearer {key}"}
+            if key:
+                headers = {"Authorization": f"Bearer {key}"}
         elif auth == "bearer_opt":
             if key:
                 headers = {"Authorization": f"Bearer {key}"}

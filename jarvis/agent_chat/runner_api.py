@@ -59,6 +59,7 @@ BRAIN_BY_PROVIDER: Final[dict[str, tuple[str, str]]] = {
     "openrouter": ("jarvis.plugins.brain.openrouter", "OpenRouterBrain"),
     "grok": ("jarvis.plugins.brain.grok", "GrokBrain"),
     "nvidia": ("jarvis.plugins.brain.nvidia", "NvidiaBrain"),
+    "nous": ("jarvis.plugins.brain.nous", "NousBrain"),
     "claude-api": ("jarvis.plugins.brain.claude_api", "ClaudeAPIBrain"),
     "gemini": ("jarvis.plugins.brain.gemini", "GeminiBrain"),
     "vertex": ("jarvis.plugins.brain.vertex", "VertexBrain"),

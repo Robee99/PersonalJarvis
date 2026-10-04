@@ -77,6 +77,8 @@ _LADDERS: Final[dict[str, tuple[tuple[str, ...], str]]] = {
     "hermes": (("",), ""),
     "cursor": (("",), ""),
     "nvidia": (("", "none", "low", "medium", "high"), ""),
+    # Nous Portal documents no reasoning-effort parameter, so no knob is offered.
+    "nous": (("",), ""),
     "ollama": (("", "none", "low", "medium", "high", "max"), ""),
     "local-openai": (("", "none", "low", "medium", "high"), ""),
 }

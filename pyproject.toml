@@ -553,6 +553,8 @@ openrouter-tts = "jarvis.plugins.tts.openrouter_tts:OpenRouterTTS"
 claude-api = "jarvis.plugins.brain.claude_api:ClaudeAPIBrain"
 openrouter = "jarvis.plugins.brain.openrouter:OpenRouterBrain"
 nvidia = "jarvis.plugins.brain.nvidia:NvidiaBrain"
+# Nous Portal — Nous Research's hosted OpenAI-compatible model API (cloud).
+nous = "jarvis.plugins.brain.nous:NousBrain"
 openai = "jarvis.plugins.brain.openai:OpenAIBrain"
 gemini = "jarvis.plugins.brain.gemini:GeminiBrain"
 # Google Cloud Vertex AI — the same Gemini models on Google's enterprise

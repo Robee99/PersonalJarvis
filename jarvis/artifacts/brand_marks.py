@@ -92,6 +92,9 @@ BRAND_FAMILIES: Final[tuple[BrandFamily, ...]] = (
     ),
     BrandFamily("xai", "xAI / Grok", "providers", "xai.svg", "mono", ("xAI", "Grok")),
     BrandFamily("nvidia", "NVIDIA", "providers", "nvidia.svg", "colour", ("NVIDIA", "Nvidia")),
+    BrandFamily(
+        "nous", "Nous Research", "providers", "nous.svg", "mono", ("Nous Research", "Nous Portal")
+    ),
     BrandFamily("ollama", "Ollama", "providers", "ollama.svg", "mono", ("Ollama",)),
     BrandFamily("groq", "Groq", "providers", "groq.svg", "mono", ("Groq",)),
     BrandFamily("openrouter", "OpenRouter", "providers", "openrouter.svg", "mono", ("OpenRouter",)),

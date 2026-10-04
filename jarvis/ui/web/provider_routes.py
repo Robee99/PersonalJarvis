@@ -1814,7 +1814,11 @@ def _worker_usable(provider: str) -> bool:
 
             st = ClaudeAuthService().status()
             return bool(getattr(st, "connected", False) or get_jarvis_agent_secret("claude-api"))
-        return bool(get_jarvis_agent_secret(p))
+        if get_jarvis_agent_secret(p):
+            return True
+        from jarvis.brain.app_control import loopback_keyless_ready
+
+        return loopback_keyless_ready(p)
     except Exception:  # noqa: BLE001
         return False
 

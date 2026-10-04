@@ -140,6 +140,10 @@ MAPPINGS: Final[tuple[ProviderMapping, ...]] = (
     # selectable subagent in the API-Keys "Subagents" tab and env/slug lookups
     # stay consistent.
     ProviderMapping("nvidia", "nvidia", "NVIDIA_API_KEY"),
+    # Nous Portal (cloud, OpenAI-compatible): in-process ApiAgentWorker like
+    # nvidia, so ``worker_slug`` is a stable identity only. Not the Hermes Agent
+    # CLI, which routes through HERMES_SUBAGENT_SLUGS instead.
+    ProviderMapping("nous", "nous", "NOUS_API_KEY"),
     # Google Cloud Vertex AI: runs through the in-process ApiAgentWorker on the
     # VertexBrain, like nvidia — there is no worker-harness slug for it, so
     # ``worker_slug`` is a stable identity for display and reverse lookup only.

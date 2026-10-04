@@ -113,11 +113,11 @@ Pause, resume, delete or run-now one agent routine on user request.
 
 ## `brain-switch` — Switch brain provider
 
-Switch the ACTIVE main brain (LLM) provider, e.g. from openai to claude-api. Reversible; validated against the provider catalog and stored credentials.
+Switch the ACTIVE main brain (LLM) provider, e.g. from openai to claude-api. Validated against the provider catalog and stored credentials. Only when the user explicitly asks to change it; to report the active provider use providers-list.
 
 - **Endpoint:** `POST /api/brain/switch`
-- **Arguments:** `provider` (one of: claude-api, gemini, grok, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: claude-api, gemini, grok, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the brain provider to claude"
 
@@ -127,7 +127,7 @@ Switch the active text-to-speech provider (live, no restart).
 
 - **Endpoint:** `POST /api/tts/switch`
 - **Arguments:** `provider` (one of: cartesia, elevenlabs, gemini-flash-tts, grok-voice, inworld, openrouter-tts, piper-local, vertex-tts; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the voice to elevenlabs"
 
@@ -137,17 +137,17 @@ Switch the speech-to-text provider. Takes effect on the next voice-pipeline star
 
 - **Endpoint:** `POST /api/stt/switch`
 - **Arguments:** `provider` (one of: faster-whisper, gemini-api, groq-api, nemotron-local, openai-api, openrouter-stt, vertex-stt; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch speech recognition to deepgram"
 
 ## `realtime-switch` — Switch realtime voice provider
 
-Switch which realtime voice engine (speech-to-speech) is active, including subscription- and API-backed providers. Experimental transports require explicit acknowledgement.
+Switch which realtime voice engine (speech-to-speech) is active, including subscription- and API-backed providers. Experimental transports require explicit acknowledgement. Only when the user explicitly asks to change it.
 
 - **Endpoint:** `POST /api/realtime/switch`
 - **Arguments:** `provider` (one of: gemini-live, local-realtime, local-voice, openai-live, openai-live-subscription, vertex-live; required); `persist` (boolean; optional); `accept_experimental` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the realtime model to gemini"
 
@@ -166,8 +166,8 @@ Select the Ollama brain and speech model for the managed local realtime server, 
 Switch the dedicated Computer-Use planner provider (screen control), decoupled from the main brain.
 
 - **Endpoint:** `POST /api/computer-use/switch`
-- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the computer use provider to gemini"
 
@@ -176,8 +176,8 @@ Switch the dedicated Computer-Use planner provider (screen control), decoupled f
 Switch the provider used for new missions (e.g. codex to openai). The next mission uses the new provider.
 
 - **Endpoint:** `POST /api/jarvis-agent/switch`
-- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `agents`
 - **Voice example (EN):** "switch the agent provider to openai"
 
@@ -196,7 +196,7 @@ List all configured providers and which ones are active.
 Test connectivity and authentication for one provider.
 
 - **Endpoint:** `POST /api/providers/{provider_id}/test`
-- **Arguments:** `provider_id` (one of: antigravity, cartesia, claude-api, claude-cli, codex, elevenlabs, faster-whisper, gemini, gemini-api, gemini-flash-tts, gemini-live, gemini-polish, grok, grok-build, grok-voice, groq-api, groq-polish, inworld, local-openai, local-realtime, local-voice, nemotron-local, nvidia, ollama, ollama-polish, openai, openai-api, openai-live, openai-live-subscription, openai-polish, openrouter, openrouter-polish, openrouter-stt, openrouter-tts, piper-local, vertex, vertex-live, vertex-stt, vertex-tts; required)
+- **Arguments:** `provider_id` (one of: antigravity, cartesia, claude-api, claude-cli, codex, elevenlabs, faster-whisper, gemini, gemini-api, gemini-flash-tts, gemini-live, gemini-polish, grok, grok-build, grok-voice, groq-api, groq-polish, inworld, local-openai, local-realtime, local-voice, nemotron-local, nous, nvidia, ollama, ollama-polish, openai, openai-api, openai-live, openai-live-subscription, openai-polish, openrouter, openrouter-polish, openrouter-stt, openrouter-tts, piper-local, vertex, vertex-live, vertex-stt, vertex-tts; required)
 - **Requires confirmation:** no
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "test the openai provider"
@@ -217,7 +217,7 @@ Choose the voice engine: the classic STT-brain-TTS pipeline or a realtime speech
 
 - **Endpoint:** `PUT /api/settings/voice-mode`
 - **Arguments:** `mode` (one of: pipeline, realtime; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `settings`
 - **Voice example (EN):** "switch to realtime mode"
 

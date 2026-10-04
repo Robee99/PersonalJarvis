@@ -193,7 +193,8 @@ def test_ad6_table_is_complete() -> None:
     Grok uses the documented ``grok->xai`` row. ``nvidia`` (NVIDIA NIM) is an
     OpenAI-compatible API brain that, like ``openai``/``openrouter``, runs on the
     in-process ApiAgentWorker (not the Jarvis-Agent CLI worker harness); its row
-    exists so it is a selectable Jarvis-Agent in the API-Keys view.
+    exists so it is a selectable Jarvis-Agent in the API-Keys view. ``nous``
+    (Nous Portal) and ``vertex`` are in-process API rows for the same reason.
 
     ``ollama`` and ``local-openai`` are the self-hosted rows. They carry a key
     slot name for shape only: no Agent key slot exists, so the worker proceeds
@@ -207,6 +208,8 @@ def test_ad6_table_is_complete() -> None:
         "openrouter",
         "grok",
         "nvidia",
+        "nous",
+        "vertex",
         "ollama",
         "local-openai",
     }

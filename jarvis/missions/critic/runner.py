@@ -2229,6 +2229,11 @@ _API_CRITIC_PROVIDERS: tuple[str, ...] = (
     "local-openai",
 )
 
+# Families that grade only the missions they ran themselves. They are never
+# part of the cross-family walk above, so a saved key alone never makes them a
+# critic for another provider's work (Nous Portal is used only when selected).
+_SELECTED_ONLY_CRITIC_PROVIDERS: tuple[str, ...] = ("nous",)
+
 
 def _provider_picked_model(provider: str) -> str | None:
     """The user's configured model for ``provider`` ([brain.providers[p]].model).
@@ -2270,7 +2275,10 @@ def _resolve_api_critic_provider(
     from jarvis.missions.init import _api_key_family_viable, _route_policy_reserves_claude
 
     order: list[str] = []
-    if primary_provider in _API_CRITIC_PROVIDERS:
+    if (
+        primary_provider in _API_CRITIC_PROVIDERS
+        or primary_provider in _SELECTED_ONLY_CRITIC_PROVIDERS
+    ):
         order.append(primary_provider)  # type: ignore[arg-type]
     order += [p for p in _API_CRITIC_PROVIDERS if p not in order]
     excluded = set(excluded_providers)

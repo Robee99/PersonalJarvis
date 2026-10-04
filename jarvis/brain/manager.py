@@ -253,6 +253,9 @@ PROVIDER_ALIASES = {
     "nvidia": "nvidia",
     "nim": "nvidia",
     "nemotron": "nvidia",
+    # Nous Portal. Deliberately no "hermes" alias: that word names the
+    # separate Hermes Agent CLI (subagent-only), not this cloud host.
+    "nous": "nous",
 }
 
 SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
@@ -295,6 +298,7 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "openrouter": "OpenRouter",
     "grok": "xAI Grok",
     "nvidia": "NVIDIA NIM",
+    "nous": "Nous Portal",
     "gemini": "Google Gemini",
     "antigravity": "Google Antigravity (Gemini)",
     "grok-build": "Grok Build (xAI subscription)",
@@ -352,6 +356,7 @@ _SECRET_KEY_TO_BRAIN: dict[str, str] = {
     "grok_api_key": "grok",
     "xai_api_key": "grok",
     "nvidia_api_key": "nvidia",
+    "nous_api_key": "nous",
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -418,6 +423,10 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # generation — 12B of 120B activate per token, so it answers faster than
         # the dense model it replaces. Verified against integrate.api.nvidia.com.
         "nvidia": "nvidia/nemotron-3-super-120b-a12b",
+        # Nous Portal: a :free route, so a model-less pick works on a free
+        # account and never bills a paid model by surprise (same rule as the
+        # OpenRouter gateway above). The user's own pick wins over this.
+        "nous": "stepfun/step-3.7-flash:free",
         "mistral": "mistral-small-3.1",
         # Local providers: no server-side catalog is knowable ahead of time —
         # empty means "the plugin discovers the first installed model".
@@ -444,6 +453,8 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # Nemotron 3 Ultra (verified against integrate.api.nvidia.com), which
         # the OpenRouter tiers above already name.
         "nvidia": "nvidia/nemotron-3-ultra-550b-a55b",
+        # Nous Portal: free route here too — see the router-tier note.
+        "nous": "stepfun/step-3.7-flash:free",
         "mistral": "mistral-large-3",
         # Local providers: empty = plugin-side discovery (see router tier).
         "ollama": "",
@@ -2183,6 +2194,7 @@ _SUBAGENT_VOICE_TO_CANONICAL: dict[str, str] = {
     "openrouter": "openrouter",
     "grok": "grok",
     "nvidia": "nvidia", "nim": "nvidia", "nemotron": "nvidia",
+    "nous": "nous",
     "antigravity": "antigravity",
     "grok-build": "grok-build",
     "grok build": "grok-build",
@@ -2193,6 +2205,7 @@ _SUBAGENT_DISPLAY: dict[str, str] = {
     "openai": "OpenAI", "openai-codex": "Codex", "claude-api": "Claude",
     "gemini": "Gemini", "openrouter": "OpenRouter", "grok": "xAI Grok",
     "nvidia": "NVIDIA NIM",
+    "nous": "Nous Portal",
     "antigravity": "Antigravity",
     "grok-build": "Grok Build",
 }
@@ -14432,6 +14445,7 @@ _PROVIDER_SETUP_HINTS: dict[str, str] = {
     "openrouter": "OPENROUTER_API_KEY setzen",
     "grok": "Set XAI_API_KEY (key from console.x.ai)",
     "nvidia": "Set NVIDIA_API_KEY (nvapi- key from build.nvidia.com)",
+    "nous": "Set NOUS_API_KEY (sk-nous- key from portal.nousresearch.com)",
     "ollama-local": "Ollama-Server starten (localhost:11434)",
     "ollama-cloud": "Ollama-Cloud-Token setzen",
 }

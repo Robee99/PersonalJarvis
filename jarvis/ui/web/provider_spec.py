@@ -595,6 +595,32 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             "background tasks, sluggish as your main or voice brain."
         ),
     ),
+    # Nous Portal: Nous Research's hosted OpenAI-compatible API (a cloud model
+    # host). Not "Hermes Agent", which is a separate CLI agent product.
+    ProviderSpec(
+        id="nous",
+        label="Nous Portal",
+        tier="brain",
+        auth_mode="api_key",
+        secret_keys=("nous_api_key",),
+        dashboard_url="https://portal.nousresearch.com",
+        signup_url="https://portal.nousresearch.com",
+        credential_help=(
+            "Nous Portal API key (starts with sk-nous-) from the API keys "
+            "section of portal.nousresearch.com. A cloud service: one key "
+            "reaches the models Nous hosts, including Hermes. Free accounts "
+            "can use the :free models (about 50 requests a minute); other "
+            "models are billed on your Nous account. A gateway on this machine "
+            "(server URL on localhost) needs no key here."
+        ),
+        # The free route the picker highlights; works on a free account.
+        recommended_model="stepfun/step-3.7-flash:free",
+        # The server-URL field: point the card at a local OpenAI-compatible
+        # gateway. Still a cloud provider (billing "api", no vision) because the
+        # models behind such a gateway run at Nous.
+        supports_base_url=True,
+        default_base_url="https://inference-api.nousresearch.com/v1",
+    ),
     # Ollama re-added 2026-07-25 as a keyless LOCAL provider (auth_mode
     # "none" → billing "local"); the 2026-04-21 removal predates the
     # local-first mandate.
