@@ -149,6 +149,16 @@ class RunShellTool:
         "required": ["command"],
     }
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float | None:
+        """The ToolExecutor's deadline for this call: the command's own
+        ``timeout_s`` plus room to kill the child and collect its output, so
+        the tool's own, clearer "Timeout after" result always arrives first."""
+        try:
+            timeout_s = float(args.get("timeout_s", 30))
+        except (TypeError, ValueError):  # execute() fails on the same value
+            return None
+        return max(timeout_s, 0.0) + 15.0
+
     def risk_tier_for_args(self, args: dict[str, Any]) -> str | None:
         """Escalate destructive commands to the ``ask`` tier.
 
@@ -232,6 +242,14 @@ class RunShellTool:
                 proc.kill()
                 await proc.wait()
                 return ToolResult(success=False, output=None, error=f"Timeout after {timeout_s}s")
+            except asyncio.CancelledError:
+                # Stopped by the ToolExecutor (deadline, kill switch) or the
+                # caller: the child must not outlive the call. Only the direct
+                # child is killed; a grandchild the shell forked survives.
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                raise
         except FileNotFoundError as exc:
             return ToolResult(success=False, output=None, error=f"Not found: {exc}")
         except Exception as exc:  # noqa: BLE001

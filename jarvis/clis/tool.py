@@ -89,17 +89,26 @@ class CliTool:
                 },
                 "timeout_s": {
                     "type": "number",
-                    "description": "Maximale Laufzeit in Sekunden (default 60).",
+                    "description": "Maximum runtime in seconds (default 60).",
                     "default": DEFAULT_TIMEOUT_S,
                 },
                 "cwd": {
                     "type": "string",
-                    "description": "Arbeitsverzeichnis (optional).",
+                    "description": "Working directory (optional).",
                     "default": "",
                 },
             },
             "required": ["command"],
         }
+
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float | None:
+        """The ToolExecutor's deadline for this call: the CLI's own
+        ``timeout_s`` plus room to kill it and log the run."""
+        try:
+            timeout_s = float(args.get("timeout_s") or DEFAULT_TIMEOUT_S)
+        except (TypeError, ValueError):  # execute() fails on the same value
+            return None
+        return max(timeout_s, 0.0) + 15.0
 
     @staticmethod
     def _build_description(spec: CliSpec) -> str:
@@ -128,7 +137,7 @@ class CliTool:
         cwd = args.get("cwd") or None
 
         if not command:
-            return ToolResult(success=False, output=None, error="command fehlt")
+            return ToolResult(success=False, output=None, error="command is missing")
         if not command.split(maxsplit=1)[0] == self._spec.binary_name:
             return ToolResult(
                 success=False,
@@ -182,18 +191,30 @@ class CliTool:
             )
             try:
                 out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            except asyncio.CancelledError:
+                # Stopped by the ToolExecutor (deadline, kill switch) or the
+                # caller: the CLI process must not outlive the call.
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                self._usage.record_failure(
+                    row_id,
+                    error="cancelled",
+                    finished_at_ms=int(time.time() * 1000),
+                )
+                raise
             except TimeoutError:
                 proc.kill()
                 await proc.wait()
                 self._usage.record_failure(
                     row_id,
-                    error=f"Timeout nach {timeout_s}s",
+                    error=f"Timeout after {timeout_s}s",
                     finished_at_ms=int(time.time() * 1000),
                 )
                 return ToolResult(
                     success=False,
                     output=None,
-                    error=f"Timeout nach {timeout_s}s",
+                    error=f"Timeout after {timeout_s}s",
                 )
         except FileNotFoundError as exc:
             self._usage.record_failure(

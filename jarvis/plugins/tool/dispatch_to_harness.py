@@ -90,6 +90,17 @@ class DispatchToHarnessTool:
         self._manager = manager or HarnessManager(bus=bus)
         self._max_output_chars = max_output_chars
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float:
+        """The ToolExecutor's deadline for this call: a backstop behind this
+        tool's own clock, never in front of it. The run may queue for up to
+        ``2 * timeout_s`` before its work starts and then work for
+        ``timeout_s`` (see ``_execute_single``), plus room to close the stream."""
+        try:
+            timeout_s = float(args.get("timeout_s") or 600)
+        except (TypeError, ValueError):  # execute() fails on the same value
+            timeout_s = 600.0
+        return 3 * max(timeout_s, 0.001) + 30.0
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------

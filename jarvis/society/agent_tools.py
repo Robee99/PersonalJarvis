@@ -605,6 +605,17 @@ class ShellTool:
         #: applies from the very next command.
         self._backend = backend
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float:
+        """The ToolExecutor's deadline for this call: the command's own
+        timeout (capped like the backends cap it) plus room to kill it."""
+        from .shell import DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S
+
+        try:
+            timeout = float(args.get("timeout_s") or DEFAULT_TIMEOUT_S)
+        except (TypeError, ValueError):  # execute() falls back the same way
+            timeout = DEFAULT_TIMEOUT_S
+        return min(max(timeout, 1.0), MAX_TIMEOUT_S) + 15.0
+
     @staticmethod
     def _level(command: str) -> str:
         from jarvis.safety.command_impact import classify_command
