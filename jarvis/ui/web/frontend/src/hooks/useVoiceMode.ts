@@ -351,6 +351,9 @@ export function useVoiceMode() {
         ? q.data?.last_start_error ?? null
         : null,
     setMode: m.mutate,
+    /** The same write as `setMode`, awaitable: for a caller that chains it
+     *  after other switches and must report the first one that failed. */
+    setModeAsync: m.mutateAsync,
     isLoading: q.isLoading,
     isSaving: m.isPending,
   };

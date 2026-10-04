@@ -3,7 +3,7 @@ import { Bot, ChevronDown, FlaskConical, Frame, HardDrive, KeyRound, Lock, LogIn
 import { agentBrandNow, useAgentBrand } from "@/lib/agentBrand";
 import { PromptWriterCard } from "@/components/PromptWriterCard";
 import { cn } from "@/lib/utils";
-import { useT } from "@/i18n";
+import { fill, useT } from "@/i18n";
 import { useEventStore } from "@/store/events";
 import {
   codexLogout,
@@ -20,12 +20,15 @@ import {
   useProviders,
   type AgentCliTestResult,
   type AntigravityStatus,
+  type BrainModelsResult,
   type Billing,
   type ClaudeStatus,
   type CodexStatus,
   type GrokBuildStatus,
 } from "@/hooks/useProviders";
 import { BrainModelSelector } from "@/components/BrainModelSelector";
+import { fetchAgentChatCatalog } from "@/lib/agentChatApi";
+import { BrandedSelect, type BrandedSelectOption } from "@/components/ui/select";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
 import { AgentAccountsPanel } from "@/components/AgentAccountsPanel";
 import { Button } from "@/components/ui/button";
@@ -120,7 +123,43 @@ const PROVIDER_LABELS: Record<string, string> = {
   // API key), the Google sibling of Codex.
   antigravity: "Antigravity (Google subscription)",
   "grok-build": "Grok Build",
+  hermes: "Hermes Agent",
+  ollama: "Ollama",
+  "local-openai": "Local server (OpenAI-compatible)",
+  vertex: "Google Vertex AI",
+  nous: "Nous Portal",
 };
+
+/**
+ * Direct workers whose models are not a Brain provider's catalog
+ * (``GET /api/providers/{id}/models`` has no entry for them). Hermes Agent's
+ * list is the agent chat's curated row: the free models Hermes reaches with
+ * its own Nous login, passed to ``hermes -m``.
+ */
+const WORKER_MODEL_SOURCES: Record<string, (refresh: boolean) => Promise<BrainModelsResult>> = {
+  hermes: async () => {
+    const catalog = await fetchAgentChatCatalog();
+    const row = catalog.providers.find((p) => p.id === "hermes");
+    return {
+      provider: "hermes",
+      current_model: "",
+      models: (row?.curated_models ?? []).map((m) => ({
+        id: m.id,
+        label: m.label,
+        free: (m.note ?? "").startsWith("free"),
+      })),
+      source: "curated",
+      fetched_at: Date.now() / 1000,
+      selects: "model",
+    };
+  },
+};
+
+/** A worker row's display name: the server's own label first. */
+function workerLabel(slug: string, rows: readonly SubagentMappingRow[] = []): string {
+  const row = rows.find((r) => r.jarvis === slug && r.label);
+  return row?.label || PROVIDER_LABELS[slug] || slug;
+}
 
 /**
  * The disclosure key of a row. Claude is the one slug that renders TWICE —
@@ -347,7 +386,20 @@ export function JarvisAgentSection({
 
       {/* The model pin sits right under the status line — it is the setting
           users come back for, so it must not hide below the worker rows. */}
-      <SubagentModelCard status={bridge} onSaved={reload} />
+      <SubagentModelCard
+        status={bridge}
+        visibleRows={localVisibleRows}
+        onSaved={reload}
+        onSetUp={(slug) => {
+          setOpenRow(rowId(slug, slug === "claude-api" ? claudeStatus?.mode : undefined));
+          // The setup row opens on the next render; bring it into view.
+          requestAnimationFrame(() =>
+            document
+              .querySelector('[data-expanded="true"]')
+              ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+          );
+        }}
+      />
 
       {/* Who writes the Agentic-IDE briefs. Sits next to the model pin because
           it is the same kind of decision — which model does work on the user's
@@ -479,24 +531,84 @@ export function JarvisAgentSection({
  */
 function SubagentModelCard({
   status,
+  visibleRows,
   onSaved,
+  onSetUp,
 }: {
   status: SubagentStatus;
+  /** The worker rows the list below shows (Local Mode hides hosted ones). */
+  visibleRows: readonly SubagentMappingRow[];
   onSaved: () => void;
+  /** Opens the setup row of a worker that still needs a key or a login. */
+  onSetUp: (slug: string) => void;
 }) {
   const t = useT();
-  // The subagent worker slug → the catalog provider id (Codex's worker slug
-  // "openai-codex" maps to the catalog's "codex"; all others match 1:1).
+  const pushToast = useEventStore((s) => s.pushToast);
+  const { providers } = useProviders();
+  // A provider picked in the list that is not ready yet: nothing is switched,
+  // the card explains what is missing and offers the setup instead.
+  const [unready, setUnready] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+
+  // One option per worker the server reports, in its order. Claude appears as
+  // two rows (subscription and API key) that switch to the same worker slug.
+  const rows: SubagentMappingRow[] = [];
+  for (const row of visibleRows) {
+    const seen = rows.findIndex((r) => r.jarvis === row.jarvis);
+    if (seen === -1) rows.push(row);
+    else if (row.key_set && !rows[seen].key_set) rows[seen] = row;
+  }
+  const accessHint: Record<string, string> = {
+    local: t("subagent_model.access_local"),
+    api: t("subagent_model.access_api"),
+    subscription: t("subagent_model.access_subscription"),
+    subscription_or_api: t("subagent_model.access_subscription"),
+  };
+  const options: BrandedSelectOption[] = rows.map((row) => ({
+    value: row.jarvis,
+    label: workerLabel(row.jarvis, status.mapping),
+    hint: row.key_set
+      ? accessHint[row.billing] ?? row.billing
+      : t("subagent_model.needs_setup"),
+  }));
+  if (!rows.some((r) => r.jarvis === status.brain_primary)) {
+    options.unshift({
+      value: status.brain_primary,
+      label: workerLabel(status.brain_primary, status.mapping),
+    });
+  }
+
+  async function pickProvider(slug: string) {
+    setUnready(null);
+    if (slug === status.brain_primary || switching) return;
+    const row = rows.find((r) => r.jarvis === slug);
+    if (!row?.key_set) {
+      setUnready(slug);
+      return;
+    }
+    setSwitching(true);
+    try {
+      const result = await switchSubagentProvider(slug);
+      const note = result.restart_required ? ` ${t("subagent_model.next_restart")}` : "";
+      pushToast("success", `${agentBrandNow()} → ${workerLabel(slug, status.mapping)}${note}`);
+      window.dispatchEvent(new CustomEvent("jarvis:agent-switched"));
+      onSaved();
+    } catch (e) {
+      pushToast("error", (e as Error).message);
+    } finally {
+      setSwitching(false);
+    }
+  }
+
+  // The worker slug → its model catalog id. Codex's worker slug "openai-codex"
+  // is the catalog's "codex"; every other slug matches 1:1. A worker without a
+  // catalog (Hermes Agent picks models in its own config) gets no dead list.
   const catalogProvider =
-    status.brain_primary === "openai-codex"
-      ? "codex"
-      : status.brain_primary === "grok-build"
-        ? "grok-build"
-        : status.brain_primary;
+    status.brain_primary === "openai-codex" ? "codex" : status.brain_primary;
+  const workerSource = WORKER_MODEL_SOURCES[catalogProvider];
   // Whether the ACTIVE worker's server can be told to download a model. Read
   // off the provider catalog rather than a provider name, so a second local
   // server type that ships a puller lights this up on its own (AP-21).
-  const { providers } = useProviders();
   const pullable = providers.find(
     (p) => p.id === catalogProvider && p.supports_model_pull,
   );
@@ -505,10 +617,54 @@ function SubagentModelCard({
       <p className="text-xs leading-relaxed text-muted-foreground">
         {t("subagent_model.description")}
       </p>
-      {catalogProvider ? (
+      <div className="space-y-1.5">
+        <p className="text-xs font-medium text-foreground">
+          {t("subagent_model.provider_label")}
+        </p>
+        <BrandedSelect
+          ariaLabel={t("subagent_model.provider_label")}
+          value={status.brain_primary}
+          options={options}
+          onValueChange={(slug) => void pickProvider(slug)}
+          disabled={switching}
+          testId="subagent-provider-select"
+        />
+      </div>
+      {unready && (
+        <div
+          role="status"
+          data-testid="subagent-provider-unready"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground"
+        >
+          <span>
+            {fill(t("subagent_model.unready_hint"), {
+              provider: workerLabel(unready, status.mapping),
+            })}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              onSetUp(unready);
+              setUnready(null);
+            }}
+          >
+            {fill(t("subagent_model.set_up"), { provider: workerLabel(unready, status.mapping) })}
+          </Button>
+        </div>
+      )}
+      {
+        // Controlled: an empty pin shows the placeholder, never the CHAT
+        // brain's model (the catalog's ``current_model`` belongs to the chat
+        // brain, which made the box claim a model the worker does not run).
         <BrainModelSelector
+          key={catalogProvider}
           providerId={catalogProvider}
+          controlled
           currentModel={status.sub_model_override ?? ""}
+          placeholder={t("subagent_model.model_placeholder")}
+          loadModels={workerSource}
           healthSection="subagents"
           healthActive
           onSave={async (model) => {
@@ -526,9 +682,7 @@ function SubagentModelCard({
             };
           }}
         />
-      ) : (
-        <p className="text-xs text-muted-foreground">{t("subagent_model.model_hint")}</p>
-      )}
+      }
       <p className="text-xs text-muted-foreground">
         {t("subagent_model.model_hint")}
         {status.model_resolved ? ` (${status.model_resolved})` : ""}
@@ -563,7 +717,7 @@ function BridgeStatusStrip({ status }: { status: SubagentStatus }) {
   const t = useT();
   const activeRow = status.mapping.find((row) => row.is_active_brain);
   const live = Boolean(activeRow?.key_set);
-  const worker = PROVIDER_LABELS[status.brain_primary] ?? status.brain_primary;
+  const worker = workerLabel(status.brain_primary, status.mapping);
   const model = status.model_resolved ?? status.sub_model_override ?? null;
   /*
    * The one place in this section that talks to another one.

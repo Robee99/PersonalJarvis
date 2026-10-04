@@ -52,6 +52,8 @@ import {
 } from "@/components/agentchat/reduce";
 import { TurnTrace } from "@/components/agentchat/WorkTrace";
 import { VoiceStage } from "@/components/home/VoiceStage";
+import type { ChatPick } from "@/lib/voiceContinuity";
+import { VoiceContinuityNotice } from "./VoiceContinuityNotice";
 import { ProviderLogo } from "@/components/providers/ProviderLogo";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -361,6 +363,13 @@ function JarvisChat({ agent, roster }: AgentChatPanelProps) {
 
   const mentionable = useMemo(() => roster.filter((a) => a.tier !== "lead"), [roster]);
 
+  // The typed chat's own provider pick, for the voice tab's continuity line.
+  const providerById = useAgentChat((s) => s.providerById);
+  const chatProvider = draft.provider ? providerById(draft.provider) : undefined;
+  const chatPick: ChatPick | null = chatProvider
+    ? { id: chatProvider.id, label: chatProvider.label, runner: chatProvider.runner, model: draft.model }
+    : null;
+
   // Voice or typed — Jarvis' card only. The other agents have no voice: the
   // wake word, the realtime brain and the microphone belong to the lead.
   const mode = useJarvisCardMode();
@@ -378,12 +387,11 @@ function JarvisChat({ agent, roster }: AgentChatPanelProps) {
     return (
       <div className="flex h-full min-h-0 flex-col" data-testid="society-chat" data-mode="voice">
         <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border px-3 py-2">
-          <span className="min-w-0 truncate text-xs text-muted-foreground" title={t("society.chat.voice_note")}>
-            {t("society.chat.voice_note")}
-          </span>
+          <span aria-hidden />
           <JarvisModeSwitch mode={mode} onPick={pickMode} />
           <span aria-hidden />
         </div>
+        <VoiceContinuityNotice chat={chatPick} />
         <VoiceStage />
       </div>
     );

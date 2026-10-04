@@ -11,7 +11,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 
 function renderKeys(ui: ReactElement = <ApiKeysView />) {
@@ -117,7 +117,7 @@ describe("ApiKeysView two-mode", () => {
 
   it("shows the segmented Pipeline|Realtime switch with an Active badge on the live mode", () => {
     renderKeys();
-    const pipelineSegment = screen.getByRole("button", { name: /pipeline/i });
+    const pipelineSegment = within(screen.getByTestId("voice-engine-header-control")).getByRole("button", { name: /pipeline/i });
     const realtimeSegment = screen.getByRole("button", { name: /^realtime/i });
     expect(pipelineSegment).toBeTruthy();
     expect(realtimeSegment).toBeTruthy();
@@ -129,7 +129,7 @@ describe("ApiKeysView two-mode", () => {
 
   it("marks Realtime as recommended and Pipeline as not recommended", () => {
     renderKeys();
-    const pipelineSegment = screen.getByRole("button", { name: /pipeline/i });
+    const pipelineSegment = within(screen.getByTestId("voice-engine-header-control")).getByRole("button", { name: /pipeline/i });
     const realtimeSegment = screen.getByRole("button", { name: /^realtime/i });
     expect(pipelineSegment.textContent).toMatch(/not recommended/i);
     expect(realtimeSegment.textContent).toMatch(/recommended/i);
@@ -188,7 +188,7 @@ describe("ApiKeysView two-mode", () => {
     renderKeys();
     fireEvent.click(screen.getByRole("button", { name: /^realtime/i }));
     putVoiceMode.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /pipeline/i }));
+    fireEvent.click(within(screen.getByTestId("voice-engine-header-control")).getByRole("button", { name: /pipeline/i }));
 
     expect(screen.getByRole("tab", { name: /brain/i })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: /realtime/i })).toBeNull();
@@ -225,8 +225,38 @@ describe("ApiKeysView two-mode — realtime unavailable (no key in any family)",
     renderKeys();
     fireEvent.click(screen.getByRole("button", { name: /^realtime/i }));
     putVoiceMode.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /pipeline/i }));
+    fireEvent.click(within(screen.getByTestId("voice-engine-header-control")).getByRole("button", { name: /pipeline/i }));
 
     expect(putVoiceMode).toHaveBeenCalledWith("pipeline");
+  });
+});
+
+describe("ApiKeysView two-mode — chat models that talk through Pipeline", () => {
+  it("explains on the Realtime tab where Hermes, Nous Portal and Qwen went, with no stand-in row", () => {
+    mockVoiceMode = "realtime";
+    renderKeys();
+    const hint = screen.getByTestId("realtime-pipeline-hint");
+    expect(hint.textContent).toMatch(/Hermes, Nous Portal or a local Qwen/);
+    expect(hint.textContent).toMatch(/can't be a voice brain/);
+
+    putVoiceMode.mockClear();
+    fireEvent.click(screen.getByTestId("realtime-pipeline-hint-use"));
+    // An explicit click persists Pipeline and opens its brain picker.
+    expect(putVoiceMode).toHaveBeenCalledWith("pipeline");
+    expect(screen.getByRole("tab", { name: /brain/i }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("opens the brain tab from another surface even while Realtime is live", async () => {
+    mockVoiceMode = "realtime";
+    const { requestApiKeysTab, clearApiKeysTabRequest } = await import("@/lib/apiKeysTab");
+    requestApiKeysTab("brain");
+    try {
+      renderKeys();
+      expect(screen.getByRole("tab", { name: /brain/i }).getAttribute("aria-selected")).toBe("true");
+      // Showing the brain tab is a view choice; it never rewrites [voice].mode.
+      expect(putVoiceMode).not.toHaveBeenCalled();
+    } finally {
+      clearApiKeysTabRequest();
+    }
   });
 });

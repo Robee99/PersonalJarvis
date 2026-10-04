@@ -13,6 +13,7 @@ import {
 import { ViewHeader } from "@/views/ChatsView";
 import { JarvisAgentSection } from "@/components/JarvisAgentSection";
 import { VoiceProviderSettings } from "@/components/providers/VoiceProviderSettings";
+import { RoutePolicyCard } from "@/components/routing/RoutePolicyCard";
 import { TelephonyPanel } from "@/views/TelephonyView";
 import { WikiProviderCard } from "@/views/settings/WikiProviderCard";
 import { JarvisApiGroup } from "@/views/settings/JarvisApiGroup";
@@ -40,6 +41,7 @@ import { useLocalMode } from "@/lib/localMode";
 import {
   APIKEYS_TAB_EVENT,
   clearApiKeysTabRequest,
+  requestApiKeysTab,
   requestedApiKeysTab,
 } from "@/lib/apiKeysTab";
 import { cn } from "@/lib/utils";
@@ -67,6 +69,14 @@ const REALTIME_TABS: CategoryKey[] = [
   "jarvis-key",
   "advanced",
 ];
+
+/** The one engine whose tab set holds `tab`, or null when both (or neither) do. */
+function engineOwningTab(tab: CategoryKey): VoiceEngineMode | null {
+  const pipeline = PIPELINE_TABS.includes(tab);
+  const realtime = REALTIME_TABS.includes(tab);
+  if (pipeline === realtime) return null;
+  return pipeline ? "pipeline" : "realtime";
+}
 
 export function ApiKeysView() {
   const t = useT();
@@ -106,6 +116,13 @@ export function ApiKeysView() {
   useEffect(() => {
     const onRequest = (event: Event) => {
       const wanted = (event as CustomEvent<string | null>).detail as CategoryKey | null;
+      // A tab only the other engine has (the brain while Realtime is shown):
+      // show that engine's tabs; the mode effect above then lands on it.
+      const owner = wanted ? engineOwningTab(wanted) : null;
+      if (owner && owner !== engineMode) {
+        setEngineMode(owner);
+        return;
+      }
       const tabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
       setActive(wanted && tabs.includes(wanted) ? wanted : tabs[0]);
     };
@@ -125,7 +142,9 @@ export function ApiKeysView() {
   useEffect(() => {
     if (viewSyncedToLive.current || liveModeLoading) return;
     viewSyncedToLive.current = true;
-    setEngineMode(liveMode === "realtime" ? "realtime" : "pipeline");
+    const wanted = requestedApiKeysTab() as CategoryKey | null;
+    const owner = wanted ? engineOwningTab(wanted) : null;
+    setEngineMode(owner ?? (liveMode === "realtime" ? "realtime" : "pipeline"));
   }, [liveMode, liveModeLoading]);
 
   const modeTabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
@@ -185,6 +204,7 @@ export function ApiKeysView() {
               wideGrid
             />
           )}
+          {active === "brain" && <RoutePolicyCard providers={providers} />}
           {active === "realtime" && (
             <VoiceProviderSettings
               providers={providers}
@@ -195,6 +215,10 @@ export function ApiKeysView() {
               health={health.realtime}
               localMode={localMode}
               onDisableLocalMode={() => setLocalMode(false)}
+              onUsePipeline={() => {
+                setVoiceMode("pipeline");
+                requestApiKeysTab("brain");
+              }}
             />
           )}
           {active === "subagents" && <SubagentCategory />}
