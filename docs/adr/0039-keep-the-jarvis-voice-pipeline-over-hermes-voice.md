@@ -1,6 +1,6 @@
 # ADR-0039 — Keep the Jarvis voice pipeline; Hermes Voice Mode and voice frameworks are not adopted as the runtime
 
-**Status:** Accepted (2026-10-03)
+**Status:** Accepted (2026-10-03); the Hermes consequence is superseded by ADR-0042 (2026-10-05)
 **Date:** 2026-10-03
 **Reference:** [Final hardening evidence](../research/final-hardening-evidence.md) §3–§6; ADR-0037
 
@@ -44,7 +44,9 @@ and `jarvis/audio` (about 36k lines):
 ## Consequences
 
 - No second voice runtime, event model or tool executor exists.
-- Hermes stays what it is on the PC today: a separate agent with its own
-  voice CLI, reachable as a Paperclip agent.
+- ~~Hermes stays what it is on the PC today: a separate agent with its own
+  voice CLI, reachable as a Paperclip agent.~~ Superseded by ADR-0042: Hermes
+  Agent is now the orchestrating brain behind this same voice pipeline. The
+  voice decision above is unchanged.
 - Improvements to the voice layer happen inside the existing pipeline and are
   measured on the device (the built-in microphone currently blocks that).
