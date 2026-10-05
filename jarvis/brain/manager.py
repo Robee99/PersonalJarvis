@@ -12048,8 +12048,8 @@ class BrainManager:
             # (b) all filtered out by _dead_providers (no key set).
             # In production (b) is the common case — provide an actionable message.
             self._last_turn_all_failed = True
-            if turn_override is not None:
-                turn_override.receipt.finish_reason = "error"
+            if private is not None:
+                private.receipt.finish_reason = "error"
             # Keep the actionable provider/key diagnostic in the LOG (UI/console
             # surface it), but SPEAK only a localized, provider-agnostic apology
             # — never read setup hints or provider names aloud (AP-11/ADR-0010).
