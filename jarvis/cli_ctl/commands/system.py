@@ -115,3 +115,32 @@ def status() -> None:
     render.emit({"reachable": reachable}, as_json=as_json())
     if not reachable:
         raise typer.Exit(code=1)
+
+
+@app.command("free-voice")
+def free_voice(
+    gateway: str = typer.Option(
+        "http://127.0.0.1:11436", "--gateway", help="Free Nous gateway serving Step 3.7 Flash.",
+    ),
+    ollama: str = typer.Option(
+        "http://127.0.0.1:11434", "--ollama", help="Ollama server holding the local Gemma model.",
+    ),
+    local_model: str = typer.Option(
+        None, "--local-model", help="Ollama tag to use instead of the newest Gemma 12B.",
+    ),
+) -> None:
+    """Set up a free, full-time voice agent: Pipeline voice, Step 3.7 Flash,
+    local Gemma, paid providers blocked, and the PC-control MCP servers on."""
+    from jarvis.cli_ctl.__main__ import as_json, make_client
+    from jarvis.cli_ctl.free_voice import render_report, run_free_voice
+
+    with make_client() as client:
+        report = run_free_voice(
+            client, gateway=gateway, ollama=ollama, local_model=local_model,
+        )
+    if as_json():
+        render.emit(report.as_dict(), as_json=True)
+    else:
+        typer.echo(render_report(report))
+    if report.failed:
+        raise typer.Exit(code=1)
