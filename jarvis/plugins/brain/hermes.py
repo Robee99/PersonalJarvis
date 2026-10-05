@@ -7,7 +7,7 @@ by default). This brain hands each turn to it as one Hermes run
 (``POST /v1/runs``, events from ``/v1/runs/{id}/events``), so the flow is::
 
     user -> Jarvis (voice, UI) -> Hermes -> Hermes picks the model
-         (local Qwen, local Gemma, a free or paid cloud model) -> Hermes tools
+         (local Qwen, local Gemma, or a configured cloud model) -> Hermes tools
          -> answer -> Jarvis -> user
 
 Jarvis does not offer Hermes its own tools and does not pick the model. The
@@ -40,6 +40,7 @@ Credentials: none are stored in Jarvis. The API server key is read from
 Hermes's own ``.env`` (``API_SERVER_KEY``) when the server is on this machine;
 a remote Hermes is refused rather than sent a key it never asked for.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -377,7 +378,9 @@ class HermesBrain:
                     "Hermes Agent refused the request (401): the API server "
                     "key in Hermes's .env does not match."
                 )
-            raise RuntimeError(f"Hermes Agent answered HTTP {resp.status_code}: {resp.text[:300]}")
+            raise RuntimeError(
+                f"Hermes Agent answered HTTP {resp.status_code}. Check its local gateway."
+            )
         run_id = str((resp.json() or {}).get("run_id") or "")
         if not run_id:
             raise RuntimeError("Hermes Agent started a run without a run id")
@@ -408,6 +411,8 @@ class HermesBrain:
             while True:
                 item = await run.queue.get()
                 if item is _END:
+                    if not run.finished:
+                        raise RuntimeError("Hermes Agent disconnected before completing this task.")
                     break
                 if isinstance(item, BaseException):
                     raise item
@@ -423,9 +428,24 @@ class HermesBrain:
                     return
                 if name in _FINISHED:
                     run.finished = True
-                    if name == "run.failed":
-                        reason = item.get("error") or "unknown error"
-                        raise RuntimeError(f"Hermes run failed: {reason}")
+                    if name != "run.completed" or (
+                        item.get("completed") is False
+                        or item.get("partial")
+                        or item.get("failed")
+                        or item.get("error")
+                    ):
+                        from jarvis.brain.provider_test import classify_provider_error
+
+                        category = classify_provider_error(str(item.get("error") or ""))
+                        safe_reason = {
+                            "rate_limited": "rate limited (429)",
+                            "no_credits": "out of credit or quota",
+                            "bad_key": "authentication refused (401)",
+                            "missing_key": "provider is not connected",
+                        }.get(category, "task incomplete")
+                        raise RuntimeError(
+                            f"Hermes Agent did not complete this task: {safe_reason}."
+                        )
                     output = item.get("output")
                     if not spoke and isinstance(output, str) and output.strip():
                         yield BrainDelta(content=output)

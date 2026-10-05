@@ -272,7 +272,7 @@ async def test_a_typed_chat_turn_on_the_hermes_seat_reaches_the_same_hermes_sess
     assert "Always reply in English" in typed_run.body["instructions"]
 
 
-def test_the_hermes_seat_keeps_its_own_runner_when_hermes_is_not_the_brain(
+def test_the_chat_pick_uses_the_hermes_bridge_even_when_voice_has_another_brain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from jarvis.agent_chat import runner_brain
@@ -280,5 +280,5 @@ def test_the_hermes_seat_keeps_its_own_runner_when_hermes_is_not_the_brain(
 
     other = SimpleNamespace(_config=_config(primary="gemini"))
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: other)
-    assert resolve_runner("hermes", surface="jarvis") == "hermes-cli"
+    assert resolve_runner("hermes", surface="jarvis") == "brain"
     assert resolve_runner("hermes", surface="agent") == "hermes-cli"
