@@ -90,9 +90,14 @@ the owner's PC on 2026-10-05:
   toolset leaves out `computer_use` (`platform_toolsets.api_server` or
   `hermes tools enable computer_use --platform api_server`). That toolset also
   needs the cua-driver on Windows.
+- The front page's chat is the same brain. With Hermes as the brain, its
+  Hermes seat runs on the brain runner (`BrainManager.generate`), so a typed
+  turn joins the voice's Hermes session. Before this, that seat ran a
+  one-shot `hermes -z` with its own session and the trimmed German persona
+  prompt, and answered in German (measured on the owner's PC, 2026-10-05).
 - Two Hermes surfaces stay outside this session because the user starts them
-  explicitly: an agent-chat seat on Hermes and a Hermes mission worker. Both
-  run `hermes -z` in their own session. One-shot mode approves Hermes's own
-  tool prompts, and a mission contains them in its worktree.
+  explicitly: a Hermes seat in the Agentic IDE chat and a Hermes mission
+  worker. Both run `hermes -z` in their own session. One-shot mode approves
+  Hermes's own tool prompts, and a mission contains them in its worktree.
 - The live voice proof waits on a working microphone on the owner's PC
   (ADR-0039 and the status document).

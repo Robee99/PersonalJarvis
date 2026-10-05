@@ -80,6 +80,23 @@ def _claude_cli_installed() -> bool:
     return bool(shutil.which("claude") or shutil.which("claude.cmd") or shutil.which("claude.exe"))
 
 
+def _hermes_is_the_brain() -> bool:
+    """Whether Hermes Agent is Jarvis' main brain, per the live brain's config."""
+    from jarvis.agent_chat.runner_brain import brain_manager
+    from jarvis.brain.route_policy import hermes_is_main_brain
+
+    config = getattr(brain_manager(), "_config", None)
+    if config is None:
+        from jarvis.core.config import load_config
+
+        try:
+            config = load_config()
+        except Exception:  # noqa: BLE001 — an unreadable config keeps the seat's own runner
+            log.debug("agent chat: config unreadable, Hermes seat keeps its runner", exc_info=True)
+            return False
+    return hermes_is_main_brain(config)
+
+
 def resolve_runner(provider: str, *, surface: str = "agent") -> str:
     """Which runner answers for ``provider`` on this machine, right now.
 
@@ -93,12 +110,19 @@ def resolve_runner(provider: str, *, surface: str = "agent") -> str:
     (``SurfaceKit.cli_seats``, maintainer 2026-08-26), so a vendor CLI never
     answers there — not even the dual Claude row, which runs on the Anthropic
     API behind its key like every other seat.
+
+    With Hermes Agent as Jarvis' brain (ADR-0042), the front page's Hermes
+    seat is that brain: a typed turn goes through ``BrainManager.generate``
+    into the same Hermes session the voice uses, never a one-shot
+    ``hermes -z`` with its own session and persona.
     """
     kit = kit_for(surface)
     api_runner = "brain" if kit.brain_runner else "api"
     row = provider_row(provider)
     if row is None:
         return api_runner if supports_api_runner(provider) else "unknown"
+    if surface == "jarvis" and row.id == "hermes" and _hermes_is_the_brain():
+        return "brain"
     if not kit.cli_seats:
         # No vendor process here: the provider's own API answers, or nothing
         # does. ``rows_for`` keeps the picker to the same set, so "unknown"

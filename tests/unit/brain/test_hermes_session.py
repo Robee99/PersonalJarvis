@@ -218,3 +218,67 @@ async def test_the_spoken_approval_round_trip_through_jarvis(hermes_manager: Any
     assert answer == "Deleted notes.txt."
     assert server.approvals == [{"choice": "once", "request_id": "req-7"}]
     assert len(server.runs) == 1
+
+
+# --- the typed chat on the front page: the same brain and session -----------
+
+
+@pytest.mark.asyncio
+async def test_a_typed_chat_turn_on_the_hermes_seat_reaches_the_same_hermes_session(
+    hermes_manager: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.agent_chat import runner_brain
+    from jarvis.agent_chat.service import AgentChatService, resolve_runner
+    from jarvis.agent_chat.store import AgentChatStore
+
+    server = FakeHermesApi(say("Notepad is open."), say("I opened Notepad."))
+    original_init = HermesBrain.__init__
+
+    def init(self: HermesBrain, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        self.transport = server.transport
+
+    monkeypatch.setattr(HermesBrain, "__init__", init)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: hermes_manager)
+    monkeypatch.setattr(runner_brain, "_agent_secret", lambda _resolver, _provider: None)
+    voice_brain = hermes_manager._get_brain(*hermes_manager._build_fallback_chain("fast")[0])
+    voice_brain.transport = server.transport
+
+    assert resolve_runner("hermes", surface="jarvis") == "brain"
+    svc = AgentChatService(
+        AgentChatStore(":memory:"), assistant_name=lambda: "Jarvis", bus=lambda: None
+    )
+    session = svc.create_session(
+        provider="hermes", model="stepfun/step-3.7-flash:free", effort="",
+        cwd=str(tmp_path), permission_mode="ask", surface="jarvis",
+    )
+    queue = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "Open Notepad and type hello from JARVIS")
+    events: list[dict[str, Any]] = []
+    async with asyncio.timeout(10):
+        while not events or events[-1]["kind"] != "turn_finished":
+            events.append(await queue.get())
+    spoken = await hermes_manager.generate("What did you just do?", use_history=False)
+
+    started = next(e for e in events if e["kind"] == "turn_started")["payload"]
+    assert started["runner"] == "brain"
+    typed = next(e for e in events if e["kind"] == "assistant_text")["payload"]["text"]
+    assert typed == "Notepad is open."
+    assert spoken == "I opened Notepad."
+    typed_run, spoken_run = server.runs
+    assert typed_run.body["session_id"] == spoken_run.body["session_id"] == SESSION_ID
+    assert typed_run.body["model"] == "stepfun/step-3.7-flash:free"
+    assert typed_run.body["input"].endswith("Open Notepad and type hello from JARVIS")
+    assert "Always reply in English" in typed_run.body["instructions"]
+
+
+def test_the_hermes_seat_keeps_its_own_runner_when_hermes_is_not_the_brain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jarvis.agent_chat import runner_brain
+    from jarvis.agent_chat.service import resolve_runner
+
+    other = SimpleNamespace(_config=_config(primary="gemini"))
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: other)
+    assert resolve_runner("hermes", surface="jarvis") == "hermes-cli"
+    assert resolve_runner("hermes", surface="agent") == "hermes-cli"
