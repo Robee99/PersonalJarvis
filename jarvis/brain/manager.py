@@ -253,9 +253,12 @@ PROVIDER_ALIASES = {
     "nvidia": "nvidia",
     "nim": "nvidia",
     "nemotron": "nvidia",
-    # Nous Portal. Deliberately no "hermes" alias: that word names the
-    # separate Hermes Agent CLI (subagent-only), not this cloud host.
+    # Nous Portal (a cloud model host). "hermes" names Hermes Agent, the
+    # orchestrating brain below, never this host.
     "nous": "nous",
+    "hermes": "hermes",
+    "hermes agent": "hermes",
+    "hermes-agent": "hermes",
 }
 
 SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
@@ -266,8 +269,6 @@ SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
         "grok-build",
         "grok-cli",
         "grokbuild",
-        "hermes",
-        "hermes-agent",
     }
 )
 
@@ -427,6 +428,9 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # account and never bills a paid model by surprise (same rule as the
         # OpenRouter gateway above). The user's own pick wins over this.
         "nous": "stepfun/step-3.7-flash:free",
+        # Hermes Agent: its own name means "the model Hermes picks" (its
+        # default, its fallbacks, its routes); Jarvis never chooses for it.
+        "hermes": "hermes-agent",
         "mistral": "mistral-small-3.1",
         # Local providers: no server-side catalog is knowable ahead of time —
         # empty means "the plugin discovers the first installed model".
@@ -455,6 +459,7 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         "nvidia": "nvidia/nemotron-3-ultra-550b-a55b",
         # Nous Portal: free route here too — see the router-tier note.
         "nous": "stepfun/step-3.7-flash:free",
+        "hermes": "hermes-agent",
         "mistral": "mistral-large-3",
         # Local providers: empty = plugin-side discovery (see router tier).
         "ollama": "",
@@ -3860,6 +3865,30 @@ class BrainManager:
         if override.loop_control is not None:
             kwargs["loop_control"] = override.loop_control
         return kwargs
+
+    def _brain_orchestrates_tools(self) -> bool:
+        """Whether the turn's first brain is an agent that runs its own tools.
+
+        Hermes Agent (``orchestrates_tools``) plans, calls its own tools and
+        delegates on its side, so Jarvis's own pre-brain shortcuts (local
+        actions, skill missions, wiki writes, screen looks, Agentic-IDE fast
+        paths, force-spawn, capability refusals, tool mandates) stand down and
+        the turn goes straight to it. Checked on the active brain and, with a
+        route policy on, on its fast target (the one every fast turn starts on).
+        Capability-gated, never by provider name (AP-21).
+        """
+        names = [self._active_name]
+        policy = self._route_policy()
+        fast = getattr(policy, "fast", None) if policy is not None else None
+        if fast is not None and getattr(fast, "provider", ""):
+            names.insert(0, fast.provider)
+        for name in names:
+            try:
+                brain = self._get_brain(name, None)
+            except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+                continue
+            return getattr(brain, "orchestrates_tools", False) is True
+        return False
 
     @staticmethod
     def _fast_turn_skips_thinking(
@@ -11436,6 +11465,9 @@ class BrainManager:
         # probe the skill never gets a chance (the root cause of "Jarvis
         # never calls a skill"). Overwritten on every turn.
         self._skill_turn_match = self._match_skill_for_turn(user_text)
+        # An agent brain (Hermes Agent) owns tools, skills, missions, memory
+        # writes and computer use; see _brain_orchestrates_tools.
+        agent_owned = self._brain_orchestrates_tools()
         # Evidence-gate state is strictly per-turn — a stale directive must
         # never leak into a later prompt build (e.g. a skill turn that
         # early-returns before the gate runs).
@@ -11476,6 +11508,8 @@ class BrainManager:
                 getattr(self._skill_turn_match, "name", "?"),
             )
             self._skill_turn_match = None
+        if agent_owned:
+            self._skill_turn_match = None
 
         # Wiki-write fast path (spec A1-A3): an explicit wiki target owns the
         # turn before generic local-action, external-integration, or
@@ -11483,7 +11517,7 @@ class BrainManager:
         # nouns inside the content (for example a trip to save as a fact) must
         # never reinterpret the command as booking or dispatching that noun.
         # Deterministic, model-independent, and confirm-after-write.
-        wiki_reply = await self._run_wiki_ingest_fast_path(
+        wiki_reply = None if agent_owned else await self._run_wiki_ingest_fast_path(
             user_text,
             trace_id=turn_trace_id,
             use_history=use_history,
@@ -11563,6 +11597,10 @@ class BrainManager:
         # the production BrainManager path before desktop-action routing: an
         # ambiguous request asks first, a privacy refusal shuts every alternate
         # screen path, and a successful capture owns the visual part of the turn.
+        if screen_context is None and agent_owned:
+            from jarvis.screen_context.turn import TurnScreenContext  # noqa: PLC0415
+
+            screen_context = TurnScreenContext(status="none")
         if screen_context is None:
             screen_context = await self._resolve_screen_context_turn(
                 user_text,
@@ -11601,7 +11639,8 @@ class BrainManager:
         # drift away from them. The turn is not answered here — it simply stays
         # available for the Agentic-IDE fast path a few lines below.
         if (
-            not screen_context.has_image
+            not agent_owned
+            and not screen_context.has_image
             and self._skill_turn_match is None
             and not self._agentic_ide_owns_turn(user_text)
         ):
@@ -11638,7 +11677,7 @@ class BrainManager:
         # workspace action, not a question for the router to interpret. It runs
         # before addressed delivery so the word "all" cannot become a prompt
         # sent into the very panes the user asked to stop.
-        ide_close_reply = await self._run_agentic_ide_close_fast_path(
+        ide_close_reply = None if agent_owned else await self._run_agentic_ide_close_fast_path(
             user_text, trace_id=turn_trace_id,
         )
         if ide_close_reply is not None:
@@ -11658,7 +11697,7 @@ class BrainManager:
         # capability gate. Placed AFTER navigation so a section command still
         # moves the UI even when a pane happens to share that word. Returns None
         # on every turn that does not address a terminal.
-        ide_reply = await self._run_agentic_ide_fast_path(
+        ide_reply = None if agent_owned else await self._run_agentic_ide_fast_path(
             user_text,
             trace_id=turn_trace_id,
             consume_pending_voice_attachments=consume_pending_voice_attachments,
@@ -11680,7 +11719,7 @@ class BrainManager:
         # addressed-terminal path because ``detect_spawn`` stands down for an
         # addressed pane ("sag Mika, sie soll ein Terminal öffnen" is Mika's
         # work), which makes the two mutually exclusive by construction.
-        ide_spawn_reply = await self._run_agentic_ide_spawn_fast_path(
+        ide_spawn_reply = None if agent_owned else await self._run_agentic_ide_spawn_fast_path(
             user_text, trace_id=turn_trace_id,
         )
         if ide_spawn_reply is not None:
@@ -11701,7 +11740,7 @@ class BrainManager:
         # refusal must not fire on a skill turn.
         unsupported = (
             None
-            if self._skill_turn_match is not None or screen_context.has_image
+            if agent_owned or self._skill_turn_match is not None or screen_context.has_image
             else self._check_unsupported_intent(user_text)
         )
         if unsupported is not None:
@@ -11717,7 +11756,7 @@ class BrainManager:
         # the LLM tool-use loop. Prevents spawn reflex on ambiguous smalltalk
         # inputs (see docs/persona-research.md section 2 — 60% empty smalltalk
         # outputs from the reflexive LLM spawn path).
-        if screen_context.has_image:
+        if agent_owned or screen_context.has_image:
             forced_spawn = None
         elif (
             contextual_tool_names
@@ -11764,7 +11803,7 @@ class BrainManager:
         # stands down on a matched skill (AD-S3); non-CLI capabilities
         # (paired skills, router tools, MCP) make the gate stand down (PASS).
         verdict = self._run_evidence_gate(user_text)
-        if verdict.kind == "honest_refusal":
+        if verdict.kind == "honest_refusal" and not agent_owned:
             await self._record_response_side_effects(
                 user_text=user_text,
                 response_text=verdict.refusal_text,
@@ -11903,6 +11942,14 @@ class BrainManager:
                 self._evidence_required_is_write = True
                 self._evidence_required_domain = "routine"
                 log.info("Recurring-work intent — mandating society-create-routine")
+
+        if agent_owned:
+            # Jarvis's tool mandates name Jarvis tools the agent never sees; its
+            # own tool runs are the evidence (BrainDelta.agent_tools).
+            self._evidence_directive = ""
+            self._evidence_required_tool = ""
+            self._evidence_required_is_write = False
+            self._evidence_required_domain = ""
 
         # Phase 5 / ADR-0006: pre-call budget gate. Block rather than request
         # when cooldown is active or the task/daily budget is exhausted.
@@ -14478,6 +14525,7 @@ _PROVIDER_SETUP_HINTS: dict[str, str] = {
     "grok": "Set XAI_API_KEY (key from console.x.ai)",
     "nvidia": "Set NVIDIA_API_KEY (nvapi- key from build.nvidia.com)",
     "nous": "Set NOUS_API_KEY (sk-nous- key from portal.nousresearch.com)",
+    "hermes": "Start Hermes Agent's API server (API_SERVER_ENABLED=true, then hermes gateway)",
     "ollama-local": "Ollama-Server starten (localhost:11434)",
     "ollama-cloud": "Ollama-Cloud-Token setzen",
 }

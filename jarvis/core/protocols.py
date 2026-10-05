@@ -168,6 +168,9 @@ class BrainDelta:
     tool_call: dict[str, Any] | None = None
     finish_reason: str | None = None
     usage: dict[str, int] | None = None  # input_tokens, output_tokens, cache_hit_tokens
+    # Tools an agent brain ran on its own side (Hermes Agent), as evidence for
+    # the honesty guards. Jarvis never executes these; it only records them.
+    agent_tools: tuple[str, ...] | None = None
 
 
 # ----------------------------------------------------------------------

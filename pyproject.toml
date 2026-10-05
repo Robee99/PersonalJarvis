@@ -561,6 +561,9 @@ openrouter = "jarvis.plugins.brain.openrouter:OpenRouterBrain"
 nvidia = "jarvis.plugins.brain.nvidia:NvidiaBrain"
 # Nous Portal — Nous Research's hosted OpenAI-compatible model API (cloud).
 nous = "jarvis.plugins.brain.nous:NousBrain"
+# Hermes Agent's API server: the turn goes to Hermes, which picks the model and
+# runs its own tools (main-brain orchestrator, not a model host).
+hermes = "jarvis.plugins.brain.hermes:HermesBrain"
 openai = "jarvis.plugins.brain.openai:OpenAIBrain"
 gemini = "jarvis.plugins.brain.gemini:GeminiBrain"
 # Google Cloud Vertex AI — the same Gemini models on Google's enterprise

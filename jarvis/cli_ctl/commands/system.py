@@ -119,30 +119,21 @@ def status() -> None:
 
 @app.command("free-voice")
 def free_voice(
-    gateway: str = typer.Option(
-        "http://127.0.0.1:11436", "--gateway", help="Free Nous gateway serving Step 3.7 Flash.",
+    hermes: str = typer.Option(
+        "http://127.0.0.1:8642", "--hermes", help="Hermes Agent's API server on this machine.",
     ),
-    ollama: str = typer.Option(
-        "http://127.0.0.1:11434", "--ollama", help="Ollama server holding the local Gemma model.",
-    ),
-    local_model: str = typer.Option(
-        None, "--local-model", help="Model to use instead of the newest Gemma 12B.",
-    ),
-    local_server: str = typer.Option(
-        None, "--local-server",
-        help="OpenAI-compatible llama-server holding Gemma (used instead of Ollama).",
+    check_model: list[str] = typer.Option(  # noqa: B008 — typer reads options from defaults
+        None, "--check-model",
+        help="A Hermes route or provider::model to try once, e.g. local-qwen::qwen.",
     ),
 ) -> None:
-    """Set up a free, full-time voice agent: Pipeline voice, Step 3.7 Flash,
-    local Gemma, paid providers blocked, and the PC-control MCP servers on."""
+    """Make Hermes Agent the brain for everything: voice, tools, missions; Hermes
+    picks the model (local Qwen, local Gemma, cloud); paid providers blocked."""
     from jarvis.cli_ctl.__main__ import as_json, make_client
     from jarvis.cli_ctl.free_voice import render_report, run_free_voice
 
     with make_client() as client:
-        report = run_free_voice(
-            client, gateway=gateway, ollama=ollama, local_model=local_model,
-            local_server=local_server,
-        )
+        report = run_free_voice(client, hermes=hermes, check_models=tuple(check_model or ()))
     if as_json():
         render.emit(report.as_dict(), as_json=True)
     else:

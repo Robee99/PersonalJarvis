@@ -1,107 +1,140 @@
-"""``jarvis system free-voice``: configures through the app API, reports each step."""
+"""``jarvis system free-voice``: Hermes becomes the brain, through the app API only."""
 
 from __future__ import annotations
 
-import json
+import itertools
 from typing import Any
 
 from jarvis.cli_ctl.client import ApiError
 from jarvis.cli_ctl.free_voice import (
     PAID_BRAIN_PROVIDERS,
-    STEP_MODEL,
-    pick_gemma,
-    probe_gateway,
+    probe_hermes,
     render_report,
     run_free_voice,
 )
 
 
 class FakeClient:
-    def __init__(self, *, fail: dict[str, str] | None = None, mcp_content: str = "") -> None:
+    def __init__(self, *, fail: dict[str, str] | None = None) -> None:
         self.calls: list[tuple[str, str, Any]] = []
         self.fail = fail or {}
-        self.mcp_content = mcp_content
 
     def request(self, method: str, path: str, *, json: Any = None, **_: Any) -> Any:
         self.calls.append((method, path, json))
         key = f"{method} {path}"
         if key in self.fail:
             raise ApiError(self.fail[key], 409)
-        if key == "GET /api/mcps/config/info":
-            return {"content": self.mcp_content}
-        if path.endswith("/enable"):
-            return {"ok": True}
         return {"ok": True}
 
     def body(self, method: str, path: str) -> Any:
         return next(b for m, p, b in self.calls if m == method and p == path)
 
-
-def _tool_reply(*_: Any) -> dict[str, Any]:
-    return {"choices": [{"message": {"tool_calls": [{"id": "1"}]}}]}
-
-
-def _tags(*_: Any) -> dict[str, Any]:
-    return {"models": [{"name": "llama3:8b"}, {"name": "gemma3:12b-it-qat"}]}
+    def paths(self) -> list[str]:
+        return [p for _, p, _ in self.calls]
 
 
-def _run(client: FakeClient, **kw: Any):
-    return run_free_voice(
-        client, http_get=_tags, http_post=_tool_reply, home="C:/Users/rober", **kw
-    )
+class FakeHermes:
+    """Hermes's API server: answers per requested provider/model, names the runtime."""
+
+    def __init__(self, down: set[str] | None = None) -> None:
+        self.bodies: list[dict[str, Any]] = []
+        self.down = down or set()
+
+    def __call__(self, url: str, body: dict[str, Any], headers: dict[str, str], timeout: float):
+        self.bodies.append(body)
+        provider = body.get("provider") or "nous"
+        model = body["model"] if body["model"] != "hermes-agent" else "step-3.7-flash:free"
+        if provider in self.down:
+            raise RuntimeError(f"{provider} server is not running")
+        return {
+            "choices": [{"message": {"content": "ready"}}],
+            "runtime": {"provider": provider, "model": model},
+        }
 
 
-def test_sets_step_brain_pipeline_voice_gemma_and_blocks_paid_providers() -> None:
+def _ticks() -> Any:
+    counter = itertools.count()
+    return lambda: float(next(counter))
+
+
+def _run(client: FakeClient, hermes: FakeHermes | None = None, **kw: Any):
+    return run_free_voice(client, http_post=hermes or FakeHermes(), clock=_ticks(), **kw)
+
+
+def test_hermes_becomes_the_brain_for_everything_and_paid_providers_stay_blocked() -> None:
     client = FakeClient()
     report = _run(client)
 
     assert not report.failed, render_report(report)
-    assert client.body("PUT", "/api/providers/nous/base-url") == {"base_url": "http://127.0.0.1:11436"}
-    assert client.body("PUT", "/api/providers/nous/model") == {"model": STEP_MODEL}
-    assert client.body("POST", "/api/brain/switch")["provider"] == "nous"
-    assert client.body("PUT", "/api/providers/ollama/model") == {"model": "gemma3:12b-it-qat"}
-    assert client.body("PUT", "/api/settings/voice-mode")["mode"] == "pipeline"
+    assert client.body("PUT", "/api/providers/hermes/base-url") == {
+        "base_url": "http://127.0.0.1:8642"
+    }
+    # Empty model: Hermes picks it, Jarvis does not.
+    assert client.body("PUT", "/api/providers/hermes/model") == {"model": ""}
+    assert client.body("POST", "/api/brain/switch")["provider"] == "hermes"
+    assert client.body("PUT", "/api/providers/hermes/thinking-budget") == {"budget": 0}
     policy = client.body("PUT", "/api/brain/route-policy")
-    assert policy["fast"] == {"provider": "nous", "model": STEP_MODEL}
-    assert policy["deep"] == {"provider": "ollama", "model": "gemma3:12b-it-qat", "local": True}
-    assert policy["escalation"]["agent"] == "hermes"
+    assert policy["fast"] == {"provider": "hermes"}
+    # No second brain in Jarvis: no deep tier and no Paperclip side door.
+    assert policy["deep"] == {"provider": ""}
+    assert policy["escalation"] == {"enabled": False}
     assert "claude-api" in policy["deny_providers"]
+    assert client.body("POST", "/api/jarvis-agent/switch")["provider"] == "hermes"
+    assert client.body("PUT", "/api/settings/voice-mode")["mode"] == "pipeline"
     assert "gemini" not in PAID_BRAIN_PROVIDERS
 
 
-def test_adds_missing_mcp_servers_without_touching_the_users_own() -> None:
-    mine = {"mcpServers": {"windows-mcp": {"command": "C:/tools/windows-mcp.exe", "enabled": True}}}
-    client = FakeClient(mcp_content="\ufeff" + json.dumps(mine))
+def test_jarvis_does_not_start_its_own_mcp_servers_or_local_models() -> None:
+    client = FakeClient()
     _run(client)
-
-    written = client.body("PUT", "/api/mcps/config/raw")["mcpServers"]
-    assert written["windows-mcp"]["command"] == "C:/tools/windows-mcp.exe"
-    assert {"desktop-commander", "filesystem", "playwright", "fetch"} <= set(written)
-    assert written["filesystem"]["args"][-1] == "C:/Users/rober"
-    enabled = {p for m, p, _ in client.calls if p.endswith("/enable")}
-    assert "/api/mcps/desktop-commander/enable" in enabled
+    assert not [p for p in client.paths() if "/mcps/" in p]
+    assert not [p for p in client.paths() if "ollama" in p or "local-openai" in p]
 
 
-def test_a_failing_step_is_reported_and_the_rest_still_runs() -> None:
-    client = FakeClient(fail={"POST /api/stt/switch": "HTTP 409: no key"})
+def test_each_local_model_is_asked_through_hermes_and_reports_what_ran() -> None:
+    hermes = FakeHermes()
+    report = _run(
+        FakeClient(), hermes,
+        check_models=("local-qwen::qwen", "local-gemma::gemma-4-12b-qat"),
+    )
+
+    sent = [(b.get("provider"), b["model"]) for b in hermes.bodies]
+    assert sent == [
+        (None, "hermes-agent"),
+        ("local-qwen", "qwen"),
+        ("local-gemma", "gemma-4-12b-qat"),
+    ]
+    details = {s.name: s.detail for s in report.steps}
+    assert "on local-qwen/qwen" in details["hermes-model:local-qwen::qwen"]
+    assert "on local-gemma/gemma-4-12b-qat" in details[
+        "hermes-model:local-gemma::gemma-4-12b-qat"
+    ]
+
+
+def test_a_local_model_that_is_not_running_is_reported_and_the_rest_still_runs() -> None:
+    client = FakeClient()
+    report = _run(
+        client, FakeHermes(down={"local-gemma"}),
+        check_models=("local-qwen::qwen", "local-gemma::gemma-4-12b-qat"),
+    )
+    assert [s.name for s in report.failed] == ["hermes-model:local-gemma::gemma-4-12b-qat"]
+    assert client.body("POST", "/api/brain/switch")["provider"] == "hermes"
+
+
+def test_an_older_app_without_the_thinking_setting_is_reported_not_fatal() -> None:
+    client = FakeClient(fail={"PUT /api/providers/hermes/thinking-budget": "Not Found"})
     report = _run(client)
-
-    stt = next(s for s in report.steps if s.name == "stt")
-    assert stt.status == "failed"
-    assert any(p == "/api/tts/switch" for _, p, _ in client.calls)
-    assert "need attention" in render_report(report)
+    assert [s.name for s in report.failed] == ["thinking"]
+    assert client.body("PUT", "/api/settings/voice-mode")["mode"] == "pipeline"
 
 
-def test_stt_falls_through_to_the_next_free_provider() -> None:
-    class SttClient(FakeClient):
-        def request(self, method: str, path: str, *, json: Any = None, **kw: Any) -> Any:
-            if path == "/api/stt/switch" and json["provider"] == "gemini-api":
-                self.calls.append((method, path, json))
-                raise ApiError("HTTP 409: no key", 409)
-            return super().request(method, path, json=json, **kw)
-
-    report = _run(SttClient())
-    assert next(s for s in report.steps if s.name == "stt").detail == "groq-api"
+def test_failed_steps_are_reported_and_the_rest_still_runs() -> None:
+    client = FakeClient(fail={"POST /api/stt/switch": "no key"})
+    report = _run(client)
+    names = [s.name for s in report.failed]
+    assert names == ["stt"]
+    assert client.body("POST", "/api/tts/switch")["provider"] == "piper-local"
+    assert "FAIL" in render_report(report)
 
 
 def test_unreachable_jarvis_stops_early_with_a_clear_reason() -> None:
@@ -111,41 +144,13 @@ def test_unreachable_jarvis_stops_early_with_a_clear_reason() -> None:
     assert "Start it first" in report.steps[0].detail
 
 
-def test_gateway_without_tool_calls_is_flagged() -> None:
-    reachable, tools, _ = probe_gateway(
-        "http://g", http_post=lambda *_: {"choices": [{"message": {"content": "ok"}}]}
-    )
-    assert reachable and not tools
-
+def test_hermes_down_or_silent_is_flagged() -> None:
     def boom(*_: Any) -> Any:
-        raise RuntimeError("rate-limited (HTTP 429)")
+        raise RuntimeError("connection refused")
 
-    reachable, tools, detail = probe_gateway("http://g", http_post=boom)
-    assert not reachable and "429" in detail
-
-
-def test_pick_gemma_prefers_12b_qat() -> None:
-    assert pick_gemma(["gemma3:4b", "gemma3:12b", "gemma3:12b-it-qat"]) == "gemma3:12b-it-qat"
-    assert pick_gemma(["gemma3:4b", "gemma3:12b"]) == "gemma3:12b"
-    assert pick_gemma(["llama3"]) is None
-
-
-def test_local_server_puts_gemma_on_the_openai_compatible_slot() -> None:
-    def get(url: str, _t: float) -> dict[str, Any]:
-        assert url == "http://127.0.0.1:11438/v1/models"
-        return {"data": [{"id": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"}]}
-
-    client = FakeClient()
-    report = run_free_voice(
-        client, http_get=get, http_post=_tool_reply, home="h",
-        local_server="http://127.0.0.1:11438",
+    ok, detail = probe_hermes("http://127.0.0.1:8642", http_post=boom)
+    assert not ok and "did not answer" in detail
+    ok, detail = probe_hermes(
+        "http://127.0.0.1:8642", http_post=lambda *_: {"choices": [{"message": {}}]}
     )
-
-    assert not report.failed, render_report(report)
-    assert client.body("PUT", "/api/providers/local-openai/base-url") == {
-        "base_url": "http://127.0.0.1:11438"
-    }
-    model = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
-    assert client.body("PUT", "/api/providers/local-openai/model") == {"model": model}
-    deep = client.body("PUT", "/api/brain/route-policy")["deep"]
-    assert deep == {"provider": "local-openai", "model": model, "local": True}
+    assert not ok and "no text" in detail

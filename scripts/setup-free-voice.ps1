@@ -1,16 +1,21 @@
 <#
 .SYNOPSIS
-  Turn an installed Personal Jarvis into a free, full-time voice agent.
+  Make Hermes Agent the brain of an installed Personal Jarvis.
 
 .DESCRIPTION
-  1. Starts the free Step 3.7 Flash gateway (Nous) when it is not running.
-  2. Starts a llama-server with the local Gemma 12B GGUF when one is found.
+  User -> Jarvis (voice, UI) -> Hermes Agent -> Hermes picks the model
+  (local Qwen, local Gemma, a free cloud model) -> Hermes tools -> Jarvis.
+
+  1. Turns on Hermes's local API server (API_SERVER_ENABLED, plus a random
+     API_SERVER_KEY when none is set) in Hermes's own .env. The key never
+     leaves that file: Jarvis reads it there.
+  2. Starts `hermes gateway` when the API server is not answering.
   3. Starts Jarvis when it is not running.
-  4. Runs `jarvis system free-voice`, which sets Pipeline voice, the Step brain,
-     Gemma as the local deep tier, a route policy that blocks paid providers,
-     free speech-to-text/text-to-speech and the PC-control MCP servers, all
-     through the app's own settings API.
-  5. Adds a Startup entry so both servers come up after a reboot
+  4. Runs `jarvis system free-voice`, which makes Hermes the brain, hands
+     missions to Hermes, switches Jarvis's own model routing off, blocks paid
+     providers, and asks Hermes once per -CheckModel so the report shows which
+     model Hermes really ran.
+  5. Adds a Startup entry so the Hermes gateway comes up after a reboot
      (skip with -NoAtLogon).
 
   Run it in PowerShell:
@@ -18,11 +23,9 @@
   Every step prints what it did; nothing is deleted.
 #>
 param(
-    [string]$GatewayScript = "C:\paperclip\tools\nous-free-proxy.mjs",
-    [int]$GatewayPort = 11436,
-    [int]$LocalPort = 11438,
-    [string]$GemmaPath = "",
-    [string]$LlamaServer = "",
+    [string]$HermesHome = (Join-Path $env:LOCALAPPDATA "hermes"),
+    [int]$HermesPort = 8642,
+    [string[]]$CheckModel = @("local-qwen::qwen", "local-gemma::gemma-4-12b-qat"),
     [string]$JarvisDir = (Join-Path $env:LOCALAPPDATA "Programs\Personal Jarvis"),
     [switch]$NoAtLogon
 )
@@ -30,14 +33,6 @@ param(
 $ErrorActionPreference = "Continue"
 
 function Say([string]$Status, [string]$Text) { Write-Host ("{0,-5} {1}" -f $Status, $Text) }
-
-function Test-Port([int]$Port) {
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-        $wait = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
-        return ($wait.AsyncWaitHandle.WaitOne(800) -and $client.Connected)
-    } catch { return $false } finally { $client.Close() }
-}
 
 function Wait-Url([string]$Url, [int]$Seconds) {
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -47,63 +42,46 @@ function Wait-Url([string]$Url, [int]$Seconds) {
     return $false
 }
 
-# --- 1. Free Step 3.7 Flash gateway ---------------------------------------
-$gatewayCmd = $null
-if (Test-Port $GatewayPort) {
-    Say "OK" "Step gateway already running on port $GatewayPort"
-} elseif (Test-Path $GatewayScript) {
-    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
-    if ($node) {
-        Start-Process -FilePath $node -ArgumentList "`"$GatewayScript`"" -WindowStyle Hidden
-        $gatewayCmd = "start `"`" /min `"$node`" `"$GatewayScript`""
-        if (Wait-Url "http://127.0.0.1:$GatewayPort/v1/models" 20) { Say "SET" "Started the Step gateway" }
-        else { Say "FAIL" "Started the Step gateway but it does not answer on port $GatewayPort" }
-    } else { Say "FAIL" "Node.js not found, so the Step gateway cannot start" }
-} else {
-    Say "FAIL" "No Step gateway at $GatewayScript (pass -GatewayScript)"
+# --- 1. Hermes API server switched on in Hermes's own .env -----------------
+$envFile = Join-Path $HermesHome ".env"
+if (-not (Test-Path $HermesHome)) {
+    Say "FAIL" "No Hermes Agent at $HermesHome (pass -HermesHome)"
+    return
 }
-if (-not $gatewayCmd -and (Test-Path $GatewayScript)) {
-    $node = (Get-Command node -ErrorAction SilentlyContinue).Source
-    if ($node) { $gatewayCmd = "start `"`" /min `"$node`" `"$GatewayScript`"" }
+$lines = @()
+if (Test-Path $envFile) { $lines = @(Get-Content -Path $envFile) }
+$changed = $false
+if (-not ($lines | Where-Object { $_ -match '^\s*API_SERVER_ENABLED\s*=\s*true' })) {
+    $lines += "API_SERVER_ENABLED=true"; $changed = $true
 }
+if (-not ($lines | Where-Object { $_ -match '^\s*API_SERVER_KEY\s*=\s*\S' })) {
+    $bytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $lines += "API_SERVER_KEY=" + [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+    $changed = $true
+}
+if ($changed) {
+    if (Test-Path $envFile) { Copy-Item $envFile "$envFile.bak-jarvis" -Force }
+    # No byte-order mark: Hermes's .env reader would glue it to the first key.
+    [System.IO.File]::WriteAllLines($envFile, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+    Say "SET" "Hermes API server switched on in $envFile (backup .env.bak-jarvis)"
+} else { Say "OK" "Hermes API server already switched on" }
 
-# --- 2. Gemma on llama-server ---------------------------------------------
-$localServer = $null
-$llamaCmd = $null
-if (-not $GemmaPath) {
-    $hub = Join-Path $env:USERPROFILE ".cache\huggingface\hub"
-    $GemmaPath = Get-ChildItem -Path $hub -Recurse -Filter "*.gguf" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -match "gemma" -and $_.Name -match "12b" -and $_.Name -notmatch "mtp|mmproj|draft" } |
-        Sort-Object { $_.Name -notmatch "qat" }, Length |
-        Select-Object -First 1 -ExpandProperty FullName
-}
-if (-not $LlamaServer) {
-    $LlamaServer = (Get-Command llama-server -ErrorAction SilentlyContinue).Source
-    if (-not $LlamaServer) {
-        $LlamaServer = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "hermes") -Recurse -Filter "llama-server.exe" -ErrorAction SilentlyContinue |
-            Select-Object -First 1 -ExpandProperty FullName
-    }
-}
-if (Test-Port $LocalPort) {
-    $localServer = "http://127.0.0.1:$LocalPort"
-    Say "OK" "Local model server already running on port $LocalPort"
-} elseif ($GemmaPath -and $LlamaServer) {
-    foreach ($layers in @(99, 24, 0)) {
-        $serverArgs = "-m `"$GemmaPath`" --host 127.0.0.1 --port $LocalPort -c 16384 -ngl $layers --jinja"
-        $proc = Start-Process -FilePath $LlamaServer -ArgumentList $serverArgs -WindowStyle Hidden -PassThru
-        if (Wait-Url "http://127.0.0.1:$LocalPort/v1/models" 180) {
-            $localServer = "http://127.0.0.1:$LocalPort"
-            $llamaCmd = "start `"`" /min `"$LlamaServer`" $serverArgs"
-            Say "SET" "Gemma running on port $LocalPort ($layers GPU layers): $GemmaPath"
-            break
-        }
-        if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
-        Say "INFO" "Gemma did not start with $layers GPU layers, trying fewer"
-    }
-    if (-not $localServer) { Say "FAIL" "Gemma did not start (not enough memory?)" }
+# --- 2. Hermes gateway running ----------------------------------------------
+$hermesUrl = "http://127.0.0.1:$HermesPort"
+$hermes = (Get-Command hermes -ErrorAction SilentlyContinue).Source
+$gatewayCmd = $null
+if ($hermes) { $gatewayCmd = "start `"`" /min `"$hermes`" gateway" }
+if (Wait-Url "$hermesUrl/health" 2) {
+    if ($changed -and $hermes) {
+        Say "INFO" "Restart the Hermes gateway once so it reads the new API server settings"
+    } else { Say "OK" "Hermes API server answering on port $HermesPort" }
+} elseif ($hermes) {
+    Start-Process -FilePath $hermes -ArgumentList "gateway" -WindowStyle Minimized
+    if (Wait-Url "$hermesUrl/health" 60) { Say "SET" "Started the Hermes gateway" }
+    else { Say "FAIL" "Started 'hermes gateway' but its API server does not answer on port $HermesPort" }
 } else {
-    if (-not $GemmaPath) { Say "SKIP" "No Gemma 12B .gguf found (pass -GemmaPath)" }
-    if (-not $LlamaServer) { Say "SKIP" "No llama-server.exe found (pass -LlamaServer)" }
+    Say "FAIL" "The 'hermes' command is not on PATH, so the gateway cannot start"
 }
 
 # --- 3. Jarvis running ------------------------------------------------------
@@ -123,19 +101,16 @@ if (-not (Test-Path $session)) {
 } else { Say "OK" "Jarvis is running" }
 
 # --- 4. Configure through the app ------------------------------------------
-$cliArgs = @("system", "free-voice", "--gateway", "http://127.0.0.1:$GatewayPort")
-if ($localServer) { $cliArgs += @("--local-server", $localServer) }
+$cliArgs = @("system", "free-voice", "--hermes", $hermesUrl)
+foreach ($model in $CheckModel) { if ($model) { $cliArgs += @("--check-model", $model) } }
 & $cli @cliArgs
 
-# --- 5. Start both servers after a reboot ----------------------------------
-if (-not $NoAtLogon) {
+# --- 5. Hermes gateway after a reboot ----------------------------------------
+if (-not $NoAtLogon -and $gatewayCmd) {
     $startup = [Environment]::GetFolderPath("Startup")
-    if ($startup -and ($gatewayCmd -or $llamaCmd)) {
-        $file = Join-Path $startup "jarvis-free-servers.cmd"
-        $lines = @("@echo off")
-        if ($gatewayCmd) { $lines += $gatewayCmd }
-        if ($llamaCmd) { $lines += $llamaCmd }
-        Set-Content -Path $file -Value $lines -Encoding ASCII
-        Say "SET" "Servers start at logon ($file)"
+    if ($startup) {
+        $file = Join-Path $startup "jarvis-hermes-gateway.cmd"
+        Set-Content -Path $file -Value @("@echo off", $gatewayCmd) -Encoding ASCII
+        Say "SET" "Hermes gateway starts at logon ($file)"
     }
 }

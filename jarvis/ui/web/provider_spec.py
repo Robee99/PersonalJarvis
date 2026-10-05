@@ -621,6 +621,30 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         supports_base_url=True,
         default_base_url="https://inference-api.nousresearch.com/v1",
     ),
+    # Hermes Agent as the main brain: Jarvis hands every turn to Hermes's local
+    # API server, and Hermes picks the model (local Qwen, local Gemma, cloud)
+    # and runs its own tools. Keyless here: the server key stays in Hermes's
+    # own .env and is read in place.
+    ProviderSpec(
+        id="hermes",
+        label="Hermes Agent",
+        tier="brain",
+        auth_mode="none",
+        secret_keys=(),
+        dashboard_url=None,
+        install_hint="hermes gateway",
+        signup_url="https://github.com/NousResearch/hermes-agent",
+        supports_base_url=True,
+        default_base_url="http://127.0.0.1:8642",
+        credential_help=(
+            "Hands every turn to Hermes Agent on this machine. Hermes chooses "
+            "the model (its local Qwen or Gemma, or a cloud model) and runs its "
+            "own tools, MCP servers, memory and subagents. Start its API server "
+            "with API_SERVER_ENABLED=true in Hermes's .env and run 'hermes "
+            "gateway'. The model field may name a Hermes route (qwen, gemma) or "
+            "provider::model; empty lets Hermes decide."
+        ),
+    ),
     # Ollama re-added 2026-07-25 as a keyless LOCAL provider (auth_mode
     # "none" → billing "local"); the 2026-04-21 removal predates the
     # local-first mandate.

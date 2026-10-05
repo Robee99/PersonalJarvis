@@ -1,26 +1,33 @@
-"""``jarvis system free-voice``: one command for a free, full-time voice agent.
+"""``jarvis system free-voice``: Hermes Agent as the brain of a full-time voice agent.
+
+The flow it sets up::
+
+    user -> Jarvis (voice, UI) -> Hermes Agent -> Hermes picks the model
+         (local Qwen, local Gemma, a free cloud model) -> Hermes tools -> Jarvis
 
 It configures the RUNNING app through its own API, so every write goes through
 the same validated writers the settings UI uses (TOML, drift baseline and the
-boot ENV layer stay in step). Nothing here edits ``jarvis.toml`` directly.
+boot ENV layer stay in step). Nothing here edits ``jarvis.toml`` directly, and
+nothing here configures Hermes: its models, local servers, MCP servers and
+memory live in Hermes's own config.
 
 What it sets, and what it only reports:
 
-* Brain: the Nous Portal provider on a local free gateway (keyless loopback),
-  model ``stepfun/step-3.7-flash:free``. The gateway is probed first, including
-  one tool call, because a brain that cannot call tools cannot open or close
-  anything.
-* Local model: Gemma as the deep tier, either from a llama-server
-  (``--local-server``, the "Local server (OpenAI-compatible)" slot) or the
-  newest Gemma 12B on Ollama (QAT preferred).
-* Route policy: fast = Nous, deep = local Gemma, "ask Hermes" escalates to the
-  Paperclip agent ``hermes``, and every paid provider is deny-listed so a free
-  model failing never becomes a paid fallback.
-* Voice: Pipeline mode (the selected brain answers; Realtime would hand every
-  turn to the realtime provider instead). Speech-to-text and text-to-speech
-  are switched to the first provider that works without paying.
-* MCP: Windows control, browser, fetch, Desktop Commander and filesystem
-  servers are added when missing and switched on; each result is reported.
+* Hermes: its API server is probed with one real answer, and the provider and
+  model Hermes resolved for it are reported. Each ``--check-model`` (a Hermes
+  route alias or ``provider::model``, e.g. ``local-qwen::qwen``) is sent once
+  the same way, so the report shows Hermes actually switching models at
+  runtime, not just a config entry.
+* Brain: the ``hermes`` provider is the main brain, with Hermes's reasoning
+  pass switched off for speed (``thinking_budget = 0``).
+* Route policy: Hermes answers every turn, Jarvis keeps no model routing of its
+  own (no second tier, no Paperclip escalation), and paid providers stay
+  deny-listed so a failure never becomes a paid fallback inside Jarvis.
+* Missions: the sub-agent worker is Hermes too.
+* Voice: Pipeline mode (the brain answers; Realtime would hand every turn to the
+  realtime provider instead). Speech-to-text and text-to-speech are switched to
+  the first provider that works without paying, local ones first because they
+  are the quickest.
 
 Each step reports ``ok``, ``changed``, ``skipped`` or ``failed`` with a reason;
 one failing step never stops the rest.
@@ -28,20 +35,15 @@ one failing step never stops the rest.
 
 from __future__ import annotations
 
-import json
-import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from jarvis.cli_ctl.client import ApiError
 
-STEP_MODEL = "stepfun/step-3.7-flash:free"
-DEFAULT_GATEWAY = "http://127.0.0.1:11436"
-DEFAULT_OLLAMA = "http://127.0.0.1:11434"
-HERMES_AGENT = "hermes"
-HERMES_PHRASES = ("ask hermes", "hand it to hermes", "let hermes do it")
+DEFAULT_HERMES = "http://127.0.0.1:8642"
+HERMES_PROVIDER = "hermes"
 
 #: Brain providers that bill per use or need a paid plan. Kept off every chain.
 PAID_BRAIN_PROVIDERS: tuple[str, ...] = (
@@ -56,45 +58,13 @@ PAID_BRAIN_PROVIDERS: tuple[str, ...] = (
     "antigravity",
     "nvidia",
 )
-#: Tried in order; the first one the app accepts wins. Free keys or local.
-STT_CANDIDATES: tuple[str, ...] = ("gemini-api", "groq-api", "faster-whisper")
-TTS_CANDIDATES: tuple[str, ...] = ("gemini-flash-tts", "piper-local")
+#: Tried in order; the first one the app accepts wins. Local first: no network
+#: round trip and no shared free-tier limit.
+STT_CANDIDATES: tuple[str, ...] = ("faster-whisper", "groq-api", "gemini-api")
+TTS_CANDIDATES: tuple[str, ...] = ("piper-local", "gemini-flash-tts")
 
-
-def default_mcp_servers(home: str) -> dict[str, dict[str, Any]]:
-    """The PC-control servers, cloned from their official packages."""
-    return {
-        "windows-mcp": {
-            "command": "uvx",
-            "args": ["windows-mcp"],
-            "description": "Open, close and arrange apps and windows; type and click.",
-            "enabled": True,
-        },
-        "desktop-commander": {
-            "command": "npx",
-            "args": ["-y", "@wonderwhy-er/desktop-commander"],
-            "description": "Terminal commands, processes and file edits.",
-            "enabled": True,
-        },
-        "filesystem": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", home],
-            "description": "Read and write files in your user folder.",
-            "enabled": True,
-        },
-        "playwright": {
-            "command": "npx",
-            "args": ["-y", "@playwright/mcp@latest"],
-            "description": "Drive a browser: open pages, click, fill forms.",
-            "enabled": True,
-        },
-        "fetch": {
-            "command": "uvx",
-            "args": ["mcp-server-fetch"],
-            "description": "Fetch web pages as text.",
-            "enabled": True,
-        },
-    }
+#: One Hermes answer may run a tool or load a local model; give it room.
+HERMES_PROBE_TIMEOUT_S = 120.0
 
 
 @dataclass
@@ -122,107 +92,79 @@ class FreeVoiceReport:
         }
 
 
-HttpGet = Callable[[str, float], Any]
-HttpPost = Callable[[str, dict[str, Any], float], Any]
+HttpPost = Callable[[str, dict[str, Any], dict[str, str], float], Any]
 
 
-def _http_get(url: str, timeout: float) -> Any:
+def _http_post(url: str, body: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:
     import httpx
 
-    resp = httpx.get(url, timeout=timeout)
+    resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
+    if resp.status_code == 401:
+        raise RuntimeError("Hermes refused the API server key (HTTP 401)")
     resp.raise_for_status()
     return resp.json()
 
 
-def _http_post(url: str, body: dict[str, Any], timeout: float) -> Any:
-    import httpx
+def _hermes_headers() -> dict[str, str]:
+    from jarvis.plugins.brain.hermes import SESSION_KEY, read_api_server_key
 
-    resp = httpx.post(url, json=body, timeout=timeout)
-    if resp.status_code == 429:
-        raise RuntimeError("rate-limited (HTTP 429)")
-    resp.raise_for_status()
-    return resp.json()
+    headers = {"X-Hermes-Session-Key": SESSION_KEY}
+    key = read_api_server_key()
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return headers
 
 
-def probe_gateway(
-    gateway: str, *, http_post: HttpPost = _http_post, timeout: float = 30.0
-) -> tuple[bool, bool, str]:
-    """``(reachable, calls_tools, detail)`` for one tool-call round trip."""
+def probe_hermes(
+    hermes: str,
+    model: str = "",
+    *,
+    http_post: HttpPost = _http_post,
+    clock: Callable[[], float] = time.monotonic,
+) -> tuple[bool, str]:
+    """``(answered, detail)`` for one real Hermes answer, naming the model it used."""
+    from jarvis.plugins.brain.hermes import model_fields
+
     body = {
-        "model": STEP_MODEL,
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": "Open Notepad."}],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "open_app",
-                    "description": "Open an application on this computer.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"app_name": {"type": "string"}},
-                        "required": ["app_name"],
-                    },
-                },
-            }
-        ],
+        **model_fields(model),
+        "messages": [{"role": "user", "content": "Reply with the single word: ready"}],
+        "stream": False,
+        "model_options": {"reasoning": {"enabled": False}},
     }
+    started = clock()
     try:
-        reply = http_post(gateway.rstrip("/") + "/v1/chat/completions", body, timeout)
+        reply = http_post(
+            hermes.rstrip("/") + "/v1/chat/completions",
+            body,
+            _hermes_headers(),
+            HERMES_PROBE_TIMEOUT_S,
+        )
     except Exception as exc:  # the caller reports it as a failed step  # noqa: BLE001
-        return False, False, f"{gateway} did not answer: {exc}"
-    choices = (reply or {}).get("choices") or [{}]
-    message = (choices[0] or {}).get("message") or {}
-    if message.get("tool_calls"):
-        return True, True, "answered with a tool call"
-    return True, False, "answered, but without a tool call"
+        return False, f"{hermes} did not answer: {exc}"
+    elapsed = clock() - started
+    reply = reply or {}
+    choices = reply.get("choices") or [{}]
+    text = str(((choices[0] or {}).get("message") or {}).get("content") or "").strip()
+    runtime = reply.get("runtime") or {}
+    used = "/".join(
+        str(runtime.get(k)) for k in ("provider", "model") if runtime.get(k)
+    ) or "model not reported"
+    if not text:
+        return False, f"answered with no text in {elapsed:.1f}s (ran on {used})"
+    return True, f"answered in {elapsed:.1f}s on {used}"
 
 
-def pick_gemma(tags: list[str]) -> str | None:
-    """The best Gemma 12B tag: QAT first, then any 12B, then any Gemma."""
-    gemma = [t for t in tags if "gemma" in t.lower()]
-    for pattern in (r"12b.*qat|qat.*12b", r"12b"):
-        for tag in gemma:
-            if re.search(pattern, tag.lower()):
-                return tag
-    return gemma[0] if gemma else None
-
-
-#: A first MCP start downloads its package (npx/uvx), which takes a while.
-MCP_START_TIMEOUT_S = 240.0
-
-
-def _call(
-    client: Any, method: str, path: str, body: Any = None, *, timeout_s: float | None = None
-) -> Any:
-    if timeout_s is None:
-        return client.request(method, path, json=body)
-    return client.request(method, path, json=body, timeout_s=timeout_s)
-
-
-def _merge_mcp(existing: dict[str, Any], wanted: dict[str, dict[str, Any]]) -> list[str]:
-    """Add the wanted servers that are missing; never overwrite the user's own."""
-    servers = existing.setdefault("mcpServers", {})
-    added: list[str] = []
-    for name, entry in wanted.items():
-        if name not in servers:
-            servers[name] = dict(entry)
-            added.append(name)
-        elif isinstance(servers[name], dict) and not servers[name].get("enabled", True):
-            servers[name]["enabled"] = True
-    return added
+def _call(client: Any, method: str, path: str, body: Any = None) -> Any:
+    return client.request(method, path, json=body)
 
 
 def run_free_voice(
     client: Any,
     *,
-    gateway: str = DEFAULT_GATEWAY,
-    ollama: str = DEFAULT_OLLAMA,
-    local_model: str | None = None,
-    local_server: str | None = None,
-    home: str | None = None,
-    http_get: HttpGet = _http_get,
+    hermes: str = DEFAULT_HERMES,
+    check_models: tuple[str, ...] = (),
     http_post: HttpPost = _http_post,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -233,100 +175,67 @@ def run_free_voice(
         return report
     report.add("jarvis", "ok", "running")
 
-    # --- Brain: Step 3.7 Flash through the free gateway -------------------
-    reachable, calls_tools, detail = probe_gateway(gateway, http_post=http_post)
-    if not reachable:
-        report.add("step-gateway", "failed", detail)
-    elif not calls_tools:
-        report.add(
-            "step-gateway", "failed",
-            f"{detail}. Voice can talk but cannot open or close apps through it.",
-        )
-    else:
-        report.add("step-gateway", "ok", detail)
+    # --- Hermes answers, and switches models when asked ----------------------
+    answered, detail = probe_hermes(hermes, http_post=http_post, clock=clock)
+    report.add("hermes", "ok" if answered else "failed", detail)
+    for model in check_models:
+        ok, model_detail = probe_hermes(hermes, model, http_post=http_post, clock=clock)
+        report.add(f"hermes-model:{model}", "ok" if ok else "failed", model_detail)
+
+    # --- Brain: Hermes for every turn ---------------------------------------
     brain_ok = False
     try:
-        _call(client, "PUT", "/api/providers/nous/base-url", {"base_url": gateway})
-        _call(client, "PUT", "/api/providers/nous/model", {"model": STEP_MODEL})
-        _call(client, "POST", "/api/brain/switch", {"provider": "nous", "persist": True})
+        _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/base-url", {"base_url": hermes})
+        _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/model", {"model": ""})
+        _call(
+            client, "POST", "/api/brain/switch",
+            {"provider": HERMES_PROVIDER, "persist": True},
+        )
         brain_ok = True
-        report.add("brain", "changed", f"Nous Portal, {STEP_MODEL}, via {gateway}")
+        report.add("brain", "changed", f"Hermes Agent at {hermes}; Hermes picks the model")
     except ApiError as exc:
         report.add("brain", "failed", str(exc))
-
-    # --- Local model: Gemma on a llama-server, else on Ollama ----------------
-    gemma = local_model
-    local_provider = "ollama"
-    if local_server:
-        local_provider = "local-openai"
-        try:
-            listing = http_get(local_server.rstrip("/") + "/v1/models", 5.0) or {}
-            ids = [m.get("id", "") for m in listing.get("data", [])]
-            gemma = local_model or pick_gemma(ids) or (ids[0] if ids else None)
-            if not gemma:
-                report.add("local-model", "failed", f"{local_server} lists no models")
-        except Exception as exc:  # noqa: BLE001 - reported as a failed step
-            report.add("local-model", "failed", f"{local_server} did not answer: {exc}")
-            gemma = None
-        if gemma:
-            try:
-                _call(
-                    client, "PUT", "/api/providers/local-openai/base-url",
-                    {"base_url": local_server},
-                )
-            except ApiError as exc:
-                report.add("local-model", "failed", str(exc))
-                gemma = None
-    elif gemma is None:
-        try:
-            listing = http_get(ollama + "/api/tags", 5.0) or {}
-            tags = [m.get("name", "") for m in listing.get("models", [])]
-            gemma = pick_gemma(tags)
-        except Exception as exc:  # noqa: BLE001 - reported below
-            report.add("local-model", "failed", f"Ollama at {ollama} did not answer: {exc}")
-    if gemma:
-        try:
-            _call(client, "PUT", f"/api/providers/{local_provider}/model", {"model": gemma})
-            where = local_server if local_server else "Ollama"
-            report.add("local-model", "changed", f"{gemma} on {where}")
-        except ApiError as exc:
-            report.add("local-model", "failed", str(exc))
-            gemma = None
-    elif not any(s.name == "local-model" for s in report.steps):
-        report.add(
-            "local-model", "skipped",
-            "no Gemma found; start a llama-server and pass --local-server URL",
+    # A reasoning pass costs seconds before the first spoken word.
+    try:
+        _call(
+            client, "PUT", f"/api/providers/{HERMES_PROVIDER}/thinking-budget", {"budget": 0}
         )
+        report.add("thinking", "changed", "Hermes answers without a reasoning pass first")
+    except ApiError as exc:
+        report.add("thinking", "failed", str(exc))
 
-    # --- Route policy -------------------------------------------------------
+    # --- Route policy: no model routing of Jarvis's own ---------------------
     policy: dict[str, Any] = {
         "enabled": True,
+        "deep": {"provider": ""},
         "deny_providers": list(PAID_BRAIN_PROVIDERS),
-        "escalation": {
-            "enabled": True,
-            "via": "paperclip",
-            "agent": HERMES_AGENT,
-            "trigger_phrases": list(HERMES_PHRASES),
-        },
+        "escalation": {"enabled": False},
     }
     if brain_ok:
-        policy["fast"] = {"provider": "nous", "model": STEP_MODEL}
-    if gemma:
-        policy["deep"] = {"provider": local_provider, "model": gemma, "local": True}
+        policy["fast"] = {"provider": HERMES_PROVIDER}
     try:
         _call(client, "PUT", "/api/brain/route-policy", policy)
         report.add(
             "route-policy", "changed",
-            "fast Step 3.7 Flash, deep local Gemma, 'ask Hermes' via Paperclip, "
-            "paid providers blocked",
+            "Hermes answers every turn, no second brain in Jarvis, paid providers blocked",
         )
     except ApiError as exc:
         report.add("route-policy", "failed", str(exc))
 
+    # --- Missions: Hermes is the worker too ----------------------------------
+    try:
+        _call(
+            client, "POST", "/api/jarvis-agent/switch",
+            {"provider": HERMES_PROVIDER, "persist": True},
+        )
+        report.add("missions", "changed", "missions run on Hermes Agent")
+    except ApiError as exc:
+        report.add("missions", "failed", str(exc))
+
     # --- Voice: Pipeline, free speech in and out ----------------------------
     try:
         _call(client, "PUT", "/api/settings/voice-mode", {"mode": "pipeline", "persist": True})
-        report.add("voice-mode", "changed", "Pipeline: your selected brain answers every turn")
+        report.add("voice-mode", "changed", "Pipeline: Hermes answers every spoken turn")
     except ApiError as exc:
         report.add("voice-mode", "failed", str(exc))
     for tier, candidates in (("stt", STT_CANDIDATES), ("tts", TTS_CANDIDATES)):
@@ -341,40 +250,6 @@ def run_free_voice(
                 reasons.append(f"{provider}: {exc}")
         else:
             report.add(tier, "failed", "; ".join(reasons))
-
-    # --- MCP servers --------------------------------------------------------
-    try:
-        info = _call(client, "GET", "/api/mcps/config/info") or {}
-        raw = (info.get("content") or "").lstrip("﻿").strip()
-        current = json.loads(raw) if raw else {"mcpServers": {}}
-        if not isinstance(current, dict):
-            current = {"mcpServers": {}}
-        added = _merge_mcp(current, default_mcp_servers(home or str(Path.home())))
-        _call(client, "PUT", "/api/mcps/config/raw", current)
-        report.add(
-            "mcp-config", "changed" if added else "ok", ", ".join(added) or "nothing missing"
-        )
-        for name in sorted(current.get("mcpServers", {})):
-            entry = current["mcpServers"][name]
-            if not isinstance(entry, dict) or not entry.get("enabled", True):
-                continue
-            try:
-                result = (
-                    _call(
-                        client, "POST", f"/api/mcps/{name}/enable",
-                        timeout_s=MCP_START_TIMEOUT_S,
-                    )
-                    or {}
-                )
-            except ApiError as exc:
-                report.add(f"mcp:{name}", "failed", str(exc))
-                continue
-            if result.get("ok"):
-                report.add(f"mcp:{name}", "ok", "connected")
-            else:
-                report.add(f"mcp:{name}", "failed", str(result.get("error") or "did not start"))
-    except (ApiError, ValueError) as exc:
-        report.add("mcp-config", "failed", str(exc))
 
     return report
 

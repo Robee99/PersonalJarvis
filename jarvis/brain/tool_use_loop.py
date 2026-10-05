@@ -1054,6 +1054,8 @@ class ToolUseLoop:
             final_agg.finish_reason = agg.finish_reason
             for k, v in agg.usage.items():
                 final_agg.usage[k] = final_agg.usage.get(k, 0) + int(v)
+            # Tools an agent brain ran on its own side (BrainDelta.agent_tools).
+            final_agg.executed_tool_names.update(agg.executed_tool_names)
 
             # Budget tracking
             self._budget.record_turn(

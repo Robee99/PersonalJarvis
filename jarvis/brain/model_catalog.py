@@ -796,6 +796,12 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
     # added below as curated-only — no /v1/models over their OAuth logins.
     for p in CATALOG_PROVIDERS:
         cat[p] = CatalogSpec("brain", "model", tuple(CURATED_MODELS.get(p, ())), live=True)
+    # Hermes Agent — the orchestrating brain picks its own model (its default,
+    # fallbacks and routes), so the one entry means "Hermes decides". A Hermes
+    # route alias or ``provider::model`` can still be typed on the card.
+    cat["hermes"] = CatalogSpec(
+        "brain", "model", tuple(_curated([("hermes-agent", "Hermes decides")])), live=False
+    )
     # Codex — Jarvis-Agent model catalog for the ChatGPT-login worker; no
     # /v1/models over OAuth, so curated only. The concrete GPT-5.6 choices are
     # the current Codex lineup; the still-supported GPT-5.5/5.4 choices remain
