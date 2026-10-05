@@ -882,7 +882,8 @@ class BrainProviderConfig(BaseModel):
     #             needs no reasoning).
     # ``-1``    → dynamic-auto (provider decides per request).
     # ``> 0``   → fixed token cap for the thinking portion.
-    # Currently only evaluated by ``GeminiBrain``; other providers ignore it.
+    # Evaluated by ``GeminiBrain``; ``NousBrain`` and ``HermesBrain`` read ``0``
+    # as "never think". Other providers ignore it.
     thinking_budget: int | None = None
     # Per-model Ollama options keyed by model tag (``"qwen3.5:9b"``), read by
     # the Ollama brain plugin on every turn. Only meaningful for the Ollama

@@ -12,6 +12,13 @@ same shape as the NVIDIA NIM brain. One Nous-specific rule: every chat request
 must carry a user tag in the body (``{"tags": ["user=<name>"]}``) or the API
 answers 400 "missing user tag", so ``complete`` always sends one.
 
+Thinking switch: the free Step route is a reasoning model that thinks for many
+seconds before its first word, which a voice turn cannot afford. A request
+with ``reasoning_effort="none"`` (the manager's fast turns) carries the
+gateway-style ``{"reasoning": {"enabled": false}}`` opt-out, and
+``[brain.providers.nous].thinking_budget = 0`` asks for it on every turn. An
+endpoint that refuses the opt-out gets the same request once without it.
+
 The card's server-URL field can point the brain at an OpenAI-compatible
 gateway on this machine (e.g. ``http://127.0.0.1:11436``) that signs upstream
 with its own Nous login; on such a loopback URL no client key is needed. It is
@@ -25,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 from jarvis.core import config as cfg
@@ -57,6 +65,20 @@ def user_tag_body() -> dict[str, Any]:
     return {"tags": [USER_TAG]}
 
 
+def thinking_off_by_config() -> bool:
+    """Whether ``[brain.providers.nous].thinking_budget = 0`` is set.
+
+    Read per call from the (file-identity cached) config, so a change made by
+    the settings API or ``jarvis system free-voice`` applies on the next turn
+    without a restart.
+    """
+    try:
+        provider = cfg.load_config().brain.providers.get("nous")
+    except Exception:  # noqa: BLE001 — an unreadable config keeps the default thinking
+        return False
+    return provider is not None and getattr(provider, "thinking_budget", None) == 0
+
+
 def chat_base_url(base_url: str | None, *, via_proxy: bool = False) -> str:
     """The OpenAI-compatible ``…/v1`` base for a resolved endpoint.
 
@@ -82,6 +104,9 @@ class NousBrain:
     # images are never sent here — the shared builder drops them with a WARN
     # and vision work stays with a provider that declares it.
     supports_vision: bool = False
+    # Honours ``reasoning_effort="none"`` per request (see the module
+    # docstring), so the manager's fast turns skip the thinking.
+    supports_thinking_switch: bool = True
 
     def __init__(self, model: str | None = None) -> None:
         self._model = model or DEFAULT_MODEL
@@ -118,13 +143,44 @@ class NousBrain:
             # First use imports the SDK — seconds on a cold disk, and never on
             # the event loop (BUG-189; see claude_api.py for the measurement).
             client = await asyncio.to_thread(self._ensure_client)
-        async for delta in stream_complete(
+        if getattr(req, "reasoning_effort", None) != "none" and not thinking_off_by_config():
+            async for delta in stream_complete(
+                client,
+                self._model,
+                req,
+                extra_body=user_tag_body(),
+                supports_vision=self.supports_vision,
+            ):
+                yield delta
+            return
+        stream = stream_complete(
             client,
             self._model,
-            req,
-            extra_body=user_tag_body(),
+            replace(req, reasoning_effort="none"),
+            extra_body={**user_tag_body(), "reasoning": {"enabled": False}},
             supports_vision=self.supports_vision,
-        ):
+        )
+        try:
+            first = await anext(stream)
+        except StopAsyncIteration:  # an empty stream is a finished, empty answer
+            return
+        except Exception as exc:  # noqa: BLE001 — inspect, fall back, or re-raise
+            # A latency hint must never brick a turn: an endpoint that refuses
+            # the reasoning opt-out gets the plain request once. Nothing was
+            # spoken yet, so the retry is invisible to the user.
+            if "reasoning" not in str(exc).lower():
+                raise
+            async for delta in stream_complete(
+                client,
+                self._model,
+                replace(req, reasoning_effort=None),
+                extra_body=user_tag_body(),
+                supports_vision=self.supports_vision,
+            ):
+                yield delta
+            return
+        yield first
+        async for delta in stream:
             yield delta
 
     def estimate_cost(self, req: BrainRequest) -> float:

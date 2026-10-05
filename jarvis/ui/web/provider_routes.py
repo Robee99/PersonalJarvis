@@ -2873,6 +2873,43 @@ async def set_provider_base_url(provider_id: str, body: BaseUrlBody) -> BaseUrlR
     )
 
 
+#: Brain providers whose plugin reads ``thinking_budget`` per call (``0`` =
+#: never think; Hermes passes it on as its reasoning opt-out). Gemini reads it
+#: only when its brain is built, so a live change would not apply; others would
+#: store a dead key.
+THINKING_BUDGET_PROVIDERS: tuple[str, ...] = ("nous", "hermes")
+
+
+class ThinkingBudgetBody(BaseModel):
+    # None clears the key -> the model's own default thinking.
+    budget: int | None = Field(default=None, ge=-1, le=1_000_000)
+
+
+@router.put("/providers/{provider_id}/thinking-budget")
+async def set_provider_thinking_budget(
+    provider_id: str, body: ThinkingBudgetBody
+) -> dict[str, Any]:
+    """Set (or clear) a brain provider's thinking budget; ``0`` turns thinking off.
+
+    Voice needs the first word in about a second, and a reasoning model that
+    thinks before answering costs many seconds per turn. The brains read the
+    value per call, so it applies from the next turn.
+    """
+    if get_spec(provider_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_id}")
+    if provider_id not in THINKING_BUDGET_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{provider_id}' has no thinking setting.",
+        )
+    from jarvis.core import config_writer
+
+    await asyncio.to_thread(
+        config_writer.set_provider_thinking_budget, provider_id, body.budget
+    )
+    return {"ok": True, "provider": provider_id, "budget": body.budget}
+
+
 @router.post("/providers/{provider_id}/local-install")
 async def start_local_install(provider_id: str) -> dict[str, Any]:
     """Install an on-device provider's engine and download its model.

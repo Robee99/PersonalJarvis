@@ -2436,6 +2436,28 @@ def set_provider_base_url(
         )
 
 
+def set_provider_thinking_budget(
+    provider: str, budget: int | None, *, path: Path = DEFAULT_CONFIG_FILE
+) -> None:
+    """Persist (or clear) ``[brain.providers.<provider>].thinking_budget``.
+
+    ``0`` switches the provider's thinking off on every turn (read by the
+    Gemini and Nous brains); ``None`` removes the key so the model's own
+    default applies again. Atomic discipline as every setter here (AP-7).
+    """
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        doc, had_bom = _read_doc(path)
+        block = _provider_block(doc, provider)
+        if budget is None:
+            if "thinking_budget" in block:
+                del block["thinking_budget"]
+        else:
+            block["thinking_budget"] = int(budget)
+        _write_doc(path, doc, had_bom)
+    clear_config_cache()
+
+
 #: Closed list of per-provider boolean flags :func:`set_provider_flag` may
 #: write. Each entry is a real field on ``BrainProviderConfig`` with a reader;
 #: adding one here without a reader is the AP-31 shape.
