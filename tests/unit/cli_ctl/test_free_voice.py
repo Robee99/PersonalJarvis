@@ -128,3 +128,24 @@ def test_pick_gemma_prefers_12b_qat() -> None:
     assert pick_gemma(["gemma3:4b", "gemma3:12b", "gemma3:12b-it-qat"]) == "gemma3:12b-it-qat"
     assert pick_gemma(["gemma3:4b", "gemma3:12b"]) == "gemma3:12b"
     assert pick_gemma(["llama3"]) is None
+
+
+def test_local_server_puts_gemma_on_the_openai_compatible_slot() -> None:
+    def get(url: str, _t: float) -> dict[str, Any]:
+        assert url == "http://127.0.0.1:11438/v1/models"
+        return {"data": [{"id": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"}]}
+
+    client = FakeClient()
+    report = run_free_voice(
+        client, http_get=get, http_post=_tool_reply, home="h",
+        local_server="http://127.0.0.1:11438",
+    )
+
+    assert not report.failed, render_report(report)
+    assert client.body("PUT", "/api/providers/local-openai/base-url") == {
+        "base_url": "http://127.0.0.1:11438"
+    }
+    model = "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf"
+    assert client.body("PUT", "/api/providers/local-openai/model") == {"model": model}
+    deep = client.body("PUT", "/api/brain/route-policy")["deep"]
+    assert deep == {"provider": "local-openai", "model": model, "local": True}

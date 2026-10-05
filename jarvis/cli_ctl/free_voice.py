@@ -10,7 +10,9 @@ What it sets, and what it only reports:
   model ``stepfun/step-3.7-flash:free``. The gateway is probed first, including
   one tool call, because a brain that cannot call tools cannot open or close
   anything.
-* Local model: the newest Gemma 12B on Ollama (QAT preferred) as the deep tier.
+* Local model: Gemma as the deep tier, either from a llama-server
+  (``--local-server``, the "Local server (OpenAI-compatible)" slot) or the
+  newest Gemma 12B on Ollama (QAT preferred).
 * Route policy: fast = Nous, deep = local Gemma, "ask Hermes" escalates to the
   Paperclip agent ``hermes``, and every paid provider is deny-listed so a free
   model failing never becomes a paid fallback.
@@ -217,6 +219,7 @@ def run_free_voice(
     gateway: str = DEFAULT_GATEWAY,
     ollama: str = DEFAULT_OLLAMA,
     local_model: str | None = None,
+    local_server: str | None = None,
     home: str | None = None,
     http_get: HttpGet = _http_get,
     http_post: HttpPost = _http_post,
@@ -251,9 +254,30 @@ def run_free_voice(
     except ApiError as exc:
         report.add("brain", "failed", str(exc))
 
-    # --- Local model: Gemma on Ollama ---------------------------------------
+    # --- Local model: Gemma on a llama-server, else on Ollama ----------------
     gemma = local_model
-    if gemma is None:
+    local_provider = "ollama"
+    if local_server:
+        local_provider = "local-openai"
+        try:
+            listing = http_get(local_server.rstrip("/") + "/v1/models", 5.0) or {}
+            ids = [m.get("id", "") for m in listing.get("data", [])]
+            gemma = local_model or pick_gemma(ids) or (ids[0] if ids else None)
+            if not gemma:
+                report.add("local-model", "failed", f"{local_server} lists no models")
+        except Exception as exc:  # noqa: BLE001 - reported as a failed step
+            report.add("local-model", "failed", f"{local_server} did not answer: {exc}")
+            gemma = None
+        if gemma:
+            try:
+                _call(
+                    client, "PUT", "/api/providers/local-openai/base-url",
+                    {"base_url": local_server},
+                )
+            except ApiError as exc:
+                report.add("local-model", "failed", str(exc))
+                gemma = None
+    elif gemma is None:
         try:
             listing = http_get(ollama + "/api/tags", 5.0) or {}
             tags = [m.get("name", "") for m in listing.get("models", [])]
@@ -262,14 +286,16 @@ def run_free_voice(
             report.add("local-model", "failed", f"Ollama at {ollama} did not answer: {exc}")
     if gemma:
         try:
-            _call(client, "PUT", "/api/providers/ollama/model", {"model": gemma})
-            report.add("local-model", "changed", f"Ollama {gemma}")
+            _call(client, "PUT", f"/api/providers/{local_provider}/model", {"model": gemma})
+            where = local_server if local_server else "Ollama"
+            report.add("local-model", "changed", f"{gemma} on {where}")
         except ApiError as exc:
             report.add("local-model", "failed", str(exc))
             gemma = None
     elif not any(s.name == "local-model" for s in report.steps):
         report.add(
-            "local-model", "skipped", "no Gemma model in Ollama (ollama pull gemma3:12b-it-qat)"
+            "local-model", "skipped",
+            "no Gemma found; start a llama-server and pass --local-server URL",
         )
 
     # --- Route policy -------------------------------------------------------
@@ -286,7 +312,7 @@ def run_free_voice(
     if brain_ok:
         policy["fast"] = {"provider": "nous", "model": STEP_MODEL}
     if gemma:
-        policy["deep"] = {"provider": "ollama", "model": gemma, "local": True}
+        policy["deep"] = {"provider": local_provider, "model": gemma, "local": True}
     try:
         _call(client, "PUT", "/api/brain/route-policy", policy)
         report.add(

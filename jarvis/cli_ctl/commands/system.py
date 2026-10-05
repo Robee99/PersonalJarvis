@@ -126,7 +126,11 @@ def free_voice(
         "http://127.0.0.1:11434", "--ollama", help="Ollama server holding the local Gemma model.",
     ),
     local_model: str = typer.Option(
-        None, "--local-model", help="Ollama tag to use instead of the newest Gemma 12B.",
+        None, "--local-model", help="Model to use instead of the newest Gemma 12B.",
+    ),
+    local_server: str = typer.Option(
+        None, "--local-server",
+        help="OpenAI-compatible llama-server holding Gemma (used instead of Ollama).",
     ),
 ) -> None:
     """Set up a free, full-time voice agent: Pipeline voice, Step 3.7 Flash,
@@ -137,6 +141,7 @@ def free_voice(
     with make_client() as client:
         report = run_free_voice(
             client, gateway=gateway, ollama=ollama, local_model=local_model,
+            local_server=local_server,
         )
     if as_json():
         render.emit(report.as_dict(), as_json=True)
