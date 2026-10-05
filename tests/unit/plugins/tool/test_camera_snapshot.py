@@ -324,3 +324,18 @@ async def test_windows_without_the_packages_names_them(
 
     assert not result.success
     assert "pip install winrt-Windows.Media.Capture" in result.error
+
+
+def test_desktop_extra_ships_the_windows_camera_packages() -> None:
+    """The installer bundles ``[desktop]``; every camera namespace must be in it."""
+    import tomllib
+    from pathlib import Path
+
+    from jarvis.plugins.tool.camera_snapshot import WINDOWS_CAMERA_PACKAGES
+
+    pyproject = Path(__file__).resolve().parents[4] / "pyproject.toml"
+    desktop = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"][
+        "optional-dependencies"
+    ]["desktop"]
+    names = {entry.split(">=")[0].split(";")[0].strip() for entry in desktop}
+    assert set(WINDOWS_CAMERA_PACKAGES) <= names

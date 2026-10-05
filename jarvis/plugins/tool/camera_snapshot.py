@@ -10,9 +10,8 @@ Backends, chosen per platform at call time:
 * **Windows** - WinRT ``MediaCapture`` in video-only mode (no microphone),
   from the same MIT-licensed PyWinRT family the ``[desktop]`` extra already
   uses for the media session. The still is encoded to JPEG by Windows itself.
-  The three namespace packages (:data:`WINDOWS_CAMERA_PACKAGES`) are not in
-  ``[desktop]`` yet: adding them needs a ``uv lock`` run that can reach the
-  native-crypto index.
+  The three namespace packages (:data:`WINDOWS_CAMERA_PACKAGES`) ship in
+  ``[desktop]``, so the installer bundles them.
 * **Linux** - OpenCV, only when the user installed it themselves. It is not a
   dependency: its wheels bundle FFmpeg under the LGPL.
 * **macOS** - refused honestly. The bundle deliberately ships without
