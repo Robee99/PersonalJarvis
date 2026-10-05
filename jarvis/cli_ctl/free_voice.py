@@ -60,8 +60,8 @@ PAID_BRAIN_PROVIDERS: tuple[str, ...] = (
 )
 #: Tried in order; the first one the app accepts wins. Local first: no network
 #: round trip and no shared free-tier limit.
-STT_CANDIDATES: tuple[str, ...] = ("faster-whisper", "groq-api", "gemini-api")
-TTS_CANDIDATES: tuple[str, ...] = ("piper-local", "gemini-flash-tts")
+STT_CANDIDATES: tuple[str, ...] = ("nemotron-local", "faster-whisper")
+TTS_CANDIDATES: tuple[str, ...] = ("piper-local",)
 
 #: One Hermes answer may run a tool or load a local model; give it room.
 HERMES_PROBE_TIMEOUT_S = 120.0
@@ -142,15 +142,28 @@ def probe_hermes(
     except Exception as exc:  # the caller reports it as a failed step  # noqa: BLE001
         return False, f"{hermes} did not answer: {exc}"
     elapsed = clock() - started
-    reply = reply or {}
+    if not isinstance(reply, dict):
+        return False, f"invalid Hermes response in {elapsed:.1f}s"
     choices = reply.get("choices") or [{}]
     text = str(((choices[0] or {}).get("message") or {}).get("content") or "").strip()
     runtime = reply.get("runtime") or {}
-    used = "/".join(
-        str(runtime.get(k)) for k in ("provider", "model") if runtime.get(k)
-    ) or "model not reported"
+    used = (
+        "/".join(str(runtime.get(k)) for k in ("provider", "model") if runtime.get(k))
+        or "model not reported"
+    )
     if not text:
         return False, f"answered with no text in {elapsed:.1f}s (ran on {used})"
+    completion = reply.get("hermes") or {}
+    if (
+        completion.get("completed") is False
+        or completion.get("failed")
+        or completion.get("partial")
+        or completion.get("error")
+        or choices[0].get("finish_reason") in ("error", "length")
+    ):
+        return False, f"Hermes reported an incomplete or failed turn in {elapsed:.1f}s"
+    if text.casefold().strip(" \t\r\n.!\"'`") != "ready":
+        return False, f"Hermes did not return the expected readiness answer in {elapsed:.1f}s"
     return True, f"answered in {elapsed:.1f}s on {used}"
 
 
@@ -188,7 +201,9 @@ def run_free_voice(
         _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/base-url", {"base_url": hermes})
         _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/model", {"model": ""})
         _call(
-            client, "POST", "/api/brain/switch",
+            client,
+            "POST",
+            "/api/brain/switch",
             {"provider": HERMES_PROVIDER, "persist": True},
         )
         brain_ok = True
@@ -197,10 +212,12 @@ def run_free_voice(
         report.add("brain", "failed", str(exc))
     # A reasoning pass costs seconds before the first spoken word.
     try:
-        _call(
-            client, "PUT", f"/api/providers/{HERMES_PROVIDER}/thinking-budget", {"budget": 0}
+        _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/thinking-budget", {"budget": 0})
+        report.add(
+            "thinking",
+            "changed",
+            "requested reasoning off; the selected model may require reasoning",
         )
-        report.add("thinking", "changed", "Hermes answers without a reasoning pass first")
     except ApiError as exc:
         report.add("thinking", "failed", str(exc))
 
@@ -216,7 +233,8 @@ def run_free_voice(
     try:
         _call(client, "PUT", "/api/brain/route-policy", policy)
         report.add(
-            "route-policy", "changed",
+            "route-policy",
+            "changed",
             "Hermes answers every turn, no second brain in Jarvis, paid providers blocked",
         )
     except ApiError as exc:
@@ -225,7 +243,9 @@ def run_free_voice(
     # --- Missions: Hermes is the worker too ----------------------------------
     try:
         _call(
-            client, "POST", "/api/jarvis-agent/switch",
+            client,
+            "POST",
+            "/api/jarvis-agent/switch",
             {"provider": HERMES_PROVIDER, "persist": True},
         )
         report.add("missions", "changed", "missions run on Hermes Agent")
@@ -258,7 +278,8 @@ def render_report(report: FreeVoiceReport) -> str:
     marks = {"ok": "OK  ", "changed": "SET ", "skipped": "SKIP", "failed": "FAIL"}
     lines = [f"{marks.get(s.status, s.status)}  {s.name}: {s.detail}" for s in report.steps]
     lines.append(
-        "All set." if not report.failed
+        "All set."
+        if not report.failed
         else f"{len(report.failed)} step(s) need attention (FAIL lines above)."
     )
     return "\n".join(lines)

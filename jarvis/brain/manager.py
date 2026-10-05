@@ -10823,6 +10823,7 @@ class BrainManager:
             ],
             can_call_tools=self._brain_can_call_tools,
             supports_vision=lambda p, m: self._provider_advertises_vision(p, m),
+            selected_model=lambda p: getattr(self._provider_cfg(p), "model", None),
         )
         self._last_route_decision = decision
         log.info(

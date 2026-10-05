@@ -796,11 +796,33 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
     # added below as curated-only — no /v1/models over their OAuth logins.
     for p in CATALOG_PROVIDERS:
         cat[p] = CatalogSpec("brain", "model", tuple(CURATED_MODELS.get(p, ())), live=True)
-    # Hermes Agent — the orchestrating brain picks its own model (its default,
-    # fallbacks and routes), so the one entry means "Hermes decides". A Hermes
-    # route alias or ``provider::model`` can still be typed on the card.
+    # Hermes remains the orchestrator for every choice. Qualify cloud/local
+    # models with their Hermes provider: a bare model id can be ignored by the
+    # gateway when direct-model requests are disabled. The free Nous roster was
+    # checked against its authenticated /v1/models catalog on 2026-10-05.
     cat["hermes"] = CatalogSpec(
-        "brain", "model", tuple(_curated([("hermes-agent", "Hermes decides")])), live=False
+        "brain",
+        "model",
+        tuple(
+            _curated(
+                [
+                    ("hermes-agent", "Hermes decides"),
+                    ("nous::stepfun/step-3.7-flash:free", "Step 3.7 Flash (Nous free)"),
+                    ("nous::poolside/laguna-s-2.1:free", "Laguna S 2.1 (Nous free)"),
+                    ("nous::poolside/laguna-xs-2.1:free", "Laguna XS 2.1 (Nous free)"),
+                    ("nous::meituan/longcat-2.0:free", "LongCat 2.0 (Nous free)"),
+                    ("nous::meituan/longcat-2.5-preview:free", "LongCat 2.5 Preview (Nous free)"),
+                    (
+                        "nous::inclusionai/ling-3.0-flash-sante:free",
+                        "Ling 3.0 Flash Sante (Nous free)",
+                    ),
+                    ("nous::inclusionai/ling-3.0-flash-fin:free", "Ling 3.0 Flash Fin (Nous free)"),
+                    ("local-qwen::qwen", "Qwen (local Hermes provider)"),
+                    ("local-gemma::gemma-4-12b-qat", "Gemma 12B QAT (local Hermes provider)"),
+                ]
+            )
+        ),
+        live=False,
     )
     # Codex — Jarvis-Agent model catalog for the ChatGPT-login worker; no
     # /v1/models over OAuth, so curated only. The concrete GPT-5.6 choices are

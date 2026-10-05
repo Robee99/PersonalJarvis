@@ -12,6 +12,7 @@ Pinned here, with Hermes's API server played by ``httpx.MockTransport``:
   Agentic-IDE, force-spawn) never take the turn;
 * the key stays in Hermes's .env and a remote Hermes is refused.
 """
+
 from __future__ import annotations
 
 import json
@@ -165,6 +166,55 @@ async def test_qwen_and_gemma_are_reached_as_models_under_hermes() -> None:
         await _collect(brain, _req("hello"))
         assert (server.requests[0]["provider"], server.requests[0]["model"]) == (provider, model)
         assert brain.last_runtime == {"provider": provider, "model": model}
+
+
+@pytest.mark.asyncio
+async def test_every_free_cloud_picker_choice_explicitly_selects_nous() -> None:
+    from jarvis.brain.model_catalog import ModelCatalog
+
+    catalog = await ModelCatalog().list_models("hermes")
+    cloud_choices = [m for m in catalog.models if m.id.startswith("nous::")]
+    assert len(cloud_choices) == 7
+    assert all(m.id.endswith(":free") for m in cloud_choices)
+    assert catalog.models[0].id == "hermes-agent"
+    for choice in cloud_choices:
+        server = FakeHermesServer(_sse(("", _chunk("ready", "stop"))))
+        await _collect(_brain(server, model=choice.id), _req("hello"))
+        assert server.requests[0]["provider"] == "nous"
+        assert server.requests[0]["model"] == choice.id.split("::", 1)[1]
+
+
+def test_changing_hermes_picker_model_rebuilds_the_active_brain(
+    hermes_manager: BrainManager,
+) -> None:
+    previous = _hermes_of(hermes_manager)
+    for model in (
+        "nous::poolside/laguna-xs-2.1:free",
+        "nous::meituan/longcat-2.5-preview:free",
+        "hermes-agent",
+    ):
+        assert hermes_manager.apply_provider_model("hermes", model)
+        current = _hermes_of(hermes_manager)
+        assert current is not previous
+        assert model_fields(current._model) == model_fields(model)
+        previous = current
+
+
+def test_an_explicit_route_model_still_overrides_the_provider_card(
+    hermes_manager: BrainManager,
+) -> None:
+    pinned = "nous::stepfun/step-3.7-flash:free"
+    hermes_manager._config.brain.route_policy.fast.model = pinned
+    hermes_manager.apply_provider_model("hermes", "nous::poolside/laguna-xs-2.1:free")
+    assert _hermes_of(hermes_manager)._model == pinned
+
+
+def test_a_selected_model_is_checked_against_route_denies(
+    hermes_manager: BrainManager,
+) -> None:
+    hermes_manager._config.brain.route_policy.deny_model_prefixes = ["nous::blocked/"]
+    hermes_manager.apply_provider_model("hermes", "nous::blocked/model")
+    assert hermes_manager._build_fallback_chain("fast") == []
 
 
 @pytest.mark.asyncio

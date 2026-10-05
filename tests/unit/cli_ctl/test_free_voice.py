@@ -94,7 +94,8 @@ def test_jarvis_does_not_start_its_own_mcp_servers_or_local_models() -> None:
 def test_each_local_model_is_asked_through_hermes_and_reports_what_ran() -> None:
     hermes = FakeHermes()
     report = _run(
-        FakeClient(), hermes,
+        FakeClient(),
+        hermes,
         check_models=("local-qwen::qwen", "local-gemma::gemma-4-12b-qat"),
     )
 
@@ -106,15 +107,14 @@ def test_each_local_model_is_asked_through_hermes_and_reports_what_ran() -> None
     ]
     details = {s.name: s.detail for s in report.steps}
     assert "on local-qwen/qwen" in details["hermes-model:local-qwen::qwen"]
-    assert "on local-gemma/gemma-4-12b-qat" in details[
-        "hermes-model:local-gemma::gemma-4-12b-qat"
-    ]
+    assert "on local-gemma/gemma-4-12b-qat" in details["hermes-model:local-gemma::gemma-4-12b-qat"]
 
 
 def test_a_local_model_that_is_not_running_is_reported_and_the_rest_still_runs() -> None:
     client = FakeClient()
     report = _run(
-        client, FakeHermes(down={"local-gemma"}),
+        client,
+        FakeHermes(down={"local-gemma"}),
         check_models=("local-qwen::qwen", "local-gemma::gemma-4-12b-qat"),
     )
     assert [s.name for s in report.failed] == ["hermes-model:local-gemma::gemma-4-12b-qat"]
@@ -154,3 +154,51 @@ def test_hermes_down_or_silent_is_flagged() -> None:
         "http://127.0.0.1:8642", http_post=lambda *_: {"choices": [{"message": {}}]}
     )
     assert not ok and "no text" in detail
+
+
+def test_http_200_error_text_is_not_a_successful_local_model_probe() -> None:
+    for reply in (
+        {"choices": [{"message": {"content": "Could not connect to local Qwen"}}]},
+        {
+            "choices": [{"message": {"content": "ready"}, "finish_reason": "error"}],
+            "hermes": {"completed": False, "failed": True},
+        },
+        {
+            "choices": [{"message": {"content": "ready"}}],
+            "hermes": {"partial": True},
+        },
+    ):
+        ok, _ = probe_hermes(
+            "http://127.0.0.1:8642",
+            "local-qwen::qwen",
+            http_post=lambda *_, result=reply: result,
+        )
+        assert not ok
+
+
+def test_missing_runtime_metadata_is_reported_without_trusting_echoed_model() -> None:
+    ok, detail = probe_hermes(
+        "http://127.0.0.1:8642",
+        http_post=lambda *_: {
+            "model": "hermes-agent",
+            "choices": [{"message": {"content": "Ready."}}],
+        },
+    )
+    assert ok and "model not reported" in detail
+
+
+def test_missing_local_speech_never_enables_an_api_speech_provider() -> None:
+    client = FakeClient(
+        fail={
+            "POST /api/stt/switch": "not installed",
+            "POST /api/tts/switch": "not installed",
+        }
+    )
+    report = _run(client)
+    assert {s.name for s in report.failed} == {"stt", "tts"}
+    speech = [
+        b["provider"]
+        for _, path, b in client.calls
+        if path in ("/api/stt/switch", "/api/tts/switch")
+    ]
+    assert speech == ["nemotron-local", "faster-whisper", "piper-local"]

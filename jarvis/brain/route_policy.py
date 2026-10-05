@@ -214,6 +214,7 @@ def decide_route(
     available: Iterable[str],
     can_call_tools: Callable[[str, str | None], bool],
     supports_vision: Callable[[str, str | None], bool],
+    selected_model: Callable[[str], str | None] | None = None,
     environ: dict[str, str] | None = None,
 ) -> RouteDecision:
     """Pick the tier and the bounded, ordered chain for one turn.
@@ -254,6 +255,11 @@ def decide_route(
             excluded.append((tier, "not-configured"))
             continue
         provider, model = target
+        # A route with no explicit pin follows the provider card's selection.
+        # Resolve before checking denies/capabilities, never after admission.
+        if model is None and selected_model is not None:
+            model = selected_model(provider)
+            target = provider, model
         why = None
         if is_denied(policy, provider, model):
             why = "denied"

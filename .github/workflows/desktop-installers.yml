@@ -27,6 +27,8 @@ name: Desktop installers
 
 on:
   push:
+    branches:
+      - "jarvis/local-qwen-build"
     tags:
       - "v*.*.*"
   workflow_dispatch: {}
