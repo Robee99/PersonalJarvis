@@ -96,6 +96,38 @@ class TestConfirmPatterns:
     def test_confirm_en(self, transcript: str) -> None:
         assert classify_response(transcript, language="en") == "confirm"
 
+    @pytest.mark.parametrize(
+        "transcript",
+        [
+            "Yeah, that's all right.",
+            "yeah",
+            "yep",
+            "Okay.",
+            "alright",
+            "That's fine.",
+            "of course",
+            "please do",
+            "sounds good",
+        ],
+    )
+    def test_short_casual_answer_confirms_en(self, transcript: str) -> None:
+        assert classify_response(transcript, language="en") == "confirm"
+
+    @pytest.mark.parametrize(
+        "transcript",
+        [
+            "Is that alright?",
+            "Is it okay to take a photo from your webcam for vision?",
+            "okay so tell me what the weather looks like this weekend",
+            "fine, no",
+            "the weather is fine today",
+        ],
+    )
+    def test_casual_words_inside_questions_or_sentences_do_not_confirm_en(
+        self, transcript: str
+    ) -> None:
+        assert classify_response(transcript, language="en") != "confirm"
+
 
 class TestVetoPatterns:
     @pytest.mark.parametrize(
