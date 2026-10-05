@@ -3877,6 +3877,15 @@ class BrainManager:
         route policy on, on its fast target (the one every fast turn starts on).
         Capability-gated, never by provider name (AP-21).
         """
+        override = _TURN_OVERRIDE.get()
+        if override is not None:
+            # A chat's pick owns this turn even when the global voice brain
+            # and route policy point at a different provider.
+            try:
+                brain = self._get_brain(override.provider, override.model)
+            except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+                return False
+            return getattr(brain, "orchestrates_tools", False) is True
         names = [self._active_name]
         policy = self._route_policy()
         fast = getattr(policy, "fast", None) if policy is not None else None
@@ -11469,6 +11478,14 @@ class BrainManager:
         # An agent brain (Hermes Agent) owns tools, skills, missions, memory
         # writes and computer use; see _brain_orchestrates_tools.
         agent_owned = self._brain_orchestrates_tools()
+        private = _TURN_OVERRIDE.get()
+        if agent_owned and private is not None and private.tool_context.get("chat_read_only"):
+            # Our filtered tool set cannot restrict an external agent's own
+            # tools. Fail before dispatch rather than silently acting in Plan.
+            raise RuntimeError(
+                "The selected agent controls its own tools and cannot enforce Plan mode. "
+                "Switch this chat to Build mode before asking it to act."
+            )
         # Evidence-gate state is strictly per-turn — a stale directive must
         # never leak into a later prompt build (e.g. a skill turn that
         # early-returns before the gate runs).
@@ -12031,6 +12048,8 @@ class BrainManager:
             # (b) all filtered out by _dead_providers (no key set).
             # In production (b) is the common case — provide an actionable message.
             self._last_turn_all_failed = True
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "error"
             # Keep the actionable provider/key diagnostic in the LOG (UI/console
             # surface it), but SPEAK only a localized, provider-agnostic apology
             # — never read setup hints or provider names aloud (AP-11/ADR-0010).
@@ -12906,6 +12925,8 @@ class BrainManager:
 
         if used_provider is None and unknown_outcome_actions:
             self._last_turn_all_failed = True
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "error"
             response_text = _UNKNOWN_OUTCOME_PHRASES.get(
                 self._resolve_turn_lang(), _UNKNOWN_OUTCOME_PHRASES["en"]
             )
@@ -12917,6 +12938,8 @@ class BrainManager:
 
         if used_provider is None:
             self._last_turn_all_failed = True
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "error"
             log.error("Alle %d Provider-Versuche fehlgeschlagen. Letzter Fehler: %s",
                      len(chain), last_exc)
             # Developer diagnostic → LOG only. The voice path gets a localized,

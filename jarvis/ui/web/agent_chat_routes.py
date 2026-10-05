@@ -357,6 +357,10 @@ async def get_catalog(
         runner = resolve_runner(row.id, surface=surface)
         d["runner"] = runner
         d["cli_installed"] = _cli_installed(runner) if runner not in ("api", "brain") else None
+        if runner == "brain":
+            # The front page uses the brain catalog, whose ids can name an
+            # explicit agent provider. CLI defaults are a different contract.
+            d["models_source"] = "live"
         # A CLI that publishes its own model list (agy, Codex) overrides the
         # curated fallback with what THIS account can actually pick.
         if d["cli_installed"] and runner in live_models:

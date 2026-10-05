@@ -548,6 +548,9 @@ async def run_brain_turn(
         if override.receipt.guard_failure:
             status = "error"
             error = override.receipt.failure_reason or "guarded_response"
+        elif override.receipt.finish_reason in ("error", "length"):
+            status = "error"
+            error = "The selected agent did not complete this turn."
     await finish(status, override.receipt.usage(), error)
 
 

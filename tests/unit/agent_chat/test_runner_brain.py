@@ -164,6 +164,70 @@ async def test_a_jarvis_turn_runs_on_the_brain_with_the_sessions_pick(
     assert not svc.is_running(session.session_id)
 
 
+async def test_hermes_is_selectable_and_receives_the_main_chat_model_pick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.agent_chat.catalog import HERMES_FREE_MODELS, offers
+    from jarvis.agent_chat.service import resolve_runner
+
+    assert offers("jarvis", "hermes")
+    assert resolve_runner("hermes", surface="jarvis") == "brain"
+    assert resolve_runner("hermes", surface="agent") == "hermes-cli"
+    assert len(HERMES_FREE_MODELS) == 7
+    assert all(m.id.endswith(":free") for m in HERMES_FREE_MODELS)
+    selected = "nous::poolside/laguna-xs-2.1:free"
+    fake = FakeBrainManager()
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model=selected, effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "done"
+    override = fake.calls[0][1]["turn_override"]
+    assert (override.provider, override.model) == ("hermes", selected)
+
+
+async def test_a_provider_down_explanation_is_visible_but_finishes_as_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeBrainManager(reply="The agent could not finish this task.")
+    original = fake.generate
+
+    async def failed(text, **kwargs):
+        reply = await original(text, **kwargs)
+        kwargs["turn_override"].receipt.finish_reason = "error"
+        return reply
+
+    fake.generate = failed
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model="", effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "error"
+    assert any(e["kind"] == "assistant_text" for e in events)
+
+
+async def test_main_chat_fetches_the_brain_catalog_for_the_agent_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.ui.web import agent_chat_routes
+
+    async def no_cli_models():
+        return {}
+
+    monkeypatch.setattr(agent_chat_routes, "_live_cli_models", no_cli_models)
+    monkeypatch.setattr(agent_chat_routes, "_cli_installed", lambda _runner: False)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent_chat=_service(None))))
+    result = await agent_chat_routes.get_catalog(request, surface="jarvis")
+    row = next(p for p in result["providers"] if p["id"] == "hermes")
+    assert row["runner"] == "brain"
+    assert row["models_source"] == "live"
+    assert row["cli_installed"] is None
+
+
 async def test_history_is_the_sessions_own_log_in_prose(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):

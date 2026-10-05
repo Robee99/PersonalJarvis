@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
 from jarvis.agent_chat.effort import default_effort, effort_levels
-from jarvis.brain.model_catalog import CURATED_MODELS, GROK_BUILD_MODELS
+from jarvis.brain.model_catalog import CURATED_MODELS, GROK_BUILD_MODELS, catalog_spec
 
 log = logging.getLogger(__name__)
 
@@ -216,18 +216,14 @@ CODEX_FALLBACK_MODELS: Final[tuple[CuratedModel, ...]] = (
 
 #: The free models Hermes Agent's own picker curates on Nous Portal (its
 #: ``hermes model`` list, all priced free). Hermes reaches them with its own
-#: Nous login; the ids are Nous Portal's. A ``:free`` route or a stealth
-#: preview never bills, so a pick here cannot surprise anyone with a charge.
+#: Nous login; the ids are Nous Portal's. Keep the CLI list aligned with the
+#: brain catalog's explicitly free cloud choices; the brain card also offers
+#: local providers and qualifies its ids with the Hermes provider slug.
 HERMES_FREE_MODELS: Final[tuple[CuratedModel, ...]] = (
-    CuratedModel("stepfun/step-3.7-flash:free", "Step 3.7 Flash", note="free"),
-    CuratedModel("meituan/longcat-2.5-preview:free", "LongCat 2.5 Preview", note="free"),
-    CuratedModel("inclusionai/ling-3.0-flash-sante:free", "Ling 3.0 Flash", note="free"),
-    CuratedModel("poolside/laguna-s-2.1:free", "Laguna S 2.1", note="free"),
-    CuratedModel("poolside/laguna-xs-2.1:free", "Laguna XS 2.1", note="free"),
-    CuratedModel(
-        "stealth/space-bunny-alpha",
-        "Space Bunny (stealth)",
-        note="free · unknown provider, keep personal data out",
+    *(
+        CuratedModel(m.id.removeprefix("nous::"), m.label, note="free")
+        for m in catalog_spec("hermes").curated
+        if m.id.startswith("nous::") and m.id.endswith(":free")
     ),
 )
 
@@ -376,9 +372,7 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
         id="nvidia", label="NVIDIA NIM", family="nvidia", runner="api", models_source="live"
     ),
     # Nous Portal (cloud model host) — not the "hermes" CLI row above.
-    ProviderRow(
-        id="nous", label="Nous Portal", family="nous", runner="api", models_source="live"
-    ),
+    ProviderRow(id="nous", label="Nous Portal", family="nous", runner="api", models_source="live"),
     ProviderRow(
         id="vertex",
         label="Google Vertex AI",

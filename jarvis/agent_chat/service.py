@@ -49,7 +49,12 @@ from jarvis.agent_chat.questions import (
     answer_from,
     recommended_answer,
 )
-from jarvis.agent_chat.runner_api import TurnHandle, run_api_turn, supports_api_runner
+from jarvis.agent_chat.runner_api import (
+    TurnHandle,
+    run_api_turn,
+    supports_agent_brain,
+    supports_api_runner,
+)
 from jarvis.agent_chat.runner_brain import brain_history_from_events, run_brain_turn
 from jarvis.agent_chat.runner_cli import run_cli_turn, supports_cli_runner
 from jarvis.agent_chat.store import (
@@ -128,6 +133,10 @@ def resolve_runner(provider: str, *, surface: str = "agent") -> str:
         # does. ``rows_for`` keeps the picker to the same set, so "unknown"
         # is only reachable through a stale session or a hand-made request.
         return api_runner if supports_api_runner(row.id) else "unknown"
+    if kit.brain_runner and supports_agent_brain(row.id):
+        # An agent's API bridge keeps typed and spoken turns on the same
+        # harness, even when this surface also offers ordinary coding CLIs.
+        return "brain"
     if row.id == "claude-api":
         return "claude-cli" if _claude_cli_installed() else api_runner
     if row.runner == "api":
@@ -194,7 +203,14 @@ class _OpenQuestion:
     """
 
     __slots__ = (
-        "answers", "closing", "delivered", "result", "session_id", "specs", "turn_id", "wake",
+        "answers",
+        "closing",
+        "delivered",
+        "result",
+        "session_id",
+        "specs",
+        "turn_id",
+        "wake",
     )
 
     def __init__(
@@ -822,7 +838,9 @@ class AgentChatService:
 
             completion = (
                 TurnCompletion(
-                    self, handle, origin.user_text,
+                    self,
+                    handle,
+                    origin.user_text,
                     allow_correction=origin.direct_user and not read_only,
                     context=prompt,
                 )
@@ -831,7 +849,8 @@ class AgentChatService:
             )
             run_handle = (
                 replace(handle, emit=completion.emit, request_approval=completion.ask)
-                if completion is not None else handle
+                if completion is not None
+                else handle
             )
 
             async def run_attempt(run_prompt: str) -> None:
@@ -923,7 +942,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": None,
                         },
@@ -943,7 +963,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": f"{type(exc).__name__}: {exc}",
                         },
@@ -1349,7 +1370,8 @@ class AgentChatService:
     def undelivered_questions(self, session_id: str, turn_id: str) -> list[str]:
         """Cards whose answers have not reached the runner, including just-answered ones."""
         return [
-            qid for qid, q in self._questions.items()
+            qid
+            for qid, q in self._questions.items()
             if q.session_id == session_id and q.turn_id == turn_id and not q.delivered
         ]
 
