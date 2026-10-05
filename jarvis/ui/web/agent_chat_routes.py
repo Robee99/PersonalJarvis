@@ -361,6 +361,10 @@ async def get_catalog(
             # The front page uses the brain catalog, whose ids can name an
             # explicit agent provider. CLI defaults are a different contract.
             d["models_source"] = "live"
+        if row.id == "hermes" and runner == "brain":
+            # Hermes answers on its local API server with the key Hermes
+            # keeps itself; the Agents tab has no key to show for it.
+            d["keyless"] = True
         # A CLI that publishes its own model list (agy, Codex) overrides the
         # curated fallback with what THIS account can actually pick.
         if d["cli_installed"] and runner in live_models:
