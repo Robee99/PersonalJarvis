@@ -15511,7 +15511,10 @@ class SpeechPipeline:
             # LISTENING in silence — the user would keep talking into a void
             # ("Jarvis listens forever, never answers"). Say we missed it, then
             # resume so they can simply repeat.
-            await self._speak_stt_unavailable()
+            # No transcript exists, so the language comes from the reply-language
+            # pin or the running conversation (English by default), never a
+            # hard-coded German line (live 2026-10-05).
+            await self._speak_stt_unavailable(self._output_language(None, ""))
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
         log.info(
@@ -17518,14 +17521,14 @@ class SpeechPipeline:
         except Exception as exc:  # noqa: BLE001
             log.warning("Brain-unavailable fallback speak failed: %s", exc)
 
-    async def _speak_stt_unavailable(self, lang: str = "de") -> None:
+    async def _speak_stt_unavailable(self, lang: str = "en") -> None:
         """Zero-silent-drop (AD-OE6) for STT: say we couldn't transcribe the
         utterance instead of dropping back to LISTENING mute when
         ``_transcribe_final`` exhausted its retries (sustained cloud rate-limit
         / outage). Mirrors ``_speak_brain_unavailable``. No transcript exists
-        yet, so there is no detected language — default to German (the user's
-        primary; runtime TTS auto-detects anyway). Failures here are swallowed:
-        the fallback must never itself crash the turn.
+        yet, so the caller passes ``_output_language`` (reply-language pin,
+        then the running conversation). Failures here are swallowed: the
+        fallback must never itself crash the turn.
         """
         picker_lang = _phrase_lang(lang)
         phrase = _STT_UNAVAILABLE_PHRASE[picker_lang]
