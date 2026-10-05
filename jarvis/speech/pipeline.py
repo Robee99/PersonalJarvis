@@ -2688,12 +2688,14 @@ class SpeechPipeline:
         # cross-platform STT, sentence-TTS, playback receipts, follow-up
         # listening and barge-in machinery below stays the single audio path.
         if config is not None:
+            from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
             from jarvis.voice.subscription_profile import (  # noqa: PLC0415
                 CodexSubscriptionVoiceBrain,
                 subscription_voice_selected,
             )
 
-            if subscription_voice_selected(config):
+            # Hermes as the brain answers voice too; no second text transport.
+            if subscription_voice_selected(config) and not hermes_is_main_brain(config):
                 self._brain = CodexSubscriptionVoiceBrain(self._brain, config)
         # Flash-Brain reference (None when feature disabled).
         self._ack_brain: Any = ack_brain
@@ -7610,11 +7612,12 @@ class SpeechPipeline:
         """Return the normalized configured engine for the next session."""
         config = getattr(self, "_config", None)
         if config is not None:
+            from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
             from jarvis.voice.subscription_profile import (  # noqa: PLC0415
                 subscription_voice_selected,
             )
 
-            if subscription_voice_selected(config):
+            if subscription_voice_selected(config) or hermes_is_main_brain(config):
                 return "pipeline"
         mode = str(
             getattr(
@@ -7707,7 +7710,9 @@ class SpeechPipeline:
             voice.profile = normalized
             if normalized:
                 voice.mode = "pipeline"
-        if normalized:
+        from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
+
+        if normalized and not hermes_is_main_brain(getattr(self, "_config", None)):
             if not isinstance(self._brain, CodexSubscriptionVoiceBrain):
                 self._brain = CodexSubscriptionVoiceBrain(
                     getattr(self, "_base_brain", self._brain),

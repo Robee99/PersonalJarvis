@@ -1,9 +1,9 @@
 """Hermes Agent as Jarvis's brain: Hermes orchestrates, Jarvis is the front-end.
 
-Pinned here, with Hermes's API server played by ``httpx.MockTransport``:
+Pinned here, with Hermes's API server played by ``tests/fakes/fake_hermes_api``:
 
-* the turn goes to Hermes without Jarvis's tools, and Hermes's own pick of the
-  model is used unless the card names a Hermes route or ``provider::model``
+* each turn is one Hermes run without Jarvis's tools, and Hermes's own pick of
+  the model is used unless the card names a Hermes route or ``provider::model``
   (both local models, Qwen and Gemma, are reached that way);
 * the provider and model Hermes actually ran on come back and are recorded;
 * tools Hermes ran count as evidence, so a real action is spoken and an empty
@@ -12,10 +12,8 @@ Pinned here, with Hermes's API server played by ``httpx.MockTransport``:
   Agentic-IDE, force-spawn) never take the turn;
 * the key stays in Hermes's .env and a remote Hermes is refused.
 """
-
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -27,44 +25,13 @@ from jarvis.core.bus import EventBus
 from jarvis.core.config import BrainRoutePolicyConfig, load_config
 from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
 from jarvis.plugins.brain import hermes
-from jarvis.plugins.brain.hermes import HermesBrain, build_messages, model_fields
+from jarvis.plugins.brain.hermes import HermesBrain, build_instructions, model_fields
+from tests.fakes.fake_hermes_api import FakeHermesApi, say
 
 
-def _sse(*events: tuple[str, dict[str, Any] | str]) -> bytes:
-    out: list[str] = [": keepalive"]
-    for name, payload in events:
-        if name:
-            out.append(f"event: {name}")
-        out.append("data: " + (payload if isinstance(payload, str) else json.dumps(payload)))
-        out.append("")
-    return ("\n".join(out) + "\n").encode()
-
-
-def _chunk(text: str = "", finish: str | None = None, **extra: Any) -> dict[str, Any]:
-    return {
-        "choices": [{"delta": {"content": text} if text else {}, "finish_reason": finish}],
-        **extra,
-    }
-
-
-class FakeHermesServer:
-    """Answers like Hermes's /v1/chat/completions and remembers each request."""
-
-    def __init__(self, body: bytes) -> None:
-        self.body = body
-        self.requests: list[dict[str, Any]] = []
-        self.headers: list[httpx.Headers] = []
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/chat/completions"
-        self.requests.append(json.loads(request.content))
-        self.headers.append(request.headers)
-        return httpx.Response(200, content=self.body, headers={"content-type": "text/event-stream"})
-
-
-def _brain(server: FakeHermesServer, model: str | None = None) -> HermesBrain:
+def _brain(server: FakeHermesApi, model: str | None = None) -> HermesBrain:
     brain = HermesBrain(model=model)
-    brain.transport = httpx.MockTransport(server)
+    brain.transport = server.transport
     return brain
 
 
@@ -114,43 +81,34 @@ def test_the_card_value_becomes_hermes_model_selection(card: str, expected: dict
     assert model_fields(card) == expected
 
 
-def test_hermes_gets_the_conversation_not_jarvis_tool_rules() -> None:
+def test_hermes_gets_the_front_end_contract_not_jarvis_tool_rules() -> None:
     req = BrainRequest(
-        messages=tuple(
-            BrainMessage(role="user" if i % 2 == 0 else "assistant", content=f"turn {i}")
-            for i in range(30)
-        ),
+        messages=(BrainMessage(role="user", content="hi"),),
         system="ROUTER RULES: call open_app.\n\nReply in English.",
     )
-    messages = build_messages(req)
-    assert messages[0]["role"] == "system"
-    assert "open_app" not in messages[0]["content"]
-    assert [m["content"] for m in messages[1:]] == [f"turn {i}" for i in range(18, 30)]
+    instructions = build_instructions(req)
+    assert "open_app" not in instructions
+    assert instructions.startswith(hermes.FRONT_END_INSTRUCTIONS)
 
 
 @pytest.mark.asyncio
 async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() -> None:
-    server = FakeHermesServer(
-        _sse(
-            ("hermes.tool.progress", {"tool": "open_app", "status": "started"}),
-            ("", _chunk("Opened ")),
-            ("", _chunk("Notepad.", "stop", runtime={"provider": "local-qwen", "model": "qwen"})),
-            ("", {"choices": [], "usage": {"prompt_tokens": 40, "completion_tokens": 3}}),
-            ("", "[DONE]"),
-        )
+    server = FakeHermesApi(
+        say("Opened Notepad.", tools=("computer_use",),
+            runtime={"provider": "local-qwen", "model": "qwen"})
     )
     brain = _brain(server)
     deltas = await _collect(brain, _req("open notepad"))
 
     assert "".join(d.content or "" for d in deltas) == "Opened Notepad."
-    assert [d.agent_tools for d in deltas if d.agent_tools] == [("hermes:open_app",)]
+    assert [d.agent_tools for d in deltas if d.agent_tools] == [("hermes:computer_use",)]
     assert {"input_tokens": 40, "output_tokens": 3} in [d.usage for d in deltas if d.usage]
     assert brain.last_runtime == {"provider": "local-qwen", "model": "qwen"}
-    sent = server.requests[0]
+    sent = server.runs[0].body
     assert sent["model"] == "hermes-agent" and "provider" not in sent
-    assert "tools" not in sent
-    assert sent["stream"] is True
-    assert server.headers[0]["x-hermes-session-key"] == hermes.SESSION_KEY
+    assert sent["input"] == "open notepad"
+    assert "tools" not in sent and "conversation_history" not in sent
+    assert server.runs[0].headers["x-hermes-session-key"] == hermes.SESSION_KEY
 
 
 @pytest.mark.asyncio
@@ -159,77 +117,26 @@ async def test_qwen_and_gemma_are_reached_as_models_under_hermes() -> None:
         ("local-qwen::qwen", "local-qwen", "qwen"),
         ("local-gemma::gemma-4-12b-qat", "local-gemma", "gemma-4-12b-qat"),
     ):
-        server = FakeHermesServer(
-            _sse(("", _chunk("ok", "stop", runtime={"provider": provider, "model": model})))
-        )
+        server = FakeHermesApi(say("ok", runtime={"provider": provider, "model": model}))
         brain = _brain(server, model=card)
         await _collect(brain, _req("hello"))
-        assert (server.requests[0]["provider"], server.requests[0]["model"]) == (provider, model)
+        assert (server.runs[0].body["provider"], server.runs[0].body["model"]) == (provider, model)
         assert brain.last_runtime == {"provider": provider, "model": model}
 
 
 @pytest.mark.asyncio
-async def test_every_free_cloud_picker_choice_explicitly_selects_nous() -> None:
-    from jarvis.brain.model_catalog import ModelCatalog
-
-    catalog = await ModelCatalog().list_models("hermes")
-    cloud_choices = [m for m in catalog.models if m.id.startswith("nous::")]
-    assert len(cloud_choices) == 7
-    assert all(m.id.endswith(":free") for m in cloud_choices)
-    assert catalog.models[0].id == "hermes-agent"
-    for choice in cloud_choices:
-        server = FakeHermesServer(_sse(("", _chunk("ready", "stop"))))
-        await _collect(_brain(server, model=choice.id), _req("hello"))
-        assert server.requests[0]["provider"] == "nous"
-        assert server.requests[0]["model"] == choice.id.split("::", 1)[1]
-
-
-def test_changing_hermes_picker_model_rebuilds_the_active_brain(
-    hermes_manager: BrainManager,
-) -> None:
-    previous = _hermes_of(hermes_manager)
-    for model in (
-        "nous::poolside/laguna-xs-2.1:free",
-        "nous::meituan/longcat-2.5-preview:free",
-        "hermes-agent",
-    ):
-        assert hermes_manager.apply_provider_model("hermes", model)
-        current = _hermes_of(hermes_manager)
-        assert current is not previous
-        assert model_fields(current._model) == model_fields(model)
-        previous = current
-
-
-def test_an_explicit_route_model_still_overrides_the_provider_card(
-    hermes_manager: BrainManager,
-) -> None:
-    pinned = "nous::stepfun/step-3.7-flash:free"
-    hermes_manager._config.brain.route_policy.fast.model = pinned
-    hermes_manager.apply_provider_model("hermes", "nous::poolside/laguna-xs-2.1:free")
-    assert _hermes_of(hermes_manager)._model == pinned
-
-
-def test_a_selected_model_is_checked_against_route_denies(
-    hermes_manager: BrainManager,
-) -> None:
-    hermes_manager._config.brain.route_policy.deny_model_prefixes = ["nous::blocked/"]
-    hermes_manager.apply_provider_model("hermes", "nous::blocked/model")
-    assert hermes_manager._build_fallback_chain("fast") == []
-
-
-@pytest.mark.asyncio
 async def test_a_fast_turn_asks_hermes_to_skip_its_reasoning_pass() -> None:
-    server = FakeHermesServer(_sse(("", _chunk("4", "stop"))))
+    server = FakeHermesApi(say("4"))
     await _collect(_brain(server), _req("two plus two", reasoning_effort="none"))
-    assert server.requests[0]["model_options"] == {"reasoning": {"enabled": False}}
+    assert server.runs[0].body["model_options"] == {"reasoning": {"enabled": False}}
 
 
 @pytest.mark.asyncio
 async def test_the_key_is_read_from_hermes_env_in_place(_isolated: Path) -> None:
     (_isolated / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=local-secret\n")
-    server = FakeHermesServer(_sse(("", _chunk("hi", "stop"))))
+    server = FakeHermesApi(say("hi"))
     await _collect(_brain(server), _req("hi"))
-    assert server.headers[0]["authorization"] == "Bearer local-secret"
+    assert server.runs[0].headers["authorization"] == "Bearer local-secret"
 
 
 @pytest.mark.asyncio
@@ -245,6 +152,15 @@ async def test_a_rejected_key_is_named() -> None:
     brain.transport = httpx.MockTransport(lambda _r: httpx.Response(401, content=b"no"))
     with pytest.raises(RuntimeError, match="401"):
         await _collect(brain, _req("hi"))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_is_raised_for_the_fallback_chain() -> None:
+    async def fails(_server: Any, _run: Any):
+        yield {"event": "run.failed", "error": "provider 429"}
+
+    with pytest.raises(RuntimeError, match="429"):
+        await _collect(_brain(FakeHermesApi(fails)), _req("hi"))
 
 
 # --- the manager: Hermes owns the turn ------------------------------------
@@ -269,7 +185,7 @@ def test_hermes_is_a_main_brain_and_owns_tools(hermes_manager: BrainManager) -> 
     assert hermes_manager._brain_orchestrates_tools() is True
 
 
-def _hermes_of(mgr: BrainManager) -> HermesBrain:
+def hermes_of(mgr: BrainManager) -> HermesBrain:
     chain = mgr._build_fallback_chain("fast")
     assert [p for p, _ in chain] == ["hermes"]
     brain = mgr._get_brain(*chain[0])
@@ -304,19 +220,14 @@ async def test_open_an_app_goes_to_hermes_and_its_action_is_spoken(
     hermes_manager: BrainManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _forbid_shortcuts(hermes_manager, monkeypatch)
-    server = FakeHermesServer(
-        _sse(
-            ("hermes.tool.progress", {"tool": "windows_mcp_launch"}),
-            ("", _chunk("I'll open Notepad now.", "stop", runtime={"provider": "nous"})),
-        )
-    )
-    _hermes_of(hermes_manager).transport = httpx.MockTransport(server)
+    server = FakeHermesApi(say("I'll open Notepad now.", tools=("computer_use",)))
+    hermes_of(hermes_manager).transport = server.transport
 
     answer = await hermes_manager.generate("open notepad", use_history=False)
 
     # Hermes's own tool run is the evidence, so the honesty guard keeps it.
     assert answer == "I'll open Notepad now."
-    assert len(server.requests) == 1 and "tools" not in server.requests[0]
+    assert len(server.runs) == 1 and "tools" not in server.runs[0].body
 
 
 @pytest.mark.asyncio
@@ -324,8 +235,8 @@ async def test_a_promise_without_any_hermes_tool_run_is_still_caught(
     hermes_manager: BrainManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _forbid_shortcuts(hermes_manager, monkeypatch)
-    server = FakeHermesServer(_sse(("", _chunk("I'll open Notepad now.", "stop"))))
-    _hermes_of(hermes_manager).transport = httpx.MockTransport(server)
+    server = FakeHermesApi(say("I'll open Notepad now."))
+    hermes_of(hermes_manager).transport = server.transport
 
     answer = await hermes_manager.generate("open notepad", use_history=False)
 

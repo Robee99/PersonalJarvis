@@ -282,13 +282,14 @@ async def get_voice_mode(request: Request) -> dict[str, object]:
 
     cfg = getattr(request.app.state, "config", None) or getattr(request.app.state, "cfg", None)
     mode = getattr(getattr(cfg, "voice", None), "mode", "pipeline")
+    from jarvis.brain.route_policy import hermes_is_main_brain
     from jarvis.voice.subscription_profile import (
         LEGACY_CODEX_REALTIME_PROVIDER,
         configured_voice_profile,
     )
 
     profile = configured_voice_profile(cfg) if cfg is not None else ""
-    if profile:
+    if profile or (cfg is not None and hermes_is_main_brain(cfg)):
         mode = "pipeline"
     # Cross-family (AP-22): resolved via the SAME ordering the realtime
     # session factory uses, so this never disagrees with what a realtime
@@ -405,8 +406,18 @@ async def put_voice_mode(body: VoiceModeBody, request: Request) -> dict[str, obj
         raise HTTPException(status_code=400, detail=f"mode must be one of {_VOICE_MODES}")
 
     cfg = getattr(request.app.state, "config", None) or getattr(request.app.state, "cfg", None)
+    from jarvis.brain.route_policy import hermes_is_main_brain
     from jarvis.voice.subscription_profile import subscription_voice_selected
 
+    if body.mode == "realtime" and cfg is not None and hermes_is_main_brain(cfg):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Hermes Agent is the brain, so voice runs through the Pipeline "
+                "engine and every turn reaches Hermes. Pick another brain "
+                "before enabling Realtime mode."
+            ),
+        )
     if body.mode == "realtime" and cfg is not None and subscription_voice_selected(cfg):
         raise HTTPException(
             status_code=400,

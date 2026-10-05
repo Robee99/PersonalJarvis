@@ -182,6 +182,22 @@ def _target(policy: Any, tier: str) -> tuple[str, str | None] | None:
     return provider, (str(model).strip() or None) if model else None
 
 
+def hermes_is_main_brain(config: Any) -> bool:
+    """Whether Hermes Agent answers Jarvis's turns in ``config``.
+
+    Voice then has to reach Hermes too: a realtime voice model or the
+    subscription voice profile would be a second brain beside it (ADR-0042).
+    """
+    brain = getattr(config, "brain", None)
+    if str(getattr(brain, "primary", "") or "").strip().lower() == "hermes":
+        return True
+    policy = getattr(brain, "route_policy", None)
+    fast = getattr(policy, "fast", None)
+    return bool(getattr(policy, "enabled", False)) and (
+        str(getattr(fast, "provider", "") or "").strip().lower() == "hermes"
+    )
+
+
 def is_denied(policy: Any, provider: str, model: str | None) -> bool:
     """True when the configured deny lists exclude this provider or model."""
     denied = {p.strip() for p in (getattr(policy, "deny_providers", None) or []) if p}
