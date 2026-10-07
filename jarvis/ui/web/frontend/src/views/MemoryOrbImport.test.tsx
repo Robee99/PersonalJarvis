@@ -41,7 +41,15 @@ describe("Import Data on the memory orb", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/wiki/import") return json({ ...base });
-      if (url === "/api/wiki/import/j1") return json({ ...base, phase: "done", running: false, imported: 3 });
+      if (url === "/api/wiki/import/j1")
+        return json({
+          ...base,
+          phase: "done",
+          running: false,
+          imported: 3,
+          conversations: 2,
+          skipped_types: { ".png: picture (no text)": 20 },
+        });
       return json({}, 404);
     });
 
@@ -61,6 +69,8 @@ describe("Import Data on the memory orb", () => {
     expect(JSON.parse(String(started?.[1]?.body))).toEqual({ path: "C:\\AI DATA" });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["orb", "sources"] });
     expect(screen.getByText("Obsidian vault detected.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("2 conversation pages");
+    expect(screen.getByText("Skipped 20 × .png: picture (no text)")).toBeTruthy();
   });
 
   it("shows why a source was refused", async () => {

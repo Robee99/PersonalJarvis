@@ -98,7 +98,7 @@ def test_a_folder_lands_under_imports_with_paths_frontmatter_and_links_kept(
     assert not (root / "attachments").exists() and not (root / "_archive").exists()
     assert not any(p.name == "app.json" for p in vault.rglob("*")), ".obsidian is not knowledge"
     assert result.imported == 3 and result.updated == 0 and result.failed == 0
-    assert result.skip_reasons == {"unsupported type": 1, "empty": 1}
+    assert result.skip_reasons == {"picture (no text)": 1, "empty": 1}
     assert result.extensions[".md"] == 3
     assert result.indexed == 3
 
@@ -263,3 +263,125 @@ def test_the_memory_orb_routes_import_report_progress_and_show_the_pages(
         missing = client.post("/api/wiki/import", json={"path": str(source / "nope")})
         assert missing.status_code == 400
         assert client.get("/api/wiki/import/unknown").status_code == 404
+
+
+# --- documents and AI chat exports ------------------------------------------
+
+
+def _docx(path: Path, text: str) -> None:
+    import zipfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        zf.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+            f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>",
+        )
+
+
+CHATGPT_EXPORT = [
+    {
+        "title": "Falcon launch plan",
+        "create_time": 1791300000,
+        "current_node": "c",
+        "mapping": {
+            "root": {"message": None, "parent": None},
+            "a": {
+                "parent": "root",
+                "message": {"author": {"role": "user"}, "content": {"parts": ["When is launch?"]}},
+            },
+            "b": {
+                "parent": "a",
+                "message": {
+                    "author": {"role": "assistant"},
+                    "content": {"parts": ["Launch is on Heron_Day_Marker."]},
+                },
+            },
+            "c": {
+                "parent": "b",
+                "message": {
+                    "author": {"role": "user"},
+                    "content": {"parts": ["my key is sk-proj-" + "b" * 48]},
+                },
+            },
+        },
+    }
+]
+
+CLAUDE_EXPORT = [
+    {
+        "uuid": "1",
+        "name": "Garden ideas",
+        "created_at": "2026-09-01T10:00:00Z",
+        "chat_messages": [
+            {"sender": "human", "text": "What should I plant?"},
+            {"sender": "assistant", "content": [{"type": "text", "text": "Try Kestrel_Tomato."}]},
+        ],
+    }
+]
+
+
+def test_chat_exports_become_one_page_per_conversation_with_keys_masked(
+    tmp_path: Path, vault: Path, db_path: Path
+) -> None:
+    import json
+
+    src = tmp_path / "AI DATA"
+    _write(src / "chatgpt" / "conversations.json", json.dumps(CHATGPT_EXPORT))
+    _write(src / "claude" / "conversations.json", json.dumps(CLAUDE_EXPORT))
+    rows = [
+        {"messages": [{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}]}
+        for i in range(30)
+    ]
+    _write(src / "dataset.jsonl", "\n".join(json.dumps(r) for r in rows))
+
+    result = run_import(src, vault, db_path=db_path)
+
+    assert result.failed == 0 and result.skipped == 0
+    assert result.conversations == 4, "2 export conversations + 2 dataset pages of 25"
+    root = vault / IMPORT_DIR / source_label(src.resolve())
+    falcon = (root / "chatgpt" / "conversations" / "Falcon launch plan.md").read_text("utf-8")
+    assert falcon.startswith("# Falcon launch plan")
+    assert "**You:**\n\nWhen is launch?" in falcon
+    assert "**Assistant:**\n\nLaunch is on Heron_Day_Marker." in falcon
+    assert "sk-proj-" not in falcon and "<redacted:" in falcon
+    assert (root / "claude" / "conversations" / "Garden ideas.md").is_file()
+    assert sorted(p.name for p in (root / "dataset").iterdir()) == [
+        "dataset 00001-00025.md",
+        "dataset 00026-00030.md",
+    ]
+    assert _search(vault, db_path, "Heron_Day_Marker") == ["Falcon launch plan"]
+    assert _search(vault, db_path, "Kestrel_Tomato") == ["Garden ideas"]
+
+    again = run_import(src, vault, db_path=db_path)
+    assert (again.imported, again.updated, again.unchanged) == (0, 0, 4)
+
+
+def test_documents_become_pages_and_files_without_text_say_why(
+    tmp_path: Path, vault: Path, db_path: Path
+) -> None:
+    src = tmp_path / "docs"
+    _docx(src / "Plan.docx", "The budget code is Osprey_Budget_Marker")
+    _write(src / "page.html", "<html><body><h1>Hi</h1><p>Plover_Html_Marker</p></body></html>")
+    _write(src / "table.csv", "name,code\nalpha,Tern_Csv_Marker\n")
+    _write(src / "settings.json", '{"theme": "Gull_Json_Marker"}')
+    _write(src / "Plan.md", "# Plan\n\nThe markdown plan.\n")
+    _write(src / "photo.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 20)
+    _write(src / "old.doc", b"\xd0\xcf\x11\xe0" + b"\x00" * 20)
+
+    result = run_import(src, vault, db_path=db_path)
+
+    root = vault / IMPORT_DIR / source_label(src.resolve())
+    assert (root / "Plan.docx.md").read_text("utf-8").startswith("# Plan\n\n_Imported from")
+    assert (root / "Plan.md").read_text("utf-8") == "# Plan\n\nThe markdown plan.\n"
+    for marker in ("Osprey_Budget_Marker", "Plover_Html_Marker", "Tern_Csv_Marker",
+                   "Gull_Json_Marker"):
+        assert _search(vault, db_path, marker), marker
+    assert result.imported == 5
+    assert result.skipped_types == {
+        ".jpg: picture (no text)": 1,
+        ".doc: old Office format (save it as .docx/.xlsx/.pptx)": 1,
+    }
+    assert result.problems == [], "pictures and old files are counted, not listed as problems"

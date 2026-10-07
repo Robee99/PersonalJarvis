@@ -25,6 +25,10 @@ export interface ImportState {
   failed: number;
   current: string;
   skip_reasons: Record<string, number>;
+  /** "<extension>: <reason>" → files, for the files that gave no page. */
+  skipped_types?: Record<string, number>;
+  /** Pages made from AI chat exports (one per conversation). */
+  conversations?: number;
   problems: { path: string; reason: string }[];
   error: string;
 }
@@ -41,6 +45,7 @@ async function detail(res: Response): Promise<string> {
 /** A one-line summary of where an import stands. */
 export function importSummary(s: ImportState): string {
   const parts = [`${s.imported} new`, `${s.updated} updated`, `${s.unchanged} unchanged`];
+  if (s.conversations) parts.push(`${s.conversations} conversation pages`);
   if (s.skipped) parts.push(`${s.skipped} skipped`);
   if (s.failed) parts.push(`${s.failed} failed`);
   const counts = parts.join(" · ");
@@ -141,7 +146,8 @@ export function MemoryOrbImport() {
             </button>
           </div>
           <p className="mb-2 text-slate-400">
-            A folder of notes, an Obsidian vault or one file. Markdown and text files are added to memory;
+            A folder of notes, an Obsidian vault or one file. Notes, documents (PDF, Word, slides,
+            spreadsheets, web pages) and AI chat exports (ChatGPT, Claude) are added to memory;
             re-importing only picks up what changed.
           </p>
           <div className="flex gap-2">
@@ -193,6 +199,13 @@ export function MemoryOrbImport() {
               </p>
               {state.obsidian_vault && <p className="text-slate-400">Obsidian vault detected.</p>}
               {running && state.current && <p className="truncate text-slate-500">{state.current}</p>}
+              {Object.entries(state.skipped_types ?? {})
+                .slice(0, 6)
+                .map(([what, n]) => (
+                  <p key={what} className="truncate text-slate-400">
+                    Skipped {n} × {what}
+                  </p>
+                ))}
               {state.problems.slice(0, 5).map((p) => (
                 <p key={p.path} className="truncate text-slate-500">
                   {p.path}: {p.reason}

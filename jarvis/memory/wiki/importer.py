@@ -19,8 +19,12 @@ batches. Nothing else is created: no second store, no import database.
   text and written as text.
 
 Markdown is copied byte-for-byte so frontmatter, tags and ``[[wikilinks]]``
-keep working; plain text becomes a page titled after its file name. Other
-formats are counted and reported as unsupported.
+keep working; plain text becomes a page titled after its file name. Documents
+(PDF, Office, HTML, CSV, JSON, code…) become one page of their text, and AI
+chat exports (ChatGPT, Claude, chat datasets) one page per conversation
+(``import_formats``). In converted pages a key or token is masked
+(``redact_secrets``) and the page is skipped if one is still found. Files with
+no text (pictures, archives, old Office files) are counted with the reason.
 """
 
 from __future__ import annotations
@@ -40,7 +44,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final
 
+from jarvis.core.redact import redact_secrets
 from jarvis.memory.wiki import fts_index
+from jarvis.memory.wiki.import_formats import (
+    NO_TEXT_REASONS,
+    NoText,
+    Page,
+    conversation_pages,
+    document_page,
+)
 from jarvis.memory.wiki.secret_guard import contains_secret
 
 log = logging.getLogger(__name__)
@@ -54,6 +66,12 @@ TEXT_SUFFIXES: Final[frozenset[str]] = frozenset({".txt"})
 
 #: A note bigger than this is reported, not imported.
 MAX_FILE_BYTES: Final[int] = 2_000_000
+#: The same for a document (PDF, Office…) and for a chat export, which are
+#: mostly markup and metadata around the text.
+MAX_DOCUMENT_BYTES: Final[int] = 64 * 1024 * 1024
+MAX_EXPORT_BYTES: Final[int] = 256 * 1024 * 1024
+#: JSON that may be an AI chat export or dataset.
+EXPORT_SUFFIXES: Final[frozenset[str]] = frozenset({".json", ".jsonl", ".ndjson"})
 
 #: Pages per FTS commit.
 INDEX_BATCH: Final[int] = 50
@@ -92,6 +110,8 @@ class ImportProgress:
     current: str = ""
     extensions: Counter[str] = field(default_factory=Counter)
     skip_reasons: Counter[str] = field(default_factory=Counter)
+    skipped_types: Counter[str] = field(default_factory=Counter)
+    conversations: int = 0
     problems: list[dict[str, str]] = field(default_factory=list)
     error: str = ""
     started_at: float = 0.0
@@ -116,6 +136,8 @@ class ImportProgress:
             "current": self.current,
             "extensions": dict(self.extensions.most_common()),
             "skip_reasons": dict(self.skip_reasons),
+            "skipped_types": dict(self.skipped_types.most_common(12)),
+            "conversations": self.conversations,
             "problems": list(self.problems[:50]),
             "error": self.error,
             "started_at": self.started_at,
@@ -326,30 +348,72 @@ def _import_one(
     indexer: _Indexer,
 ) -> None:
     suffix = path.suffix.lower()
-    if suffix not in MARKDOWN_SUFFIXES | TEXT_SUFFIXES:
-        _skip(progress, relative, "unsupported type")
-        return
-    progress.supported += 1
+    verbatim = suffix in MARKDOWN_SUFFIXES | TEXT_SUFFIXES
+    limit = (
+        MAX_FILE_BYTES if verbatim
+        else MAX_EXPORT_BYTES if suffix in EXPORT_SUFFIXES
+        else MAX_DOCUMENT_BYTES
+    )
     try:
         size = path.stat().st_size
         progress.total_bytes += size
-        if size > MAX_FILE_BYTES:
+        if size > limit:
             _skip(progress, relative, "too large")
             return
-        raw = path.read_bytes()
+        raw = path.read_bytes() if verbatim or suffix in EXPORT_SUFFIXES else b""
     except OSError as exc:  # reported per file in the job's problems list
         _fail(progress, relative, f"unreadable ({type(exc).__name__})")
         return
-    try:
-        content = page_text(path, raw)
-    except ValueError as exc:  # binary or empty: reported as a skip reason
-        _skip(progress, relative, str(exc))
+    if verbatim:
+        try:
+            content = page_text(path, raw)
+        except ValueError as exc:  # binary or empty: reported as a skip reason
+            _skip(progress, relative, str(exc))
+            return
+        progress.supported += 1
+        if contains_secret(content):
+            _skip(progress, relative, "looks like it holds a key or token")
+            return
+        _write(destination_for(relative, import_root), content, relative, progress, indexer)
         return
-    if contains_secret(content):
-        _skip(progress, relative, "looks like it holds a key or token")
-        return
+
+    pages: list[Page] | None = None
+    if suffix in EXPORT_SUFFIXES:
+        pages = conversation_pages(path, raw)
+        if pages is not None:
+            progress.conversations += len(pages)
+    if pages is None:
+        try:
+            pages = [document_page(path)]
+        except NoText as exc:  # pictures, archives…: counted with the reason
+            _skip(progress, relative, str(exc))
+            return
+        target_of = {pages[0].name: relative.parent / f"{relative.name}.md"}
+    else:
+        folder = relative.parent / relative.stem
+        target_of = {page.name: folder / f"{page.name}.md" for page in pages}
+    progress.supported += 1
+    for page in pages:
+        body = redact_secrets(page.body)
+        if contains_secret(body):
+            _skip(progress, relative, "looks like it holds a key or token")
+            continue
+        try:
+            target = destination_for(target_of[page.name], import_root)
+        except ImportRefused:  # reported per page in the job's problems list
+            _fail(progress, relative, "could not name its page")
+            continue
+        _write(target, body, relative, progress, indexer)
+
+
+def _write(
+    target: Path,
+    content: str,
+    relative: Path,
+    progress: ImportProgress,
+    indexer: _Indexer,
+) -> None:
     try:
-        target = destination_for(relative, import_root)
         existing = (
             target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
         )
@@ -357,7 +421,7 @@ def _import_one(
             progress.unchanged += 1
             return
         write_page_atomic(target, content)
-    except (OSError, ImportRefused) as exc:  # reported per file in the job's problems list
+    except OSError as exc:  # reported per file in the job's problems list
         _fail(progress, relative, f"could not write ({type(exc).__name__})")
         return
     if existing is None:
@@ -367,10 +431,16 @@ def _import_one(
     indexer.add(target)
 
 
+#: Skip reasons counted but not listed file by file: they are the normal
+#: contents of a folder, not problems.
+_QUIET_REASONS: Final[frozenset[str]] = frozenset({"empty", *NO_TEXT_REASONS.values()})
+
+
 def _skip(progress: ImportProgress, relative: Path, reason: str) -> None:
     progress.skipped += 1
     progress.skip_reasons[reason] += 1
-    if reason != "unsupported type":
+    progress.skipped_types[f"{relative.suffix.lower() or '(no extension)'}: {reason}"] += 1
+    if reason not in _QUIET_REASONS:
         progress.problems.append({"path": relative.as_posix(), "reason": reason})
 
 
