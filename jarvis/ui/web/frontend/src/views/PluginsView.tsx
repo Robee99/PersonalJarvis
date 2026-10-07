@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { CommunityTab } from "@/views/PluginsCommunity";
 import { PluginUploadDialog } from "@/views/PluginUploadDialog";
+import { ArmoryStat, HermesArmoryGroup } from "@/views/ArmoryHermes";
 import { fill, translate } from "@/i18n";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BrandedSelect } from "@/components/ui/select";
@@ -1475,21 +1476,27 @@ function PluginArmory({
           Everything the assistant can reach. Connect an app and it uses it mid-conversation.
         </p>
 
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <ArmoryStat label="Apps" value={`${connected} / ${total}`} hint="connected" />
-          <ArmoryStat
-            label="MCP servers"
-            value={`${mcps?.running ?? 0} / ${mcps?.total ?? 0}`}
-            hint="running"
-            onClick={() => onSection("mcps")}
-          />
-          <ArmoryStat
-            label="Skills"
-            value={String(skills?.skills?.length ?? 0)}
-            hint="ready to use"
-            onClick={() => onSection("skills")}
-          />
-        </div>
+        <section aria-label="Jarvis" className="mt-5">
+          <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">
+            Jarvis <span className="normal-case tracking-normal text-slate-600">Jarvis&apos;s own tools</span>
+          </p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ArmoryStat label="Apps" value={`${connected} / ${total}`} hint="connected" />
+            <ArmoryStat
+              label="MCP servers"
+              value={`${mcps?.running ?? 0} / ${mcps?.total ?? 0}`}
+              hint="running"
+              onClick={() => onSection("mcps")}
+            />
+            <ArmoryStat
+              label="Skills"
+              value={String(skills?.skills?.length ?? 0)}
+              hint="ready to use"
+              onClick={() => onSection("skills")}
+            />
+          </div>
+        </section>
+        <HermesArmoryGroup />
 
         <label className="mt-6 flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-slate-400 focus-within:border-cyan-300/50">
           <Search className="h-4 w-4 shrink-0" aria-hidden />
@@ -1540,22 +1547,6 @@ function PluginArmory({
         )}
       </div>
     </div>
-  );
-}
-
-function ArmoryStat({ label, value, hint, onClick }: { label: string; value: string; hint: string; onClick?: () => void }) {
-  const body = (
-    <>
-      <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">{label}</span>
-      <span className="mt-1 block text-2xl font-semibold text-slate-50">{value}</span>
-      <span className="text-xs text-slate-400">{hint}</span>
-    </>
-  );
-  const className = "block w-full rounded-xl border border-white/10 bg-white/[0.03] p-4 text-left";
-  return onClick ? (
-    <button type="button" onClick={onClick} className={cn(className, "hover:border-cyan-300/40")}>{body}</button>
-  ) : (
-    <div className={className}>{body}</div>
   );
 }
 
