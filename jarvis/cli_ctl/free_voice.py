@@ -256,6 +256,31 @@ def keep_hermes_aux_free(*, hermes_argv: list[str] | None, run: Runner = _run) -
     return "changed", "Hermes's side models (vision, summaries) use free models only"
 
 
+#: Context size at which Hermes compacts the Jarvis session. Hermes's own
+#: prompt and tool schemas are about 20k tokens; without a cap the one
+#: long-lived ``jarvis-main`` session grew to 100k-200k tokens per turn on the
+#: owner's PC (6-52 s replies), because the ratio threshold only fires at half
+#: of a large model window.
+LEAN_CONTEXT_TOKENS = 40_000
+
+
+def keep_hermes_context_lean(
+    *, hermes_argv: list[str] | None, run: Runner = _run
+) -> tuple[str, str]:
+    """Cap the context Hermes carries per turn, so spoken replies stay fast."""
+    if not hermes_argv:
+        return "failed", "the hermes command is not on PATH"
+    code, output = run(
+        [*hermes_argv, "config", "set", "compression.threshold_tokens", str(LEAN_CONTEXT_TOKENS)]
+    )
+    if code != 0:
+        return "failed", f"hermes config set failed: {output[:300]}"
+    return "changed", (
+        f"Hermes compacts the conversation above {LEAN_CONTEXT_TOKENS:,} tokens; "
+        "restart the Hermes gateway to apply it"
+    )
+
+
 def _call(client: Any, method: str, path: str, body: Any = None) -> Any:
     return client.request(method, path, json=body)
 
@@ -269,6 +294,7 @@ def run_free_voice(
     clock: Callable[[], float] = time.monotonic,
     link_memory: Callable[[], tuple[str, str]] | None = None,
     free_aux: Callable[[], tuple[str, str]] | None = None,
+    lean_context: Callable[[], tuple[str, str]] | None = None,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -376,6 +402,13 @@ def run_free_voice(
         except OSError as exc:
             report.add("hermes-free-aux", "failed", f"{type(exc).__name__}: {exc}")
 
+    # --- Fast replies: Hermes's per-turn context stays small ------------------
+    if lean_context is not None:
+        try:
+            report.add("hermes-lean-context", *lean_context())
+        except OSError as exc:
+            report.add("hermes-lean-context", "failed", f"{type(exc).__name__}: {exc}")
+
     return report
 
 
@@ -403,19 +436,23 @@ def link_memory_for(client: Any) -> Callable[[], tuple[str, str]]:
     return link
 
 
+def _local_hermes_argv() -> list[str] | None:
+    from jarvis.agent_chat.runner_cli import CliUnavailable, hermes_argv_prefix
+
+    try:
+        return hermes_argv_prefix()
+    except CliUnavailable:  # no hermes on PATH: reported as the step failure
+        return None
+
+
 def free_aux_for() -> Callable[[], tuple[str, str]]:
     """The production free-only switch for this machine's Hermes."""
+    return lambda: keep_hermes_aux_free(hermes_argv=_local_hermes_argv())
 
-    def keep_free() -> tuple[str, str]:
-        from jarvis.agent_chat.runner_cli import CliUnavailable, hermes_argv_prefix
 
-        try:
-            argv: list[str] | None = hermes_argv_prefix()
-        except CliUnavailable:  # no hermes on PATH: reported as the step failure
-            argv = None
-        return keep_hermes_aux_free(hermes_argv=argv)
-
-    return keep_free
+def lean_context_for() -> Callable[[], tuple[str, str]]:
+    """The production context cap for this machine's Hermes."""
+    return lambda: keep_hermes_context_lean(hermes_argv=_local_hermes_argv())
 
 
 def render_report(report: FreeVoiceReport) -> str:

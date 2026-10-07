@@ -269,3 +269,18 @@ def test_hermes_side_models_are_kept_free() -> None:
     assert keep_hermes_aux_free(hermes_argv=["hermes"], run=run)[0] == "changed"
     assert calls == [["hermes", "config", "set", "auxiliary.free_only", "true"]]
     assert keep_hermes_aux_free(hermes_argv=None, run=run)[0] == "failed"
+
+
+def test_hermes_context_is_capped_for_fast_replies() -> None:
+    from jarvis.cli_ctl.free_voice import LEAN_CONTEXT_TOKENS, keep_hermes_context_lean
+
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, ""
+
+    assert keep_hermes_context_lean(hermes_argv=["hermes"], run=run)[0] == "changed"
+    assert calls == [
+        ["hermes", "config", "set", "compression.threshold_tokens", str(LEAN_CONTEXT_TOKENS)]
+    ]

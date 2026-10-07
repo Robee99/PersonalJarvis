@@ -136,6 +136,7 @@ def free_voice(
     from jarvis.cli_ctl.__main__ import as_json, make_client
     from jarvis.cli_ctl.free_voice import (
         free_aux_for,
+        lean_context_for,
         link_memory_for,
         render_report,
         run_free_voice,
@@ -148,6 +149,7 @@ def free_voice(
             check_models=tuple(check_model or ()),
             link_memory=link_memory_for(client) if link_memory else None,
             free_aux=free_aux_for(),
+            lean_context=lean_context_for(),
         )
     if as_json():
         render.emit(report.as_dict(), as_json=True)
