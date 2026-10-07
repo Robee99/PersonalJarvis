@@ -11691,6 +11691,23 @@ class BrainManager:
             )
             return nav_reply
 
+        # Brightness reflex: a plain "set the brightness to 40" is answered
+        # without a model, also when Hermes owns the turn, and the reply states
+        # only what Windows reads back afterwards (jarvis/platform/brightness.py).
+        # Negations, questions and conditions never match and reach the brain.
+        if not screen_context.has_image:
+            from jarvis.platform.brightness import brightness_reflex
+
+            brightness_reply = await asyncio.to_thread(brightness_reflex, user_text)
+            if brightness_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=brightness_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return brightness_reply
+
         # Agentic-IDE fleet close: "close all Codex terminals" is a concrete
         # workspace action, not a question for the router to interpret. It runs
         # before addressed delivery so the word "all" cannot become a prompt

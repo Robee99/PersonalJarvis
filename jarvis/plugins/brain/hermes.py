@@ -109,6 +109,22 @@ FRONT_END_INSTRUCTIONS = (
     "Say you did something only after a tool actually did it."
 )
 
+#: Added when the user asked only to look ("don't click anything, just look").
+OBSERVE_ONLY_INSTRUCTIONS = (
+    "This turn is observation only: the user asked you to look, not to act. "
+    "You may capture or read the screen, a page or a file, but do not click, "
+    "type, press keys, open, close, launch, send, write or change anything. "
+    "Describe what you see."
+)
+
+#: Tools that change something; one starting in an observation-only turn
+#: stops the run. ``computer_use`` input actions ask for approval first, and
+#: Jarvis denies those itself in such a turn.
+_ACTING_TOOLS = frozenset({
+    "browser_click", "browser_type", "browser_press", "browser_vault_fill",
+    "browser_vault_save_login", "write_file", "patch",
+})
+
 
 def _hermes_home_candidates() -> list[Path]:
     homes: list[Path] = []
@@ -194,7 +210,43 @@ def build_instructions(req: BrainRequest) -> str:
     lang = extract_reply_language_directive(req.system)
     if lang:
         parts.append(lang)
+    if observation_only(latest_user_text(req)):
+        parts.append(OBSERVE_ONLY_INSTRUCTIONS)
     return "\n\n".join(parts)
+
+
+def observation_only(text: str) -> bool:
+    """Whether the user asked only to look (Jarvis's own look-not-act gate)."""
+    from jarvis.brain.cu_gate import is_observation_only
+
+    return bool(text) and is_observation_only(text)
+
+
+def latest_user_message(req: BrainRequest) -> BrainMessage | None:
+    for message in reversed(req.messages):
+        if getattr(message, "role", None) == "user":
+            return message
+    return None
+
+
+def run_input(req: BrainRequest) -> str | list[dict[str, Any]]:
+    """The run's ``input``: the newest user text, with its images when it has any.
+
+    Images go as OpenAI ``image_url`` parts in one user message; Hermes hands
+    them to a model that can see, or describes them with its own vision tool
+    when the model cannot. Whether an image may leave the machine at all is
+    decided before this brain is picked (``route_policy.media_chain``).
+    """
+    text = latest_user_text(req)
+    message = latest_user_message(req)
+    images = tuple(getattr(message, "images", ()) or ()) if message is not None else ()
+    if not images:
+        return text
+    parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
+    for image in images:
+        url = f"data:{image.mime};base64,{image.data_b64}"
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    return [{"role": "user", "content": parts}]
 
 
 def latest_user_text(req: BrainRequest) -> str:
@@ -269,6 +321,13 @@ class _PendingApproval:
     reasks: int = field(default=0)
 
 
+def observe_only_stop_message(tool: str) -> str:
+    """What Jarvis says when Hermes tried to act in a look-only turn."""
+    return (
+        f"I stopped Hermes: you asked me only to look, and it started to act ({tool})."
+    )
+
+
 async def _single(text: str) -> AsyncIterator[BrainDelta]:
     yield BrainDelta(content=text)
     yield BrainDelta(finish_reason="stop")
@@ -282,9 +341,11 @@ class HermesBrain:
     # Tool turns are served: Hermes calls its own tools. Jarvis's tool list is
     # never sent, so no Jarvis tool call can come back.
     supports_tools: bool = True
-    # Hermes takes images, but whether its model can see is Hermes's config;
-    # screenshots stay with Hermes's own tools instead of Jarvis attachments.
-    supports_vision: bool = False
+    # Images in the turn are forwarded (``run_input``): Hermes sends them to a
+    # model that can see or describes them with its own vision tool, and says
+    # so when neither works. Screen Context stays off for Hermes, which looks
+    # with its own computer_use capture.
+    supports_vision: bool = True
     # The turn belongs to Hermes: Jarvis's shortcuts and tool mandates stand
     # down (BrainManager._brain_orchestrates_tools).
     orchestrates_tools: bool = True
@@ -303,6 +364,7 @@ class HermesBrain:
         self.announce: Callable[[str, str], Awaitable[None]] | None = None
         self.delivery_poll_s = DELIVERY_POLL_S
         self._delegated = False
+        self._observe_only = False
         self._watcher: asyncio.Task[None] | None = None
 
     def can_call_tools(self) -> bool:
@@ -331,7 +393,7 @@ class HermesBrain:
         """One run in the Jarvis session: Hermes loads the history itself."""
         body: dict[str, Any] = {
             **model_fields(self._model),
-            "input": latest_user_text(req),
+            "input": run_input(req),
             "instructions": build_instructions(req),
             "session_id": SESSION_ID,
         }
@@ -350,6 +412,7 @@ class HermesBrain:
                 return
         self.last_runtime = None
         self._delegated = False
+        self._observe_only = observation_only(latest_user_text(req))
         run = await self._start(self.request_body(req))
         # Closed with this turn, so a turn the user cuts off stops the run.
         async with aclosing(self._relay(run)) as relay:
@@ -417,6 +480,18 @@ class HermesBrain:
                 if isinstance(item, BaseException):
                     raise item
                 name = str(item.get("event") or "") if isinstance(item, dict) else ""
+                if name == "approval.request" and self._observe_only:
+                    # The user asked only to look: nothing that needs approval runs.
+                    await self._post_approval(run, str(item.get("request_id") or ""), "deny")
+                    log.info("Hermes approval denied: the user asked only to look")
+                    continue
+                if name == "tool.started" and self._observe_only:
+                    tool = tool_name_of(item)
+                    if tool in _ACTING_TOOLS:
+                        log.warning("Hermes started %s in a look-only turn; stopping it", tool)
+                        yield BrainDelta(content=observe_only_stop_message(tool))
+                        yield BrainDelta(finish_reason="stop")
+                        return
                 if name == "approval.request":
                     parked = True
                     language = phrase_language()
