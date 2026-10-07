@@ -284,3 +284,40 @@ def test_hermes_context_is_capped_for_fast_replies() -> None:
     assert calls == [
         ["hermes", "config", "set", "compression.threshold_tokens", str(LEAN_CONTEXT_TOKENS)]
     ]
+
+
+def test_hermes_gets_its_computer_use_for_jarvis_runs() -> None:
+    from jarvis.cli_ctl.free_voice import enable_hermes_computer_use
+
+    calls: list[list[str]] = []
+    installs: list[list[str]] = []
+    statuses = iter(["cua-driver: not installed", "cua-driver 0.4.2 ready"])
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, next(statuses) if argv[-1] == "status" else "✓ Enabled: computer_use"
+
+    def install(argv: list[str]) -> tuple[int, str]:
+        installs.append(argv)
+        return 0, "installed"
+
+    status, _detail = enable_hermes_computer_use(hermes_argv=["hermes"], run=run, install=install)
+    assert status == "changed"
+    assert installs == [["hermes", "computer-use", "install"]]
+    assert calls[-1] == ["hermes", "tools", "enable", "--platform", "api_server", "computer_use"]
+
+
+def test_a_missing_computer_use_driver_is_reported_and_not_enabled() -> None:
+    from jarvis.cli_ctl.free_voice import enable_hermes_computer_use
+
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, "cua-driver: not installed"
+
+    status, detail = enable_hermes_computer_use(
+        hermes_argv=["hermes"], run=run, install=lambda _argv: (1, "download failed")
+    )
+    assert status == "failed" and "download failed" in detail
+    assert not any("enable" in argv for argv in calls)

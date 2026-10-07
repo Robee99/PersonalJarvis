@@ -61,3 +61,13 @@ def wired_computer_use():
     )
     yield
     set_computer_use_context(None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hermes_sessions():
+    """Hermes approval and delivery state is per session, process-wide: reset it."""
+    from jarvis.plugins.brain import hermes
+
+    hermes._SESSIONS.clear()  # noqa: SLF001 — test-only reset of the session table
+    yield
+    hermes._SESSIONS.clear()  # noqa: SLF001

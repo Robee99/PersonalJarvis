@@ -3750,6 +3750,14 @@ class BrainManager:
                     "is a bug (a silent DEFAULT_MODEL fallback), not expected.",
                     name, model, actual,
                 )
+        # An agent brain with its own server-side session (Hermes) joins the
+        # person's conversation only for the turns the person makes: the
+        # unscoped voice/legacy brain and the typed chat (``agent`` scope).
+        # Every other scope (goal checks, probes) keeps the brain's own
+        # background session, so housekeeping never lands in the conversation.
+        join = getattr(inst, "join_conversation", None)
+        if callable(join) and scope in (None, "agent"):
+            join()
         self._brain_cache[key] = inst
         return inst
 
@@ -3865,6 +3873,14 @@ class BrainManager:
         if override.loop_control is not None:
             kwargs["loop_control"] = override.loop_control
         return kwargs
+
+    def _active_orchestrates_tools(self) -> bool:
+        """Whether the active (global) brain is an agent that runs its own tools."""
+        try:
+            brain = self._get_brain(self._active_name, None)
+        except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+            return False
+        return getattr(brain, "orchestrates_tools", False) is True
 
     def _brain_orchestrates_tools(self) -> bool:
         """Whether the turn's first brain is an agent that runs its own tools.
@@ -10943,6 +10959,11 @@ class BrainManager:
             return filter_denied(policy, chain) if policy is not None else chain
         if policy is not None:
             return self._policy_chain(policy, level)
+        if self._active_orchestrates_tools():
+            # An agent brain (Hermes) is the one brain (ADR-0042): it picks its
+            # own model and its own free fallbacks. No Jarvis deep brain, router
+            # fallback or cross-provider tail may answer in its place.
+            return [(active, self._fast_model(active))]
 
         # Capability-driven tool delegation (NOT a per-provider hardcode): the
         # subscription-CLI brains (Codex over the ChatGPT login, Antigravity over

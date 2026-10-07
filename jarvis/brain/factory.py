@@ -1825,6 +1825,13 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
     telemetry labels show the concrete provider.
     """
     from jarvis.brain.ack_brain.providers import REGISTRY
+    from jarvis.brain.route_policy import hermes_is_main_brain
+
+    if hermes_is_main_brain(jcfg):
+        # One brain (ADR-0042): no second model writes what Jarvis says while
+        # Hermes answers. Every flash consumer then uses its canned pool.
+        log.info("Flash-Brain: Hermes is the brain — canned acknowledgements only.")
+        return None
 
     provider_name = ack_cfg.provider
     if provider_name == "follow_brain":

@@ -77,9 +77,35 @@ PROVIDER_SEPARATOR = "::"
 #: shares one long-term memory lane, like one chat on a messaging platform.
 SESSION_KEY = "jarvis:main"
 
-#: The one Hermes session every Jarvis run continues: Hermes loads the history
-#: from its own store.
+#: The one Hermes session every Jarvis conversation turn continues, spoken or
+#: typed: Hermes loads the history from its own store. Only BrainManager's
+#: conversation brain is put on it (``BrainManager._get_brain``).
 SESSION_ID = "jarvis-main"
+
+#: Where every other Hermes call goes: wiki curation, learning review, goal
+#: checks, provider probes. The person's conversation never carries Jarvis's
+#: own housekeeping prompts.
+BACKGROUND_SESSION_ID = "jarvis-background"
+
+
+@dataclass(slots=True)
+class _SessionState:
+    """What belongs to a Hermes session, not to one HermesBrain object.
+
+    Voice and the typed chat build separate brain objects for the same
+    session; an approval asked in one is answered in the other, and one
+    background result is announced once.
+    """
+
+    pending_approval: _PendingApproval | None = None
+    watcher: asyncio.Task[None] | None = None
+
+
+_SESSIONS: dict[str, _SessionState] = {}
+
+
+def _session_state(session_id: str) -> _SessionState:
+    return _SESSIONS.setdefault(session_id, _SessionState())
 
 #: Hermes's delegation tool; its background result lands in the session.
 DELEGATE_TOOL = "delegate_task"
@@ -358,14 +384,35 @@ class HermesBrain:
         self.last_runtime: dict[str, Any] | None = None
         # An ``httpx`` transport for tests (``httpx.MockTransport``); None = network.
         self.transport: Any = None
-        # A Hermes run parked on an approval the user has been asked about.
-        self.pending_approval: _PendingApproval | None = None
+        # Housekeeping by default; BrainManager moves its conversation brain
+        # onto SESSION_ID.
+        self.session_id = BACKGROUND_SESSION_ID
         # Speaks a background result; None = Jarvis's announcement event.
         self.announce: Callable[[str, str], Awaitable[None]] | None = None
         self.delivery_poll_s = DELIVERY_POLL_S
         self._delegated = False
         self._observe_only = False
-        self._watcher: asyncio.Task[None] | None = None
+
+    def join_conversation(self) -> None:
+        """Put this brain on the person's conversation session (voice and chat)."""
+        self.session_id = SESSION_ID
+
+    @property
+    def pending_approval(self) -> _PendingApproval | None:
+        """A Hermes run in this session parked on an approval the user was asked about."""
+        return _session_state(self.session_id).pending_approval
+
+    @pending_approval.setter
+    def pending_approval(self, value: _PendingApproval | None) -> None:
+        _session_state(self.session_id).pending_approval = value
+
+    @property
+    def _watcher(self) -> asyncio.Task[None] | None:
+        return _session_state(self.session_id).watcher
+
+    @_watcher.setter
+    def _watcher(self, value: asyncio.Task[None] | None) -> None:
+        _session_state(self.session_id).watcher = value
 
     def can_call_tools(self) -> bool:
         return True
@@ -395,7 +442,7 @@ class HermesBrain:
             **model_fields(self._model),
             "input": run_input(req),
             "instructions": build_instructions(req),
-            "session_id": SESSION_ID,
+            "session_id": self.session_id,
         }
         if getattr(req, "reasoning_effort", None) == "none" or thinking_off_by_config():
             body["model_options"] = {"reasoning": {"enabled": False}}
@@ -619,7 +666,7 @@ class HermesBrain:
         try:
             async with self._client() as client:
                 resp = await client.get(
-                    f"{base_url}/api/sessions/{SESSION_ID}/messages",
+                    f"{base_url}/api/sessions/{self.session_id}/messages",
                     params={"order": "latest", "limit": "50"},
                     headers=self._headers(base_url),
                 )

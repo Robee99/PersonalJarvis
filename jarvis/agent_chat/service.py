@@ -368,6 +368,12 @@ class AgentChatService:
         surface: str = DEFAULT_SURFACE,
         account_id: str = "",
     ) -> AgentChatSession:
+        if surface == "jarvis":
+            from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+            if provider != HERMES_SEAT and hermes_is_live_brain():
+                # A pick saved before Hermes became the brain opens on Hermes.
+                provider, model, account_id = HERMES_SEAT, "", ""
         row = provider_row(provider)
         if row is None and not supports_api_runner(provider):
             raise ValueError(f"Unknown agent-chat provider: {provider!r}")
@@ -627,6 +633,14 @@ class AgentChatService:
         if session.surface == "society":
             session = await self.bind_society_session(session_id, routine_run=routine_run)
         selected_runner = None
+        if session.surface == "jarvis":
+            from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+            if session.provider != HERMES_SEAT and hermes_is_live_brain():
+                # A chat opened on another seat before Hermes became the brain
+                # continues on Hermes: one assistant, one conversation.
+                session = replace(session, provider=HERMES_SEAT, model="", vendor_session=None)
+                self.store.reseat_session(session_id, provider=HERMES_SEAT, model="")
         if session.surface == "jarvis":
             from jarvis.core.task_agent import subscription_seat_off_loop
 

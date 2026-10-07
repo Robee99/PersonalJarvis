@@ -382,6 +382,7 @@ class WebServer:
         from .friends_routes import router as friends_router
         from .frontier_routes import router as frontier_router
         from .grok_build_routes import router as grok_build_router
+        from .acceptance_routes import router as acceptance_router
         from .hermes_inventory_routes import router as hermes_inventory_router
         from .holo_routes import api_router as holo_api_router
         from .holo_routes import router as holo_router
@@ -451,6 +452,7 @@ class WebServer:
         app.include_router(agent_mcp_router)
         app.include_router(tools_router)
         app.include_router(hermes_inventory_router)
+        app.include_router(acceptance_router)
         app.include_router(tool_model_router)
         # Jarvis' OWN tools, offered outwards over MCP so an agent-chat session
         # drives Jarvis instead of a bare workspace. Key-gated like the rest of

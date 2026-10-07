@@ -198,6 +198,19 @@ def hermes_is_main_brain(config: Any) -> bool:
     )
 
 
+def hermes_is_live_brain() -> bool:
+    """``hermes_is_main_brain`` for the running app's config (False before it is built)."""
+    from jarvis.core import runtime_refs
+
+    manager = runtime_refs.get_brain_manager()
+    config = getattr(manager, "_config", None)
+    return config is not None and hermes_is_main_brain(config)
+
+
+#: The chat seat that answers on the Jarvis surface while Hermes is the brain.
+HERMES_SEAT = "hermes"
+
+
 def is_denied(policy: Any, provider: str, model: str | None) -> bool:
     """True when the configured deny lists exclude this provider or model."""
     denied = {p.strip() for p in (getattr(policy, "deny_providers", None) or []) if p}

@@ -196,6 +196,22 @@ def _run(argv: list[str]) -> tuple[int, str]:
     return done.returncode, (done.stderr or done.stdout).strip()
 
 
+def _run_long(argv: list[str]) -> tuple[int, str]:
+    """``_run`` for a download (the computer-use driver): a timeout is a failure, not a crash."""
+    try:
+        done = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=600,
+            check=False,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+        )
+    except subprocess.TimeoutExpired:  # reported to the caller as exit code 124
+        return 124, "timed out after 600 s"
+    return done.returncode, (done.stderr or done.stdout).strip()
+
+
 def write_env_value(env_file: Any, name: str, value: str) -> None:
     """Set ``name=value`` in a dotenv file, replacing an earlier line."""
     from pathlib import Path
@@ -295,6 +311,7 @@ def run_free_voice(
     link_memory: Callable[[], tuple[str, str]] | None = None,
     free_aux: Callable[[], tuple[str, str]] | None = None,
     lean_context: Callable[[], tuple[str, str]] | None = None,
+    computer_use: Callable[[], tuple[str, str]] | None = None,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -409,6 +426,13 @@ def run_free_voice(
         except OSError as exc:
             report.add("hermes-lean-context", "failed", f"{type(exc).__name__}: {exc}")
 
+    # --- Hands: Hermes's own computer use for Jarvis's runs -------------------
+    if computer_use is not None:
+        try:
+            report.add("hermes-computer-use", *computer_use())
+        except OSError as exc:
+            report.add("hermes-computer-use", "failed", f"{type(exc).__name__}: {exc}")
+
     return report
 
 
@@ -453,6 +477,42 @@ def free_aux_for() -> Callable[[], tuple[str, str]]:
 def lean_context_for() -> Callable[[], tuple[str, str]]:
     """The production context cap for this machine's Hermes."""
     return lambda: keep_hermes_context_lean(hermes_argv=_local_hermes_argv())
+
+
+#: Hermes's platform key for its API server, the one every Jarvis run uses.
+HERMES_API_PLATFORM = "api_server"
+
+
+def enable_hermes_computer_use(
+    *, hermes_argv: list[str] | None, run: Runner = _run, install: Runner = _run_long
+) -> tuple[str, str]:
+    """Give Hermes its own computer use for Jarvis's runs.
+
+    Hermes ships ``computer_use`` (cua-driver: the Windows accessibility tree,
+    screenshots, background input, an approval per action) but leaves it out
+    of the API server's default toolset, so a spoken "open Notepad and type"
+    had no hands. Installs the driver with Hermes's own installer when it is
+    missing, then enables the toolset for the API server platform.
+    """
+    if not hermes_argv:
+        return "failed", "the hermes command is not on PATH"
+    _code, status = run([*hermes_argv, "computer-use", "status"])
+    if "not installed" in status.lower():
+        code, output = install([*hermes_argv, "computer-use", "install"])
+        _code, status = run([*hermes_argv, "computer-use", "status"])
+        if code != 0 or "not installed" in status.lower():
+            return "failed", f"Hermes could not install its computer-use driver: {output[:300]}"
+    code, output = run(
+        [*hermes_argv, "tools", "enable", "--platform", HERMES_API_PLATFORM, "computer_use"]
+    )
+    if code != 0:
+        return "failed", f"hermes tools enable failed: {output[:300]}"
+    return "changed", "Hermes can see and use this computer (each action asks first)"
+
+
+def computer_use_for() -> Callable[[], tuple[str, str]]:
+    """The production computer-use switch for this machine's Hermes."""
+    return lambda: enable_hermes_computer_use(hermes_argv=_local_hermes_argv())
 
 
 def render_report(report: FreeVoiceReport) -> str:

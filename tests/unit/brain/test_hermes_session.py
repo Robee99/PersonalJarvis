@@ -37,6 +37,7 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _brain(server: FakeHermesApi) -> HermesBrain:
     brain = HermesBrain()
+    brain.join_conversation()
     brain.transport = server.transport
     return brain
 

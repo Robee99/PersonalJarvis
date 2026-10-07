@@ -424,6 +424,14 @@ def rows_for(surface: str) -> tuple[ProviderRow, ...]:
     """
     from jarvis.agent_chat.surface_kits import kit_for
 
+    if surface == "jarvis":
+        from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+        if hermes_is_live_brain():
+            # One brain (ADR-0042): while Hermes answers voice, the front page's
+            # chat is Hermes too, in the same session. Another seat here would
+            # be a second assistant with its own memory of the conversation.
+            return tuple(row for row in PROVIDER_ROWS if row.id == HERMES_SEAT)
     if kit_for(surface).cli_seats:
         return tuple(row for row in PROVIDER_ROWS if not row.agent or _ide_has(row.agent))
     from jarvis.agent_chat.runner_api import supports_api_runner
