@@ -241,6 +241,21 @@ def connect_hermes_memory(
     )
 
 
+def keep_hermes_aux_free(*, hermes_argv: list[str] | None, run: Runner = _run) -> tuple[str, str]:
+    """Keep Hermes's side models (vision, compression, titles) free.
+
+    Hermes's auxiliary auto-chain can fall back to a paid OpenRouter model when
+    an OpenRouter key is present; ``auxiliary.free_only`` skips that step
+    unless the model is a ``:free`` one. Returns ``(status, detail)``.
+    """
+    if not hermes_argv:
+        return "failed", "the hermes command is not on PATH"
+    code, output = run([*hermes_argv, "config", "set", "auxiliary.free_only", "true"])
+    if code != 0:
+        return "failed", f"hermes config set failed: {output[:300]}"
+    return "changed", "Hermes's side models (vision, summaries) use free models only"
+
+
 def _call(client: Any, method: str, path: str, body: Any = None) -> Any:
     return client.request(method, path, json=body)
 
@@ -253,6 +268,7 @@ def run_free_voice(
     http_post: HttpPost = _http_post,
     clock: Callable[[], float] = time.monotonic,
     link_memory: Callable[[], tuple[str, str]] | None = None,
+    free_aux: Callable[[], tuple[str, str]] | None = None,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -353,6 +369,13 @@ def run_free_voice(
         except OSError as exc:
             report.add("hermes-memory", "failed", f"{type(exc).__name__}: {exc}")
 
+    # --- No paid fallback for Hermes's side models ----------------------------
+    if free_aux is not None:
+        try:
+            report.add("hermes-free-aux", *free_aux())
+        except OSError as exc:
+            report.add("hermes-free-aux", "failed", f"{type(exc).__name__}: {exc}")
+
     return report
 
 
@@ -378,6 +401,21 @@ def link_memory_for(client: Any) -> Callable[[], tuple[str, str]]:
         )
 
     return link
+
+
+def free_aux_for() -> Callable[[], tuple[str, str]]:
+    """The production free-only switch for this machine's Hermes."""
+
+    def keep_free() -> tuple[str, str]:
+        from jarvis.agent_chat.runner_cli import CliUnavailable, hermes_argv_prefix
+
+        try:
+            argv: list[str] | None = hermes_argv_prefix()
+        except CliUnavailable:  # no hermes on PATH: reported as the step failure
+            argv = None
+        return keep_hermes_aux_free(hermes_argv=argv)
+
+    return keep_free
 
 
 def render_report(report: FreeVoiceReport) -> str:

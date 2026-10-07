@@ -255,3 +255,17 @@ def test_the_memory_link_reports_what_is_missing(tmp_path) -> None:
     )
     assert no_key[0] == no_hermes[0] == "failed"
     assert not (tmp_path / ".env").exists()
+
+
+def test_hermes_side_models_are_kept_free() -> None:
+    from jarvis.cli_ctl.free_voice import keep_hermes_aux_free
+
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, ""
+
+    assert keep_hermes_aux_free(hermes_argv=["hermes"], run=run)[0] == "changed"
+    assert calls == [["hermes", "config", "set", "auxiliary.free_only", "true"]]
+    assert keep_hermes_aux_free(hermes_argv=None, run=run)[0] == "failed"
