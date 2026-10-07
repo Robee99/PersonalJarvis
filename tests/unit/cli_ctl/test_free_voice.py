@@ -202,3 +202,56 @@ def test_missing_local_speech_never_enables_an_api_speech_provider() -> None:
         if path in ("/api/stt/switch", "/api/tts/switch")
     ]
     assert speech == ["nemotron-local", "faster-whisper", "piper-local"]
+
+
+def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_path) -> None:
+    import json
+
+    from jarvis.cli_ctl.free_voice import CONTROL_KEY_ENV, connect_hermes_memory
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("API_SERVER_KEY=abc\nJARVIS_CONTROL_KEY=old\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, ""
+
+    status, _detail = connect_hermes_memory(
+        jarvis_url="http://127.0.0.1:47821/",
+        control_key="ck-new",
+        env_file=env_file,
+        hermes_argv=["hermes"],
+        run=run,
+    )
+
+    assert status == "changed"
+    assert env_file.read_text(encoding="utf-8").splitlines() == [
+        "API_SERVER_KEY=abc",
+        f"{CONTROL_KEY_ENV}=ck-new",
+    ]
+    (argv,) = calls
+    assert argv[:4] == ["hermes", "config", "set", "mcp_servers.jarvis"]
+    entry = json.loads(argv[4])
+    assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp"
+    assert entry["headers"] == {"Authorization": "Bearer ${JARVIS_CONTROL_KEY}"}
+    assert entry["tools"]["include"] == ["wiki-recall", "wiki-list"]
+    assert "ck-new" not in argv[4], "the key never goes on a command line or into config.yaml"
+
+
+def test_the_memory_link_reports_what_is_missing(tmp_path) -> None:
+    from jarvis.cli_ctl.free_voice import connect_hermes_memory
+
+    def never(_argv: list[str]) -> tuple[int, str]:
+        raise AssertionError("hermes must not run")
+
+    no_key = connect_hermes_memory(
+        jarvis_url="http://x", control_key=None, env_file=tmp_path / ".env",
+        hermes_argv=["hermes"], run=never,
+    )
+    no_hermes = connect_hermes_memory(
+        jarvis_url="http://x", control_key="k", env_file=tmp_path / ".env",
+        hermes_argv=None, run=never,
+    )
+    assert no_key[0] == no_hermes[0] == "failed"
+    assert not (tmp_path / ".env").exists()

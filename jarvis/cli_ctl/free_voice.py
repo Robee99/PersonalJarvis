@@ -9,7 +9,8 @@ It configures the RUNNING app through its own API, so every write goes through
 the same validated writers the settings UI uses (TOML, drift baseline and the
 boot ENV layer stay in step). Nothing here edits ``jarvis.toml`` directly, and
 nothing here configures Hermes: its models, local servers, MCP servers and
-memory live in Hermes's own config.
+memory live in Hermes's own config. The one exception is the memory link
+below, which adds a single MCP entry through Hermes's own ``config set``.
 
 What it sets, and what it only reports:
 
@@ -24,6 +25,10 @@ What it sets, and what it only reports:
   own (no second tier, no Paperclip escalation), and paid providers stay
   deny-listed so a failure never becomes a paid fallback inside Jarvis.
 * Missions: the sub-agent worker is Hermes too.
+* Memory: Hermes gets Jarvis's wiki recall as an MCP server (``jarvis`` in
+  Hermes's ``mcp_servers``, only the wiki tools), so notes imported into the
+  memory orb are knowledge Hermes can look up. The Jarvis control key it needs
+  is written to Hermes's own ``.env``, never to its ``config.yaml``.
 * Voice: Pipeline mode (the brain answers; Realtime would hand every turn to the
   realtime provider instead). Speech-to-text and text-to-speech are switched to
   the first provider that works without paying, local ones first because they
@@ -35,6 +40,8 @@ one failing step never stops the rest.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -167,6 +174,65 @@ def probe_hermes(
     return True, f"answered in {elapsed:.1f}s on {used}"
 
 
+#: The Jarvis tools Hermes may call over MCP: wiki recall only. Everything else
+#: (computer use, the browser, files) is Hermes's own.
+HERMES_MEMORY_TOOLS: tuple[str, ...] = ("wiki-recall", "wiki-list")
+#: The name of the ``.env`` variable that carries Jarvis's control key.
+CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"
+
+Runner = Callable[[list[str]], tuple[int, str]]
+
+
+def _run(argv: list[str]) -> tuple[int, str]:
+    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    return done.returncode, (done.stderr or done.stdout).strip()
+
+
+def write_env_value(env_file: Any, name: str, value: str) -> None:
+    """Set ``name=value`` in a dotenv file, replacing an earlier line."""
+    from pathlib import Path
+
+    path = Path(env_file)
+    lines = path.read_text(encoding="utf-8-sig").splitlines() if path.exists() else []
+    kept = [line for line in lines if line.strip().partition("=")[0].strip() != name]
+    kept.append(f"{name}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def hermes_memory_entry(jarvis_url: str) -> dict[str, Any]:
+    """Hermes's ``mcp_servers.jarvis`` entry: Jarvis's wiki tools over MCP."""
+    return {
+        "url": jarvis_url.rstrip("/") + "/api/control/mcp",
+        "headers": {"Authorization": "Bearer ${" + CONTROL_KEY_ENV + "}"},
+        "tools": {"include": list(HERMES_MEMORY_TOOLS), "resources": False, "prompts": False},
+    }
+
+
+def connect_hermes_memory(
+    *,
+    jarvis_url: str,
+    control_key: str | None,
+    env_file: Any,
+    hermes_argv: list[str] | None,
+    run: Runner = _run,
+) -> tuple[str, str]:
+    """Mount Jarvis's wiki recall in Hermes. Returns ``(status, detail)``."""
+    if not control_key:
+        return "failed", "Jarvis has no control key yet; start Jarvis once and run this again"
+    if not hermes_argv:
+        return "failed", "the hermes command is not on PATH"
+    write_env_value(env_file, CONTROL_KEY_ENV, control_key)
+    entry = json.dumps(hermes_memory_entry(jarvis_url))
+    code, output = run([*hermes_argv, "config", "set", "mcp_servers.jarvis", entry])
+    if code != 0:
+        return "failed", f"hermes config set failed: {output[:300]}"
+    return "changed", (
+        "Hermes can search Jarvis's memory (wiki-recall, wiki-list); "
+        "restart the Hermes gateway to load it"
+    )
+
+
 def _call(client: Any, method: str, path: str, body: Any = None) -> Any:
     return client.request(method, path, json=body)
 
@@ -178,6 +244,7 @@ def run_free_voice(
     check_models: tuple[str, ...] = (),
     http_post: HttpPost = _http_post,
     clock: Callable[[], float] = time.monotonic,
+    link_memory: Callable[[], tuple[str, str]] | None = None,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -271,7 +338,38 @@ def run_free_voice(
         else:
             report.add(tier, "failed", "; ".join(reasons))
 
+    # --- Memory: Hermes can recall what the wiki knows -----------------------
+    if link_memory is not None:
+        try:
+            report.add("hermes-memory", *link_memory())
+        except OSError as exc:
+            report.add("hermes-memory", "failed", f"{type(exc).__name__}: {exc}")
+
     return report
+
+
+def link_memory_for(client: Any) -> Callable[[], tuple[str, str]]:
+    """The production memory link: this machine's Hermes, Jarvis and key."""
+
+    def link() -> tuple[str, str]:
+        from jarvis.agent_chat.runner_cli import CliUnavailable, hermes_argv_prefix
+        from jarvis.core.control_key import get_control_key
+        from jarvis.plugins.brain.hermes import _hermes_home_candidates
+
+        try:
+            argv: list[str] | None = hermes_argv_prefix()
+        except CliUnavailable:  # no hermes on PATH: reported as the step failure
+            argv = None
+        homes = _hermes_home_candidates()
+        home = next((h for h in homes if (h / ".env").exists()), homes[0])
+        return connect_hermes_memory(
+            jarvis_url=str(getattr(client, "base_url", "http://127.0.0.1:47821")),
+            control_key=get_control_key(),
+            env_file=home / ".env",
+            hermes_argv=argv,
+        )
+
+    return link
 
 
 def render_report(report: FreeVoiceReport) -> str:

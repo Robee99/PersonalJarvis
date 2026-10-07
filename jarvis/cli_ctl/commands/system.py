@@ -126,14 +126,23 @@ def free_voice(
         None, "--check-model",
         help="A Hermes route or provider::model to try once, e.g. local-qwen::qwen.",
     ),
+    link_memory: bool = typer.Option(
+        True, "--link-memory/--no-link-memory",
+        help="Let Hermes search Jarvis's memory (the wiki) over MCP.",
+    ),
 ) -> None:
     """Make Hermes Agent the brain for everything: voice, tools, missions; Hermes
     picks the model (local Qwen, local Gemma, cloud); paid providers blocked."""
     from jarvis.cli_ctl.__main__ import as_json, make_client
-    from jarvis.cli_ctl.free_voice import render_report, run_free_voice
+    from jarvis.cli_ctl.free_voice import link_memory_for, render_report, run_free_voice
 
     with make_client() as client:
-        report = run_free_voice(client, hermes=hermes, check_models=tuple(check_model or ()))
+        report = run_free_voice(
+            client,
+            hermes=hermes,
+            check_models=tuple(check_model or ()),
+            link_memory=link_memory_for(client) if link_memory else None,
+        )
     if as_json():
         render.emit(report.as_dict(), as_json=True)
     else:
