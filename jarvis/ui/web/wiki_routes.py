@@ -1124,7 +1124,7 @@ def get_wiki_import(job_id: str) -> dict[str, Any]:
     return {"job_id": job.job_id, "running": job.running, **job.progress.to_dict()}
 
 
-@router.post("/import/{job_id}/cancel")
+@router.post("/import/{job_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
 def cancel_wiki_import(job_id: str) -> dict[str, Any]:
     """Stop an import after the file it is on; pages already written stay."""
     from jarvis.memory.wiki.importer import IMPORT_JOBS
