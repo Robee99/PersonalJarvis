@@ -1,30 +1,34 @@
 /**
- * The memory orb's map: everything the assistant knows and can reach, as one graph.
+ * The memory orb's map: what the assistant remembers and what it can use.
  *
- * The wiki map (`lib/wikiGraph.ts`) draws what the assistant remembers. The orb
- * adds what it can DO: its skills, its tools, the apps it is connected to and
- * the MCP servers it runs. Each family hangs off a hub, and the hubs hang off
- * the core, so a glance shows how big each part of the assistant is and a
- * filter hides a family without breaking the picture.
+ * Only real things and real relationships are drawn. Notes are linked the way
+ * the vault links them; nothing else gets an edge, because nothing else has
+ * one. Families (notes, skills, tools, apps, MCP servers) are shown as regions
+ * of the map, pulled together by `createRegionForce`, never as invented hub
+ * nodes with spokes.
  *
- * Pure: the view fetches the five catalogs and hands them here, so the shape
- * of the map is testable without a canvas.
+ * Capabilities come from Hermes Agent when its inventory is readable (the
+ * brain that actually uses them, and the same list the Tool Armory shows);
+ * otherwise from Jarvis's own registries, and the legend says which.
+ *
+ * A catalog that could not be read is "unavailable", never zero.
+ *
+ * Pure: the view fetches the catalogs and hands them here, so the shape of the
+ * map is testable without a canvas.
  */
 
-export type OrbGroup = "core" | "wiki" | "concepts" | "skills" | "tools" | "apps" | "mcp";
+export type OrbGroup = "wiki" | "concepts" | "skills" | "tools" | "apps" | "mcp";
 
 export interface OrbNode {
   id: string;
   label: string;
   group: OrbGroup;
-  /** A hub is a family or category node; leaves hang off it. */
-  hub: boolean;
-  /** Bright when the thing is live: a connected app, a running server. */
+  /** On: an enabled skill or toolset, a connected app, an enabled server. */
   live: boolean;
   detail: string;
-  /** Where clicking the node leads, when there is a section for it. */
+  /** Where "Open" leads. */
   section?: "memory" | "skills" | "plugins" | "mcps" | "jarvis-actions";
-  /** The wiki slug, for wiki pages. */
+  /** The wiki slug, for notes: "Open" shows that page. */
   slug?: string;
 }
 
@@ -33,25 +37,40 @@ export interface OrbLink {
   target: string;
 }
 
+export type CapabilitySource = "hermes" | "jarvis";
+
 export interface OrbGraph {
   nodes: OrbNode[];
   links: OrbLink[];
-  counts: Record<Exclude<OrbGroup, "core">, number>;
+  /** Real things per family, after duplicates are dropped. */
+  counts: Record<OrbGroup, number>;
+  /** Families whose catalog could not be read. */
+  unavailable: OrbGroup[];
+  capabilitySource: CapabilitySource;
 }
 
+/** One catalog entry, already reduced to what the map shows. */
+export interface OrbItem {
+  id: string;
+  label: string;
+  live: boolean;
+  detail: string;
+}
+
+/** `undefined` = the catalog could not be read; `[]` = it is empty. */
 export interface OrbSources {
   wiki?: {
     nodes: { id: string; kind: string; title?: string }[];
     edges: { source: string; target: string }[];
   };
-  skills?: { name: string; category?: string; description?: string; state?: string }[];
-  tools?: { name: string; description?: string; risk_tier?: string }[];
-  apps?: { id: string; display_name?: string; description?: string; category?: string; status?: string }[];
-  mcp?: { name: string; display?: string; description?: string; status?: string }[];
+  skills?: OrbItem[];
+  tools?: OrbItem[];
+  apps?: OrbItem[];
+  mcp?: OrbItem[];
+  capabilitySource?: CapabilitySource;
 }
 
 export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
-  core: "#f5f7ff",
   wiki: "#5bd4a4",
   concepts: "#ffb84d",
   skills: "#b48cf2",
@@ -60,16 +79,16 @@ export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
   mcp: "#4fd1e8",
 };
 
-export const ORB_GROUP_LABEL: Record<Exclude<OrbGroup, "core">, string> = {
+export const ORB_GROUP_LABEL: Record<OrbGroup, string> = {
   wiki: "Notes",
   concepts: "Concepts",
   skills: "Skills",
   tools: "Tools",
-  apps: "Apps",
+  apps: "Connected apps",
   mcp: "MCP servers",
 };
 
-export const ORB_GROUPS = Object.keys(ORB_GROUP_LABEL) as Exclude<OrbGroup, "core">[];
+export const ORB_GROUPS = Object.keys(ORB_GROUP_LABEL) as OrbGroup[];
 
 /** Wiki kinds that read as ideas rather than notes get their own colour. */
 const CONCEPT_KINDS = new Set(["concept", "project", "entity"]);
@@ -89,165 +108,252 @@ function titleCase(text: string): string {
   return text.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function joined(...parts: (string | undefined)[]): string {
+  return parts.filter((p) => p && p.trim()).join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// Catalogs → items
+// ---------------------------------------------------------------------------
+
+export interface JarvisCatalogs {
+  skills?: { name: string; category?: string; description?: string; state?: string }[];
+  tools?: { name: string; description?: string; risk_tier?: string }[];
+  mcp?: { name: string; display?: string; description?: string; status?: string }[];
+}
+
+export interface HermesCatalogs {
+  available: boolean;
+  skills: { items: { name: string; provenance?: string; enabled?: boolean }[] };
+  mcp_servers: { name: string; transport?: string; enabled: boolean }[];
+  toolsets: { available: boolean; items?: { name: string; label?: string; enabled: boolean; tool_count?: number }[] };
+}
+
+export type MarketplaceApp = {
+  id: string;
+  display_name?: string;
+  description?: string;
+  category?: string;
+  status?: string;
+};
+
+/** Skills, toolsets and MCP servers as Hermes has them. */
+export function itemsFromHermes(inv: HermesCatalogs): Pick<OrbSources, "skills" | "tools" | "mcp"> {
+  return {
+    skills: inv.skills.items.map((s) => ({
+      id: s.name,
+      label: s.name,
+      live: s.enabled !== false,
+      detail: joined(s.enabled === false ? "Disabled in Hermes" : "Enabled in Hermes", s.provenance && titleCase(s.provenance)),
+    })),
+    tools: inv.toolsets.available
+      ? (inv.toolsets.items ?? []).map((t) => ({
+          id: t.name,
+          label: t.label || t.name,
+          live: t.enabled,
+          detail: joined(
+            t.enabled ? "Toolset on for Jarvis" : "Toolset off for Jarvis",
+            t.tool_count ? `${t.tool_count} tools` : undefined,
+          ),
+        }))
+      : undefined,
+    mcp: inv.mcp_servers.map((m) => ({
+      id: m.name,
+      label: m.name,
+      live: m.enabled,
+      detail: joined(m.enabled ? "Enabled in Hermes" : "Disabled in Hermes", m.transport),
+    })),
+  };
+}
+
+/** Skills, tools and MCP servers from Jarvis's own registries. */
+export function itemsFromJarvis(cat: JarvisCatalogs): Pick<OrbSources, "skills" | "tools" | "mcp"> {
+  return {
+    skills: cat.skills?.map((s) => ({
+      id: s.name,
+      label: s.name,
+      live: s.state !== "invalid" && s.state !== "disabled",
+      detail: joined(s.category && titleCase(s.category), oneLine(s.description)),
+    })),
+    tools: cat.tools?.map((t) => ({
+      id: t.name,
+      label: t.name,
+      live: true,
+      detail: joined(RISK_LABEL[t.risk_tier ?? ""] ?? undefined, oneLine(t.description)),
+    })),
+    mcp: cat.mcp?.map((m) => ({
+      id: m.name,
+      label: m.display || m.name,
+      live: m.status === "running",
+      detail: joined(m.status === "running" ? "Running" : "Stopped", oneLine(m.description, 100)),
+    })),
+  };
+}
+
+/** Only the apps the user has actually connected; the marketplace is not memory. */
+export function connectedApps(apps: MarketplaceApp[] | undefined): OrbItem[] | undefined {
+  return apps
+    ?.filter((a) => a.status === "connected")
+    .map((a) => ({
+      id: a.id,
+      label: a.display_name || a.id,
+      live: true,
+      detail: joined(a.category, oneLine(a.description, 100)),
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// The graph
+// ---------------------------------------------------------------------------
+
+const SECTION: Record<Exclude<OrbGroup, "wiki" | "concepts">, OrbNode["section"]> = {
+  skills: "skills",
+  tools: "jarvis-actions",
+  apps: "plugins",
+  mcp: "mcps",
+};
+
 export function buildOrbGraph(src: OrbSources): OrbGraph {
   const nodes: OrbNode[] = [];
   const links: OrbLink[] = [];
   const seen = new Set<string>();
-  const counts = { wiki: 0, concepts: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
+  const counts: Record<OrbGroup, number> = { wiki: 0, concepts: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
+  const unavailable: OrbGroup[] = [];
 
-  const add = (node: OrbNode, parent?: string) => {
+  const add = (node: OrbNode) => {
     if (seen.has(node.id)) return;
     seen.add(node.id);
     nodes.push(node);
-    if (parent) links.push({ source: parent, target: node.id });
+    counts[node.group] += 1;
   };
-  const hub = (id: string, label: string, group: OrbGroup, parent: string, detail = "") =>
-    add({ id, label, group, hub: true, live: true, detail }, parent);
 
-  add({ id: "core", label: "Jarvis", group: "core", hub: true, live: true, detail: "The assistant" });
-
-  // Memory: every wiki page, linked as the vault links them.
   const wiki = src.wiki;
-  if (wiki && wiki.nodes.length) {
-    hub("hub:wiki", "Memory", "wiki", "core", "What the assistant remembers");
-    const wikiIds = new Set<string>();
+  if (!wiki || !Array.isArray(wiki.nodes)) {
+    unavailable.push("wiki", "concepts");
+  } else {
     for (const page of wiki.nodes) {
-      const group: OrbGroup = CONCEPT_KINDS.has(page.kind) ? "concepts" : "wiki";
-      counts[group] += 1;
-      wikiIds.add(`wiki:${page.id}`);
-      add(
-        {
-          id: `wiki:${page.id}`,
-          label: page.title?.replace(/^"|"$/g, "") || page.id,
-          group,
-          hub: false,
-          live: true,
-          detail: `${titleCase(page.kind)} page in the wiki`,
-          section: "memory",
-          slug: page.id,
-        },
-        "hub:wiki",
-      );
+      add({
+        id: `wiki:${page.id}`,
+        label: page.title?.replace(/^"|"$/g, "") || page.id,
+        group: CONCEPT_KINDS.has(page.kind) ? "concepts" : "wiki",
+        live: true,
+        detail: `${titleCase(page.kind)} page in memory`,
+        section: "memory",
+        slug: page.id,
+      });
     }
-    for (const edge of wiki.edges) {
+    const linked = new Set<string>();
+    for (const edge of wiki.edges ?? []) {
       const a = `wiki:${edge.source}`;
       const b = `wiki:${edge.target}`;
-      if (a !== b && wikiIds.has(a) && wikiIds.has(b)) links.push({ source: a, target: b });
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (a !== b && seen.has(a) && seen.has(b) && !linked.has(key)) {
+        linked.add(key);
+        links.push({ source: a, target: b });
+      }
     }
   }
 
-  // Skills, grouped by category.
-  if (src.skills?.length) {
-    hub("hub:skills", "Skills", "skills", "core", "Playbooks the assistant follows");
-    for (const skill of src.skills) {
-      const cat = skill.category || "other";
-      const catId = `skills:cat:${cat}`;
-      hub(catId, titleCase(cat), "skills", "hub:skills");
-      counts.skills += 1;
-      add(
-        {
-          id: `skill:${skill.name}`,
-          label: skill.name,
-          group: "skills",
-          hub: false,
-          live: skill.state !== "invalid" && skill.state !== "disabled",
-          detail: oneLine(skill.description),
-          section: "skills",
-        },
-        catId,
-      );
+  for (const group of ["skills", "tools", "apps", "mcp"] as const) {
+    const items = src[group];
+    if (!items) {
+      unavailable.push(group);
+      continue;
+    }
+    for (const item of items) {
+      add({
+        id: `${group}:${item.id}`,
+        label: item.label,
+        group,
+        live: item.live,
+        detail: item.detail,
+        section: SECTION[group],
+      });
     }
   }
 
-  // Tools, grouped by how much they need the user's say-so.
-  if (src.tools?.length) {
-    hub("hub:tools", "Tools", "tools", "core", "Actions the assistant can take");
-    for (const tool of src.tools) {
-      const tier = tool.risk_tier || "monitor";
-      const tierId = `tools:tier:${tier}`;
-      hub(tierId, RISK_LABEL[tier] ?? titleCase(tier), "tools", "hub:tools");
-      counts.tools += 1;
-      add(
-        {
-          id: `tool:${tool.name}`,
-          label: tool.name,
-          group: "tools",
-          hub: false,
-          live: true,
-          detail: oneLine(tool.description),
-          section: "jarvis-actions",
-        },
-        tierId,
-      );
-    }
-  }
-
-  // Connected apps, grouped by category; the ones not yet connected stay dim.
-  if (src.apps?.length) {
-    hub("hub:apps", "Apps", "apps", "core", "Accounts the assistant can use");
-    for (const app of src.apps) {
-      const cat = app.category || "Other";
-      const catId = `apps:cat:${cat}`;
-      hub(catId, cat, "apps", "hub:apps");
-      counts.apps += 1;
-      const live = app.status === "connected";
-      add(
-        {
-          id: `app:${app.id}`,
-          label: app.display_name || app.id,
-          group: "apps",
-          hub: false,
-          live,
-          detail: `${live ? "Connected" : "Not connected"} · ${oneLine(app.description, 100)}`,
-          section: "plugins",
-        },
-        catId,
-      );
-    }
-  }
-
-  // MCP servers.
-  if (src.mcp?.length) {
-    hub("hub:mcp", "MCP servers", "mcp", "core", "Tool servers the assistant runs");
-    for (const server of src.mcp) {
-      counts.mcp += 1;
-      const live = server.status === "running";
-      add(
-        {
-          id: `mcp:${server.name}`,
-          label: server.display || server.name,
-          group: "mcp",
-          hub: false,
-          live,
-          detail: `${live ? "Running" : "Stopped"} · ${oneLine(server.description, 100)}`,
-          section: "mcps",
-        },
-        "hub:mcp",
-      );
-    }
-  }
-
-  return { nodes, links, counts };
+  return { nodes, links, counts, unavailable, capabilitySource: src.capabilitySource ?? "jarvis" };
 }
 
-/** The graph with the hidden families taken out, links included. */
+/** The graph with the hidden families taken out, links included; counts stay the totals. */
 export function filterOrbGraph(graph: OrbGraph, hidden: ReadonlySet<OrbGroup>): OrbGraph {
   if (!hidden.size) return graph;
   const keep = new Set(graph.nodes.filter((n) => !hidden.has(n.group)).map((n) => n.id));
   return {
+    ...graph,
     nodes: graph.nodes.filter((n) => keep.has(n.id)),
     links: graph.links.filter((l) => keep.has(l.source) && keep.has(l.target)),
-    counts: graph.counts,
   };
 }
 
-/** Case-insensitive label/detail match, for the search box. */
-export function matchOrbNodes(graph: OrbGraph, query: string): Set<string> {
+/**
+ * Nodes matching the search, best first: label prefix, then label, then
+ * detail. Only what is on the map is searched, so a hit is always visible.
+ */
+export function matchOrbNodes(graph: Pick<OrbGraph, "nodes">, query: string): OrbNode[] {
   const q = query.trim().toLowerCase();
-  if (!q) return new Set();
-  return new Set(
-    graph.nodes
-      .filter((n) => n.label.toLowerCase().includes(q) || n.detail.toLowerCase().includes(q))
-      .map((n) => n.id),
-  );
+  if (!q) return [];
+  const rank = (n: OrbNode): number => {
+    const label = n.label.toLowerCase();
+    if (label.startsWith(q)) return 0;
+    if (label.includes(q)) return 1;
+    return n.detail.toLowerCase().includes(q) ? 2 : -1;
+  };
+  return graph.nodes
+    .map((n) => [rank(n), n] as const)
+    .filter(([r]) => r >= 0)
+    .sort((a, b) => a[0] - b[0] || a[1].label.localeCompare(b[1].label))
+    .map(([, n]) => n);
+}
+
+// ---------------------------------------------------------------------------
+// Layout regions
+// ---------------------------------------------------------------------------
+
+/** Where each family's region sits, on a ring around the origin. */
+export function regionAnchors(groups: readonly OrbGroup[], radius: number): Map<OrbGroup, { x: number; y: number }> {
+  const anchors = new Map<OrbGroup, { x: number; y: number }>();
+  if (groups.length === 1) {
+    anchors.set(groups[0], { x: 0, y: 0 });
+    return anchors;
+  }
+  groups.forEach((group, i) => {
+    const angle = (2 * Math.PI * i) / groups.length - Math.PI / 2;
+    anchors.set(group, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+  });
+  return anchors;
+}
+
+interface RegionNode {
+  group: OrbGroup;
+  x?: number;
+  y?: number;
+  vx?: number;
+  vy?: number;
+}
+
+/** A d3-force-shaped pull of every node toward its family's anchor. */
+export interface RegionForce {
+  (alpha: number): void;
+  initialize: (nodes: RegionNode[]) => void;
+}
+
+export function createRegionForce(
+  anchors: ReadonlyMap<OrbGroup, { x: number; y: number }>,
+  strength: number,
+): RegionForce {
+  let nodes: RegionNode[] = [];
+  const force = ((alpha: number) => {
+    const k = strength * alpha;
+    for (const node of nodes) {
+      const a = anchors.get(node.group);
+      if (!a) continue;
+      node.vx = (node.vx ?? 0) + (a.x - (node.x ?? 0)) * k;
+      node.vy = (node.vy ?? 0) + (a.y - (node.y ?? 0)) * k;
+    }
+  }) as RegionForce;
+  force.initialize = (next) => {
+    nodes = next ?? [];
+  };
+  return force;
 }
