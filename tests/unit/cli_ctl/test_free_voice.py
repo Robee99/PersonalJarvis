@@ -233,7 +233,7 @@ def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_pa
     (argv,) = calls
     assert argv[:4] == ["hermes", "config", "set", "mcp_servers.jarvis"]
     entry = json.loads(argv[4])
-    assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp"
+    assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp/"
     assert entry["headers"] == {"Authorization": "Bearer ${JARVIS_CONTROL_KEY}"}
     assert entry["tools"]["include"] == ["wiki-recall", "wiki-list"]
     assert "ck-new" not in argv[4], "the key never goes on a command line or into config.yaml"

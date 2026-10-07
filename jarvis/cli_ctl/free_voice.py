@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from jarvis.cli_ctl.client import ApiError
+from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 
 DEFAULT_HERMES = "http://127.0.0.1:8642"
 HERMES_PROVIDER = "hermes"
@@ -184,7 +185,14 @@ Runner = Callable[[list[str]], tuple[int, str]]
 
 
 def _run(argv: list[str]) -> tuple[int, str]:
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=60, check=False)
+    done = subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        creationflags=NO_WINDOW_CREATIONFLAGS,
+    )
     return done.returncode, (done.stderr or done.stdout).strip()
 
 
@@ -203,7 +211,7 @@ def write_env_value(env_file: Any, name: str, value: str) -> None:
 def hermes_memory_entry(jarvis_url: str) -> dict[str, Any]:
     """Hermes's ``mcp_servers.jarvis`` entry: Jarvis's wiki tools over MCP."""
     return {
-        "url": jarvis_url.rstrip("/") + "/api/control/mcp",
+        "url": jarvis_url.rstrip("/") + "/api/control/mcp/",
         "headers": {"Authorization": "Bearer ${" + CONTROL_KEY_ENV + "}"},
         "tools": {"include": list(HERMES_MEMORY_TOOLS), "resources": False, "prompts": False},
     }
