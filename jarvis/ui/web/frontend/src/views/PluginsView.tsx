@@ -1481,7 +1481,16 @@ function PluginArmory({
             Jarvis <span className="normal-case tracking-normal text-slate-600">Jarvis&apos;s own tools</span>
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
-            <ArmoryStat label="Apps" value={`${connected} / ${total}`} hint="connected" />
+            <ArmoryStat
+              label="Apps"
+              value={`${connected} / ${total}`}
+              hint="connected"
+              onClick={() => {
+                const search = document.getElementById("armory-apps-search");
+                search?.scrollIntoView({ behavior: "smooth", block: "start" });
+                search?.focus({ preventScroll: true });
+              }}
+            />
             <ArmoryStat
               label="MCP servers"
               value={`${mcps?.running ?? 0} / ${mcps?.total ?? 0}`}
@@ -1504,6 +1513,7 @@ function PluginArmory({
             type="search"
             value={query}
             onChange={(event) => onQuery(event.target.value)}
+            id="armory-apps-search"
             placeholder="Search tools (calendar, email, payments, design…)"
             aria-label="Search tools"
             className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"

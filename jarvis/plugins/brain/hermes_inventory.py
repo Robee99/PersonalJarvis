@@ -283,13 +283,32 @@ def collect_skills(home: Path, config: dict[str, Any]) -> dict[str, Any]:
     counts = {key: 0 for key in ("bundled", "hub", "local", "external", "plugin")}
     for provenance in rows.values():
         counts[provenance] += 1
-    items = [{"name": n, "provenance": p} for n, p in sorted(rows.items())]
+    disabled = _disabled_skill_names(config)
+    items = [
+        {"name": n, "provenance": p, "enabled": n not in disabled}
+        for n, p in sorted(rows.items())
+    ]
     return {
         **counts,
         "total": len(rows),
         "items": items[:ITEM_CAP],
         "truncated": len(items) > ITEM_CAP,
     }
+
+
+def _disabled_skill_names(config: dict[str, Any]) -> set[str]:
+    """``skills.disabled`` plus the API server's own list, as Hermes reads them."""
+    skills_cfg = config.get("skills")
+    if not isinstance(skills_cfg, dict):
+        return set()
+    names: set[str] = set()
+    platform = skills_cfg.get("platform_disabled")
+    for raw in (
+        skills_cfg.get("disabled"),
+        platform.get("api_server") if isinstance(platform, dict) else None,
+    ):
+        names |= set(_name_list(raw) or [])
+    return names
 
 
 def _within(path: Path, root: Path) -> bool:
