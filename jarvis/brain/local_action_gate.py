@@ -14,6 +14,8 @@ from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 from urllib.parse import quote_plus
 
+from jarvis.brain.cu_gate import has_negated_desktop_action, is_observation_only
+
 #: Entry-point name of the screenshot-based computer-use harness (see
 #: ``pyproject.toml`` ``[project.entry-points."jarvis.harness"]`` +
 #: ``jarvis/plugins/harness/computer_use.py``). Canonical home for the
@@ -282,11 +284,41 @@ def _is_narrated(text: str, start: int, end: int) -> bool:
     )
 
 
-def _has_assistant_imperative(text: str) -> bool:
-    """True when the turn gives Jarvis an order somewhere in it."""
+#: An embedded how-to / explain request: "can you tell me how to open
+#: Spotify", "show me how to take a screenshot", "erklaer mir mal, wie man ...".
+#: ``_QUESTION_OPENER_RE`` only sees an interrogative at a clause start, so the
+#: polite wrapper hid the question and "tell me how to open Chrome" launched
+#: Chrome. The request verb itself ("show", "tell") is part of the question,
+#: not an order, so ``_is_information_question`` ignores imperatives inside
+#: this span.
+_HOW_TO_REQUEST_RE = re.compile(
+    r"\b(?:tell|show|explain|teach|remind)\s+(?:me|us)\s+(?:again\s+)?"
+    r"(?:how|what|why|where|which|when)\b"
+    r"|\bexplain\s+(?:how|what|why|where|which|when)\b"
+    r"|\b(?:do|does)\s+(?:you|anyone)\s+know\s+(?:how|what|why|where|which|when)\b"
+    r"|\b(?:wonder(?:ing)?|want\s+to\s+know|need\s+to\s+know)\s+"
+    r"(?:how|what|why|where|which|when|if|whether)\b"
+    r"|\b(?:sag|erklaer|zeig)\w*\s+(?:du\s+)?(?:mir|uns)(?:[\s,]+(?:mal|bitte|doch|kurz))*"
+    r"[\s,]+(?:wie|was|warum|wo|wann|welche\w*)\b"
+    r"|\b(?:mir|uns)\s+(?:mal\s+)?(?:sagen|erklaeren|zeigen)[\s,]+"
+    r"(?:wie|was|warum|wo|wann|welche\w*)\b"
+    r"|\b(?:weisst|wisst)\s+du[\s,]+(?:wie|was|warum|wo|wann)\b",
+    re.IGNORECASE,
+)
+
+
+def _has_assistant_imperative(
+    text: str, skip: tuple[int, int] | None = None
+) -> bool:
+    """True when the turn gives Jarvis an order somewhere in it.
+
+    ``skip`` is a span whose verbs belong to a how-to request ("show me how
+    to ...") and therefore order nothing.
+    """
     return any(
         not _is_narrated(text, match.start(), match.end())
         for match in _ASSISTANT_IMPERATIVE_RE.finditer(text)
+        if skip is None or not (skip[0] <= match.start() < skip[1])
     )
 
 
@@ -300,9 +332,12 @@ def _is_information_question(text: str) -> bool:
     either: "Kannst du bitte einen Screenshot machen?" carries no interrogative
     opener at all and stays a task.
     """
-    if not _QUESTION_OPENER_RE.search(text):
+    how_to = _HOW_TO_REQUEST_RE.search(text)
+    if how_to is None and not _QUESTION_OPENER_RE.search(text):
         return False
-    return not _has_assistant_imperative(text)
+    return not _has_assistant_imperative(
+        text, skip=how_to.span() if how_to is not None else None
+    )
 
 
 def _has_commanding_gui_verb(text: str) -> bool:
@@ -973,6 +1008,14 @@ def match_local_action(
             mode=LocalActionMode.DIRECT,
             tool_calls=(LocalToolCall(name="reset_orb_position", args={}),),
         )
+    # A prohibition, an observation-only turn, or a question is never a
+    # local action. Checked once, before every mutating branch below (scripted,
+    # DIRECT, browser+URL, visual target, computer-use hand-off, fallback):
+    # "don't open Spotify" used to reach the open-app fallback, whose negation
+    # guard knew only German, and launched Spotify; "don't click anything, just
+    # look" reached the GUI-verb branch and started the computer-use loop.
+    if _declines_local_action(normalized):
+        return None
     scripted = _match_scripted_local_plan(normalized)
     if scripted is not None:
         return scripted
@@ -1054,6 +1097,21 @@ def match_local_action(
             )
 
     return None
+
+
+def _declines_local_action(normalized: str) -> bool:
+    """True when the turn must never yield a mutating local action.
+
+    Any negated desktop action counts, even next to an order ("don't open
+    Spotify, open Chrome"): the open-app fallback launches the FIRST known app
+    it finds, so acting on such a turn could launch the forbidden one. The
+    brain answers these turns instead.
+    """
+    return (
+        has_negated_desktop_action(normalized)
+        or is_observation_only(normalized)
+        or _is_information_question(normalized)
+    )
 
 
 def _match_scripted_local_plan(text: str) -> LocalActionPlan | None:

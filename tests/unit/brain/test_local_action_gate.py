@@ -272,6 +272,23 @@ def test_bare_open_known_app_stays_direct_despite_container_guard(
         "bitte Chrome nicht starten",
         "mach mir kein Spotify auf",
         "öffne Discord lieber nicht",
+        # English negation (live gap: the negation guard knew only German, so
+        # "don't open Spotify" took the open-app fallback and LAUNCHED it).
+        "don't open Spotify",
+        "Don’t open Spotify",
+        "do not open chrome",
+        "dont open discord",
+        "never open Spotify",
+        "no need to open Spotify",
+        "stop opening Spotify",
+        "please don't launch chrome",
+        # A forbidden app next to an allowed one: the fallback would launch the
+        # FIRST known app it sees, i.e. the forbidden one.
+        "Don't open Spotify, open Chrome",
+        # Negation on the browser+URL and compound computer-use paths.
+        "don't open chrome and go to x.com",
+        "don't open chrome and google cats",
+        "do not open WhatsApp and write mom hello",
     ],
 )
 def test_negated_open_never_launches(text: str) -> None:
@@ -1218,6 +1235,13 @@ def test_orders_still_reach_computer_use(utterance: str) -> None:
 @pytest.mark.parametrize(
     ("utterance", "is_question"),
     [
+        # A polite how-to wrapper hides the interrogative from the clause-start
+        # opener; it is still a question, while a polite ORDER stays an order.
+        ("can you tell me how to open spotify", True),
+        ("show me how to take a screenshot", True),
+        ("erklaer mir mal, wie man spotify oeffnet", True),
+        ("can you open spotify", False),
+        ("open chrome and show me how to use it", False),
         # A question that ENDS in an order is an ORDER - the guard stands down
         # so the command can still run (same rule as
         # ``tool_use_loop._is_instructional_question``). That the window-op
@@ -1237,3 +1261,58 @@ def test_orders_still_reach_computer_use(utterance: str) -> None:
 def test_information_question_classifier(utterance: str, is_question: bool) -> None:
     """The TASK-or-QUESTION decision itself, on already-normalised input."""
     assert _is_information_question(utterance) is is_question
+
+
+# ---------------------------------------------------------------------------
+# Prohibitions, observation-only turns and how-to questions never mutate.
+#
+# "Don't click anything, just look at my screen" reached the GUI-verb branch
+# and started the computer-use loop; "Can you tell me how to open Spotify?" and
+# "tell me how to open Chrome" are questions, not launches.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Don't click anything, just look at my screen",
+        "don't touch anything",
+        "don't interact, just tell me what is there",
+        "tell me what is there, don't interact",
+        "just look at the screen",
+        "do not scroll down",
+        "don't click the button",
+        "nicht klicken",  # i18n-allow: DE turn fixture
+        "nichts anklicken, nur schauen",  # i18n-allow: DE turn fixture
+        "klick nichts an, nur schauen",  # i18n-allow: DE turn fixture
+        "Can you tell me how to open Spotify?",
+        "tell me how to open chrome",
+        "explain how to open Spotify",
+        "can you tell me how to take a screenshot",
+        "Why is Spotify not opening?",
+    ],
+)
+def test_prohibitions_and_questions_never_mutate(utterance: str) -> None:
+    plan = match_local_action(utterance, _registry=None)
+    assert plan is None, f"{utterance!r} wrongly produced a local plan: {plan}"
+
+
+@pytest.mark.parametrize(
+    ("utterance", "mode"),
+    [
+        ("click the Start button", LocalActionMode.COMPUTER_USE),
+        ("open Spotify", LocalActionMode.DIRECT),
+        ("öffne Spotify", LocalActionMode.DIRECT),
+        ("can you open spotify", LocalActionMode.DIRECT),
+        ("I don't know, open Spotify", LocalActionMode.DIRECT),
+        ("take a screenshot", LocalActionMode.COMPUTER_USE),
+        # A button LABEL containing a negation is still an order.
+        ("klick auf nicht speichern", LocalActionMode.COMPUTER_USE),  # i18n-allow
+    ],
+)
+def test_positive_controls_survive_the_negation_guard(
+    utterance: str, mode: LocalActionMode
+) -> None:
+    plan = match_local_action(utterance, _registry=None)
+    assert plan is not None, f"{utterance!r} lost its local plan"
+    assert plan.mode is mode, f"{utterance!r} -> {plan.mode}, want {mode}"
