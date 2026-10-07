@@ -1,9 +1,13 @@
-"""Streaming chat against a local Ollama server, with tool calls and timings.
+"""Streaming chat against a local model server, with tool calls and timings.
 
-Ollama's native ``/api/chat`` is used because it accepts the voice profile
-directly (``num_ctx``, ``think: false``, ``keep_alive``) and reports prompt and
-generation counters that show whether the prefix cache hit. A portable
-OpenAI-compatible client (llama-server, LM Studio) follows in phase P1.
+:class:`OllamaChat` uses Ollama's native ``/api/chat`` because it accepts the
+voice profile directly (``num_ctx``, ``think: false``, ``keep_alive``) and
+reports prompt and generation counters that show whether the prefix cache hit.
+
+:class:`OpenAIChat` is the portable client for an OpenAI-compatible server
+(llama-server, LM Studio, vLLM): the model, its context and its residency are
+the server's, so only the turn itself is sent. Both return the same
+:class:`LlmResult` and take the same Ollama-shaped history the engine keeps.
 """
 
 from __future__ import annotations
@@ -20,6 +24,8 @@ from urllib.parse import urlsplit
 from jarvis.voice_engine.chunker import ClauseChunker
 
 DEFAULT_BASE_URL = "http://127.0.0.1:11434"
+#: ``[voice_engine] llm_api`` values: Ollama's own API, or any OpenAI-compatible one.
+LLM_APIS = ("ollama", "openai")
 
 
 @dataclass(slots=True)
@@ -235,3 +241,215 @@ class OllamaChat:
         result.clauses.append(clause)
         if on_clause is not None:
             on_clause(clause, at)
+
+
+class OpenAIChat:
+    """Streaming ``/v1/chat/completions`` with the same surface as :class:`OllamaChat`.
+
+    Thinking is switched off per request through ``chat_template_kwargs``
+    (llama-server and vLLM pass it into the chat template; a server that does
+    not know the field ignores it). llama-server's ``timings`` block, when
+    present, fills the same prompt and generation counters as Ollama's.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        base_url: str,
+        temperature: float = 0.2,
+        timeout_s: float = 120.0,
+    ) -> None:
+        parts = urlsplit(base_url)
+        if parts.scheme != "http" or not parts.hostname:
+            raise ValueError(f"expected an http://host:port server address, got {base_url!r}")
+        self.model = model
+        self._host = parts.hostname
+        self._port = parts.port or 80
+        # The root and a pasted ``…/v1`` both work, like the brain's card.
+        self._prefix = parts.path.rstrip("/").removesuffix("/v1")
+        self._timeout = timeout_s
+        self._temperature = temperature
+
+    def _connection(self) -> http.client.HTTPConnection:
+        return http.client.HTTPConnection(self._host, self._port, timeout=self._timeout)
+
+    def warm(self) -> float:
+        """Prove the server answers and lists a model; returns seconds spent.
+
+        The server owns loading, so there is nothing to load from here.
+        """
+        started = time.perf_counter()
+        connection = self._connection()
+        connection.request("GET", f"{self._prefix}/v1/models")
+        response = connection.getresponse()
+        payload = response.read()
+        if response.status != 200:
+            raise RuntimeError(f"the model server answered HTTP {response.status}")
+        if not (json.loads(payload or b"{}").get("data") or []):
+            raise RuntimeError("the model server lists no models")
+        return time.perf_counter() - started
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        chunker: ClauseChunker | None = None,
+        on_clause: Callable[[str, float], None] | None = None,
+        stop: threading.Event | None = None,
+    ) -> LlmResult:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": openai_messages(messages),
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "temperature": self._temperature,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if tools:
+            payload["tools"] = tools
+        started = time.perf_counter()
+        connection = self._connection()
+        connection.request(
+            "POST",
+            f"{self._prefix}/v1/chat/completions",
+            body=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            detail = response.read().decode("utf-8", "replace")
+            return LlmResult(error=f"HTTP {response.status}: {detail[:300]}",
+                             t_done=time.perf_counter() - started)
+        result = LlmResult()
+        chunker = chunker or ClauseChunker()
+        calls: dict[int, dict[str, str]] = {}
+        try:
+            for raw in response:
+                if stop is not None and stop.is_set():
+                    result.error = "cancelled"
+                    break
+                line = raw.strip()
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[5:].strip()
+                if data == b"[DONE]":
+                    break
+                event = json.loads(data)
+                if event.get("error"):
+                    result.error = str(event["error"])
+                    break
+                now = time.perf_counter() - started
+                for choice in event.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    result.thinking_chars += len(delta.get("reasoning_content") or "")
+                    text = delta.get("content") or ""
+                    if text:
+                        if result.t_first_token is None:
+                            result.t_first_token = now
+                        result.text += text
+                        for clause in chunker.feed(text):
+                            self._clause(result, clause, now, on_clause)
+                    for call in delta.get("tool_calls") or []:
+                        if result.t_first_token is None:
+                            result.t_first_token = now
+                        slot = calls.setdefault(int(call.get("index") or 0),
+                                                {"name": "", "arguments": ""})
+                        function = call.get("function") or {}
+                        slot["name"] += function.get("name") or ""
+                        slot["arguments"] += function.get("arguments") or ""
+                _read_counters(result, event)
+        finally:
+            response.close()
+        for index in sorted(calls):
+            name, arguments = calls[index]["name"], calls[index]["arguments"]
+            try:
+                parsed = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                # A truncated argument string is still a call; the tool says
+                # what it is missing instead of the turn failing here.
+                parsed = {}
+            result.tool_calls.append(
+                {"name": name, "arguments": parsed if isinstance(parsed, dict) else {}}
+            )
+        end = time.perf_counter() - started
+        for clause in chunker.flush():
+            self._clause(result, clause, end, on_clause)
+        result.t_done = end
+        return result
+
+    _clause = staticmethod(OllamaChat._clause)
+
+
+def _read_counters(result: LlmResult, event: dict[str, Any]) -> None:
+    """Prompt and generation counters from llama-server ``timings``, else ``usage``."""
+    timings = event.get("timings")
+    if isinstance(timings, dict):
+        cached = int(timings.get("cache_n") or 0)
+        result.prompt_cached_tokens = cached
+        result.prompt_tokens = int(timings.get("prompt_n") or 0) + cached
+        result.prompt_eval_s = float(timings.get("prompt_ms") or 0.0) / 1000.0
+        result.eval_tokens = int(timings.get("predicted_n") or 0)
+        result.eval_s = float(timings.get("predicted_ms") or 0.0) / 1000.0
+        return
+    usage = event.get("usage")
+    if isinstance(usage, dict) and not result.prompt_tokens:
+        result.prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        result.eval_tokens = int(usage.get("completion_tokens") or 0)
+
+
+def openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The engine's Ollama-shaped history in the OpenAI chat shape.
+
+    Ollama pairs a tool result with its call by order and name and takes the
+    arguments as an object; the OpenAI shape pairs them by ``tool_call_id``
+    and takes the arguments as a JSON string. Ids are given here, in order.
+    """
+    converted: list[dict[str, Any]] = []
+    pending: list[str] = []
+    for index, message in enumerate(messages):
+        role = message.get("role")
+        if role == "assistant" and message.get("tool_calls"):
+            calls = []
+            for number, call in enumerate(message["tool_calls"]):
+                function = call.get("function") or {}
+                arguments = function.get("arguments")
+                call_id = f"call_{index}_{number}"
+                pending.append(call_id)
+                calls.append({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": function.get("name", ""),
+                        "arguments": arguments if isinstance(arguments, str)
+                        else json.dumps(arguments or {}, ensure_ascii=False),
+                    },
+                })
+            converted.append(
+                {"role": "assistant", "content": message.get("content") or "", "tool_calls": calls}
+            )
+        elif role == "tool":
+            call_id = pending.pop(0) if pending else f"call_{index}"
+            converted.append(
+                {"role": "tool", "tool_call_id": call_id, "content": message.get("content") or ""}
+            )
+        else:
+            converted.append({"role": role, "content": message.get("content") or ""})
+    return converted
+
+
+def make_chat(
+    api: str,
+    model: str,
+    *,
+    base_url: str,
+    num_ctx: int = 8192,
+    keep_alive: str = "30m",
+    temperature: float = 0.2,
+) -> OllamaChat | OpenAIChat:
+    """The client for ``[voice_engine] llm_api``; anything unknown is Ollama."""
+    if api == "openai":
+        return OpenAIChat(model, base_url=base_url, temperature=temperature)
+    return OllamaChat(model, base_url=base_url, num_ctx=num_ctx, keep_alive=keep_alive,
+                      temperature=temperature)

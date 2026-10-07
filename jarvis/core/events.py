@@ -1806,6 +1806,24 @@ class BrainTurnStarted(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class BrainRouteSelected(Event):
+    """``[brain.route_policy]`` picked a tier for a turn, and why.
+
+    ``chain`` is ``provider:model`` per attempt and ``excluded`` is
+    ``tier:provider:why`` per skipped target. No prompt text, no secrets.
+    ``outcome`` is filled for an escalation (the delegate's typed result).
+    """
+
+    tier: str = ""
+    reason: str = ""
+    intent_level: str = ""
+    chain: tuple[str, ...] = ()
+    excluded: tuple[str, ...] = ()
+    outcome: str = ""
+    elapsed_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class BrainTurnCompleted(Event):
     tokens_in: int = 0
     tokens_out: int = 0

@@ -194,6 +194,23 @@ def upsert_page(
     conn.commit()
 
 
+def upsert_pages(
+    conn: sqlite3.Connection,
+    vault_root: Path,
+    abs_paths: list[Path],
+) -> int:
+    """Reindex several pages in one transaction; returns how many were indexed.
+
+    A bulk import writes many pages at once. One commit per batch keeps the
+    index current without a full vault walk and without a commit per page.
+    """
+    count = sum(1 for abs_path in abs_paths if _upsert_one(conn, vault_root, abs_path))
+    if count:
+        _record_index_metadata(conn, operation="upsert_batch")
+    conn.commit()
+    return count
+
+
 def remove_page(
     conn: sqlite3.Connection,
     vault_root: Path,
@@ -445,6 +462,7 @@ __all__ = [
     "index_vault",
     "rebuild_index",
     "upsert_page",
+    "upsert_pages",
     "remove_page",
     "read_index_metadata",
     "vault_page_mtimes",

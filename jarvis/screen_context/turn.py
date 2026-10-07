@@ -206,8 +206,13 @@ def model_note(context: ScreenContext) -> str:
         lines.append(f"Limitations of this capture: {limits}")
 
     if context.ui_text:
+        source = (
+            "read from the accessibility layer and by text recognition, which can misread"
+            if "ocr" in str(getattr(context, "ui_text_source", "") or "")
+            else "read from the accessibility layer"
+        )
         lines.append(
-            "Visible on-screen text, read from the accessibility layer:\n"
+            f"Visible on-screen text, {source}:\n"
             f"{escape(context.ui_text, quote=True)}"
         )
 

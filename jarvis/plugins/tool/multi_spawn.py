@@ -71,6 +71,16 @@ class MultiSpawnTool:
         self._manager = manager or HarnessManager(bus=bus)
         self._max_output_chars = max_output_chars
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float:
+        """The ToolExecutor's deadline for this call: the harness's own
+        queue-plus-work allowance for ``timeout_s`` (as in
+        ``dispatch_to_harness``) plus room to collect the results."""
+        try:
+            timeout_s = float(args.get("timeout_s") or 600)
+        except (TypeError, ValueError):  # execute() fails on the same value
+            timeout_s = 600.0
+        return 3 * max(timeout_s, 1.0) + 30.0
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         harness_name = (args.get("harness") or "").strip()
         prompts_raw = args.get("prompts") or []

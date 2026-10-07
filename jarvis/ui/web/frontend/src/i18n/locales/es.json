@@ -94,6 +94,7 @@
     "title": "Las herramientas de dictado y escritura no alcanzan esta ventana",
     "impact": "Esta aplicación se está ejecutando con permisos de administrador, por lo que Windows impide que otros programas escriban en ella. Las apps de dictado, los expansores de texto, los gestores de portapapeles y el autocompletado de los gestores de contraseñas parecerán no hacer nada aquí, aunque sigan funcionando en el resto de aplicaciones.",
     "manual_hint": "La aplicación no puede renunciar por sí misma a los permisos de administrador en esta cuenta de Windows. Ciérrala y vuelve a abrirla con normalidad, sin «Ejecutar como administrador».",
+    "uac_off_hint": "El Control de cuentas de usuario (UAC) está desactivado en este PC, así que todas las aplicaciones se ejecutan como administrador y un reinicio no puede quitar esos permisos. Vuelve a activar el UAC en la configuración de Windows para solucionarlo.",
     "restart_now": "Reiniciar sin permisos de administrador",
     "restarting": "Reiniciando…",
     "restart_failed": "No se pudo reiniciar la aplicación sin permisos de administrador.",
@@ -177,6 +178,9 @@
     "nav_forward": "Adelante"
   },
   "nav": {
+    "deck": "HUD",
+    "orb": "Orbe de memoria",
+    "armory": "Arsenal de herramientas",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agentes",
@@ -572,6 +576,7 @@
   },
   "voice_state": {
     "idle": "Listo",
+    "unavailable": "Voz no disponible",
     "listening": "Escuchando",
     "thinking": "Pensando",
     "speaking": "Hablando",
@@ -715,7 +720,9 @@
     "prompt_mode_failed": "No se pudo cambiar el modo Prompt.",
     "theme_to_light": "Cambiar al modo claro",
     "theme_to_dark": "Cambiar al modo oscuro",
-    "back_to_assistant": "Volver a {name}"
+    "back_to_assistant": "Volver a {name}",
+    "voice_engine_title_realtime": "Voz en tiempo real: {provider} escucha y habla por sí mismo. Haz clic para cambiar el proveedor de voz.",
+    "voice_engine_title_pipeline": "Voz Pipeline: voz a texto, luego {provider}, luego texto a voz. Haz clic para cambiar el cerebro."
   },
   "assistant_chat": {
     "voice_enter": "Modo voz",
@@ -2194,7 +2201,10 @@
     "experimental_consent": "Antes de activarlo: este proveedor todavía está en beta y usa una ruta experimental e inestable que puede cambiar sin aviso. Si falla, la llamada se detiene en lugar de cambiar por su cuenta a otro proveedor. ¿Continuar?",
     "trademark_notice": "Los nombres y logotipos de proveedores y servicios son marcas de sus respectivos titulares y se muestran únicamente para identificar las integraciones que puedes conectar. No implican afiliación ni respaldo.",
     "key_verified_toast": "{0} ha respondido — la clave funciona.",
-    "key_check_failed_toast": "{0} no ha respondido: {1}"
+    "key_check_failed_toast": "{0} no ha respondido: {1}",
+    "pipeline_hint_title": "¿Buscas Hermes, Nous Portal o un Qwen local?",
+    "pipeline_hint_body": "Aquí solo aparecen proveedores con un modelo de audio en vivo propio. Cualquier modelo de chat, incluidos los de Nous Portal y un servidor local compatible con OpenAI como Qwen, habla mediante la voz Pipeline: voz a texto, luego el cerebro que elijas, luego texto a voz. Hermes Agent en sí es un agente de línea de comandos y no puede ser un cerebro de voz.",
+    "pipeline_hint_action": "Usar voz Pipeline"
   },
   "apikeys_test": {
     "button": "Probar",
@@ -2690,6 +2700,7 @@
       "dark": "Oscuro",
       "light": "Claro",
       "system": "Sistema",
+      "jarvis": "Jarvis",
       "system_now_dark": "Sigue a su sistema, que actualmente está en modo oscuro.",
       "system_now_light": "Sigue a su sistema, que actualmente está en modo claro."
     }
@@ -2928,7 +2939,15 @@
     "apply": "Aplicar",
     "applying": "Aplicando…",
     "saved": "Modelo del {name}-Agent guardado.",
-    "saved_restart": "Modelo del {name}-Agent guardado — se aplica a la próxima misión."
+    "saved_restart": "Modelo del {name}-Agent guardado — se aplica a la próxima misión.",
+    "provider_label": "Proveedor",
+    "needs_setup": "requiere configuración",
+    "access_local": "en este equipo",
+    "access_api": "clave de API",
+    "access_subscription": "suscripción",
+    "next_restart": "(activo desde el próximo reinicio)",
+    "unready_hint": "{provider} necesita una clave o un inicio de sesión antes de ejecutar agentes. No se cambió nada.",
+    "set_up": "Configurar {provider}"
   },
   "cli_connect": {
     "is_connected": "{0} está conectado",
@@ -3196,6 +3215,14 @@
     "no_hits_prefix": "Sin coincidencias para ",
     "no_hits_suffix": ". Prueba otras palabras clave o consulta el grafo.",
     "hits_heading": "Coincidencias"
+  },
+  "wiki_holo": {
+    "open": "Vista de manos",
+    "open_title": "Abrir el panel HOLO: tu memoria como orbes que agarras con las manos (usa la cámara)",
+    "preparing": "Preparando…",
+    "close": "Cerrar",
+    "install_failed": "No se pudo preparar el seguimiento de manos",
+    "frame_title": "Panel de gestos HOLO"
   },
   "wiki_graph": {
     "empty_prefix": "Tu grafo de memoria aún está vacío. En cuanto ",
@@ -3676,7 +3703,8 @@
     "prompt_not_submitted": "el prompt está en su campo de entrada, no se envió",
     "prompt_unconfirmed": "el prompt se escribió, pero el panel no mostró que llegara: revisa ese panel",
     "dictation_nowhere": "Ningún campo de texto tenía el foco, así que el dictado no se insertó. Está en el historial de dictados.",
-    "realtime_provider_issue": "El proveedor Realtime informó de un problema."
+    "realtime_provider_issue": "El proveedor Realtime informó de un problema.",
+    "tts_no_audio": "Jarvis respondió, pero la voz no pudo decirlo. Elige una voz que funcione en Ajustes."
   },
   "chat_thread": {
     "message_to": "Mensaje a",
@@ -4677,6 +4705,9 @@
     "stat_brain": "Cerebro",
     "stat_realtime": "Tiempo real",
     "stat_model": "Modelo",
+    "stat_avatar": "Avatar",
+    "avatar_gigi": "Gigi",
+    "avatar_reactor": "Reactor",
     "stat_running": "Activos",
     "switch_to_classic": "Chat clásico",
     "switch_to_deck": "Panel",
@@ -4694,6 +4725,19 @@
     "shot_empty": "Sin captura ahora.",
     "shot_redacted": "{0} ocultos",
     "card_api": "API en esta sesión",
+    "card_vitals": "Sistema",
+    "vitals_cpu": "CPU",
+    "vitals_ram": "RAM",
+    "vitals_gpu": "GPU",
+    "vitals_vram": "VRAM",
+    "vitals_temp": "Temp. GPU",
+    "vitals_power": "Potencia GPU",
+    "vitals_battery": "Batería",
+    "vitals_plugged": "enchufado",
+    "vitals_on_battery": "con batería",
+    "vitals_mode": "Modo de energía",
+    "vitals_loading": "Leyendo el equipo…",
+    "vitals_error": "Sin lecturas de este equipo.",
     "api_empty": "Aún sin respuestas del cerebro.",
     "api_in": "Entrada",
     "api_out": "Salida",
@@ -5078,7 +5122,6 @@
       "mode_voice": "Voz",
       "mode_chat": "Chat",
       "mode_hint": "Voz o chat escrito con Jarvis",
-      "voice_note": "La voz usa el cerebro de voz de Jarvis, no el modelo elegido para el chat escrito.",
       "model": "Modelo",
       "model_default": "Cerebro de Jarvis",
       "model_provider_default": "predeterminado del proveedor",
@@ -5142,7 +5185,19 @@
       "history_chats": "Chats",
       "history_voice": "Voz",
       "history_empty": "Nada aquí todavía",
-      "history_delete": "Eliminar"
+      "history_delete": "Eliminar",
+      "voice_engine": "La voz responde con {voice} ({mode}).",
+      "voice_same": "La voz también usa {chat}: la voz Pipeline pasa tu voz a texto, {chat} responde y la respuesta se lee en voz alta.",
+      "voice_differs": "El chat escrito usa {chat}, pero la voz responde con {voice} ({mode}).",
+      "voice_differs_realtime": "El chat escrito usa {chat}, pero la voz responde con {voice} ({mode}), un modelo de voz en vivo que escucha y habla por sí mismo. Para hablar con {chat}, la voz tiene que pasar a Pipeline: voz a texto, luego {chat}, luego texto a voz.",
+      "voice_cli": "El chat escrito usa {chat}, un agente de línea de comandos que solo responde cuando ha terminado y aprueba sus propias herramientas, así que no puede mantener una conversación hablada. La voz responde con {voice} ({mode}).",
+      "voice_cli_hermes": "Para hablar con los modelos que Hermes Agent usa a través de Nous, elige Nous Portal como cerebro de la voz Pipeline.",
+      "voice_use": "Usar {chat} para la voz",
+      "voice_use_hint": "Cambia la voz a Pipeline: voz a texto, luego {chat}, luego texto a voz. Se guarda y se mantiene tras reiniciar.",
+      "voice_switched": "La voz ahora responde con {chat}.",
+      "voice_switch_failed": "No se pudo pasar la voz a {chat}.",
+      "voice_settings": "Ajustes de voz",
+      "voice_pick_brain": "Elegir cerebro de voz"
     },
     "world": {
       "minimap_label": "Mapa de la isla",
@@ -6159,5 +6214,41 @@
       "create": "Crear mascota",
       "creating": "Creando…"
     }
+  },
+  "route_policy": {
+    "title": "Enrutamiento",
+    "desc": "Los turnos rápidos van al modelo rápido; el razonamiento de varios pasos, el código y la construcción van al modelo profundo. Desactivado, el cerebro elegido arriba responde todo.",
+    "enabled": "Enrutamiento automático",
+    "fast": "Rápido",
+    "fast_desc": "Preguntas cortas y charla diaria.",
+    "deep": "Profundo",
+    "deep_desc": "Razonamiento de varios pasos, código y construcción.",
+    "target_unset": "Sin definir",
+    "on_device": "en este equipo",
+    "needs_setup": "requiere configuración",
+    "model_placeholder": "Modelo propio del proveedor",
+    "model_label": "Modelo {tier}",
+    "local": "Se ejecuta en este equipo (las imágenes pueden ir aquí)",
+    "escalation": "Escalar solo cuando lo pida",
+    "escalation_desc": "Pasa la tarea a un agente delegado en Paperclip, como un agente de Claude, solo cuando digas una de estas frases. Nunca se usa automáticamente ni como respaldo.",
+    "agent": "Agente delegado",
+    "agent_placeholder": "Agente de Paperclip, p. ej. claude",
+    "phrases": "Frases",
+    "phrases_placeholder": "Frases separadas por comas, p. ej. pregunta a claude",
+    "cloud_vision": "Enviar imágenes a modelos en la nube",
+    "cloud_vision_desc": "Desactivado: las capturas, los fotogramas de cámara y las imágenes soltadas solo van a destinos en este equipo, o Jarvis dice que no puede mirar.",
+    "last_none": "Ningún turno se ha enrutado desde que se abrió la app.",
+    "last_tier": "Último turno",
+    "last_model": "Se ejecutó en",
+    "last_reason": "Por qué",
+    "last_fallback": "Respaldo",
+    "last_excluded": "Omitidos",
+    "last_outcome": "Resultado",
+    "save": "Guardar",
+    "saved": "Enrutamiento guardado. Se aplica desde el próximo turno.",
+    "restore": "Deshacer el último cambio",
+    "restored": "Enrutamiento restaurado.",
+    "loading": "Cargando enrutamiento…",
+    "load_failed": "No se pudieron cargar los ajustes de enrutamiento: {detail}"
   }
 }

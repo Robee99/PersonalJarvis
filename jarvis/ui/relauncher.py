@@ -190,6 +190,30 @@ def relauncher_command(
     return [active_executable, "-m", "jarvis.ui.relauncher", str(pid), cwd, *launcher_args]
 
 
+def self_launch_command(
+    launcher_args: tuple[str, ...] | list[str] = (),
+    *,
+    executable: str | None = None,
+    frozen: bool | None = None,
+    platform_name: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> list[str]:
+    """Argv that starts this launcher again right now, keeping its arguments.
+
+    A source install re-enters ``python -m jarvis.ui.web.launcher``. A frozen
+    build has no ``-m``: its parser rejects it and the GUI executable exits
+    without a word, so it starts its bare self through
+    :func:`frozen_self_command` (which takes no desktop overrides).
+    """
+    active_executable = sys.executable if executable is None else executable
+    is_frozen_build = _frozen() if frozen is None else frozen
+    if is_frozen_build:
+        return frozen_self_command(
+            active_executable, platform_name=platform_name, environ=environ
+        )
+    return [active_executable, "-m", LAUNCHER_MODULE, *launcher_args]
+
+
 def build_launch_command(
     executable: str,
     *,

@@ -39,10 +39,18 @@ def _resolve_placeholders(value: str, replacements: dict[str, str]) -> str:
     return out
 
 
-def _token_replacements(plugin_id: str, access_token: str) -> dict[str, str]:
+def _token_replacements(
+    plugin_id: str, access_token: str, instance_url: str = ""
+) -> dict[str, str]:
     base = f"plugin_{plugin_id}_access_token"
     # Catalog uses both bare ($x) and braced (${x}) placeholder forms.
-    return {f"${{{base}}}": access_token, f"${base}": access_token}
+    out = {f"${{{base}}}": access_token, f"${base}": access_token}
+    if instance_url:
+        # A self-hosted service's address (saved beside the token at connect)
+        # reaches its MCP server the same way the token does.
+        url_key = f"plugin_{plugin_id}_instance_url"
+        out.update({f"${{{url_key}}}": instance_url, f"${url_key}": instance_url})
+    return out
 
 
 def _stdio_entry(spec: dict[str, Any], repl: dict[str, str]) -> dict[str, Any] | None:
@@ -106,7 +114,9 @@ def assemble_claude_mcp_servers(
         if tokens is None:
             continue  # not connected
 
-        repl = _token_replacements(plugin.id, tokens.access)
+        repl = _token_replacements(
+            plugin.id, tokens.access, str(tokens.extra.get("instance_url") or "")
+        )
         transport = str(spec.get("transport") or "").lower()
         if transport == "stdio":
             entry = _stdio_entry(spec, repl)

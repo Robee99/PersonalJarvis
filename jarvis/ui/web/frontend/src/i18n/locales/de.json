@@ -94,6 +94,7 @@
     "title": "Diktier- und Tipphilfen erreichen dieses Fenster nicht",
     "impact": "Diese App läuft mit Administratorrechten, deshalb lässt Windows andere Programme nicht in ihr Fenster schreiben. Diktier-Apps, Textbausteine, Zwischenablage-Tools und das automatische Ausfüllen von Passwort-Managern scheinen hier nichts zu tun, während sie in jeder anderen App weiterhin funktionieren.",
     "manual_hint": "Die App kann die Administratorrechte auf diesem Windows-Konto nicht selbst ablegen. Schließe sie und starte sie normal neu — ohne „Als Administrator ausführen“.",
+    "uac_off_hint": "Die Benutzerkontensteuerung (UAC) ist auf diesem PC ausgeschaltet, deshalb läuft jede App mit Administratorrechten und ein Neustart kann sie nicht ablegen. Schalte die UAC in den Windows-Einstellungen wieder ein, um das aufzuheben.",
     "restart_now": "Ohne Administratorrechte neu starten",
     "restarting": "Wird neu gestartet…",
     "restart_failed": "Die App konnte nicht ohne Administratorrechte neu gestartet werden.",
@@ -177,6 +178,9 @@
     "nav_forward": "Vor"
   },
   "nav": {
+    "deck": "HUD",
+    "orb": "Gedächtnis-Orb",
+    "armory": "Werkzeug-Arsenal",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agenten",
@@ -572,6 +576,7 @@
   },
   "voice_state": {
     "idle": "Bereit",
+    "unavailable": "Sprache nicht verfügbar",
     "listening": "Hört zu",
     "thinking": "Denkt",
     "speaking": "Spricht",
@@ -715,7 +720,9 @@
     "prompt_mode_failed": "Der Prompt-Modus konnte nicht umgeschaltet werden.",
     "theme_to_light": "Zum hellen Modus wechseln",
     "theme_to_dark": "Zum dunklen Modus wechseln",
-    "back_to_assistant": "Zurück zu {name}"
+    "back_to_assistant": "Zurück zu {name}",
+    "voice_engine_title_realtime": "Realtime-Sprache: {provider} hört zu und spricht selbst. Klicken, um den Sprach-Provider zu ändern.",
+    "voice_engine_title_pipeline": "Pipeline-Sprache: Sprache zu Text, dann {provider}, dann Text zu Sprache. Klicken, um das Gehirn zu ändern."
   },
   "assistant_chat": {
     "voice_enter": "Sprachmodus",
@@ -2194,7 +2201,10 @@
     "experimental_consent": "Bevor du das aktivierst: Dieser Anbieter ist noch im Beta-Stadium und nutzt eine experimentelle, instabile Route, die sich ohne Vorankündigung ändern kann. Wenn sie ausfällt, endet das Gespräch, statt von selbst auf einen anderen Anbieter zu wechseln. Fortfahren?",
     "trademark_notice": "Anbieter- und Dienstnamen sowie Logos sind Marken ihrer jeweiligen Inhaber und werden nur gezeigt, um die verbindbaren Integrationen zu benennen. Eine Verbindung oder Empfehlung ist damit nicht gemeint.",
     "key_verified_toast": "{0} hat geantwortet — der Schlüssel funktioniert.",
-    "key_check_failed_toast": "{0} hat nicht geantwortet: {1}"
+    "key_check_failed_toast": "{0} hat nicht geantwortet: {1}",
+    "pipeline_hint_title": "Du suchst Hermes, Nous Portal oder ein lokales Qwen?",
+    "pipeline_hint_body": "Hier stehen nur Provider mit einem eigenen Live-Audio-Modell. Jedes Chat-Modell, auch Nous-Portal-Modelle und ein lokaler OpenAI-kompatibler Server wie Qwen, spricht über Pipeline-Sprache: Sprache zu Text, dann das gewählte Gehirn, dann Text zu Sprache. Hermes Agent selbst ist ein Kommandozeilen-Agent und kann kein Sprach-Gehirn sein.",
+    "pipeline_hint_action": "Pipeline-Sprache nutzen"
   },
   "apikeys_test": {
     "button": "Testen",
@@ -2690,6 +2700,7 @@
       "dark": "Dunkel",
       "light": "Hell",
       "system": "System",
+      "jarvis": "Jarvis",
       "system_now_dark": "Folgt Ihrem System, das derzeit dunkel ist.",
       "system_now_light": "Folgt Ihrem System, das derzeit hell ist."
     }
@@ -2928,7 +2939,15 @@
     "apply": "Übernehmen",
     "applying": "Übernehme…",
     "saved": "{name}-Agent-Modell gespeichert.",
-    "saved_restart": "{name}-Agent-Modell gespeichert — gilt ab der nächsten Mission."
+    "saved_restart": "{name}-Agent-Modell gespeichert — gilt ab der nächsten Mission.",
+    "provider_label": "Anbieter",
+    "needs_setup": "Einrichtung nötig",
+    "access_local": "auf diesem Gerät",
+    "access_api": "API-Schlüssel",
+    "access_subscription": "Abo",
+    "next_restart": "(aktiv ab dem nächsten Neustart)",
+    "unready_hint": "{provider} braucht einen Schlüssel oder eine Anmeldung, bevor es Agenten ausführen kann. Es wurde nichts umgestellt.",
+    "set_up": "{provider} einrichten"
   },
   "cli_connect": {
     "is_connected": "{0} ist verbunden",
@@ -3196,6 +3215,14 @@
     "no_hits_prefix": "Keine Treffer für ",
     "no_hits_suffix": ". Versuche andere Stichworte oder schau in den Graph.",
     "hits_heading": "Treffer"
+  },
+  "wiki_holo": {
+    "open": "Handansicht",
+    "open_title": "HOLO-Deck öffnen: dein Gedächtnis als Kugeln, die du mit den Händen greifst (nutzt die Kamera)",
+    "preparing": "Wird vorbereitet…",
+    "close": "Schließen",
+    "install_failed": "Handerkennung konnte nicht vorbereitet werden",
+    "frame_title": "HOLO-Handgesten-Deck"
   },
   "wiki_graph": {
     "empty_prefix": "Dein Memory-Graph ist noch leer. Sobald ",
@@ -3676,7 +3703,8 @@
     "prompt_not_submitted": "der Prompt steht im Eingabefeld, abgeschickt wurde er nicht",
     "prompt_unconfirmed": "der Prompt wurde eingetippt, aber das Pane hat den Empfang nicht sichtbar gezeigt – bitte dort nachsehen",
     "dictation_nowhere": "Es war kein Textfeld aktiv, deshalb wurde das Diktat nicht eingefügt. Es steht in der Diktat-Historie.",
-    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem."
+    "realtime_provider_issue": "Der Realtime-Anbieter meldet ein Problem.",
+    "tts_no_audio": "Jarvis hat geantwortet, aber die Stimme konnte es nicht sprechen. Wähle in den Einstellungen eine funktionierende Stimme."
   },
   "chat_thread": {
     "message_to": "Nachricht an",
@@ -4677,6 +4705,9 @@
     "stat_brain": "Hirn",
     "stat_realtime": "Realtime",
     "stat_model": "Modell",
+    "stat_avatar": "Avatar",
+    "avatar_gigi": "Gigi",
+    "avatar_reactor": "Reaktor",
     "stat_running": "Läuft",
     "switch_to_classic": "Klassischer Chat",
     "switch_to_deck": "Deck",
@@ -4694,6 +4725,19 @@
     "shot_empty": "Gerade keine Aufnahme.",
     "shot_redacted": "{0} geschwärzt",
     "card_api": "API diese Sitzung",
+    "card_vitals": "System",
+    "vitals_cpu": "CPU",
+    "vitals_ram": "RAM",
+    "vitals_gpu": "GPU",
+    "vitals_vram": "VRAM",
+    "vitals_temp": "GPU-Temp.",
+    "vitals_power": "GPU-Leistung",
+    "vitals_battery": "Akku",
+    "vitals_plugged": "am Netz",
+    "vitals_on_battery": "im Akkubetrieb",
+    "vitals_mode": "Energiemodus",
+    "vitals_loading": "Rechner wird gelesen…",
+    "vitals_error": "Keine Werte von diesem Rechner.",
     "api_empty": "Noch keine Hirn-Antworten.",
     "api_in": "Rein",
     "api_out": "Raus",
@@ -5078,7 +5122,6 @@
       "mode_voice": "Sprache",
       "mode_chat": "Chat",
       "mode_hint": "Sprache oder getippter Chat mit Jarvis",
-      "voice_note": "Sprache läuft über das Sprach-Gehirn von Jarvis, nicht über das Modell des getippten Chats.",
       "model": "Modell",
       "model_default": "Gehirn von Jarvis",
       "model_provider_default": "Anbieter-Standard",
@@ -5142,7 +5185,19 @@
       "history_chats": "Chats",
       "history_voice": "Sprache",
       "history_empty": "Noch nichts hier",
-      "history_delete": "Löschen"
+      "history_delete": "Löschen",
+      "voice_engine": "Sprache antwortet über {voice} ({mode}).",
+      "voice_same": "Sprache nutzt ebenfalls {chat}: Pipeline-Sprache wandelt deine Sprache in Text, {chat} antwortet, und die Antwort wird vorgelesen.",
+      "voice_differs": "Der getippte Chat nutzt {chat}, Sprache antwortet aber über {voice} ({mode}).",
+      "voice_differs_realtime": "Der getippte Chat nutzt {chat}, Sprache antwortet aber über {voice} ({mode}), ein Live-Sprachmodell, das selbst zuhört und spricht. Um mit {chat} zu sprechen, muss Sprache auf Pipeline wechseln: Sprache zu Text, dann {chat}, dann Text zu Sprache.",
+      "voice_cli": "Der getippte Chat nutzt {chat}, einen Kommandozeilen-Agenten, der erst antwortet, wenn er fertig ist, und seine Werkzeuge selbst freigibt. Deshalb kann er kein Gespräch führen. Sprache antwortet über {voice} ({mode}).",
+      "voice_cli_hermes": "Um mit den Modellen zu sprechen, die Hermes Agent über Nous nutzt, wähle Nous Portal als Gehirn für Pipeline-Sprache.",
+      "voice_use": "{chat} für Sprache nutzen",
+      "voice_use_hint": "Stellt Sprache auf Pipeline um: Sprache zu Text, dann {chat}, dann Text zu Sprache. Wird gespeichert und bleibt nach einem Neustart erhalten.",
+      "voice_switched": "Sprache antwortet jetzt mit {chat}.",
+      "voice_switch_failed": "Sprache konnte nicht auf {chat} umgestellt werden.",
+      "voice_settings": "Spracheinstellungen",
+      "voice_pick_brain": "Sprach-Gehirn wählen"
     },
     "world": {
       "minimap_label": "Inselkarte",
@@ -6159,5 +6214,41 @@
       "create": "Pet erstellen",
       "creating": "Wird erstellt…"
     }
+  },
+  "route_policy": {
+    "title": "Routing",
+    "desc": "Kurze Anfragen gehen an das schnelle Modell, mehrstufiges Denken, Code und Bauen an das tiefe Modell. Aus heißt: Das oben gewählte Gehirn beantwortet alles.",
+    "enabled": "Automatisches Routing",
+    "fast": "Schnell",
+    "fast_desc": "Kurze Fragen und Alltagsgespräche.",
+    "deep": "Tief",
+    "deep_desc": "Mehrstufiges Denken, Code und Bauen.",
+    "target_unset": "Nicht gesetzt",
+    "on_device": "auf diesem Computer",
+    "needs_setup": "muss eingerichtet werden",
+    "model_placeholder": "Eigenes Modell des Providers",
+    "model_label": "Modell für {tier}",
+    "local": "Läuft auf diesem Computer (Bilder dürfen hierher)",
+    "escalation": "Nur auf meinen Wunsch eskalieren",
+    "escalation_desc": "Übergibt die Aufgabe nur dann an einen Agenten in Paperclip, etwa einen Claude-Agenten, wenn du einen dieser Sätze sagst. Nie automatisch und nie als Ersatz.",
+    "agent": "Agent",
+    "agent_placeholder": "Paperclip-Agent, z. B. claude",
+    "phrases": "Sätze",
+    "phrases_placeholder": "Sätze, durch Kommas getrennt, z. B. frag claude",
+    "cloud_vision": "Bilder an Cloud-Modelle senden",
+    "cloud_vision_desc": "Aus: Screenshots, Kamerabilder und abgelegte Bilder gehen nur an Ziele auf diesem Computer, sonst sagt Jarvis, dass er nicht hinsehen kann.",
+    "last_none": "Seit dem Start wurde noch keine Anfrage geroutet.",
+    "last_tier": "Letzte Anfrage",
+    "last_model": "Lief auf",
+    "last_reason": "Warum",
+    "last_fallback": "Ersatz",
+    "last_excluded": "Übersprungen",
+    "last_outcome": "Ergebnis",
+    "save": "Speichern",
+    "saved": "Routing gespeichert. Es gilt ab der nächsten Anfrage.",
+    "restore": "Letzte Änderung zurücknehmen",
+    "restored": "Routing wurde zurückgesetzt.",
+    "loading": "Routing wird geladen…",
+    "load_failed": "Routing-Einstellungen konnten nicht geladen werden: {detail}"
   }
 }

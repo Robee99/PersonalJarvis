@@ -18,6 +18,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   openai: "OpenAI",
   grok: "Grok",
   nvidia: "NVIDIA NIM",
+  nous: "Nous Portal",
   codex: "Codex",
   mock: "Mock-Brain",
   // Realtime tier — used when the backend's pretty label is unavailable.

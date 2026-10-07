@@ -867,7 +867,9 @@ class ScreenContextService:
             )
             if ocr_result.degradation is not None:
                 degradations.append(ocr_result.degradation)
-            else:
+            # A low-confidence read still carries regions (to redact) and the
+            # masked text; an unavailable engine carries neither.
+            if ocr_result.regions:
                 ocr_regions = redaction.local_text_regions_to_redact(
                     ocr_result.regions,
                     patterns=self._patterns,

@@ -28,6 +28,28 @@ log = logging.getLogger(__name__)
 #: chain moves on (Wave-3 latency fix).
 CLIENT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=30.0)
 
+#: Longest wait between two SDK retries of one request. The SDK honours a
+#: server's Retry-After up to 60 s (openai 2.x) or 120 s (3.x) per retry, so a
+#: throttled free route held a voice turn for minutes while the speech
+#: pipeline's 30 s stall guard gave up first. The brain chain already parks a
+#: rate-limited provider and tries the next tier, so a short wait is enough.
+MAX_RETRY_WAIT_S = 2.0
+
+
+def bounded_retry_client(**kwargs: Any) -> Any:
+    """``AsyncOpenAI`` whose waits between retries never exceed ``MAX_RETRY_WAIT_S``.
+
+    The retry count stays the SDK's (a llama-server still loading its model
+    answers 503 for a moment); only the wait is capped.
+    """
+    from openai import AsyncOpenAI
+
+    class _BoundedRetryOpenAI(AsyncOpenAI):
+        def _calculate_retry_timeout(self, *args: Any, **kw: Any) -> float:
+            return min(float(super()._calculate_retry_timeout(*args, **kw)), MAX_RETRY_WAIT_S)
+
+    return _BoundedRetryOpenAI(**kwargs)
+
 
 _STREAM_OPTIONS_WARNING_EMITTED = False
 

@@ -29,7 +29,9 @@ def plugin_to_mcp_server_spec(
     spec = plugin.mcp_server
     if not spec:
         return None
-    repl = _token_replacements(plugin.id, tokens.access)
+    repl = _token_replacements(
+        plugin.id, tokens.access, str(tokens.extra.get("instance_url") or "")
+    )
     transport = str(spec.get("transport") or "").lower()
 
     if transport == "http":

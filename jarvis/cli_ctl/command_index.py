@@ -99,7 +99,7 @@ COMMAND_INDEX: dict[str, tuple[str, ...]] = {
     "board": ("summary", "heatmap", "records", "achievements", "bio", "bio-regenerate", "profile"),
     "docs": ("list", "tree", 'search "<query>"', "show <path>"),
     "costs": ("summary", "entries", "rates"),
-    "system": ("restart", "audio-devices", "status"),
+    "system": ("restart", "audio-devices", "status", "free-voice", "acceptance"),
     "auth": ("login", "status", "logout"),
     "clis": (
         "list",

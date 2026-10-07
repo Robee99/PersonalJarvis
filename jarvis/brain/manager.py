@@ -63,6 +63,7 @@ from jarvis.core.events import (
     ActionExecuted,
     AnnouncementRequested,
     BrainProviderSwitched,
+    BrainRouteSelected,
     BrainTurnCompleted,
     BrainTurnStarted,
     ResponseGenerated,
@@ -88,7 +89,7 @@ from jarvis.core.turn_language import (
 )
 from jarvis.memory import CoreMemory, PersonStore, RecallStore, Soul, UserProfile
 from jarvis.memory.curator import Curator
-from jarvis.safety.tool_executor import ToolExecutor
+from jarvis.safety.tool_executor import ToolExecutor, recording_side_effects
 from jarvis.voice.action_phrases import (
     CU_CANCEL_EXIT_CODE,
     CU_TOOL_OUTCOME_LAYER,
@@ -109,6 +110,19 @@ from .assistant_name import (
 from .dispatcher import BrainDispatcher
 from .evidence_gate import live_surface_covers
 from .intent_router import RoutingDecision, classify
+from .paperclip_delegation import DelegationRequest, delegate_from_config
+from .route_policy import (
+    RouteDecision,
+    RouteFailure,
+    TurnSignals,
+    decide_route,
+    filter_denied,
+    media_allowed,
+    media_chain,
+    media_stays_local_message,
+    recovery_message,
+    wants_escalation,
+)
 from .local_action_gate import (
     HARNESS_NAME,
     LocalActionMode,
@@ -173,6 +187,9 @@ _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
     default=None,
 )
 
+#: Tools whose whole result is a picture; a blind brain is never offered them.
+_IMAGE_CAPTURE_TOOL_NAMES: frozenset[str] = frozenset({"screenshot", "camera"})
+
 #: Bounds for the conversation-context block appended to a Computer-Use goal.
 #: The deterministic gate ships the RAW current utterance as the mission goal;
 #: a correction / follow-up turn ("that is the wrong server", "do it with
@@ -236,10 +253,23 @@ PROVIDER_ALIASES = {
     "nvidia": "nvidia",
     "nim": "nvidia",
     "nemotron": "nvidia",
+    # Nous Portal (a cloud model host). "hermes" names Hermes Agent, the
+    # orchestrating brain below, never this host.
+    "nous": "nous",
+    "hermes": "hermes",
+    "hermes agent": "hermes",
+    "hermes-agent": "hermes",
 }
 
 SUBAGENT_ONLY_BRAIN_PROVIDERS: frozenset[str] = frozenset(
-    {"antigravity", "codex", "openai-codex", "grok-build", "grok-cli", "grokbuild"}
+    {
+        "antigravity",
+        "codex",
+        "openai-codex",
+        "grok-build",
+        "grok-cli",
+        "grokbuild",
+    }
 )
 
 _MAIN_BRAIN_FALLBACK_PROVIDER_ORDER: tuple[str, ...] = (
@@ -269,9 +299,11 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "openrouter": "OpenRouter",
     "grok": "xAI Grok",
     "nvidia": "NVIDIA NIM",
+    "nous": "Nous Portal",
     "gemini": "Google Gemini",
     "antigravity": "Google Antigravity (Gemini)",
     "grok-build": "Grok Build (xAI subscription)",
+    "hermes": "Hermes Agent",
 }
 
 
@@ -325,6 +357,7 @@ _SECRET_KEY_TO_BRAIN: dict[str, str] = {
     "grok_api_key": "grok",
     "xai_api_key": "grok",
     "nvidia_api_key": "nvidia",
+    "nous_api_key": "nous",
 }
 
 # ──────────────────────────────────────────────────────────────────
@@ -391,6 +424,13 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # generation — 12B of 120B activate per token, so it answers faster than
         # the dense model it replaces. Verified against integrate.api.nvidia.com.
         "nvidia": "nvidia/nemotron-3-super-120b-a12b",
+        # Nous Portal: a :free route, so a model-less pick works on a free
+        # account and never bills a paid model by surprise (same rule as the
+        # OpenRouter gateway above). The user's own pick wins over this.
+        "nous": "stepfun/step-3.7-flash:free",
+        # Hermes Agent: its own name means "the model Hermes picks" (its
+        # default, its fallbacks, its routes); Jarvis never chooses for it.
+        "hermes": "hermes-agent",
         "mistral": "mistral-small-3.1",
         # Local providers: no server-side catalog is knowable ahead of time —
         # empty means "the plugin discovers the first installed model".
@@ -417,6 +457,9 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # Nemotron 3 Ultra (verified against integrate.api.nvidia.com), which
         # the OpenRouter tiers above already name.
         "nvidia": "nvidia/nemotron-3-ultra-550b-a55b",
+        # Nous Portal: free route here too — see the router-tier note.
+        "nous": "stepfun/step-3.7-flash:free",
+        "hermes": "hermes-agent",
         "mistral": "mistral-large-3",
         # Local providers: empty = plugin-side discovery (see router tier).
         "ollama": "",
@@ -2156,6 +2199,7 @@ _SUBAGENT_VOICE_TO_CANONICAL: dict[str, str] = {
     "openrouter": "openrouter",
     "grok": "grok",
     "nvidia": "nvidia", "nim": "nvidia", "nemotron": "nvidia",
+    "nous": "nous",
     "antigravity": "antigravity",
     "grok-build": "grok-build",
     "grok build": "grok-build",
@@ -2166,6 +2210,7 @@ _SUBAGENT_DISPLAY: dict[str, str] = {
     "openai": "OpenAI", "openai-codex": "Codex", "claude-api": "Claude",
     "gemini": "Gemini", "openrouter": "OpenRouter", "grok": "xAI Grok",
     "nvidia": "NVIDIA NIM",
+    "nous": "Nous Portal",
     "antigravity": "Antigravity",
     "grok-build": "Grok Build",
 }
@@ -2301,7 +2346,9 @@ _SELF_CONTROL_STANDING = (
     "yourself with the registry command tools in your tool set (e.g. "
     "`wake-word-set`, `brain-switch`, `provider-test`, `tts-volume-set`, "
     "`app-restart`); `set_config_value` covers a plain config key, "
-    "`cli_jarvisctl` is the fallback for anything not covered. NEVER state "
+    "`cli_jarvisctl` is the fallback for anything not covered. Switch a "
+    "provider or the voice mode only when the user explicitly asks for that "
+    "switch, never to work around a problem on your own. NEVER state "
     "or imply that a change or action happened unless a tool call actually "
     "returned success in THIS turn; without such a result, say honestly that "
     "you have not done it yet."
@@ -2694,6 +2741,34 @@ def _provider_down_phrase(lang: str, idx: int, cause: str | None = None) -> str:
 # executed tools; the empty-response guard is (correctly) skipped when tool
 # calls exist, so the turn counted as success with empty text — the user heard
 # NOTHING. Voice-safe: no provider names, no jargon (ADR-0010).
+# Spoken when a provider attempt failed AFTER an action tool started: the action
+# may or may not have happened, so the turn is not replayed on another provider.
+_UNKNOWN_OUTCOME_PHRASES: dict[str, str] = {
+    "de": (
+        "Ich habe die Aktion gestartet, aber die Verbindung ist danach abgebrochen. "  # i18n-allow
+        "Ich weiß nicht, ob sie fertig wurde. Bitte prüf das kurz, bevor ich es "  # i18n-allow
+        "noch einmal versuche."  # i18n-allow
+    ),
+    "en": (
+        "I started that action, but the connection dropped before it finished, so I "
+        "can't tell whether it went through. Please check before I try it again."
+    ),
+    "es": (
+        "Empecé esa acción, pero la conexión se cortó antes de terminar, así que no sé "
+        "si se completó. Compruébalo antes de que lo intente otra vez."
+    ),
+}
+
+
+# Spoken between a reply that broke off mid-stream and the next provider's
+# full answer, so the listener does not hear half a sentence glued to it.
+_STREAM_RESTART_PHRASES: dict[str, str] = {
+    "de": " … Die Verbindung ist abgebrochen, hier noch einmal: ",  # i18n-allow
+    "en": " … Sorry, the connection dropped. Here it is again: ",
+    "es": " … Perdón, se cortó la conexión. Otra vez: ",
+}
+
+
 _MID_ANSWER_ERROR_PHRASES: dict[str, str] = {
     "de": (
         "Ich habe die Zwischenschritte ausgeführt, aber beim Formulieren der "  # i18n-allow
@@ -3480,6 +3555,10 @@ class BrainManager:
         self, chain: list[tuple[str, str | None]]
     ) -> list[tuple[str, str | None]]:
         """Filter a delegated turn to tool-capable cross-family candidates."""
+        if self._route_policy() is not None:
+            # The routing policy owns the chain: keep its order and targets,
+            # never pull in a tool model or worker pick from outside it.
+            return [(p, m) for p, m in chain if self._brain_can_call_tools(p, m)]
         from jarvis.core.model_selection import operation_model, worker_selection
 
         selection = operation_model.get() or worker_selection(self._config)
@@ -3671,6 +3750,14 @@ class BrainManager:
                     "is a bug (a silent DEFAULT_MODEL fallback), not expected.",
                     name, model, actual,
                 )
+        # An agent brain with its own server-side session (Hermes) joins the
+        # person's conversation only for the turns the person makes: the
+        # unscoped voice/legacy brain and the typed chat (``agent`` scope).
+        # Every other scope (goal checks, probes) keeps the brain's own
+        # background session, so housekeeping never lands in the conversation.
+        join = getattr(inst, "join_conversation", None)
+        if callable(join) and scope in (None, "agent"):
+            join()
         self._brain_cache[key] = inst
         return inst
 
@@ -3693,6 +3780,7 @@ class BrainManager:
         delegated_voice: bool = False,
         tool_context: dict[str, Any] | None = None,
         loop_control: Any = None,
+        tool_images: bool = True,
     ) -> BrainDispatcher:
         """Builds the dispatcher with an optional tool override.
 
@@ -3745,6 +3833,8 @@ class BrainManager:
         kwargs: dict[str, Any] = {}
         if max_turns is not None:
             kwargs["max_turns"] = max_turns
+        if not tool_images:
+            kwargs["tool_images"] = False
         return BrainDispatcher(
             brain,
             tools=tools,
@@ -3783,6 +3873,67 @@ class BrainManager:
         if override.loop_control is not None:
             kwargs["loop_control"] = override.loop_control
         return kwargs
+
+    def _active_orchestrates_tools(self) -> bool:
+        """Whether the active (global) brain is an agent that runs its own tools."""
+        try:
+            brain = self._get_brain(self._active_name, None)
+        except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+            return False
+        return getattr(brain, "orchestrates_tools", False) is True
+
+    def _brain_orchestrates_tools(self) -> bool:
+        """Whether the turn's first brain is an agent that runs its own tools.
+
+        Hermes Agent (``orchestrates_tools``) plans, calls its own tools and
+        delegates on its side, so Jarvis's own pre-brain shortcuts (local
+        actions, skill missions, wiki writes, screen looks, Agentic-IDE fast
+        paths, force-spawn, capability refusals, tool mandates) stand down and
+        the turn goes straight to it. Checked on the active brain and, with a
+        route policy on, on its fast target (the one every fast turn starts on).
+        Capability-gated, never by provider name (AP-21).
+        """
+        override = _TURN_OVERRIDE.get()
+        if override is not None:
+            # A chat's pick owns this turn even when the global voice brain
+            # and route policy point at a different provider.
+            try:
+                brain = self._get_brain(override.provider, override.model)
+            except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+                return False
+            return getattr(brain, "orchestrates_tools", False) is True
+        names = [self._active_name]
+        policy = self._route_policy()
+        fast = getattr(policy, "fast", None) if policy is not None else None
+        if fast is not None and getattr(fast, "provider", ""):
+            names.insert(0, fast.provider)
+        for name in names:
+            try:
+                brain = self._get_brain(name, None)
+            except Exception:  # noqa: BLE001 — an unbuildable brain cannot own the turn
+                continue
+            return getattr(brain, "orchestrates_tools", False) is True
+        return False
+
+    @staticmethod
+    def _fast_turn_skips_thinking(
+        brain: Any, level: str, *, delegated: bool, override: TurnOverride | None
+    ) -> bool:
+        """Whether a classic turn asks its brain for no thinking at all.
+
+        A fast turn on a brain that can switch its model's thinking off per
+        request (a local llama-server with a thinking template) skips the
+        thinking: one model, two speeds, no second resident model. Deep turns
+        keep the server's default, and delegated or caller-picked turns carry
+        their own effort. Gated on the brain's declared capability, never on a
+        provider name (AP-21).
+        """
+        return (
+            not delegated
+            and override is None
+            and level == "fast"
+            and getattr(brain, "supports_thinking_switch", False) is True
+        )
 
     async def render_surface_prompt(self, *, user_text: str) -> tuple[str, str]:
         """(system prompt, turn context) for an external agent that should BE Jarvis.
@@ -6683,7 +6834,7 @@ class BrainManager:
         prov_name: str = "",
         model: str | None = "",
     ) -> dict[str, Tool]:
-        """Drop the ``screenshot`` tool when the answering brain has no vision.
+        """Drop the image-capture tools when the answering brain has no vision.
 
         A blind model that calls the tool is a guaranteed dead end: the
         capture succeeds, its own protocol layer drops the image ("Provider
@@ -6691,19 +6842,20 @@ class BrainManager:
         picture came back unusable (live 2026-08-06 20:52, grok-4.5 tool
         loop). Gated on the runtime capability, never the provider name
         (AP-21); the chain-level vision skip only covers images attached
-        BEFORE the turn, not ones a mid-loop tool call produces.
+        BEFORE the turn, not ones a mid-loop tool call produces. The same
+        dead end holds for the ``camera`` still, so both names are dropped.
         """
-        if not isinstance(tools, dict) or "screenshot" not in tools:
+        if not isinstance(tools, dict) or not _IMAGE_CAPTURE_TOOL_NAMES & tools.keys():
             return tools
         if getattr(brain, "supports_vision", False) is True:
             return tools
         log.info(
-            "Hiding the screenshot tool from %s(%s): the model cannot "
+            "Hiding the image-capture tools from %s(%s): the model cannot "
             "inspect images, so a capture could only dead-end.",
             prov_name,
             model,
         )
-        return {n: t for n, t in tools.items() if n != "screenshot"}
+        return {n: t for n, t in tools.items() if n not in _IMAGE_CAPTURE_TOOL_NAMES}
 
     def _fit_tools_to_brain(
         self,
@@ -10669,6 +10821,125 @@ class BrainManager:
                 chain.insert(0, helper)
         return chain
 
+    def set_route_policy(self, policy: Any) -> None:
+        """Apply a new ``[brain.route_policy]`` table from the next turn on.
+
+        The in-app routing controls persist through ``config_writer`` and then
+        call this, so a change needs no restart. The policy is read per turn
+        (``_route_policy``), so swapping the object is the whole switch.
+        """
+        self._config.brain.route_policy = policy
+
+    def _route_policy(self) -> Any | None:
+        """The enabled ``[brain.route_policy]`` table, or None (normal chain)."""
+        policy = getattr(self._config.brain, "route_policy", None)
+        return policy if policy is not None and bool(getattr(policy, "enabled", False)) else None
+
+    def _policy_chain(self, policy: Any, level: str) -> list[tuple[str, str | None]]:
+        """Build the turn's chain from the configured tiers (route_policy)."""
+        decision = decide_route(
+            TurnSignals(
+                level=level,
+                needs_tools=bool(getattr(self, "_turn_needs_tools", False)),
+            ),
+            policy,
+            available=[
+                p for p in self._registry.available() if p not in self._dead_providers
+            ],
+            can_call_tools=self._brain_can_call_tools,
+            supports_vision=lambda p, m: self._provider_advertises_vision(p, m),
+            selected_model=lambda p: getattr(self._provider_cfg(p), "model", None),
+        )
+        self._last_route_decision = decision
+        log.info(
+            "Route policy: tier=%s reason=%s chain=%s excluded=%s",
+            decision.tier, decision.reason, decision.chain, decision.excluded,
+        )
+        return list(decision.chain)
+
+    def _apply_route_deny(
+        self, chain: list[tuple[str, str | None]]
+    ) -> list[tuple[str, str | None]]:
+        """Re-apply the deny lists after a later stage reordered the chain."""
+        policy = self._route_policy()
+        return filter_denied(policy, chain) if policy is not None else chain
+
+    async def _publish_route(self, trace_uuid: UUID, level: str, **extra: Any) -> None:
+        decision = getattr(self, "_last_route_decision", None)
+        if decision is None or self._bus is None:
+            return
+        payload = decision.to_dict()
+        try:
+            await self._bus.publish(BrainRouteSelected(
+                trace_id=trace_uuid,
+                tier=extra.get("tier", payload["tier"]),
+                reason=extra.get("reason", payload["reason"]),
+                intent_level=level,
+                chain=tuple(payload["chain"]),
+                excluded=tuple(payload["excluded"]),
+                outcome=str(extra.get("outcome", "")),
+                elapsed_ms=int(extra.get("elapsed_ms", 0)),
+                source_layer="brain.route_policy",
+            ))
+        except Exception as exc:  # noqa: BLE001 — telemetry must never break a turn
+            log.warning("BrainRouteSelected publish failed: %s", exc)
+
+    async def _escalate_to_delegate(
+        self,
+        user_text: str,
+        trace_uuid: UUID,
+        *,
+        level: str,
+        reason: str,
+        use_history: bool,
+        on_progress: Callable[[], None] | None,
+    ) -> str | None:
+        """Hand the turn to the configured delegate (Paperclip), bounded.
+
+        Returns the text to answer with, or None when escalation is not
+        possible (off, over the session budget, not connected), so the caller
+        keeps its own honest fallback.
+        """
+        policy = self._route_policy()
+        escalation = getattr(policy, "escalation", None)
+        if escalation is None or not bool(getattr(escalation, "enabled", False)):
+            return None
+        used = int(getattr(self, "_route_escalations", 0))
+        if used >= int(getattr(escalation, "max_per_session", 0)):
+            log.info("Route policy: escalation budget for this session is spent")
+            self._last_route_decision = RouteDecision("escalation", [], f"{reason};budget-spent")
+            await self._publish_route(trace_uuid, level, outcome=RouteFailure.POLICY_DENIED)
+            return recovery_message(RouteFailure.POLICY_DENIED, self._resolve_turn_lang())
+        delegate = delegate_from_config(escalation, on_progress=on_progress)
+        if delegate is None:
+            log.info("Route policy: escalation requested but the delegate is not connected")
+            self._last_route_decision = RouteDecision("escalation", [], f"{reason};not-connected")
+            await self._publish_route(trace_uuid, level, outcome=RouteFailure.UNAVAILABLE)
+            return recovery_message(RouteFailure.UNAVAILABLE, self._resolve_turn_lang())
+        self._route_escalations = used + 1
+        self._last_route_decision = RouteDecision("escalation", [], reason)
+        context = "\n".join(
+            f"{getattr(m, 'role', '')}: {getattr(m, 'content', '')}"
+            for m in (self._history[-6:] if use_history else [])
+            if isinstance(getattr(m, "content", None), str)
+        )
+        result = await delegate.delegate(
+            DelegationRequest(turn_id=str(trace_uuid), task=user_text, context=context)
+        )
+        await self._publish_route(
+            trace_uuid, level, outcome=result.status, elapsed_ms=int(result.elapsed_s * 1000)
+        )
+        if result.failure is not None:
+            self._last_turn_all_failed = result.failure is RouteFailure.UNAVAILABLE
+            return recovery_message(result.failure, self._resolve_turn_lang())
+        await self._record_response_side_effects(
+            user_text=user_text,
+            response_text=result.text,
+            use_history=use_history,
+            trace_id=trace_uuid,
+        )
+        return result.text
+
     def _build_fallback_chain(self, level: str) -> list[tuple[str, str | None]]:
         """Returns a prioritised list of (provider, model) attempts."""
         active = self._active_name
@@ -10680,8 +10951,19 @@ class BrainManager:
         tool_lead: tuple[str, str | None] | None = None
 
         override = _TURN_OVERRIDE.get()
+        policy = self._route_policy()
         if override is not None:
-            return self._override_chain(override, level)
+            chain = self._override_chain(override, level)
+            # A caller's pick still obeys the configured deny lists: a denied
+            # family gets an honest error, never a quiet direct call.
+            return filter_denied(policy, chain) if policy is not None else chain
+        if policy is not None:
+            return self._policy_chain(policy, level)
+        if self._active_orchestrates_tools():
+            # An agent brain (Hermes) is the one brain (ADR-0042): it picks its
+            # own model and its own free fallbacks. No Jarvis deep brain, router
+            # fallback or cross-provider tail may answer in its place.
+            return [(active, self._fast_model(active))]
 
         # Capability-driven tool delegation (NOT a per-provider hardcode): the
         # subscription-CLI brains (Codex over the ChatGPT login, Antigravity over
@@ -11214,6 +11496,17 @@ class BrainManager:
         # probe the skill never gets a chance (the root cause of "Jarvis
         # never calls a skill"). Overwritten on every turn.
         self._skill_turn_match = self._match_skill_for_turn(user_text)
+        # An agent brain (Hermes Agent) owns tools, skills, missions, memory
+        # writes and computer use; see _brain_orchestrates_tools.
+        agent_owned = self._brain_orchestrates_tools()
+        private = _TURN_OVERRIDE.get()
+        if agent_owned and private is not None and private.tool_context.get("chat_read_only"):
+            # Our filtered tool set cannot restrict an external agent's own
+            # tools. Fail before dispatch rather than silently acting in Plan.
+            raise RuntimeError(
+                "The selected agent controls its own tools and cannot enforce Plan mode. "
+                "Switch this chat to Build mode before asking it to act."
+            )
         # Evidence-gate state is strictly per-turn — a stale directive must
         # never leak into a later prompt build (e.g. a skill turn that
         # early-returns before the gate runs).
@@ -11254,6 +11547,8 @@ class BrainManager:
                 getattr(self._skill_turn_match, "name", "?"),
             )
             self._skill_turn_match = None
+        if agent_owned:
+            self._skill_turn_match = None
 
         # Wiki-write fast path (spec A1-A3): an explicit wiki target owns the
         # turn before generic local-action, external-integration, or
@@ -11261,7 +11556,7 @@ class BrainManager:
         # nouns inside the content (for example a trip to save as a fact) must
         # never reinterpret the command as booking or dispatching that noun.
         # Deterministic, model-independent, and confirm-after-write.
-        wiki_reply = await self._run_wiki_ingest_fast_path(
+        wiki_reply = None if agent_owned else await self._run_wiki_ingest_fast_path(
             user_text,
             trace_id=turn_trace_id,
             use_history=use_history,
@@ -11341,6 +11636,10 @@ class BrainManager:
         # the production BrainManager path before desktop-action routing: an
         # ambiguous request asks first, a privacy refusal shuts every alternate
         # screen path, and a successful capture owns the visual part of the turn.
+        if screen_context is None and agent_owned:
+            from jarvis.screen_context.turn import TurnScreenContext  # noqa: PLC0415
+
+            screen_context = TurnScreenContext(status="none")
         if screen_context is None:
             screen_context = await self._resolve_screen_context_turn(
                 user_text,
@@ -11379,7 +11678,8 @@ class BrainManager:
         # drift away from them. The turn is not answered here — it simply stays
         # available for the Agentic-IDE fast path a few lines below.
         if (
-            not screen_context.has_image
+            not agent_owned
+            and not screen_context.has_image
             and self._skill_turn_match is None
             and not self._agentic_ide_owns_turn(user_text)
         ):
@@ -11412,11 +11712,28 @@ class BrainManager:
             )
             return nav_reply
 
+        # Brightness reflex: a plain "set the brightness to 40" is answered
+        # without a model, also when Hermes owns the turn, and the reply states
+        # only what Windows reads back afterwards (jarvis/platform/brightness.py).
+        # Negations, questions and conditions never match and reach the brain.
+        if not screen_context.has_image:
+            from jarvis.platform.brightness import brightness_reflex
+
+            brightness_reply = await asyncio.to_thread(brightness_reflex, user_text)
+            if brightness_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=brightness_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return brightness_reply
+
         # Agentic-IDE fleet close: "close all Codex terminals" is a concrete
         # workspace action, not a question for the router to interpret. It runs
         # before addressed delivery so the word "all" cannot become a prompt
         # sent into the very panes the user asked to stop.
-        ide_close_reply = await self._run_agentic_ide_close_fast_path(
+        ide_close_reply = None if agent_owned else await self._run_agentic_ide_close_fast_path(
             user_text, trace_id=turn_trace_id,
         )
         if ide_close_reply is not None:
@@ -11436,7 +11753,7 @@ class BrainManager:
         # capability gate. Placed AFTER navigation so a section command still
         # moves the UI even when a pane happens to share that word. Returns None
         # on every turn that does not address a terminal.
-        ide_reply = await self._run_agentic_ide_fast_path(
+        ide_reply = None if agent_owned else await self._run_agentic_ide_fast_path(
             user_text,
             trace_id=turn_trace_id,
             consume_pending_voice_attachments=consume_pending_voice_attachments,
@@ -11458,7 +11775,7 @@ class BrainManager:
         # addressed-terminal path because ``detect_spawn`` stands down for an
         # addressed pane ("sag Mika, sie soll ein Terminal öffnen" is Mika's
         # work), which makes the two mutually exclusive by construction.
-        ide_spawn_reply = await self._run_agentic_ide_spawn_fast_path(
+        ide_spawn_reply = None if agent_owned else await self._run_agentic_ide_spawn_fast_path(
             user_text, trace_id=turn_trace_id,
         )
         if ide_spawn_reply is not None:
@@ -11479,7 +11796,7 @@ class BrainManager:
         # refusal must not fire on a skill turn.
         unsupported = (
             None
-            if self._skill_turn_match is not None or screen_context.has_image
+            if agent_owned or self._skill_turn_match is not None or screen_context.has_image
             else self._check_unsupported_intent(user_text)
         )
         if unsupported is not None:
@@ -11495,7 +11812,7 @@ class BrainManager:
         # the LLM tool-use loop. Prevents spawn reflex on ambiguous smalltalk
         # inputs (see docs/persona-research.md section 2 — 60% empty smalltalk
         # outputs from the reflexive LLM spawn path).
-        if screen_context.has_image:
+        if agent_owned or screen_context.has_image:
             forced_spawn = None
         elif (
             contextual_tool_names
@@ -11542,7 +11859,7 @@ class BrainManager:
         # stands down on a matched skill (AD-S3); non-CLI capabilities
         # (paired skills, router tools, MCP) make the gate stand down (PASS).
         verdict = self._run_evidence_gate(user_text)
-        if verdict.kind == "honest_refusal":
+        if verdict.kind == "honest_refusal" and not agent_owned:
             await self._record_response_side_effects(
                 user_text=user_text,
                 response_text=verdict.refusal_text,
@@ -11682,6 +11999,14 @@ class BrainManager:
                 self._evidence_required_domain = "routine"
                 log.info("Recurring-work intent — mandating society-create-routine")
 
+        if agent_owned:
+            # Jarvis's tool mandates name Jarvis tools the agent never sees; its
+            # own tool runs are the evidence (BrainDelta.agent_tools).
+            self._evidence_directive = ""
+            self._evidence_required_tool = ""
+            self._evidence_required_is_write = False
+            self._evidence_required_domain = ""
+
         # Phase 5 / ADR-0006: pre-call budget gate. Block rather than request
         # when cooldown is active or the task/daily budget is exhausted.
         trace_uuid = turn_trace_id
@@ -11719,6 +12044,20 @@ class BrainManager:
         # 2. Router: which level applies?
         decision = self._picked_level(user_text)
         log.debug("Router-Decision: level=%s reason=%s", decision.level, decision.reason)
+        self._last_route_decision = None
+        route_policy = self._route_policy()
+        if (
+            route_policy is not None
+            and _TURN_OVERRIDE.get() is None
+            and wants_escalation(route_policy, user_text)
+        ):
+            escalated = await self._escalate_to_delegate(
+                user_text, trace_uuid, level=decision.level,
+                reason="escalation:explicit-request", use_history=use_history,
+                on_progress=on_progress,
+            )
+            if escalated is not None:
+                return escalated
 
         # 3. Build fallback chain and try each entry.
         # Provider-agnostic tool routing flags (consumed by _build_fallback_chain):
@@ -11740,11 +12079,15 @@ class BrainManager:
             # the empty-chain check so an all-dead chain keeps the honest
             # provider-down diagnostic below.
             chain = self._hoist_tool_model(chain)
+        chain = self._apply_route_deny(chain)
+        await self._publish_route(trace_uuid, decision.level)
         if not chain:
             # Empty chain means either (a) no providers registered or
             # (b) all filtered out by _dead_providers (no key set).
             # In production (b) is the common case — provide an actionable message.
             self._last_turn_all_failed = True
+            if private is not None:
+                private.receipt.finish_reason = "error"
             # Keep the actionable provider/key diagnostic in the LOG (UI/console
             # surface it), but SPEAK only a localized, provider-agnostic apology
             # — never read setup hints or provider names aloud (AP-11/ADR-0010).
@@ -11787,6 +12130,7 @@ class BrainManager:
         used_provider: str | None = None
         used_model: str | None = None
         _turn_executed: set[str] = set()  # tools that REALLY ran this turn
+        unknown_outcome_actions: list[str] = []  # actions a failed attempt started
         # AI Pointer (deictic push): launch the cursor-element resolution BEFORE
         # the vision-image await so it overlaps with it instead of running serially
         # after (AP-9: keep the deictic turn off the serial hot path). The task does
@@ -11935,8 +12279,26 @@ class BrainManager:
         )
 
         vision_capable_seen = False
-        if images:
-            chain = self._lead_vision_chain(chain)
+        if images and route_policy is not None:
+            chain, media_excluded = media_chain(
+                route_policy, chain,
+                supports_vision=lambda p, m: self._provider_advertises_vision(p, m),
+            )
+            if not chain:
+                # Nothing on this device can take the image and cloud vision is
+                # not allowed: say so instead of sending it anywhere.
+                self._last_route_decision = RouteDecision(
+                    "none", [], "privacy:media-stays-local", media_excluded
+                )
+                await self._publish_route(trace_uuid, decision.level, outcome="blocked")
+                response_text = media_stays_local_message(self._resolve_turn_lang())
+                await self._record_response_side_effects(
+                    user_text=user_text, response_text=response_text,
+                    use_history=use_history, trace_id=trace_uuid,
+                )
+                return response_text
+        elif images:
+            chain = self._apply_route_deny(self._lead_vision_chain(chain))
         screen_turn_t0 = time.perf_counter() if images else None
 
         for idx, (prov_name, model) in enumerate(chain):
@@ -12192,6 +12554,14 @@ class BrainManager:
                 if prefer_tool_model
                 else self._override_dispatch_kwargs(turn_override)
             )
+            if self._fast_turn_skips_thinking(
+                brain, decision.level, delegated=prefer_tool_model, override=turn_override
+            ):
+                _disp_kwargs["reasoning_effort"] = "none"
+            if route_policy is not None and not media_allowed(route_policy, prov_name, model):
+                # A screenshot a tool takes mid-turn must not reach a cloud
+                # model the user has not allowed to see images.
+                _disp_kwargs["tool_images"] = False
             disp = self._build_dispatcher(
                 brain, tools_override=_turn_tools, **_disp_kwargs
             )
@@ -12205,25 +12575,43 @@ class BrainManager:
             # the chosen talker streams the answer normally after the fall-through.
             _is_router_lead = self._router_lead_key == (prov_name, model)
             _attempt_consumer = None if _is_router_lead else text_consumer
+            # Whether this attempt already spoke part of an answer: if it then
+            # fails, the next provider's answer is introduced as a restart
+            # instead of being glued to the broken-off fragment.
+            _attempt_streamed = [False]
+            if _attempt_consumer is not None:
+                _speak = _attempt_consumer
+
+                def _attempt_consumer(
+                    chunk: str, _speak: Callable[[str], None] = _speak,
+                    _seen: list[bool] = _attempt_streamed,
+                ) -> None:
+                    if chunk:
+                        _seen[0] = True
+                    _speak(chunk)
+
+            attempt_actions: list[str] = []
             try:
                 # CostMeter: start per-trace tracking (idempotent if already started).
                 if self._cost_meter is not None:
                     self._cost_meter.start(trace_uuid, prov_name, model)
-                agg = await disp.dispatch(
-                    user_text,
-                    images=images,
-                    history=history,
-                    trace_id=trace_id,
-                    intent_level=decision.level,
-                    evidence_required_tool=self._evidence_required_tool,
-                    text_consumer=_attempt_consumer,
-                    ack_emitter=_tool_ack_emitter,
-                    on_progress=on_progress,
-                    turn_context=turn_context,
-                    reply_language=self._reply_language,
-                    conversation_language=self._conversation_language,
-                    voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
-                )
+                with recording_side_effects() as attempt_actions:
+                    agg = await disp.dispatch(
+                        user_text,
+                        images=images,
+                        history=history,
+                        # The turn's own id, so tool events correlate with it.
+                        trace_id=trace_uuid,
+                        intent_level=decision.level,
+                        evidence_required_tool=self._evidence_required_tool,
+                        text_consumer=_attempt_consumer,
+                        ack_emitter=_tool_ack_emitter,
+                        on_progress=on_progress,
+                        turn_context=turn_context,
+                        reply_language=self._reply_language,
+                        conversation_language=self._conversation_language,
+                        voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
+                    )
                 # Post-call cost hook: aggregated usage → meter.
                 # The meter cancels on overrun via CancelToken (see ADR-0006);
                 # the pre-call gate above catches that on the next turn.
@@ -12506,6 +12894,24 @@ class BrainManager:
                                 "weicht auf einen anderen verfuegbaren Anbieter aus. "
                                 "Setup: Sidebar -> API-Keys.", prov_name, kind)
                     provider_errors.append((prov_name, model, kind, msg[:200]))
+                if attempt_actions:
+                    # An action tool started in this attempt and the attempt then
+                    # failed, so whether the action happened is unknown. Running
+                    # the turn again on the next provider could repeat it; stop
+                    # here and say so instead.
+                    unknown_outcome_actions = list(attempt_actions)
+                    log.warning(
+                        "Brain %s(%s) failed after starting %s; not replaying the "
+                        "turn on another provider.",
+                        prov_name, model, ", ".join(unknown_outcome_actions),
+                    )
+                    break
+                if _attempt_streamed[0] and text_consumer is not None and idx + 1 < len(chain):
+                    text_consumer(
+                        _STREAM_RESTART_PHRASES.get(
+                            self._resolve_turn_lang(), _STREAM_RESTART_PHRASES["en"]
+                        )
+                    )
                 # NOTE BUG-019 (2026-05-11): this generic ``continue`` does
                 # not touch the failing provider's *internal* state. For
                 # most providers that's correct (an HTTP error is purely
@@ -12555,8 +12961,23 @@ class BrainManager:
             )
             return response_text
 
+        if used_provider is None and unknown_outcome_actions:
+            self._last_turn_all_failed = True
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "error"
+            response_text = _UNKNOWN_OUTCOME_PHRASES.get(
+                self._resolve_turn_lang(), _UNKNOWN_OUTCOME_PHRASES["en"]
+            )
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=response_text,
+                use_history=use_history, trace_id=trace_uuid,
+            )
+            return response_text
+
         if used_provider is None:
             self._last_turn_all_failed = True
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "error"
             log.error("Alle %d Provider-Versuche fehlgeschlagen. Letzter Fehler: %s",
                      len(chain), last_exc)
             # Developer diagnostic → LOG only. The voice path gets a localized,
@@ -14165,6 +14586,8 @@ _PROVIDER_SETUP_HINTS: dict[str, str] = {
     "openrouter": "OPENROUTER_API_KEY setzen",
     "grok": "Set XAI_API_KEY (key from console.x.ai)",
     "nvidia": "Set NVIDIA_API_KEY (nvapi- key from build.nvidia.com)",
+    "nous": "Set NOUS_API_KEY (sk-nous- key from portal.nousresearch.com)",
+    "hermes": "Start Hermes Agent's API server (API_SERVER_ENABLED=true, then hermes gateway)",
     "ollama-local": "Ollama-Server starten (localhost:11434)",
     "ollama-cloud": "Ollama-Cloud-Token setzen",
 }

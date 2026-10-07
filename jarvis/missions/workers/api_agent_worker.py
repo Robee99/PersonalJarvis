@@ -98,6 +98,9 @@ _BRAIN_BY_PROVIDER: dict[str, tuple[str, str]] = {
     # NVIDIA NIM is OpenAI-compatible with no vendor CLI — same in-process
     # tool-loop path as openai/openrouter, running on the user's nvapi- key.
     "nvidia": ("jarvis.plugins.brain.nvidia", "NvidiaBrain"),
+    # Nous Portal: same in-process tool loop; NousBrain adds the user tag the
+    # Portal requires on every chat request.
+    "nous": ("jarvis.plugins.brain.nous", "NousBrain"),
     # B3/B4 (open-source AP-22): claude-api + gemini run the SAME in-process tool
     # loop, so an Anthropic- or Gemini-API-key-only user can run heavy missions
     # without the npm `claude`/`gemini` CLI binary. The CLI worker stays preferred
@@ -134,6 +137,8 @@ _DEFAULT_MODEL: dict[str, str] = {
     "gemini": "gemini-3.1-pro-preview",
     # NVIDIA's own reasoning flagship for heavy subagent work.
     "nvidia": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    # A free route, so a mission on a free Nous account runs without billing.
+    "nous": "stepfun/step-3.7-flash:free",
 }
 # Vertex serves the same Gemini catalogue on Google Cloud, so its worker default
 # is the Gemini one rather than a second literal that would drift from it.
@@ -145,8 +150,9 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
 
     Precedence:
       1. the step's explicit model (the decomposer pinned one) — always wins;
-      2. ``[brain.sub_jarvis].model`` but ONLY when its provider matches this
-         worker (a pin set for antigravity must never run on the openrouter key);
+      2. ``[brain.worker].model`` but ONLY when its provider (or the inherited
+         ``brain.primary``) matches this worker (a pin set for antigravity must
+         never run on the openrouter key);
       3. ``[brain.providers[provider]].model`` — the user's own pick for this
          provider (e.g. the free OpenRouter model);
       4. the documented per-provider ``_DEFAULT_MODEL`` (non-paid for openrouter).
@@ -159,15 +165,12 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
     prov = (provider or "").strip().lower()
     try:
         from jarvis.core import config as _cfg
+        from jarvis.missions.worker_runtime.provider_map import pinned_worker_model
 
         root = _cfg.load_config()
-        sub = getattr(root.brain, "worker", None)
-        if (
-            sub is not None
-            and (getattr(sub, "provider", "") or "").strip().lower() == prov
-            and (getattr(sub, "model", "") or "").strip()
-        ):
-            return sub.model.strip()
+        pinned = pinned_worker_model(root, prov)
+        if pinned:
+            return pinned
         pc = (root.brain.providers or {}).get(prov)
         picked = (getattr(pc, "model", "") or "").strip()
         if picked:

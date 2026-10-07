@@ -5075,6 +5075,32 @@ class RealtimeVoiceSession:
                         else:
                             await self._begin_user_speech_turn()
                             await self._barge_in(interrupt_provider=False)
+                    if (
+                        event.is_final
+                        and input_observed
+                        and self._turn_id
+                        and self._delegate_surface_fallback_spoken()
+                    ):
+                        # This turn was already answered through the surface
+                        # TTS because the provider stayed mute, and a mute
+                        # provider never sends the boundary that would close
+                        # it. New words are therefore a NEW request. Appending
+                        # them to the answered turn left the follow-up with
+                        # nobody to answer it: the turn already belongs to a
+                        # delivered delegate, so its next empty boundary skips
+                        # the empty-turn recovery and closes in silence (live
+                        # 2026-10-04, Gemini Live after several barge-ins).
+                        # Close the answered turn so the follow-up opens its
+                        # own, with its own bounded recovery.
+                        log.info(
+                            "realtime[%s] new user words after turn %s was "
+                            "answered through the surface; closing it so the "
+                            "follow-up gets its own turn",
+                            self.session_id,
+                            self._turn_id,
+                        )
+                        await self._begin_user_speech_turn()
+                        await self._barge_in(interrupt_provider=False)
                     input_item_id = str(getattr(event, "item_id", "") or "")
                     input_already_answered = bool(
                         input_item_id
@@ -8942,6 +8968,12 @@ class RealtimeVoiceSession:
             or self._executed_tool_names
         ):
             return
+        if not self.allow_classic_fallback:
+            await self._speak_unanswered_turn_notice(turn_id)
+            # No provider boundary is coming for a mute re-ask: close the turn
+            # here so the microphone reopens.
+            await self._complete_surface_turn()
+            return
         log.warning(
             "realtime[%s] the re-asked provider rendered nothing within %.1fs "
             "for turn %s; recovering through the Brain chain",
@@ -8950,6 +8982,39 @@ class RealtimeVoiceSession:
             turn_id,
         )
         self._recover_empty_turn_via_brain(turn_id)
+
+    async def _speak_unanswered_turn_notice(self, turn_id: str) -> None:
+        """Say honestly that no answer came, instead of a metered second net.
+
+        After a re-ask the turn is one the planner left native (smalltalk, a
+        question the live model answers itself), and the Brain chain is a
+        classic-pipeline call made only because the live model went mute. A
+        transport that declares
+        ``implicit_usage_fallback_allowed = False`` (``allow_classic_fallback``)
+        promised the user it never continues on usage-billed credentials they
+        did not pick, so after its one re-ask the turn ends with this line
+        rather than silence. The language is the turn's resolved language.
+        """
+        from jarvis.voice.action_phrases import action_phrase  # noqa: PLC0415
+
+        spoken = action_phrase("delegate_no_brain", self._language)
+        log.warning(
+            "realtime[%s] provider left turn %s unanswered after one re-ask; "
+            "usage-billed fallback is not allowed on this transport, so the "
+            "turn ends with a spoken notice instead of the Brain chain",
+            self.session_id,
+            turn_id,
+        )
+        if not "".join(self._output_transcript).strip():
+            self._output_transcript.append(spoken)
+        try:
+            await self._send_json(self._surface_speech_message(spoken))
+        except Exception:  # noqa: BLE001 — the turn must still close
+            log.warning(
+                "realtime[%s] could not voice the unanswered-turn notice",
+                self.session_id,
+                exc_info=True,
+            )
 
     def _recover_empty_turn_via_brain(self, turn_id: str) -> None:
         """Second net: the deterministic delegate answers the empty turn."""

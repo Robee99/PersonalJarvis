@@ -34,6 +34,8 @@ _RESTART_BACKOFF_S = (1.0, 5.0, 30.0)
 _WARM_LOAD_S = 15.0
 #: Measured default for every machine class with an accelerator (plan 12.3).
 DEFAULT_LLM = "qwen3.5:4b"
+#: Where ``scripts/local_llm_lab.py serve`` and its sign-in task listen.
+LLAMA_SERVER_URL = "http://127.0.0.1:11435"
 #: Core models the engine cannot start without (``jarvis.voice_engine.models``).
 CORE_MODELS = ("silero-vad-v6", "smart-turn-v3.2", "parakeet-tdt-0.6b-v3-int8")
 #: What a refused call hears and sees, per output language. ``native.py``
@@ -140,6 +142,8 @@ class EngineSettings:
     tts_options: dict[str, Any] = field(default_factory=dict)
     llm_model: str = DEFAULT_LLM
     llm_base_url: str = "http://127.0.0.1:11434"
+    # "ollama", or "openai" for an OpenAI-compatible server (llama-server).
+    llm_api: str = "ollama"
 
     @classmethod
     def from_config(cls, cfg: Any) -> EngineSettings:
@@ -160,6 +164,16 @@ class EngineSettings:
 
         home = pick("home", os.environ.get("JARVIS_VOICE_ENGINE_HOME") or None)
         recorded = _setup_record(home)
+        llm_api = "openai" if pick("llm_api", "ollama") == "openai" else "ollama"
+        if llm_api == "openai":
+            # The same server the local brain answers with, unless the card
+            # names another one: one llama-server, one resident model.
+            served_url, served_model = _local_openai_server(cfg)
+            llm_model = str(pick("llm_model", served_model))
+            llm_base_url = str(pick("llm_base_url", served_url))
+        else:
+            llm_model = str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM))
+            llm_base_url = str(pick("llm_base_url", _ollama_root()))
         return cls(
             python=str(pick("python", os.environ.get("JARVIS_VOICE_ENGINE_PYTHON")
                             or _default_python(home))),
@@ -168,14 +182,16 @@ class EngineSettings:
             languages=list(pick("languages", ["de", "en"])),
             tts=str(pick("tts", "pocket")),
             tts_options=dict(pick("tts_options", {})),
-            llm_model=str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM)),
-            llm_base_url=str(pick("llm_base_url", _ollama_root())),
+            llm_model=llm_model,
+            llm_base_url=llm_base_url,
+            llm_api=llm_api,
         )
 
     def configure_message(self) -> dict[str, Any]:
         return {"type": "configure", "languages": self.languages, "tts": self.tts,
                 "tts_options": self.tts_options,
-                "llm": {"model": self.llm_model, "base_url": self.llm_base_url}}
+                "llm": {"model": self.llm_model, "base_url": self.llm_base_url,
+                        "api": self.llm_api}}
 
 
 def _engine_home(home: str | None) -> Path:
@@ -225,6 +241,17 @@ def _ollama_root() -> str:
     except Exception:  # noqa: BLE001 - an unreadable config keeps the vendor default
         log.debug("local voice: Ollama root unresolved; using the default", exc_info=True)
         return "http://127.0.0.1:11434"
+
+
+def _local_openai_server(cfg: Any) -> tuple[str, str]:
+    """Base URL and model of the ``local-openai`` brain card, else the lab's
+    llama-server default (``scripts/local_llm_lab.py``) and the served model."""
+    brain = getattr(cfg, "brain", None)
+    providers = getattr(brain, "providers", None) or {}
+    entry = providers.get("local-openai") if isinstance(providers, dict) else None
+    url = str(getattr(entry, "base_url", "") or "") or LLAMA_SERVER_URL
+    model = str(getattr(entry, "model", "") or "")
+    return url, model
 
 
 def _current_config() -> Any:

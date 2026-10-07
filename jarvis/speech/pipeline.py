@@ -68,6 +68,7 @@ from jarvis.core.events import (
     DictationStarted,
     DictationTranscribing,
     DictationTranscript,
+    ErrorOccurred,
     JarvisAgentAnnouncement,
     JarvisAgentBackgroundCompleted,
     LatencyTurnComplete,
@@ -2687,12 +2688,14 @@ class SpeechPipeline:
         # cross-platform STT, sentence-TTS, playback receipts, follow-up
         # listening and barge-in machinery below stays the single audio path.
         if config is not None:
+            from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
             from jarvis.voice.subscription_profile import (  # noqa: PLC0415
                 CodexSubscriptionVoiceBrain,
                 subscription_voice_selected,
             )
 
-            if subscription_voice_selected(config):
+            # Hermes as the brain answers voice too; no second text transport.
+            if subscription_voice_selected(config) and not hermes_is_main_brain(config):
                 self._brain = CodexSubscriptionVoiceBrain(self._brain, config)
         # Flash-Brain reference (None when feature disabled).
         self._ack_brain: Any = ack_brain
@@ -7609,11 +7612,12 @@ class SpeechPipeline:
         """Return the normalized configured engine for the next session."""
         config = getattr(self, "_config", None)
         if config is not None:
+            from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
             from jarvis.voice.subscription_profile import (  # noqa: PLC0415
                 subscription_voice_selected,
             )
 
-            if subscription_voice_selected(config):
+            if subscription_voice_selected(config) or hermes_is_main_brain(config):
                 return "pipeline"
         mode = str(
             getattr(
@@ -7706,7 +7710,9 @@ class SpeechPipeline:
             voice.profile = normalized
             if normalized:
                 voice.mode = "pipeline"
-        if normalized:
+        from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
+
+        if normalized and not hermes_is_main_brain(getattr(self, "_config", None)):
             if not isinstance(self._brain, CodexSubscriptionVoiceBrain):
                 self._brain = CodexSubscriptionVoiceBrain(
                     getattr(self, "_base_brain", self._brain),
@@ -15510,7 +15516,10 @@ class SpeechPipeline:
             # LISTENING in silence — the user would keep talking into a void
             # ("Jarvis listens forever, never answers"). Say we missed it, then
             # resume so they can simply repeat.
-            await self._speak_stt_unavailable()
+            # No transcript exists, so the language comes from the reply-language
+            # pin or the running conversation (English by default), never a
+            # hard-coded German line (live 2026-10-05).
+            await self._speak_stt_unavailable(self._output_language(None, ""))
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
         log.info(
@@ -16731,26 +16740,42 @@ class SpeechPipeline:
             await self._set_turn_state(TurnTakingState.PROCESSING)
             log.info("→ Brain (from completion buffer)…")
             if self._streaming_enabled():
-                # Same stall guard as the primary dispatch path — a buffered
-                # completion must not be able to hang the session either. A true
-                # stall here surfaces as TimeoutError, caught + logged below
-                # (this secondary path stays silent on stall by design).
-                await self._run_brain_with_stall_guard(
-                    self._brain_streaming(text, lang)
-                )
-            else:
+                # Same stall guard and the same zero-silent-drop endings as the
+                # primary dispatch path (AD-OE6): the user finished speaking, so
+                # a stall or an empty answer must be heard, not dropped into a
+                # silent LISTENING.
                 try:
-                    generate_call = self._brain.generate(
-                        text, consume_pending_voice_attachments=True
+                    response, barged = await self._run_brain_with_stall_guard(
+                        self._brain_streaming(text, lang)
                     )
-                except TypeError:
-                    # Compatibility for small test/provider adapters that still
-                    # expose the pre-modality Brain protocol.
-                    generate_call = self._brain.generate(text)
-                reply = await generate_call
-                if reply:
-                    await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
-                    await self._speak(reply, language=lang, kind=SPOKEN_KIND_COMPLETION)
+                except TimeoutError:
+                    log.warning("Buffered-completion brain stalled — speaking fallback")
+                    if self._should_speak_stall_fallback():
+                        await self._speak_brain_timeout(lang, site="completion_stall")
+                else:
+                    if not response.strip() and not barged:
+                        await self._handle_silent_brain_turn(lang, text)
+            else:
+                generate_call = self._open_brain_completion(
+                    text, getattr(getattr(self, "_latency_tracker", None), "trace_id", None)
+                )
+                ceiling_s = getattr(self, "_brain_hard_timeout_s", 90.0)
+                try:
+                    reply = await asyncio.wait_for(generate_call, timeout=ceiling_s)
+                except TimeoutError:
+                    log.warning(
+                        "Buffered-completion brain exceeded %.0fs — speaking fallback",
+                        ceiling_s,
+                    )
+                    await self._speak_brain_timeout(lang, site="completion_nonstream_cap")
+                else:
+                    if reply:
+                        await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
+                        await self._speak(
+                            reply, language=lang, kind=SPOKEN_KIND_COMPLETION
+                        )
+                    else:
+                        await self._handle_silent_brain_turn(lang, text)
         except Exception as exc:  # noqa: BLE001 — AD-OE6: never crash the turn
             log.exception("Buffered-completion dispatch failed: %s", exc)
         finally:
@@ -16854,6 +16879,54 @@ class SpeechPipeline:
             return False
         return hasattr(self._brain, "generate_stream")
 
+    def _open_brain_completion(self, text: str, trace_id: Any) -> Any:
+        """Start a buffered Brain call, carrying the turn's trace id when accepted."""
+        kwargs: dict[str, Any] = {"consume_pending_voice_attachments": True}
+        if trace_id is not None:
+            kwargs["trace_id"] = trace_id
+        try:
+            return self._brain.generate(text, **kwargs)
+        except TypeError:
+            kwargs.pop("trace_id", None)
+        try:
+            return self._brain.generate(text, **kwargs)
+        except TypeError:
+            # Compatibility for small test/provider adapters that still
+            # expose the pre-modality Brain protocol.
+            return self._brain.generate(text)
+
+    def _open_brain_stream(self, text: str, trace_id: Any) -> Any:
+        """Start the streaming Brain call with the richest signature it accepts.
+
+        ``allow_voice_confirm=True``: this is a conversational voice turn, so a
+        consequential ask-tier tool is deferred into a spoken yes/no
+        confirmation instead of blocking on a UI approval no voice user can
+        give (forensic 2026-06-18). The fallback drops the newest keyword
+        first. Older adapters that accept only ``on_progress`` must still
+        receive the stall-guard heartbeat; dropping straight to the bare call
+        loses ``on_progress`` and the no-first-frame ceiling would behead the
+        working turn (BUG-032).
+        """
+        full: dict[str, Any] = {
+            "on_progress": self._mark_brain_progress,
+            "allow_voice_confirm": True,
+            "consume_pending_voice_attachments": True,
+        }
+        attempts: list[dict[str, Any]] = []
+        if trace_id is not None:
+            attempts.append({**full, "trace_id": trace_id})
+        attempts += [
+            full,
+            {"on_progress": self._mark_brain_progress, "allow_voice_confirm": True},
+            {"on_progress": self._mark_brain_progress},
+        ]
+        for kwargs in attempts:
+            try:
+                return self._brain.generate_stream(text, **kwargs)
+            except TypeError:
+                continue  # signature does not take these keywords; try fewer
+        return self._brain.generate_stream(text)
+
     async def _brain_streaming(self, text: str, lang: str) -> tuple[str, bool]:
         """Latenz-Sprint-1 + Look-Ahead-Pipelining: Streaming-Brain mit
         ueberlappender Sentence-TTS.
@@ -16911,6 +16984,10 @@ class SpeechPipeline:
         tracker = self._latency_tracker
         tts_request_marked = False
         tts_first_chunk_marked = False
+        # Sentences whose synthesis raised. Each failure is logged where it
+        # happens; the end of the turn uses the count to tell "the voice
+        # provider is broken and nothing was heard" apart from a normal turn.
+        synth_errors: list[str] = []
 
         lang_code: str | None = None
         if lang:
@@ -16972,6 +17049,7 @@ class SpeechPipeline:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                synth_errors.append(f"{type(exc).__name__}: {exc}")
                 log.warning("TTS-Synthese fuer Satz fehlgeschlagen: %s", exc)
             finally:
                 await channel.put(None)
@@ -17064,6 +17142,7 @@ class SpeechPipeline:
 
         async def _produce() -> None:
             nonlocal sentence_buffer, paraphrase_stripped, brain_first_token_marked
+            cancelled = False
             try:
                 # Pass the stall-guard heartbeat down so the tool-use loop can
                 # ping it on each model-round + tool boundary (a vision/tool turn
@@ -17071,37 +17150,11 @@ class SpeechPipeline:
                 # fakes / providers without the kwarg fall back transparently.
                 if tracker is not None:
                     tracker.mark(LatencyPhase.BRAIN_REQUEST_SENT)
-                # ``allow_voice_confirm=True``: this is a conversational voice
-                # turn, so a consequential ask-tier tool is deferred into a spoken
-                # yes/no confirmation instead of blocking on a UI approval no voice
-                # user can give (forensic 2026-06-18). Graduated fallback drops the
-                # newest attachment keyword first, preserving voice confirmation on
-                # pre-attachment adapters. Older adapters that accept only
-                # ``on_progress`` must still receive the stall-guard heartbeat —
-                # dropping straight to the bare call here loses ``on_progress`` and
-                # the no-first-frame ceiling would behead the working turn (BUG-032).
-                try:
-                    stream = self._brain.generate_stream(
-                        text,
-                        on_progress=self._mark_brain_progress,
-                        allow_voice_confirm=True,
-                        consume_pending_voice_attachments=True,
-                    )
-                except TypeError:
-                    try:
-                        stream = self._brain.generate_stream(
-                            text,
-                            on_progress=self._mark_brain_progress,
-                            allow_voice_confirm=True,
-                        )
-                    except TypeError:
-                        try:
-                            stream = self._brain.generate_stream(
-                                text,
-                                on_progress=self._mark_brain_progress,
-                            )
-                        except TypeError:
-                            stream = self._brain.generate_stream(text)
+                # The turn's latency trace id goes to the Brain too, so STT,
+                # route, tool and TTS events of one voice turn share one id.
+                stream = self._open_brain_stream(
+                    text, getattr(tracker, "trace_id", None) if tracker is not None else None
+                )
                 async for chunk in stream:
                     if not chunk:
                         continue
@@ -17158,6 +17211,7 @@ class SpeechPipeline:
                         )
                     )
             except asyncio.CancelledError:
+                cancelled = True
                 raise
             except Exception as exc:  # noqa: BLE001
                 # Brain-stream errors must not hang the consumer; the sentinel
@@ -17166,9 +17220,20 @@ class SpeechPipeline:
             finally:
                 if reply_delta is not None:
                     await reply_delta.flush(done=True)
-                # End-of-turn sentinel — awaited so it lands even when the
-                # channel queue is at capacity (consumer keeps draining).
-                await sentence_channels.put(None)
+                if cancelled:
+                    # Torn down together with the consumer (barge-in, hangup,
+                    # stall): nobody drains the queue any more, so awaiting a
+                    # put on a full queue would never return and wedge the
+                    # teardown's ``await produce_task``. The teardown empties
+                    # the queue itself.
+                    try:
+                        sentence_channels.put_nowait(None)
+                    except asyncio.QueueFull:
+                        pass  # teardown drains the queue; no sentinel needed
+                else:
+                    # End-of-turn sentinel — awaited so it lands even when the
+                    # channel queue is at capacity (consumer keeps draining).
+                    await sentence_channels.put(None)
 
         produce_task = asyncio.create_task(_produce(), name="tts-produce-turn")
         play_task = asyncio.create_task(_play_sentences(), name="tts-play-turn")
@@ -17268,6 +17333,32 @@ class SpeechPipeline:
                 except asyncio.QueueEmpty:
                     break
 
+        if (
+            synth_errors
+            and spoken_anything
+            and not barged
+            and not getattr(self, "_brain_first_frame_played", False)
+        ):
+            # AD-OE6: the answer exists but the voice provider produced no
+            # audio for any of it. Speaking a notice would go through the same
+            # broken provider, so tell the screen instead of ending mute.
+            log.error(
+                "TTS produced no audio for this turn (%d sentence(s) failed, "
+                "last: %s) — the answer was shown but not spoken",
+                len(synth_errors), synth_errors[-1],
+            )
+            await self._publish_event(
+                ErrorOccurred(
+                    layer="speech.tts",
+                    error_type="tts_no_audio",
+                    message=(
+                        "Jarvis answered but the voice could not speak it "
+                        f"({synth_errors[-1][:160]}). Choose a working voice "
+                        "or a backup voice in Settings, Voice."
+                    ),
+                    recoverable=True,
+                )
+            )
         # Wave 0 (omni-latency): audio for this turn is fully played (or the
         # turn was barged over) — close the TTS span. Only meaningful when at
         # least one sentence reached TTS; an all-empty turn marks nothing.
@@ -17435,14 +17526,14 @@ class SpeechPipeline:
         except Exception as exc:  # noqa: BLE001
             log.warning("Brain-unavailable fallback speak failed: %s", exc)
 
-    async def _speak_stt_unavailable(self, lang: str = "de") -> None:
+    async def _speak_stt_unavailable(self, lang: str = "en") -> None:
         """Zero-silent-drop (AD-OE6) for STT: say we couldn't transcribe the
         utterance instead of dropping back to LISTENING mute when
         ``_transcribe_final`` exhausted its retries (sustained cloud rate-limit
         / outage). Mirrors ``_speak_brain_unavailable``. No transcript exists
-        yet, so there is no detected language — default to German (the user's
-        primary; runtime TTS auto-detects anyway). Failures here are swallowed:
-        the fallback must never itself crash the turn.
+        yet, so the caller passes ``_output_language`` (reply-language pin,
+        then the running conversation). Failures here are swallowed: the
+        fallback must never itself crash the turn.
         """
         picker_lang = _phrase_lang(lang)
         phrase = _STT_UNAVAILABLE_PHRASE[picker_lang]

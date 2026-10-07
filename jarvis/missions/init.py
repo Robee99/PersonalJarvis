@@ -50,6 +50,7 @@ from .worker_runtime.provider_map import (
     ANTIGRAVITY_SUBAGENT_SLUGS,
     CODEX_SUBAGENT_SLUGS,
     GROK_BUILD_SUBAGENT_SLUGS,
+    HERMES_SUBAGENT_SLUGS,
 )
 from .workers.api_agent_worker import ApiAgentWorker
 from .workers.capabilities import (
@@ -62,6 +63,7 @@ from .workers.codex_direct_worker import CodexDirectWorker
 from .workers.gemini_worker import GeminiWorker
 from .workers.google_cli_worker import GoogleCliWorker
 from .workers.grok_build_direct_worker import GrokBuildDirectWorker
+from .workers.hermes_direct_worker import HermesDirectWorker
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +92,10 @@ def _spawn_boot_cleanup(coro: Any, *, name: str) -> asyncio.Task[Any]:
 # vertex: Google Cloud Vertex AI runs the SAME in-process tool loop as the
 # other API providers, on the VertexBrain — so picking it as the subagent
 # actually runs the mission on Vertex instead of silently falling back to Claude.
+# nous (Nous Portal) runs only when selected: it is deliberately absent from the
+# cross-family last-resort walks below, so a saved key never pulls it in.
 _API_AGENT_SLUGS: frozenset[str] = frozenset(
-    {"openai", "openrouter", "grok", "nvidia", "ollama", "local-openai", "vertex"}
+    {"openai", "openrouter", "grok", "nvidia", "nous", "ollama", "local-openai", "vertex"}
 )
 
 
@@ -374,7 +378,7 @@ def _select_subagent_worker_kind(sub_jarvis_provider: str | None, step_model: st
     """Pure routing decision for the Heavy-Task subagent worker.
 
     Returns one of ``"claude_direct"`` | ``"codex_direct"`` | ``"antigravity"``
-    | ``"grok_build"`` | ``"subjarvis"`` | ``"gemini"``.
+    | ``"grok_build"`` | ``"hermes"`` | ``"subjarvis"`` | ``"gemini"``.
 
     Defense-in-depth (2026-05-29, user mandate: heavy tasks run on the
     configured provider — claude-api -> Claude Max OAuth — and Gemini must
@@ -402,6 +406,10 @@ def _select_subagent_worker_kind(sub_jarvis_provider: str | None, step_model: st
         return "antigravity"
     if sub_jarvis_provider in GROK_BUILD_SUBAGENT_SLUGS:
         return "grok_build"
+    # Hermes Agent answers with the models configured in Hermes itself; a
+    # per-step model cannot divert it either.
+    if sub_jarvis_provider in HERMES_SUBAGENT_SLUGS:
+        return "hermes"
     # openai / openrouter / grok / nvidia run on their own provider via the in-process
     # ApiAgentWorker (OpenAI-compatible chat API + tool-use loop writing files
     # into the worktree). They used to fall through to "subjarvis" ->
@@ -596,6 +604,15 @@ def _api_key_family_viable(provider: str) -> bool:
 
     key = get_jarvis_agent_secret(provider)
     if not key:
+        # An API-key card pointed at a loopback server (a local gateway that
+        # signs upstream itself) runs keyless; viability is then reachability,
+        # exactly like the local families above.
+        from jarvis.brain.app_control import loopback_keyless_ready
+
+        if loopback_keyless_ready(provider):
+            from jarvis.api_family_quota_state import api_family_in_cooldown
+
+            return not api_family_in_cooldown(provider)
         return False
     # A family a worker just proved quota-depleted / auth-dead is skipped
     # until its cooldown self-expires — fingerprinted, so saving a NEW key in
@@ -645,6 +662,8 @@ def reachable_worker_families() -> list[str]:
 def _cross_family_last_resort_worker(
     task_text: str,
     capability_inventory: WorkerCapabilityInventory | None = None,
+    *,
+    allow_claude: bool = True,
 ) -> Any | None:
     """The key-aware, cross-family LAST-resort heavy worker (open-source AP-22/23).
 
@@ -670,7 +689,9 @@ def _cross_family_last_resort_worker(
     case); the caller then keeps the honest Claude last resort, which fails
     legibly rather than silently. Because Claude is probed first, this never
     silently diverts a working Claude to Gemini — it only rescues a host that
-    has no Claude at all (the §3 single-key downloader).
+    has no Claude at all (the §3 single-key downloader). ``allow_claude=False``
+    skips both Claude families (the routing policy reserves Claude for
+    explicit requests).
     """
     # 1. Claude Max OAuth CLI — subscription, no metered key, preferred floor.
     #    Auth-aware since 2026-07-06: binary presence alone picked a claude CLI
@@ -680,7 +701,7 @@ def _cross_family_last_resort_worker(
 
     from jarvis.missions.workers.claude_direct_worker import _resolve_claude_binary
 
-    if _resolve_claude_binary() is not None:
+    if allow_claude and _resolve_claude_binary() is not None:
         if _claude_cli_auth_viable():
             return ClaudeDirectWorker(capability_inventory=inventory)
         logger.warning(
@@ -714,6 +735,8 @@ def _cross_family_last_resort_worker(
     from jarvis.missions.workers.api_agent_worker import supports_api_agent_worker
 
     for prov in ("claude-api", "gemini", "openrouter", "openai", "grok", "nvidia"):
+        if not allow_claude and prov == "claude-api":
+            continue
         if supports_api_agent_worker(prov) and _api_key_family_viable(prov):
             logger.warning(
                 "Mission worker -> ApiAgentWorker(%r): no Claude CLI / Codex login "
@@ -724,6 +747,60 @@ def _cross_family_last_resort_worker(
             )
             return ApiAgentWorker(prov, capability_inventory=inventory)
     return None
+
+
+def _route_policy_reserves_claude() -> bool:
+    """True when ``[brain.route_policy]`` is on and deny-lists the Claude family.
+
+    Then Claude is reached only through the explicit Paperclip escalation, so a
+    mission must never land on a Claude worker by itself (default, fallback or
+    last resort).
+    """
+    try:
+        from jarvis.brain.route_policy import is_denied
+        from jarvis.core.config import load_config
+
+        policy = getattr(load_config().brain, "route_policy", None)
+    except Exception:  # noqa: BLE001 - unreadable config keeps the upstream routing
+        logger.debug("Mission worker: route policy unreadable", exc_info=True)
+        return False
+    if policy is None or not bool(getattr(policy, "enabled", False)):
+        return False
+    return is_denied(policy, "claude-cli", None) or is_denied(policy, "claude-api", None)
+
+
+def _is_claude_worker(worker: Any) -> bool:
+    if isinstance(worker, ClaudeDirectWorker):
+        return True
+    return isinstance(worker, ApiAgentWorker) and worker.provider == "claude-api"
+
+
+class ClaudeReservedError(RuntimeError):
+    """No non-Claude mission worker is reachable while the policy reserves Claude."""
+
+
+def _without_automatic_claude(
+    worker: Any,
+    task_text: str,
+    capability_inventory: WorkerCapabilityInventory | None,
+) -> Any:
+    """Swap a Claude worker for another family when the policy reserves Claude."""
+    if not _is_claude_worker(worker) or not _route_policy_reserves_claude():
+        return worker
+    other = _cross_family_last_resort_worker(
+        task_text, capability_inventory, allow_claude=False
+    )
+    if other is None:
+        raise ClaudeReservedError(
+            "No mission worker outside the Claude family is reachable, and "
+            "[brain.route_policy] reserves Claude for explicit requests. "
+            "Configure another worker provider or ask for Claude explicitly."
+        )
+    logger.warning(
+        "Mission worker: the routing policy reserves Claude for explicit "
+        "requests; running on %s instead.", type(other).__name__,
+    )
+    return other
 
 
 def _resolve_api_agent_worker(
@@ -1109,6 +1186,13 @@ async def bootstrap_missions(
     def _worker_factory(step):  # noqa: ANN001 - Step type local
         task_text = getattr(step, "prompt", "") or ""
         capability_inventory = _assemble_worker_capability_inventory(task_text)
+        return _without_automatic_claude(
+            _select_worker(step, task_text, capability_inventory),
+            task_text,
+            capability_inventory,
+        )
+
+    def _select_worker(step, task_text, capability_inventory):  # noqa: ANN001, ANN202
         # Worker routing post-Welle-4:
         #
         # 1. If ``[brain.sub_jarvis].provider`` is set in jarvis.toml,
@@ -1253,6 +1337,12 @@ async def bootstrap_missions(
                 "subscription (grok -p, OAuth login, no API key)."
             )
             return GrokBuildDirectWorker(capability_inventory=capability_inventory)
+        if kind == "hermes":
+            logger.info(
+                "Mission worker -> HermesDirectWorker (hermes -z in the mission "
+                "worktree, on the models configured in Hermes)."
+            )
+            return HermesDirectWorker(capability_inventory=capability_inventory)
         if kind == "api_agent":
             # openai / openrouter / grok / nvidia: run on the selected
             # provider via the in-process ApiAgentWorker — see

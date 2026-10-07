@@ -18,6 +18,7 @@ from typing import Any
 
 from jarvis.core.capabilities import Capability, get_registry
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
+from jarvis.safety.command_impact import DESTRUCTIVE, classify_command
 
 from .client import MCPClient
 from .registry import MCPRegistry
@@ -242,6 +243,10 @@ class MCPToolAdapter:
         # does not fit a small local model's window.
         self.is_mcp_tool: bool = True
         self.risk_tier: RiskTier = risk_tier
+        raw_annotations = mcp_tool_def.get("annotations")
+        self._annotations: dict[str, Any] = (
+            dict(raw_annotations) if isinstance(raw_annotations, dict) else {}
+        )
 
         # Register with the global CapabilityRegistry so the voice path
         # knows this MCP tool exists and resolve_intent can match it.
@@ -260,6 +265,38 @@ class MCPToolAdapter:
             get_registry().register(_cap)
         except Exception:  # noqa: BLE001
             log.debug("MCPToolAdapter: capability registration failed for %s", _cap_id)
+
+    def risk_tier_for_args(self, args: dict[str, Any]) -> RiskTier | None:
+        """Ask first for a call that can destroy, overwrite or send.
+
+        Every MCP tool runs at the adapter's static tier (``monitor``), which
+        let a connected desktop or file server delete files or run any shell
+        command without a word. Escalate to ``ask`` when the server marks the
+        tool ``destructiveHint``, when a command argument classifies as
+        destructive (the same classifier ``run_shell`` uses), or when the tool
+        name says it deletes, overwrites, kills or sends. A tool the server
+        marks ``readOnlyHint`` keeps its tier. ``None`` keeps the static tier.
+        """
+        if self._annotations.get("readOnlyHint") is True:
+            return None
+        if self._annotations.get("destructiveHint") is True:
+            return "ask"
+        for key in _COMMAND_ARG_KEYS:
+            value = args.get(key)
+            # A list is a batch of command lines: any destructive one asks.
+            lines = value if isinstance(value, list) else [value]
+            for line in lines:
+                if isinstance(line, str) and line.strip():
+                    if classify_command(line).level == DESTRUCTIVE:
+                        return "ask"
+        words = _name_words(self._mcp_tool_name)
+        if words & _CONSEQUENTIAL_WORDS:
+            return "ask"
+        # "move" alone is the mouse (Windows-MCP Move-Tool) and must stay
+        # instant; moving a file or folder can overwrite the destination.
+        if "move" in words and words & _FILE_WORDS:
+            return "ask"
+        return None
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         """Call the MCP tool and map the result to a `ToolResult`.
@@ -284,6 +321,26 @@ class MCPToolAdapter:
                 e,
             )
             return ToolResult(success=False, output=None, error=str(e))
+
+
+#: Argument names under which desktop/shell MCP servers take a command line.
+_COMMAND_ARG_KEYS: tuple[str, ...] = ("command", "cmd", "script", "shell", "commands")
+
+#: Words in a tool name that mean the call deletes, overwrites, stops or sends.
+_CONSEQUENTIAL_WORDS: frozenset[str] = frozenset({
+    "delete", "remove", "rm", "unlink", "erase", "wipe", "purge", "drop", "truncate",
+    "kill", "terminate", "shutdown", "restart", "reboot", "uninstall",
+    "write", "overwrite", "edit", "replace", "rename",
+    "send", "post", "publish", "email", "pay", "purchase", "buy", "transfer",
+})
+
+_FILE_WORDS: frozenset[str] = frozenset({"file", "files", "directory", "folder", "item", "path"})
+
+
+def _name_words(name: str) -> set[str]:
+    """``write_file`` / ``killProcess`` / ``Remove-Item`` -> lower-case words."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name or "")
+    return {word for word in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if word}
 
 
 def _normalize_mcp_result(raw: Any) -> Any:

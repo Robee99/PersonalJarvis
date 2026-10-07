@@ -103,6 +103,15 @@ const ClisHubView = lazyView(["clis", "cli-test-hub"], () =>
 const DocsView = lazyView(["docs"], () =>
   import("@/views/DocsView").then((m) => ({ default: m.DocsView })),
 );
+const MissionDeckView = lazyPropView<{ dock?: boolean }>(["deck"], () =>
+  import("@/views/MissionDeckView").then((m) => ({ default: m.MissionDeckView })),
+);
+const MemoryOrbView = lazyView(["orb"], () =>
+  import("@/views/MemoryOrbView").then((m) => ({ default: m.MemoryOrbView })),
+);
+const ArmoryView = lazyPropView<{ armory?: boolean }>(["armory"], () =>
+  import("@/views/PluginsView").then((m) => ({ default: m.PluginsView })),
+);
 const BoardView = lazyView(["board"], () =>
   import("@/views/BoardView").then((m) => ({ default: m.BoardView })),
 );
@@ -369,6 +378,15 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <RunInspectorView />;
     case "board":
       return <BoardView />;
+    // The HUD. The sidebar is the navigation here, so the deck's own dock
+    // stays out.
+    case "deck":
+      return <MissionDeckView dock={false} />;
+    case "orb":
+      return <MemoryOrbView />;
+    // The same plugin catalog and connect flows as Plugins, laid out as cards.
+    case "armory":
+      return <ArmoryView armory />;
     case "memory":
       return <WikiView />;
     // The merged voice section: Dictation (default landing) + Dictionary +

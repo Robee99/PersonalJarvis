@@ -605,6 +605,44 @@
       "verification_hook": "home_assistant_api"
     },
     {
+      "id": "paperclip",
+      "display_name": "Paperclip",
+      "description": "Hand tasks to the agents in your own Paperclip company and follow their work",
+      "category": "Developer",
+      "logo_slug": "paperclip",
+      "logo_color": "6E56CF",
+      "featured": true,
+      "longevity": "permanent",
+      "longevity_note": "Board keys do not expire unless you revoke them in Paperclip.",
+      "auth": {
+        "mode": "pat_paste",
+        "token_creation_url": "http://127.0.0.1:3100",
+        "token_prefix": "pcp_board_",
+        "validation_endpoint": "https://localhost:3100/api/companies",
+        "instruction_md": "Paperclip runs on your own computer. Open a terminal and run: paperclipai token board create --name Jarvis\nCopy the key it prints (it starts with pcp_board_) and paste it below. You can revoke it later with paperclipai token board revoke.",
+        "instance_url": {
+          "label": "Your Paperclip address",
+          "placeholder": "http://127.0.0.1:3100",
+          "validation_path": "/api/companies",
+          "help_md": "The address of the Paperclip dashboard. It listens on your own computer, so Jarvis must run on the same machine or reach it over your network."
+        }
+      },
+      "mcp_server": {
+        "transport": "stdio",
+        "install": [
+          "npx",
+          "-y",
+          "@paperclipai/mcp-server"
+        ],
+        "env_template": {
+          "PAPERCLIP_API_URL": "$plugin_paperclip_instance_url",
+          "PAPERCLIP_API_KEY": "$plugin_paperclip_access_token"
+        },
+        "risk_tier": "ask"
+      },
+      "post_install_hint_md": "Try “what are my Paperclip agents doing” or “give dan a task to research local vision models”. Creating or changing a task asks for confirmation first. Needs Node.js for npx."
+    },
+    {
       "id": "spotify",
       "display_name": "Spotify",
       "description": "Play music, skip tracks and hear what is playing",

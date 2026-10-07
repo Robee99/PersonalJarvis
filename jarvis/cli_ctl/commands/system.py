@@ -115,3 +115,88 @@ def status() -> None:
     render.emit({"reachable": reachable}, as_json=as_json())
     if not reachable:
         raise typer.Exit(code=1)
+
+
+@app.command("free-voice")
+def free_voice(
+    hermes: str = typer.Option(
+        "http://127.0.0.1:8642", "--hermes", help="Hermes Agent's API server on this machine.",
+    ),
+    check_model: list[str] = typer.Option(  # noqa: B008 — typer reads options from defaults
+        None, "--check-model",
+        help="A Hermes route or provider::model to try once, e.g. local-qwen::qwen.",
+    ),
+    link_memory: bool = typer.Option(
+        True, "--link-memory/--no-link-memory",
+        help="Let Hermes search Jarvis's memory (the wiki) over MCP.",
+    ),
+) -> None:
+    """Make Hermes Agent the brain for everything: voice, tools, missions; Hermes
+    picks the model (local Qwen, local Gemma, cloud); paid providers blocked."""
+    from jarvis.cli_ctl.__main__ import as_json, make_client
+    from jarvis.cli_ctl.free_voice import (
+        computer_use_for,
+        free_aux_for,
+        lean_context_for,
+        link_memory_for,
+        render_report,
+        run_free_voice,
+    )
+
+    with make_client() as client:
+        report = run_free_voice(
+            client,
+            hermes=hermes,
+            check_models=tuple(check_model or ()),
+            link_memory=link_memory_for(client) if link_memory else None,
+            free_aux=free_aux_for(),
+            lean_context=lean_context_for(),
+            computer_use=computer_use_for(),
+        )
+    if as_json():
+        render.emit(report.as_dict(), as_json=True)
+    else:
+        typer.echo(render_report(report))
+    if report.failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("acceptance")
+def acceptance(
+    hermes: str = typer.Option(
+        "http://127.0.0.1:8642", "--hermes", help="Hermes Agent's API server on this machine.",
+    ),
+) -> None:
+    """Run the ship checks on the running app and write a PASS/FAIL scorecard.
+
+    Typed and spoken turns, memory recall, the web and browser, interrupting a
+    long task, Notepad and the screen, brightness read-back and latency."""
+    from jarvis.cli_ctl.__main__ import as_json, make_client
+    from jarvis.cli_ctl.acceptance import (
+        count_processes,
+        render_scorecard,
+        run_acceptance,
+        write_scorecard,
+    )
+    from jarvis.cli_ctl.free_voice import probe_hermes
+    from jarvis.core.paths import user_data_dir
+    from jarvis.platform.brightness import read_brightness, write_brightness
+
+    folder = user_data_dir() / "acceptance"
+    with make_client() as client:
+        card = run_acceptance(
+            client,
+            probe=lambda: probe_hermes(hermes),
+            probe_folder=folder / "memory-probe",
+            read_brightness=read_brightness,
+            write_brightness=write_brightness,
+            count_windows=count_processes,
+        )
+    path = write_scorecard(card, folder)
+    if as_json():
+        render.emit({**card.as_dict(), "scorecard": str(path)}, as_json=True)
+    else:
+        typer.echo(render_scorecard(card))
+        typer.echo(f"Scorecard: {path}")
+    if card.failed:
+        raise typer.Exit(code=1)

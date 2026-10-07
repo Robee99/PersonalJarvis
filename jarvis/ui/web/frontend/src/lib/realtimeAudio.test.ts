@@ -126,6 +126,38 @@ function installVoiceBrowserFakes() {
 }
 
 describe("realtime audio client", () => {
+  it("uses Jarvis's selected microphone in the embedded desktop voice path", async () => {
+    installVoiceBrowserFakes();
+    const track = { stop: vi.fn() };
+    const capture = vi.fn(async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }));
+    vi.stubGlobal("navigator", { mediaDevices: {
+      getUserMedia: capture,
+      enumerateDevices: vi.fn(async () => [
+        { kind: "audioinput", deviceId: "laptop-id", label: "Microphone Array (Realtek(R) Audio)" },
+        { kind: "audioinput", deviceId: "headset-id", label: "Headset (boAt Rockerz 255 Pro+)" },
+      ]),
+    } });
+    (window as unknown as { __JARVIS_EMBEDDED_DESKTOP?: boolean }).__JARVIS_EMBEDDED_DESKTOP = true;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ selected_input: "Headset (boAt Rockerz 255 Pro+)" }))));
+    const client = new RealtimeAudioClient({}, { browserAudio: true });
+    try {
+      const connecting = client.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ type: "audio_ready", output_sample_rate: 24_000 });
+      await connecting;
+      expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        audio: expect.objectContaining({ deviceId: { exact: "headset-id" }, echoCancellation: true }),
+      }));
+    } finally {
+      delete (window as unknown as { __JARVIS_EMBEDDED_DESKTOP?: boolean }).__JARVIS_EMBEDDED_DESKTOP;
+      FakeWebSocket.instances[0]?.receive({ type: "audio_closed" });
+      await client.disconnect();
+    }
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it("uses audio-only subscription SDP and releases microphone audio only after the peer connects", async () => {
     installVoiceBrowserFakes();
     vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });

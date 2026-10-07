@@ -61,6 +61,12 @@ BrainCallback = Callable[[str], Awaitable[str]]
 ROUTER_TOOLS = frozenset({
     "run-shell",
     "screen-snapshot",
+    # Camera still (2026-10-02): one webcam photo for vision when the user asks
+    # Jarvis to look at them or at something they hold up. Risk "ask" (the
+    # frame shows the person), hidden from blind brains like screenshot, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14). See
+    # ADR-0011 amendment "Camera still".
+    "camera-snapshot",
     # NB: ``dispatch-to-harness`` deliberately absent (removed 2026-06-28) —
     # see the header comment above. Heavy work → spawn-worker; desktop →
     # computer-use. The tool remains for the internal local-action fast path.
@@ -71,6 +77,17 @@ ROUTER_TOOLS = frozenset({
     # never a spawn — never in a worker set (AP-5/AP-14). See
     # docs/plans/ai-pointer/DESIGN.md.
     "inspect-pointer",
+    # Point at (2026-10-02): the push direction of the AI Pointer. A glowing
+    # arrow lands on the named element of the foreground window ("where do I
+    # click to export?"), drawn by the CU indicator sidecar; it never clicks.
+    # Read-only on the app, risk safe, never a spawn and never in a worker or
+    # society tool set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+    "point-at",
+    # Laptop power (2026-10-02): "turbo mode", "silent mode", "cap the battery
+    # at 80" - the Windows power slider plus ASUS Armoury Crate's operating
+    # mode and charge limit. Risk monitor, never a spawn and never in a worker
+    # or society tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
+    "laptop-power",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —
@@ -1808,6 +1825,13 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
     telemetry labels show the concrete provider.
     """
     from jarvis.brain.ack_brain.providers import REGISTRY
+    from jarvis.brain.route_policy import hermes_is_main_brain
+
+    if hermes_is_main_brain(jcfg):
+        # One brain (ADR-0042): no second model writes what Jarvis says while
+        # Hermes answers. Every flash consumer then uses its canned pool.
+        log.info("Flash-Brain: Hermes is the brain — canned acknowledgements only.")
+        return None
 
     provider_name = ack_cfg.provider
     if provider_name == "follow_brain":

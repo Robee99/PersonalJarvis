@@ -43,6 +43,23 @@ def test_mic_level_reports_too_quiet(client):
     assert b["no_device"] is False
 
 
+def test_mic_level_reports_digital_silence_apart_from_quiet(monkeypatch):
+    import jarvis.speech.diagnose as d
+
+    async def fake_measure(duration_s=3.0):
+        return -90.3
+
+    monkeypatch.setattr(d, "measure_mic_dbfs", fake_measure)
+    app = FastAPI()
+    app.include_router(router)
+
+    b = TestClient(app).get("/api/settings/wake-word/mic-level").json()
+
+    assert b["silent"] is True
+    assert b["too_quiet"] is True
+    assert b["no_device"] is False
+
+
 def test_mic_level_reports_no_device(monkeypatch):
     import jarvis.speech.diagnose as d
 
@@ -185,6 +202,7 @@ def test_macos_mic_level_measures_once_the_microphone_is_granted(monkeypatch):
         "max_dbfs": -15.0,
         "no_device": False,
         "too_quiet": False,
+        "silent": False,
         "permission_required": False,
     }
     assert gate.ensure_calls() == []

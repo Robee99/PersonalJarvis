@@ -301,3 +301,24 @@ def test_the_model_comes_from_the_card_then_setup_then_the_default(tmp_path: Pat
     assert EngineSettings.from_config(cfg).llm_model == "qwen3.5:2b"
     typed = JarvisConfig(voice_engine=VoiceEngineConfig(tts="nonsense", languages=[]))
     assert (typed.voice_engine.tts, typed.voice_engine.languages) == ("pocket", ["de", "en"])
+
+
+def test_the_openai_api_answers_with_the_local_brain_server(tmp_path: Path) -> None:
+    section = SimpleNamespace(home=str(tmp_path), llm_model="", llm_api="openai",
+                              llm_base_url="", tts="pocket", languages=["en"])
+    card = SimpleNamespace(base_url="http://127.0.0.1:8080", model="qwen3.6-35b-a3b")
+    cfg = SimpleNamespace(voice_engine=section,
+                          brain=SimpleNamespace(providers={"local-openai": card}))
+    settings = EngineSettings.from_config(cfg)
+    assert (settings.llm_api, settings.llm_base_url, settings.llm_model) == (
+        "openai", "http://127.0.0.1:8080", "qwen3.6-35b-a3b")
+    assert settings.configure_message()["llm"]["api"] == "openai"
+
+    no_card = SimpleNamespace(voice_engine=section, brain=SimpleNamespace(providers={}))
+    assert EngineSettings.from_config(no_card).llm_base_url == "http://127.0.0.1:11435"
+    section.llm_base_url = "http://127.0.0.1:1234"
+    assert EngineSettings.from_config(cfg).llm_base_url == "http://127.0.0.1:1234"
+    typed = JarvisConfig(voice_engine=VoiceEngineConfig(llm_api="OpenAI", llm_base_url=" x "))
+    assert (typed.voice_engine.llm_api, typed.voice_engine.llm_base_url) == ("openai", "x")
+    assert JarvisConfig(voice_engine=VoiceEngineConfig(llm_api="grpc")).voice_engine.llm_api == (
+        "ollama")

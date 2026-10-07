@@ -59,6 +59,17 @@ _CONFIRM_PATTERNS_EN: tuple[str, ...] = (
     r"\baffirmative\b",
 )
 
+# Casual English agreement ("Yeah, that's all right." live 2026-10-05: the
+# camera question was asked three times). These words also appear inside
+# ordinary sentences and in the assistant's own questions ("Is that alright?"),
+# so they count only as a SHORT answer that opens with them and asks nothing.
+_SHORT_CONFIRM_EN = re.compile(
+    r"^(yeah|yea|yep|yup|ok|okay|alright|all right|fine|that'?s (fine|ok|okay|"
+    r"alright|all right|good)|of course|please do|proceed|approved?|absolutely|"
+    r"definitely|sounds good|go on|let'?s do it)\b"
+)
+_SHORT_CONFIRM_MAX_WORDS = 6
+
 _VETO_PATTERNS_DE: tuple[str, ...] = (
     r"\bnein\b",
     r"\babbreche?n?\b",
@@ -176,6 +187,13 @@ def classify_response(transcript: str, *, language: str = "de") -> ResponseVerdi
     for pat in confirm_pats:
         if re.search(pat, norm):
             return "confirm"
+    if (
+        language == "en"
+        and "?" not in norm
+        and len(norm.split()) <= _SHORT_CONFIRM_MAX_WORDS
+        and _SHORT_CONFIRM_EN.match(norm)
+    ):
+        return "confirm"
     for pat in ambig_pats:
         if re.search(pat, norm):
             return "ambiguous"

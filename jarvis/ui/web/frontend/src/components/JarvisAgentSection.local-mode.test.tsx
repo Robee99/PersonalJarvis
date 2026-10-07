@@ -152,7 +152,8 @@ describe("JarvisAgentSection — Local Mode", () => {
     vi.stubGlobal("fetch", mockFetch(status));
     render(<JarvisAgentSection />);
 
-    await waitFor(() => expect(screen.getByText("ollama card")).toBeTruthy());
+    // The card title and the provider picker both name the worker.
+    await waitFor(() => expect(screen.getAllByText("ollama card").length).toBeGreaterThan(0));
     expect(screen.getAllByText("openai card").length).toBeGreaterThan(0);
     expect(screen.queryAllByText("gemini card")).toHaveLength(0);
   });

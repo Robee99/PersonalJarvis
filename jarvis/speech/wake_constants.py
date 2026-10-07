@@ -16,10 +16,13 @@ Why this module exists:
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import unicodedata
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Five-layer enum — keep in lockstep with frontend/src/constants/wakeEngines.ts
@@ -243,6 +246,28 @@ def _vosk_models_root() -> Path:
     return Path(base) / "wake_models" / "vosk"
 
 
+def _subdirs(folder: Path) -> list[Path]:
+    """Sorted subfolders of ``folder``; [] when it cannot be read.
+
+    A model folder the app may not open (live 2026-10-05: created while the
+    app ran elevated, then unreadable once it ran as the user) raised out of
+    the wake setup and took the whole voice pipeline down. An unreadable
+    folder now counts as "no model here", so only the Vosk engine is skipped.
+    """
+    try:
+        return sorted(p for p in folder.iterdir() if p.is_dir())
+    except OSError as exc:
+        log.warning("Vosk model folder %s is not readable (%s); skipping it", folder, exc)
+        return []
+
+
+def _is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:  # unreadable counts as absent; _subdirs logs the folder once
+        return False
+
+
 def _vosk_model_dir(cand: Path) -> Path | None:
     """The extracted model dir inside a language folder, or None.
 
@@ -251,12 +276,19 @@ def _vosk_model_dir(cand: Path) -> Path | None:
     ``vosk-model-small-de-0.15/`` inside the lang folder and a flattened
     layout resolve).
     """
-    if (cand / "am").is_dir() or (cand / "conf" / "model.conf").is_file():
-        return cand
-    for sub in sorted(p for p in cand.iterdir() if p.is_dir()):
-        if (sub / "am").is_dir() or (sub / "conf" / "model.conf").is_file():
-            return sub
+    try:
+        if _is_model(cand):
+            return cand
+        for sub in _subdirs(cand):
+            if _is_model(sub):
+                return sub
+    except OSError as exc:
+        log.warning("Vosk model folder %s is not readable (%s); skipping it", cand, exc)
     return None
+
+
+def _is_model(folder: Path) -> bool:
+    return (folder / "am").is_dir() or (folder / "conf" / "model.conf").is_file()
 
 
 def resolve_vosk_model_path(language: str | None) -> str | None:
@@ -267,16 +299,16 @@ def resolve_vosk_model_path(language: str | None) -> str | None:
     the FIRST language folder present (a single-language install just works).
     """
     root = _vosk_models_root()
-    if not root.is_dir():
+    if not _is_dir(root):
         return None
     lang = (language or "").strip().lower().split("-")[0]
     candidates: list[Path] = []
     if lang and lang != "auto":
         candidates.append(root / lang)
     else:
-        candidates.extend(sorted(p for p in root.iterdir() if p.is_dir()))
+        candidates.extend(_subdirs(root))
     for cand in candidates:
-        if cand.is_dir():
+        if _is_dir(cand):
             found = _vosk_model_dir(cand)
             if found is not None:
                 return str(found)
@@ -296,13 +328,13 @@ def resolve_vosk_model_paths(primary_language: str | None = None) -> list[str]:
     the primary (speaker-language) model leads.
     """
     root = _vosk_models_root()
-    if not root.is_dir():
+    if not _is_dir(root):
         return []
     out: list[str] = []
     primary = resolve_vosk_model_path(primary_language)
     if primary is not None:
         out.append(primary)
-    for lang_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    for lang_dir in _subdirs(root):
         found = _vosk_model_dir(lang_dir)
         if found is not None and str(found) not in out:
             out.append(str(found))

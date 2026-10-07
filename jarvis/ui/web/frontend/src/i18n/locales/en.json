@@ -94,6 +94,7 @@
     "title": "Dictation and typing tools can't reach this window",
     "impact": "This app is running with administrator rights, so Windows blocks other programs from typing into it. Dictation apps, text expanders, clipboard tools, and password-manager auto-type will seem to do nothing here, while still working in every other app.",
     "manual_hint": "This app can't drop the administrator rights by itself on this Windows account. Close it and start it again normally — without “Run as administrator”.",
+    "uac_off_hint": "User Account Control (UAC) is switched off on this PC, so every app runs with administrator rights and a restart can't drop them. Turn UAC back on in Windows settings to lift this.",
     "restart_now": "Restart without admin rights",
     "restarting": "Restarting…",
     "restart_failed": "The app could not restart without administrator rights.",
@@ -177,6 +178,9 @@
     "nav_forward": "Go forward"
   },
   "nav": {
+    "deck": "HUD",
+    "orb": "Memory orb",
+    "armory": "Tool armory",
     "chat_workspace": "Chat",
     "chats": "Chats",
     "agents": "Agents",
@@ -572,6 +576,7 @@
   },
   "voice_state": {
     "idle": "Ready",
+    "unavailable": "Voice unavailable",
     "listening": "Listening",
     "thinking": "Thinking",
     "speaking": "Speaking",
@@ -715,7 +720,9 @@
     "prompt_mode_failed": "Prompt Mode could not be switched.",
     "theme_to_light": "Switch to light mode",
     "theme_to_dark": "Switch to dark mode",
-    "back_to_assistant": "Back to {name}"
+    "back_to_assistant": "Back to {name}",
+    "voice_engine_title_realtime": "Realtime voice: {provider} listens and speaks by itself. Click to change the voice provider.",
+    "voice_engine_title_pipeline": "Pipeline voice: speech-to-text, then {provider}, then text-to-speech. Click to change the brain."
   },
   "assistant_chat": {
     "voice_enter": "Voice mode",
@@ -2194,7 +2201,10 @@
     "experimental_note": "Beta: this provider is not finished yet and uses an unstable protocol that can change without notice. If it cannot start, the call stops.",
     "experimental_consent": "Before you turn this on: this provider is still in beta and uses an experimental, unstable route that can change without notice. If it breaks, the call stops instead of switching to another provider on its own. Continue?",
     "key_verified_toast": "{0} answered — the key works.",
-    "key_check_failed_toast": "{0} did not answer: {1}"
+    "key_check_failed_toast": "{0} did not answer: {1}",
+    "pipeline_hint_title": "Looking for Hermes, Nous Portal or a local Qwen?",
+    "pipeline_hint_body": "Only providers with a native live-audio model are listed here. Any chat model, including Nous Portal models and a local OpenAI-compatible server such as Qwen, talks through Pipeline voice: speech-to-text, then the brain you pick, then text-to-speech. Hermes Agent itself is a command-line agent and can't be a voice brain.",
+    "pipeline_hint_action": "Use Pipeline voice"
   },
   "apikeys_test": {
     "button": "Test",
@@ -2690,6 +2700,7 @@
       "dark": "Dark",
       "light": "Light",
       "system": "System",
+      "jarvis": "Jarvis",
       "system_now_dark": "Following your system, which is currently dark.",
       "system_now_light": "Following your system, which is currently light."
     }
@@ -2928,7 +2939,15 @@
     "apply": "Apply",
     "applying": "Applying…",
     "saved": "{name}-Agent model saved.",
-    "saved_restart": "{name}-Agent model saved — applies to the next mission."
+    "saved_restart": "{name}-Agent model saved — applies to the next mission.",
+    "provider_label": "Provider",
+    "needs_setup": "needs setup",
+    "access_local": "on this machine",
+    "access_api": "API key",
+    "access_subscription": "subscription",
+    "next_restart": "(active from next restart)",
+    "unready_hint": "{provider} needs a key or a login before it can run agents. Nothing was switched.",
+    "set_up": "Set up {provider}"
   },
   "cli_connect": {
     "is_connected": "{0} is connected",
@@ -3196,6 +3215,14 @@
     "no_hits_prefix": "No matches for ",
     "no_hits_suffix": ". Try other keywords or look in the graph.",
     "hits_heading": "Matches"
+  },
+  "wiki_holo": {
+    "open": "Hands view",
+    "open_title": "Open the HOLO deck: your memory as orbs you grab with your hands (uses the camera)",
+    "preparing": "Preparing…",
+    "close": "Close",
+    "install_failed": "Could not prepare hand tracking",
+    "frame_title": "HOLO hand-gesture deck"
   },
   "wiki_graph": {
     "empty_prefix": "Your memory graph is still empty. As soon as ",
@@ -3676,7 +3703,8 @@
     "prompt_not_submitted": "the prompt is in its input box, not sent",
     "prompt_unconfirmed": "the prompt was typed in, but the pane never showed it arriving — check that pane",
     "dictation_nowhere": "No text field had focus, so the dictation was not inserted. It is in the dictation history.",
-    "realtime_provider_issue": "The realtime provider reported a problem."
+    "realtime_provider_issue": "The realtime provider reported a problem.",
+    "tts_no_audio": "Jarvis answered but the voice could not speak it. Choose a working voice in Settings."
   },
   "chat_thread": {
     "message_to": "Message to",
@@ -4677,6 +4705,9 @@
     "stat_brain": "Brain",
     "stat_realtime": "Realtime",
     "stat_model": "Model",
+    "stat_avatar": "Avatar",
+    "avatar_gigi": "Gigi",
+    "avatar_reactor": "Reactor",
     "stat_running": "Running",
     "switch_to_classic": "Classic chat",
     "switch_to_deck": "Deck",
@@ -4694,6 +4725,19 @@
     "shot_empty": "No capture right now.",
     "shot_redacted": "{0} redacted",
     "card_api": "API this session",
+    "card_vitals": "System",
+    "vitals_cpu": "CPU",
+    "vitals_ram": "RAM",
+    "vitals_gpu": "GPU",
+    "vitals_vram": "VRAM",
+    "vitals_temp": "GPU temp",
+    "vitals_power": "GPU power",
+    "vitals_battery": "Battery",
+    "vitals_plugged": "plugged in",
+    "vitals_on_battery": "on battery",
+    "vitals_mode": "Power mode",
+    "vitals_loading": "Reading the machine…",
+    "vitals_error": "No reading from this machine.",
     "api_empty": "No brain turns yet.",
     "api_in": "In",
     "api_out": "Out",
@@ -5078,7 +5122,6 @@
       "mode_voice": "Voice",
       "mode_chat": "Chat",
       "mode_hint": "Voice or typed chat with Jarvis",
-      "voice_note": "Voice runs on Jarvis' voice brain, not on the model picked for the typed chat.",
       "model": "Model",
       "model_default": "Jarvis' brain",
       "model_provider_default": "provider default",
@@ -5142,7 +5185,19 @@
       "history_chats": "Chats",
       "history_voice": "Voice",
       "history_empty": "Nothing here yet",
-      "history_delete": "Delete"
+      "history_delete": "Delete",
+      "voice_engine": "Voice answers on {voice} ({mode}).",
+      "voice_same": "Voice also uses {chat}: Pipeline voice turns your speech into text, {chat} answers, and the reply is read aloud.",
+      "voice_differs": "Typed chat uses {chat}, but voice answers on {voice} ({mode}).",
+      "voice_differs_realtime": "Typed chat uses {chat}, but voice answers on {voice} ({mode}), a live voice model that listens and speaks by itself. To talk to {chat}, voice has to switch to Pipeline: speech-to-text, then {chat}, then text-to-speech.",
+      "voice_cli": "Typed chat uses {chat}, a command-line agent that replies only once it has finished and approves its own tools, so it can't hold a spoken conversation. Voice answers on {voice} ({mode}).",
+      "voice_cli_hermes": "To talk to the models Hermes Agent uses through Nous, pick Nous Portal as the brain for Pipeline voice.",
+      "voice_use": "Use {chat} for voice",
+      "voice_use_hint": "Switches voice to Pipeline: speech-to-text, then {chat}, then text-to-speech. Saved, so it survives a restart.",
+      "voice_switched": "Voice now answers with {chat}.",
+      "voice_switch_failed": "Couldn't move voice to {chat}.",
+      "voice_settings": "Voice settings",
+      "voice_pick_brain": "Choose a voice brain"
     },
     "world": {
       "minimap_label": "Island map",
@@ -6159,5 +6214,41 @@
       "create": "Create pet",
       "creating": "Creating…"
     }
+  },
+  "route_policy": {
+    "title": "Routing",
+    "desc": "Quick turns go to the fast model; multi-step reasoning, code and building go to the deep model. Off means the brain picked above answers everything.",
+    "enabled": "Automatic routing",
+    "fast": "Fast",
+    "fast_desc": "Short questions and everyday chat.",
+    "deep": "Deep",
+    "deep_desc": "Multi-step reasoning, code and building.",
+    "target_unset": "Not set",
+    "on_device": "on this computer",
+    "needs_setup": "needs setup",
+    "model_placeholder": "Provider's own model",
+    "model_label": "{tier} model",
+    "local": "Runs on this computer (images may go here)",
+    "escalation": "Escalate only when I ask",
+    "escalation_desc": "Hands the task to a delegate agent in Paperclip, such as a Claude agent, only when you say one of these phrases. It is never used automatically or as a fallback.",
+    "agent": "Delegate agent",
+    "agent_placeholder": "Paperclip agent, e.g. claude",
+    "phrases": "Phrases",
+    "phrases_placeholder": "Phrases, comma-separated, e.g. ask claude",
+    "cloud_vision": "Send images to cloud models",
+    "cloud_vision_desc": "Off: screenshots, camera frames and dropped images only go to targets that run on this computer, or Jarvis says it cannot look.",
+    "last_none": "No turn has been routed since the app started.",
+    "last_tier": "Last turn",
+    "last_model": "Ran on",
+    "last_reason": "Why",
+    "last_fallback": "Fallback",
+    "last_excluded": "Skipped",
+    "last_outcome": "Outcome",
+    "save": "Save",
+    "saved": "Routing saved. It applies from the next turn.",
+    "restore": "Undo last change",
+    "restored": "Routing restored to how it was.",
+    "loading": "Loading routing…",
+    "load_failed": "Routing settings could not load: {detail}"
   }
 }

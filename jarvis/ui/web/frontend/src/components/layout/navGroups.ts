@@ -9,7 +9,7 @@
  * A second hand-written list anywhere would be the classic drift trap (AP-4):
  * a section added here would silently never appear on the deck.
  */
-import { KeyRound, type LucideIcon } from "lucide-react";
+import { Gauge, KeyRound, Orbit, Swords, type LucideIcon } from "lucide-react";
 import { OllamaIcon } from "@/components/icons/OllamaIcon";
 import {
   AgentsIcon,
@@ -122,7 +122,15 @@ export const NAV_GROUP_META: readonly NavGroupMeta[] = [
 // (AP-4): a section added here would silently never appear on the deck.
 export const NAV_GROUPS: NavItem[][] = [
   // 0) The front page — Voice or Chat, named after the face the switch picked.
-  [{ id: "chats", labelKey: "nav.chats", icon: ChatIcon }],
+  [
+    { id: "chats", labelKey: "nav.chats", icon: ChatIcon },
+    // The HUD: the mission deck, every instrument on one screen.
+    { id: "deck", labelKey: "nav.deck", icon: Gauge, fallbackLabel: "HUD" },
+    // Everything the assistant knows and can use, as one live map.
+    { id: "orb", labelKey: "nav.orb", icon: Orbit, fallbackLabel: "Memory orb" },
+    // Every app the assistant can reach, as a wall of cards.
+    { id: "armory", labelKey: "nav.armory", icon: Swords, fallbackLabel: "Tool armory" },
+  ],
   // 1) Workspace — what the user builds with and reads back.
   [
     { id: "agents", labelKey: "nav.agents", icon: AgentsIcon },

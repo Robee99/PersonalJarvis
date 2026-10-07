@@ -48,6 +48,19 @@ def test_stdio_transport_resolves_install_and_env():
     assert env_overrides == {"CAL_TOKEN": "TOK123"}
 
 
+def test_stdio_env_gets_the_saved_instance_address():
+    plugin = _spec({
+        "transport": "stdio",
+        "install": ["npx", "-y", "@calendar/mcp"],
+        "env_template": {"CAL_URL": "$plugin_google-calendar_instance_url"},
+    })
+    result = plugin_to_mcp_server_spec(
+        plugin, Tokens(access="TOK123", extra={"instance_url": "http://cal.lan:8080"})
+    )
+    assert result is not None
+    assert result[1] == {"CAL_URL": "http://cal.lan:8080"}
+
+
 _STDIO = {
     "transport": "stdio",
     "install": ["npx", "-y", "@calendar/mcp@1.0.0"],

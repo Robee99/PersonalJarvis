@@ -135,6 +135,9 @@ class BrowserTool:
         "required": ["task"],
     }
     is_action_tool: bool = True
+    #: The ToolExecutor's deadline for one run: up to 90 s to start the
+    #: browser, a 600 s run, per-action approval waits and the hand-back.
+    execution_timeout_s: float = 1200.0
 
     def __init__(
         self,

@@ -86,14 +86,10 @@ def _vision_capability() -> tuple[bool, str]:
 def _ocr_capability(enabled: bool) -> tuple[bool, str]:
     if not enabled:
         return False, "Optional OCR is switched off."
-    import importlib.util  # noqa: PLC0415
-    import shutil  # noqa: PLC0415
+    from jarvis.screen_context.uitext import ocr_engine_status  # noqa: PLC0415
 
-    if importlib.util.find_spec("pytesseract") is None:
-        return False, "The optional OCR Python package is not installed."
-    if shutil.which("tesseract") is None:
-        return False, "The optional Tesseract executable is not available."
-    return True, ""
+    return ocr_engine_status()
+
 
 def _get_service(request: Request) -> ScreenContextService:
     return get_shared_service(bus=getattr(request.app.state, "bus", None))

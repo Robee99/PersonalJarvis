@@ -289,6 +289,12 @@ def _realtime_is_the_configured_voice_mode(cfg: Any) -> bool:
 
     if subscription_voice_selected(cfg):
         return False
+    # With Hermes Agent as the brain every voice turn has to reach Hermes; a
+    # realtime voice model would answer and act on its own beside it.
+    from jarvis.brain.route_policy import hermes_is_main_brain  # noqa: PLC0415
+
+    if hermes_is_main_brain(cfg):
+        return False
     return getattr(getattr(cfg, "voice", None), "mode", "pipeline") == "realtime"
 
 

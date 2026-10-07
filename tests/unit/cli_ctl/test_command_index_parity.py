@@ -65,5 +65,5 @@ def test_render_is_compact_and_names_the_direct_call_rule() -> None:
     text = render_command_index()
     assert "skills:" in text and "enable <name>" in text
     assert "do not spend rounds on --help" in text
-    assert len(text) < 3000, len(text)
+    assert len(text) < 3100, len(text)
     assert command_names("skills")[:2] == ("list", "show")

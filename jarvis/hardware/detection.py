@@ -17,8 +17,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 
@@ -798,6 +800,73 @@ def system_ram_gb() -> float | None:
     except Exception:  # noqa: BLE001 — locked-down host; None is the real answer, see above
         return None
     return round(total_mb / 1024.0, 1) if total_mb > 0 else None
+
+
+_GPU_QUERY = "name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw"
+
+
+def _smi_number(text: str) -> float | None:
+    """nvidia-smi prints "[N/A]" or "[Not Supported]" for a sensor it lacks."""
+    try:
+        return float(text)
+    except ValueError:  # a sensor the card lacks reads as None, never 0
+        return None
+
+
+def gpu_vitals(run: Callable[..., str] = _run) -> list[dict[str, object]]:
+    """One live reading per NVIDIA GPU, straight from ``nvidia-smi``.
+
+    An empty list means no NVIDIA reading, not an idle GPU: AMD, Intel and
+    Apple have no cheap live source here, and a number nobody measured is
+    never shown. A sensor the card lacks is ``None``.
+    """
+    out = run(
+        ["nvidia-smi", f"--query-gpu={_GPU_QUERY}", "--format=csv,noheader,nounits"],
+        timeout=3,
+    )
+    gpus: list[dict[str, object]] = []
+    for line in out.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 6 or _smi_number(parts[3]) is None:
+            continue
+        util, used, total, temp, power = (_smi_number(p) for p in parts[1:])
+        gpus.append(
+            {
+                "name": parts[0],
+                "util_percent": util,
+                "vram_used_mb": used,
+                "vram_total_mb": total,
+                "temp_c": temp,
+                "power_w": power,
+            }
+        )
+    return gpus
+
+
+def live_vitals(ps: Any = None, run: Callable[..., str] = _run) -> dict[str, object]:
+    """CPU, memory, battery and GPU load right now, for the deck's vitals card.
+
+    Blocks for a fifth of a second to measure CPU load over a real interval
+    (psutil's first instant reading is always 0), so callers run it off the
+    event loop. CPU temperature is left out: psutil has no reading for it on
+    Windows, and an estimate would be invented.
+    """
+    if ps is None:
+        import psutil as ps  # noqa: PLC0415 - lazy (AP-26)
+    memory = ps.virtual_memory()
+    battery = ps.sensors_battery() if hasattr(ps, "sensors_battery") else None
+    return {
+        "cpu_percent": round(float(ps.cpu_percent(interval=0.2)), 1),
+        "cpu_logical": ps.cpu_count(logical=True),
+        "ram_used_gb": round((memory.total - memory.available) / 2**30, 1),
+        "ram_total_gb": round(memory.total / 2**30, 1),
+        "battery": (
+            {"percent": round(float(battery.percent)), "plugged": bool(battery.power_plugged)}
+            if battery is not None
+            else None
+        ),
+        "gpus": gpu_vitals(run),
+    }
 
 
 def main(as_json: bool = False) -> int:

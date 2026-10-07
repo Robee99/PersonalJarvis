@@ -99,7 +99,8 @@ def test_pyinstaller_spec_collects_bundled_vad_asset(monkeypatch) -> None:
     """The frozen desktop build must preserve the package-relative VAD path."""
     hooks = ModuleType("PyInstaller.utils.hooks")
     hooks.collect_data_files = lambda _package: []
-    hooks.collect_submodules = lambda _package: []
+    hooks.collect_submodules = lambda _package, **_kwargs: []
+    hooks.collect_dynamic_libs = lambda _package: []
     hooks.copy_metadata = lambda _distribution: []
     utils = ModuleType("PyInstaller.utils")
     utils.hooks = hooks

@@ -7,6 +7,7 @@ import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { usePromptMode } from "@/hooks/usePromptMode";
 import { fill, useT } from "@/i18n";
+import { requestApiKeysTab } from "@/lib/apiKeysTab";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,8 +21,9 @@ import { cn } from "@/lib/utils";
  * runs, a lit "Stop" with three breathing dots while one does. The way back
  * to the keyboard takes the "+" slot on the left, and only where the page
  * that hosts the stage has a typed half to go back to. Under the card, the
- * voice engine in small print, the way the chat names its model; a click
- * opens the provider settings.
+ * voice engine in small print — its mode (Realtime or Pipeline), provider and
+ * model, the way the chat names its model; a click opens the settings tab
+ * that changes that engine.
  *
  * Start and Stop go through the one start/stop path every voice surface
  * shares (useVoiceCall), so there is still exactly one way a call begins.
@@ -138,11 +140,27 @@ export function VoiceComposer({ hint, onExit }: { hint: string; onExit?: () => v
       <div className="flex justify-end px-3">
         <button
           type="button"
-          onClick={() => setActiveSection("apikeys")}
-          title={t("home.model_hint")}
+          onClick={() => {
+            // Land on the tab that changes THIS engine: the realtime provider
+            // in Realtime, the brain in Pipeline — not the page's first tab.
+            requestApiKeysTab(engine.tier === "realtime" ? "realtime" : "brain");
+            setActiveSection("apikeys");
+          }}
+          title={fill(
+            t(
+              engine.tier === "realtime"
+                ? "home.voice_engine_title_realtime"
+                : "home.voice_engine_title_pipeline",
+            ),
+            { provider: engine.providerLabel },
+          )}
           data-testid="voice-engine"
-          className="inline-flex max-w-[320px] items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-tier={engine.tier}
+          className="inline-flex max-w-[360px] items-center gap-1.5 rounded-md px-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
+          <span className="shrink-0 rounded-full border border-border px-1.5 text-micro uppercase tracking-wide" data-testid="voice-engine-mode">
+            {t(engine.tier === "realtime" ? "apikeys_view.mode_realtime" : "apikeys_view.mode_pipeline")}
+          </span>
           <span className="truncate font-medium text-foreground/80">{engine.providerLabel}</span>
           {engine.model && <span className="truncate">{engine.model}</span>}
         </button>

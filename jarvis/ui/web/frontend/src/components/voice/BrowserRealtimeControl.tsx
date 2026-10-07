@@ -8,6 +8,7 @@ import { useCapabilities } from "@/hooks/useCapabilities";
 import { useVoiceMode } from "@/hooks/useVoiceMode";
 import { useT } from "@/i18n";
 import { hasEmbeddedDesktopBridge, isEmbeddedMacWindow } from "@/lib/embeddedDesktop";
+import { MicrophoneSelectionError } from "@/lib/browserMicrophone";
 import {
   browserRealtimeSupportIssue,
   RealtimeAudioClient,
@@ -333,7 +334,9 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
       const hostDenied = micDenied && isEmbeddedMacWindow();
       if (hostDenied && options?.fromGesture) void reportHostMicrophoneDenied();
       setError(
-        cause instanceof RealtimeAudioSupportError
+        cause instanceof MicrophoneSelectionError
+          ? cause.message
+          : cause instanceof RealtimeAudioSupportError
           ? supportMessage(cause.issue)
           : hostDenied
             ? t("sidebar.realtime_microphone_denied_desktop")

@@ -689,3 +689,28 @@ def test_allow_always_on_a_kit_that_handles_it_does_not_flip_the_mode(
         assert remembered == [(session.session_id, "RunCommand", {"command": "echo x"})]
 
     asyncio.run(scenario())
+
+
+
+def test_the_jarvis_hermes_seat_needs_no_agents_tab_key(tmp_path: Path, monkeypatch):
+    """The front page's Hermes seat is the Hermes bridge, usable without a key."""
+    import jarvis.ui.web.agent_chat_routes as routes
+
+    async def _fake_live_models():
+        return {}
+
+    monkeypatch.setattr(routes, "_live_cli_models", _fake_live_models)
+    monkeypatch.setattr(routes, "_cli_installed", lambda _runner: True)
+    with TestClient(_app(tmp_path)) as client:
+        jarvis_rows = {
+            p["id"]: p
+            for p in client.get("/api/agent-chat/catalog?surface=jarvis").json()["providers"]
+        }
+        agent_rows = {
+            p["id"]: p
+            for p in client.get("/api/agent-chat/catalog?surface=agent").json()["providers"]
+        }
+    assert jarvis_rows["hermes"]["runner"] == "brain"
+    assert jarvis_rows["hermes"]["keyless"] is True
+    assert agent_rows["hermes"]["runner"] == "hermes-cli"
+    assert agent_rows["hermes"]["keyless"] is False

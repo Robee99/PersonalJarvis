@@ -63,6 +63,8 @@ _SHOW_ACK_TIMEOUT_S = 1.2
 #: How long the sidecar stays up for one appshot shutter effect (flash, rest
 #: in the corner, slide out — see ``renderer._SNAP_TOTAL_MS``) plus slack.
 _SNAP_LIFETIME_S = 3.4
+#: Same for one pointing arrow (fly in, hold, fade — ``renderer._POINT_TOTAL_MS``).
+_POINT_LIFETIME_S = 5.6
 
 
 def screen_indicator_capability() -> tuple[bool, str]:
@@ -303,6 +305,36 @@ class CUIndicatorController:
             )
             self._schedule_idle_quit()
             return shown
+
+    # ---------------------------------------------------------- point at
+    async def point(self, *, monitor: list[int], rect: list[float], label: str) -> tuple[bool, str]:
+        """Draw the glowing arrow at one element without clicking it.
+
+        ``monitor`` is the capture-coordinate rect of the screen holding the
+        element and ``rect`` the element as fractions of it, the same
+        convention as :meth:`snap`. Returns ``(shown, reason)``; ``reason``
+        says why nothing was drawn.
+        """
+        ok, reason = self._border_capability()
+        if not ok:
+            return False, reason
+        async with self._lock:
+            self._snap_until = max(self._snap_until, time.monotonic() + _POINT_LIFETIME_S)
+            await asyncio.to_thread(self._spawn_sidecar)
+            if self._proc is None:
+                return False, "the overlay process could not start"
+            # A later capture must never contain the arrow, on any OS.
+            capture_guard.register_hook(self._suppress_for_grab)
+            shown = await asyncio.to_thread(
+                self._send_and_wait,
+                protocol.CMD_POINT,
+                _SHOW_ACK_TIMEOUT_S,
+                monitor=list(monitor),
+                rect=list(rect),
+                label=label,
+            )
+            self._schedule_idle_quit()
+            return shown, "" if shown else "the overlay did not confirm the arrow"
 
     def _schedule_idle_quit(self) -> None:
         task = self._idle_quit_task

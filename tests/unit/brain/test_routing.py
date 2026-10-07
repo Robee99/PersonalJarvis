@@ -2004,6 +2004,16 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # worker set. See ADR-0011 amendment "Every app action".
             "find-app-action",
             "run-app-action",
+            # Camera still (2026-10-02): one confirmed webcam photo for
+            # vision (risk ask) - never a spawn, never in a worker set. See
+            # ADR-0011 amendment "Camera still".
+            "camera-snapshot",
+            # Point at (2026-10-02): an arrow on one UI element, never a
+            # click (risk safe). See ADR-0011 amendment "Point at".
+            "point-at",
+            # Laptop power (2026-10-02): power slider, ASUS operating mode,
+            # charge limit (risk monitor). See ADR-0011 amendment "Laptop power".
+            "laptop-power",
         }
     )
     assert ROUTER_TOOLS == expected, (

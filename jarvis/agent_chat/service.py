@@ -49,7 +49,12 @@ from jarvis.agent_chat.questions import (
     answer_from,
     recommended_answer,
 )
-from jarvis.agent_chat.runner_api import TurnHandle, run_api_turn, supports_api_runner
+from jarvis.agent_chat.runner_api import (
+    TurnHandle,
+    run_api_turn,
+    supports_agent_brain,
+    supports_api_runner,
+)
 from jarvis.agent_chat.runner_brain import brain_history_from_events, run_brain_turn
 from jarvis.agent_chat.runner_cli import run_cli_turn, supports_cli_runner
 from jarvis.agent_chat.store import (
@@ -93,6 +98,11 @@ def resolve_runner(provider: str, *, surface: str = "agent") -> str:
     (``SurfaceKit.cli_seats``, maintainer 2026-08-26), so a vendor CLI never
     answers there — not even the dual Claude row, which runs on the Anthropic
     API behind its key like every other seat.
+
+    With Hermes Agent as Jarvis' brain (ADR-0042), the front page's Hermes
+    seat is that brain: a typed turn goes through ``BrainManager.generate``
+    into the same Hermes session the voice uses, never a one-shot
+    ``hermes -z`` with its own session and persona.
     """
     kit = kit_for(surface)
     api_runner = "brain" if kit.brain_runner else "api"
@@ -104,6 +114,10 @@ def resolve_runner(provider: str, *, surface: str = "agent") -> str:
         # does. ``rows_for`` keeps the picker to the same set, so "unknown"
         # is only reachable through a stale session or a hand-made request.
         return api_runner if supports_api_runner(row.id) else "unknown"
+    if kit.brain_runner and supports_agent_brain(row.id):
+        # An agent's API bridge keeps typed and spoken turns on the same
+        # harness, even when this surface also offers ordinary coding CLIs.
+        return "brain"
     if row.id == "claude-api":
         return "claude-cli" if _claude_cli_installed() else api_runner
     if row.runner == "api":
@@ -170,7 +184,14 @@ class _OpenQuestion:
     """
 
     __slots__ = (
-        "answers", "closing", "delivered", "result", "session_id", "specs", "turn_id", "wake",
+        "answers",
+        "closing",
+        "delivered",
+        "result",
+        "session_id",
+        "specs",
+        "turn_id",
+        "wake",
     )
 
     def __init__(
@@ -347,6 +368,12 @@ class AgentChatService:
         surface: str = DEFAULT_SURFACE,
         account_id: str = "",
     ) -> AgentChatSession:
+        if surface == "jarvis":
+            from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+            if provider != HERMES_SEAT and hermes_is_live_brain():
+                # A pick saved before Hermes became the brain opens on Hermes.
+                provider, model, account_id = HERMES_SEAT, "", ""
         row = provider_row(provider)
         if row is None and not supports_api_runner(provider):
             raise ValueError(f"Unknown agent-chat provider: {provider!r}")
@@ -607,6 +634,14 @@ class AgentChatService:
             session = await self.bind_society_session(session_id, routine_run=routine_run)
         selected_runner = None
         if session.surface == "jarvis":
+            from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+            if session.provider != HERMES_SEAT and hermes_is_live_brain():
+                # A chat opened on another seat before Hermes became the brain
+                # continues on Hermes: one assistant, one conversation.
+                session = replace(session, provider=HERMES_SEAT, model="", vendor_session=None)
+                self.store.reseat_session(session_id, provider=HERMES_SEAT, model="")
+        if session.surface == "jarvis":
             from jarvis.core.task_agent import subscription_seat_off_loop
 
             # The saved chat pick is authoritative. Global worker preferences
@@ -798,7 +833,9 @@ class AgentChatService:
 
             completion = (
                 TurnCompletion(
-                    self, handle, origin.user_text,
+                    self,
+                    handle,
+                    origin.user_text,
                     allow_correction=origin.direct_user and not read_only,
                     context=prompt,
                 )
@@ -807,7 +844,8 @@ class AgentChatService:
             )
             run_handle = (
                 replace(handle, emit=completion.emit, request_approval=completion.ask)
-                if completion is not None else handle
+                if completion is not None
+                else handle
             )
 
             async def run_attempt(run_prompt: str) -> None:
@@ -899,7 +937,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": None,
                         },
@@ -919,7 +958,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": f"{type(exc).__name__}: {exc}",
                         },
@@ -1325,7 +1365,8 @@ class AgentChatService:
     def undelivered_questions(self, session_id: str, turn_id: str) -> list[str]:
         """Cards whose answers have not reached the runner, including just-answered ones."""
         return [
-            qid for qid, q in self._questions.items()
+            qid
+            for qid, q in self._questions.items()
             if q.session_id == session_id and q.turn_id == turn_id and not q.delivered
         ]
 

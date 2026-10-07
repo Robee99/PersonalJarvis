@@ -13,6 +13,8 @@ export interface VoiceReadiness {
   connected: boolean;
   /** Connected but the voice stack is not ready yet (drives "Voice starting…"). */
   voiceWarming: boolean;
+  /** Connected, and the voice stack gave up: typing works, speech does not. */
+  voiceUnavailable: boolean;
   /** Socket not up yet but the fast-boot backend is warming (drives "Starting…"). */
   bootWarming: boolean;
 }
@@ -33,8 +35,10 @@ export function useVoiceReadiness(): VoiceReadiness {
   const connected = useEventStore((s) => s.connected);
   const wsWarming = useEventStore((s) => s.wsWarming);
   const voiceReady = useEventStore((s) => s.voiceReady);
+  const unavailable = useEventStore((s) => s.voiceUnavailable);
 
-  const voiceWarming = connected && !voiceReady;
+  const voiceUnavailable = connected && !voiceReady && unavailable;
+  const voiceWarming = connected && !voiceReady && !unavailable;
   const bootWarming = !connected && wsWarming;
   const warming = voiceWarming || bootWarming;
 
@@ -43,6 +47,7 @@ export function useVoiceReadiness(): VoiceReadiness {
     ready: connected && voiceReady,
     connected,
     voiceWarming,
+    voiceUnavailable,
     bootWarming,
   };
 }

@@ -113,11 +113,11 @@ Pause, resume, delete or run-now one agent routine on user request.
 
 ## `brain-switch` — Switch brain provider
 
-Switch the ACTIVE main brain (LLM) provider, e.g. from openai to claude-api. Reversible; validated against the provider catalog and stored credentials.
+Switch the ACTIVE main brain (LLM) provider, e.g. from openai to claude-api. Validated against the provider catalog and stored credentials. Only when the user explicitly asks to change it; to report the active provider use providers-list.
 
 - **Endpoint:** `POST /api/brain/switch`
-- **Arguments:** `provider` (one of: claude-api, gemini, grok, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: claude-api, gemini, grok, hermes, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the brain provider to claude"
 
@@ -127,7 +127,7 @@ Switch the active text-to-speech provider (live, no restart).
 
 - **Endpoint:** `POST /api/tts/switch`
 - **Arguments:** `provider` (one of: cartesia, elevenlabs, gemini-flash-tts, grok-voice, inworld, openrouter-tts, piper-local, vertex-tts; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the voice to elevenlabs"
 
@@ -137,17 +137,17 @@ Switch the speech-to-text provider. Takes effect on the next voice-pipeline star
 
 - **Endpoint:** `POST /api/stt/switch`
 - **Arguments:** `provider` (one of: faster-whisper, gemini-api, groq-api, nemotron-local, openai-api, openrouter-stt, vertex-stt; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch speech recognition to deepgram"
 
 ## `realtime-switch` — Switch realtime voice provider
 
-Switch which realtime voice engine (speech-to-speech) is active, including subscription- and API-backed providers. Experimental transports require explicit acknowledgement.
+Switch which realtime voice engine (speech-to-speech) is active, including subscription- and API-backed providers. Experimental transports require explicit acknowledgement. Only when the user explicitly asks to change it.
 
 - **Endpoint:** `POST /api/realtime/switch`
 - **Arguments:** `provider` (one of: gemini-live, local-realtime, local-voice, openai-live, openai-live-subscription, vertex-live; required); `persist` (boolean; optional); `accept_experimental` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the realtime model to gemini"
 
@@ -166,8 +166,8 @@ Select the Ollama brain and speech model for the managed local realtime server, 
 Switch the dedicated Computer-Use planner provider (screen control), decoupled from the main brain.
 
 - **Endpoint:** `POST /api/computer-use/switch`
-- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, hermes, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "switch the computer use provider to gemini"
 
@@ -176,8 +176,8 @@ Switch the dedicated Computer-Use planner provider (screen control), decoupled f
 Switch the provider used for new missions (e.g. codex to openai). The next mission uses the new provider.
 
 - **Endpoint:** `POST /api/jarvis-agent/switch`
-- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, local-openai, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Arguments:** `provider` (one of: antigravity, claude-api, claude-cli, codex, gemini, grok, grok-build, hermes, local-openai, nous, nvidia, ollama, openai, openrouter, vertex; required); `persist` (boolean; optional)
+- **Requires confirmation:** yes
 - **Desktop UI section:** `agents`
 - **Voice example (EN):** "switch the agent provider to openai"
 
@@ -196,7 +196,7 @@ List all configured providers and which ones are active.
 Test connectivity and authentication for one provider.
 
 - **Endpoint:** `POST /api/providers/{provider_id}/test`
-- **Arguments:** `provider_id` (one of: antigravity, cartesia, claude-api, claude-cli, codex, elevenlabs, faster-whisper, gemini, gemini-api, gemini-flash-tts, gemini-live, gemini-polish, grok, grok-build, grok-voice, groq-api, groq-polish, inworld, local-openai, local-realtime, local-voice, nemotron-local, nvidia, ollama, ollama-polish, openai, openai-api, openai-live, openai-live-subscription, openai-polish, openrouter, openrouter-polish, openrouter-stt, openrouter-tts, piper-local, vertex, vertex-live, vertex-stt, vertex-tts; required)
+- **Arguments:** `provider_id` (one of: antigravity, cartesia, claude-api, claude-cli, codex, elevenlabs, faster-whisper, gemini, gemini-api, gemini-flash-tts, gemini-live, gemini-polish, grok, grok-build, grok-voice, groq-api, groq-polish, hermes, inworld, local-openai, local-realtime, local-voice, nemotron-local, nous, nvidia, ollama, ollama-polish, openai, openai-api, openai-live, openai-live-subscription, openai-polish, openrouter, openrouter-polish, openrouter-stt, openrouter-tts, piper-local, vertex, vertex-live, vertex-stt, vertex-tts; required)
 - **Requires confirmation:** no
 - **Desktop UI section:** `apikeys`
 - **Voice example (EN):** "test the openai provider"
@@ -217,7 +217,7 @@ Choose the voice engine: the classic STT-brain-TTS pipeline or a realtime speech
 
 - **Endpoint:** `PUT /api/settings/voice-mode`
 - **Arguments:** `mode` (one of: pipeline, realtime; required); `persist` (boolean; optional)
-- **Requires confirmation:** no
+- **Requires confirmation:** yes
 - **Desktop UI section:** `settings`
 - **Voice example (EN):** "switch to realtime mode"
 
@@ -476,7 +476,7 @@ Give ONE task to coding terminals — existing ones, brand-new ones, or both —
 Open one or more additional coding terminals in the open workspace, WITHOUT giving them work. Use this only when the user asks for bare panes ('spawn five new Claude Code terminals', 'open two more Codex terminals') — that is a request for workspace panes, never for a background worker. When the new panes are also meant to DO something, use 'agentic-ide-fanout' instead, which opens and briefs them in one step. Pass count, and agent only when the user named one — the accepted ids are listed on the parameter itself, and it is the only list that is right for this install. Omitted, the new panes run whatever the last pane runs. Their call-signs are their positions in the grid (T1, T2, …), assigned by the workspace — the reply's names are the only way to address them, and calling this again never produces a name you picked. CHECK THE REPLY: 'capped' true means the workspace maximum cut the request short — say how many actually opened and name them, never report the full number as done.
 
 - **Endpoint:** `POST /api/agentic-ide/terminals/batch`
-- **Arguments:** `count` (integer; required); `agent` (one of: antigravity, claude, codex, cursor, deepseek-harness, glm, grok-build, kimi, opencode; optional)
+- **Arguments:** `count` (integer; required); `agent` (one of: antigravity, claude, codex, cursor, deepseek-harness, glm, grok-build, hermes, kimi, opencode; optional)
 - **Requires confirmation:** no
 - **Desktop UI section:** `agentic-ide`
 - **Voice example (EN):** "spawn five new claude code terminals"
@@ -506,7 +506,7 @@ Rearrange the open workspace: put one terminal at another one's place. Nothing i
 Stop and remove every terminal of one coding CLI in the front workspace. Use only when the user explicitly asks to close all Claude Code or all Codex terminals; this is destructive and requires confirmation.
 
 - **Endpoint:** `DELETE /api/agentic-ide/terminals/agent/{agent}`
-- **Arguments:** `agent` (one of: antigravity, claude, codex, cursor, deepseek-harness, glm, grok-build, kimi, opencode; required)
+- **Arguments:** `agent` (one of: antigravity, claude, codex, cursor, deepseek-harness, glm, grok-build, hermes, kimi, opencode; required)
 - **Requires confirmation:** yes
 - **Desktop UI section:** `agentic-ide`
 - **Voice example (EN):** "close all codex terminals"

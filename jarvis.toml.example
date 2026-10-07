@@ -153,6 +153,40 @@ base_url = "https://openrouter.ai/api/v1"
 model = "gemma-4-12b-it-qat-q4_0"
 base_url = "http://127.0.0.1:8080"
 
+# Optional routing policy (off unless enabled). Names the provider/model for
+# simple work (fast) and for multi-step reasoning or building (deep); the other
+# tier is the one bounded fallback. Escalation hands a turn to a Paperclip agent
+# (for example a Claude agent) only when a trigger phrase is spoken; nothing
+# escalates on its own. Deny lists keep a provider family off every chain,
+# including per-turn override chains. Each tier must use a provider whose
+# endpoint is configured above (one base_url per provider).
+# Images (screenshots, camera frames, dropped files) only go to a tier marked
+# local = true. A loopback gateway that forwards to a cloud model is NOT local.
+# allow_cloud_vision = true is explicit consent to send images to the other
+# tiers; without a local tier such a turn is answered without any model.
+# [brain.route_policy]
+# enabled = true
+# allow_cloud_vision = false
+# deny_providers = ["claude-api", "claude-cli"]
+# deny_model_prefixes = ["anthropic/"]
+#
+# [brain.route_policy.fast]
+# provider = "local-openai"                # e.g. a local gateway to a hosted free model
+# model = "stepfun/step-3.7-flash:free"
+#
+# [brain.route_policy.deep]
+# provider = "ollama"                      # e.g. a local model server
+# model = "qwen3.6:35b-a3b"
+# local = true                             # runs on this machine
+#
+# [brain.route_policy.escalation]
+# enabled = true
+# via = "paperclip"                        # uses the saved Paperclip connection
+# agent = "claude"                         # Paperclip agent name or urlKey
+# trigger_phrases = ["ask claude"]
+# deadline_s = 180
+# max_per_session = 5
+
 # ── Safety: anti-confirmation-fatigue whitelist + hard blacklist ──
 [safety]
 default_tier = "safe"

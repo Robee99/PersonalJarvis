@@ -215,6 +215,15 @@ _DSH: Final[tuple[PermissionMode, ...]] = (
     ),
 )
 
+_HERMES: Final[tuple[PermissionMode, ...]] = (
+    PermissionMode(
+        "auto",
+        "Hermes policy",
+        "One-shot mode never asks; Hermes approves its own tool calls, so "
+        "only use it in a folder you would let it change.",
+    ),
+)
+
 _CURSOR: Final[tuple[PermissionMode, ...]] = (
     PermissionMode(
         "ask",
@@ -318,6 +327,7 @@ _LADDERS: Final[dict[str, tuple[tuple[PermissionMode, ...], str]]] = {
     # Code's own words.
     "glm-cli": (_CLAUDE, "acceptEdits"),
     "dsh-cli": (_DSH, "auto"),
+    "hermes-cli": (_HERMES, "auto"),
     "cursor-cli": (_CURSOR, "auto"),
     "api": (_API, "ask"),
     JARVIS_LADDER: (_JARVIS, "ask"),

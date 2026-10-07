@@ -25,6 +25,7 @@ from jarvis.ui.relauncher import (
     build_launch_command,
     frozen_self_command,
     relauncher_command,
+    self_launch_command,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -195,3 +196,28 @@ def test_frozen_build_without_a_config_falls_back_to_home() -> None:
     assert relauncher.restart_workdir("/run/appimage/.mount_abc", frozen=True, environ={}) == str(
         Path.home()
     )
+
+
+# --------------------------------------------------------------------------- #
+# self_launch_command — the boot-time hand-off to an unelevated copy
+# --------------------------------------------------------------------------- #
+def test_boot_handoff_keeps_python_m_and_arguments_on_a_source_install() -> None:
+    argv = self_launch_command(["--port", "8000"], executable="py.exe", frozen=False)
+    assert argv == ["py.exe", "-m", "jarvis.ui.web.launcher", "--port", "8000"]
+
+
+def test_boot_handoff_starts_the_bare_exe_when_frozen() -> None:
+    """``PersonalJarvis.exe -m ...`` exits on a usage error with no window."""
+    argv = self_launch_command(
+        ["--port", "8000"], executable="C:/Jarvis/PersonalJarvis.exe",
+        frozen=True, platform_name="win32", environ={},
+    )
+    assert argv == ["C:/Jarvis/PersonalJarvis.exe"]
+
+
+def test_launcher_hands_over_through_self_launch_command() -> None:
+    from jarvis.ui.web import launcher
+
+    source = inspect.getsource(launcher)
+    assert "self_launch_command(" in source
+    assert '[sys.executable, "-m", "jarvis.ui.web.launcher"' not in source

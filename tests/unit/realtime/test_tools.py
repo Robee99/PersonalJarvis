@@ -258,6 +258,61 @@ async def test_clear_yes_resumes_the_original_pending_action_once():
 
 
 @pytest.mark.asyncio
+async def test_repeat_call_waits_for_a_yes_transcript_that_arrives_late():
+    """Gemini Live can call again before the "Yes. Confirm." transcript lands."""
+    import asyncio
+
+    bridge, _tool, executor = _bridge(confirmation_required=True)
+    await bridge.handle_user_transcript("Can you open the camera for me?")
+    await bridge.execute(wire_name="open_app", arguments={"app_name": "Camera"})
+
+    async def late_yes() -> None:
+        await asyncio.sleep(0.05)
+        await bridge.handle_user_transcript("Yes. Confirm.")
+
+    late = asyncio.create_task(late_yes())
+    _name, result = await bridge.execute(
+        wire_name="open_app", arguments={"app_name": "Camera"}
+    )
+    await late
+
+    assert result == {"success": True, "output": "confirmed", "error": None}
+    assert len(executor.confirmed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_casual_yeah_confirms_the_pending_action():
+    bridge, _tool, executor = _bridge(confirmation_required=True)
+    await bridge.handle_user_transcript("Open Calculator")
+    await bridge.execute(wire_name="open_app", arguments={"app_name": "Calculator"})
+
+    await bridge.handle_user_transcript("Yeah, that's all right.")
+    _name, result = await bridge.execute(
+        wire_name="open_app", arguments={"app_name": "Calculator"}
+    )
+
+    assert result["success"] is True
+    assert len(executor.confirmed_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_repeat_call_without_an_answer_asks_again_after_the_wait(monkeypatch):
+    from jarvis.realtime import tools as realtime_tools
+
+    monkeypatch.setattr(realtime_tools, "PENDING_ANSWER_WAIT_S", 0.05)
+    bridge, _tool, executor = _bridge(confirmation_required=True)
+    await bridge.handle_user_transcript("Open Calculator")
+    await bridge.execute(wire_name="open_app", arguments={"app_name": "Calculator"})
+
+    _name, result = await bridge.execute(
+        wire_name="open_app", arguments={"app_name": "Calculator"}
+    )
+
+    assert result["confirmation_required"] is True
+    assert executor.confirmed_calls == []
+
+
+@pytest.mark.asyncio
 async def test_clear_no_cancels_and_blocks_same_turn_retry():
     bridge, _tool, executor = _bridge(confirmation_required=True)
     await bridge.handle_user_transcript("Open Calculator")

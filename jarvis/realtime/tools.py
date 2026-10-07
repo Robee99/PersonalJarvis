@@ -484,11 +484,20 @@ def _apply_declaration_budget(
     return kept, dropped
 
 
+#: How long a repeat call for an unconfirmed action waits for the user's
+#: answer to reach the bridge. Gemini Live can send the function call for
+#: "Yes. Confirm." before that answer's final transcript (live 2026-10-05:
+#: the camera question was asked again right after the user said yes).
+PENDING_ANSWER_WAIT_S = 2.0
+
+
 @dataclass(slots=True)
 class _PendingConfirmation:
     trace_id: UUID
     tool_name: str
     confirmed: bool = False
+    #: ``RealtimeToolBridge._user_turns`` when the question was asked.
+    asked_at_turn: int = 0
 
 
 class RealtimeToolBridge:
@@ -534,6 +543,8 @@ class RealtimeToolBridge:
         self._confirmed_arguments: dict[str, Any] = {}
         self._vetoed_tool = ""
         self._last_user_text = ""
+        self._user_turns = 0
+        self._user_turn_event = asyncio.Event()
 
     @classmethod
     def from_supervisor_gateway(
@@ -786,8 +797,10 @@ class RealtimeToolBridge:
             self._confirmed_receipt = None
         self._last_user_text = text
         self._vetoed_tool = ""
+        self._user_turns += 1
         pending = self._pending
         if pending is None:
+            self._user_turn_event.set()
             return
         verdict = classify_response(text, language=self._language)
         if verdict == "confirm":
@@ -796,6 +809,21 @@ class RealtimeToolBridge:
             await self._cancel_pending(pending.trace_id)
             self._vetoed_tool = pending.tool_name
             self._pending = None
+        self._user_turn_event.set()
+
+    async def _await_user_answer(self, seen_turn: int) -> None:
+        """Wait briefly for a user transcript newer than ``seen_turn``."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + PENDING_ANSWER_WAIT_S
+        while self._user_turns == seen_turn:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            self._user_turn_event.clear()
+            try:
+                await asyncio.wait_for(self._user_turn_event.wait(), remaining)
+            except TimeoutError:  # no answer yet: the caller asks the question again
+                return
 
     async def execute(
         self, *, wire_name: str, arguments: dict[str, Any], trace_id: UUID | None = None,
@@ -871,6 +899,14 @@ class RealtimeToolBridge:
 
         pending = self._pending
         if pending is not None and pending.tool_name == name:
+            if not pending.confirmed and self._user_turns == pending.asked_at_turn:
+                await self._await_user_answer(pending.asked_at_turn)
+                if self._pending is not pending:
+                    return name, {
+                        "success": False,
+                        "blocked": True,
+                        "error": "The user declined this action. Do not ask again in this turn.",
+                    }
             if not pending.confirmed:
                 return name, {
                     "success": False,
@@ -897,7 +933,9 @@ class RealtimeToolBridge:
             getattr(result, "error", None) == VOICE_CONFIRM_SENTINEL
             and isinstance(getattr(result, "output", None), dict)
         ):
-            self._pending = _PendingConfirmation(trace_id=trace_id, tool_name=name)
+            self._pending = _PendingConfirmation(
+                trace_id=trace_id, tool_name=name, asked_at_turn=self._user_turns
+            )
             impact = result.output.get("impact")
             if not isinstance(impact, dict):
                 impact = {}

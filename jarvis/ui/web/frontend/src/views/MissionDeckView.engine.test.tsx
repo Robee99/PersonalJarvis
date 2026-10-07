@@ -21,6 +21,7 @@ vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
   LiveCounter: () => <div>counter</div>,
+  VitalsCard: () => <section>vitals</section>,
 }));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {

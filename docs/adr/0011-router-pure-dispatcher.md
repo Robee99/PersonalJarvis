@@ -1428,3 +1428,127 @@ Mission workers lose the `awareness-recall` grant (ADR-0030).
 - `tests/unit/brain/test_routing.py` (exact router set)
 - `tests/unit/brain/test_evidence_gate.py`, `tests/unit/brain/test_evidence_gate_wiring.py` (honest refusal for the `activity` domain)
 - `tests/missions/test_worker_capability_parity.py` (the worker grant)
+
+## Amendment 2026-10-02 — Camera still
+
+`camera-snapshot` joins `ROUTER_TOOLS`. It registers the `camera` tool, which
+takes one still from the webcam and returns it as an image artifact in the same
+shape as `screenshot`. Before this, a voice turn like "look at what I'm holding"
+had no route at all. The router either refused or spawned a worker that could
+not see either.
+
+The capture backend is chosen per platform when the tool runs:
+
+- Windows uses WinRT `MediaCapture` in video-only mode, from the MIT PyWinRT
+  family that the media session already uses. Its three namespace packages are
+  not in `[desktop]` yet. Until a `uv lock` adds them, the tool names them in
+  its error.
+- Linux uses OpenCV only when the user installed it. OpenCV is not a dependency
+  because its wheels bundle FFmpeg under the LGPL.
+- macOS refuses honestly. The bundle still ships without
+  `NSCameraUsageDescription`.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `ask`, because a camera frame shows the person. `ToolExecutor`
+  confirms every call unless the user whitelists the tool (AP-3).
+- Nothing opens the camera at boot (AP-26). The tool opens the device inside
+  `execute` and releases it on every path.
+- A black frame (covered lens or closed privacy shutter) is an error, never a
+  success.
+- A blind brain is never offered the tool. `_hide_screenshot_for_blind_brain`
+  drops `camera` together with `screenshot`. This gate is on capability, not
+  on the provider (AP-21).
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_camera_snapshot.py` covers both backends,
+  device release, black frames, the Windows privacy block and the macOS
+  refusal.
+- `tests/unit/brain/test_screen_narration_guard.py` checks that blind brains
+  never see the tool.
+
+## Amendment 2026-10-02 — Point at
+
+`point-at` joins `ROUTER_TOOLS`. It registers the `point_at` tool, which answers
+"where do I click to ...?" with a glowing arrow on the named element of the
+foreground window. Until now the router could only describe the place in words,
+or hand the task to `computer-use`, which also clicks.
+
+The tool is the push direction of the AI Pointer. `inspect-pointer` reads the
+element under the mouse; `point_at` shows the user an element. It reads the UI
+tree through `make_ui_tree_source()` and matches with the rules
+`click_element` uses (`matching_nodes`), so the arrow lands on exactly the
+element a click would press. An exact label wins over a substring match. The
+arrow is drawn by the Computer-Use indicator sidecar through a new `point`
+protocol command. That window is click-through, excluded from capture on
+Windows and blanked before every grab elsewhere, and it fades out after about
+five seconds.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`. The tool reads the same tree `inspect-pointer` reads and
+  draws a transient overlay. Nothing in any app changes, and nothing is
+  clicked.
+- Nothing starts at boot (AP-26). The sidecar is spawned on the first arrow and
+  quits on its own when no effect or mission holds it.
+- Headless, Wayland or missing-PySide6 hosts get the indicator's own reason
+  back as the tool error.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_point_at.py` covers matching parity with
+  `click_element`, monitor placement, the no-overlay case and the honest
+  errors.
+- `tests/unit/cu/indicator/` covers the protocol command, the controller, the
+  arrow geometry and a real offscreen sidecar round trip.
+
+## Amendment 2026-10-02 — Laptop power
+
+`laptop-power` joins `ROUTER_TOOLS`. It registers the `laptop_power` tool,
+which handles requests like "turbo mode", "silent mode" or "cap the battery at
+80". It controls three settings:
+
+- the Windows 11 power mode slider, through the `powrprof` overlay calls
+- the ASUS operating mode (Armoury Crate's balanced, turbo or silent)
+- the ASUS battery charge limit
+
+Armoury Crate has no public API. `jarvis/platform/laptop_power.py` sends one
+DeviceIoControl to the ASUS System Control Interface driver (`\\.\ATKACPI`) for
+each request. The buffer layout and device IDs are hardware facts. atrofac
+(MIT/Apache-2.0), G-Helper and Linux `asus-wmi` all document them, and no code
+was copied from the GPL sources. Before every write, the tool checks the
+device's presence bit, so a setting the laptop does not report is never
+written.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `monitor`. Every change is audited, and one more sentence
+  undoes it.
+- These settings are deliberately left out: fan curves (overheating), GPU Eco
+  (kills apps holding the dGPU) and the MUX switch (needs a reboot).
+- Charge limits below 60 % are refused before the driver is touched.
+- When Armoury Crate's own service is running, the reply says that it may
+  switch the setting back.
+- Off Windows, and on laptops without the ASUS driver, the tool says what is
+  unavailable instead of failing silently.
+- Nothing is opened at boot (AP-26). Win32 prototypes are bound on private
+  `WinDLL` instances.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_laptop_power.py` checks the exact driver
+  bytes, the slider GUIDs, the presence check, charge-limit bounds and the
+  off-Windows refusals.

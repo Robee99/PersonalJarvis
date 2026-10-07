@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from jarvis.core.events import Event
+from jarvis.core.redact import redact_value
 
 if TYPE_CHECKING:
     from jarvis.core.bus import EventBus
@@ -130,6 +131,10 @@ class FlightRecorder:
             "layer": data.pop("source_layer", ""),
         }
         data.pop("trace_id", None)
+        # The recorder persists every event to disk, including raw tool args
+        # (``ActionProposed.args``) and free text. Mask credential shapes in
+        # every string; structure, keys and bytes are kept as they are.
+        data = redact_value(data)
         # Externalize into blobs any field that arrives as bytes.
         for key, value in list(data.items()):
             if isinstance(value, bytes) and len(value) > self.blob_inline_limit_bytes:

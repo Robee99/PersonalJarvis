@@ -27,6 +27,7 @@ const attachmentState = vi.hoisted(() => ({
 
 vi.mock("@/i18n", () => ({ useT: () => (key: string) => key, fill: (text: string) => text }));
 vi.mock("./AgentModelPicker", () => ({ AgentModelPicker: () => null }));
+vi.mock("./VoiceContinuityNotice", () => ({ VoiceContinuityNotice: () => <div data-testid="voice-continuity" /> }));
 vi.mock("@/components/home/VoiceComposer", () => ({ VoiceComposer: () => <div data-testid="voice-composer" /> }));
 vi.mock("@/components/home/Greeting", () => ({ Greeting: () => <div>Greeting</div> }));
 vi.mock("@/components/agentic/useVoiceCall", () => ({ useVoiceCall: () => ({ connecting: false }) }));

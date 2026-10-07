@@ -639,10 +639,15 @@ class ToolUseLoop:
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
         loop_control: LoopControl | None = None,
+        tool_images: bool = True,
     ) -> None:
         self._brain = brain
         self._tools = tools
         self._executor = executor
+        # False when this turn's model may not receive images (route policy:
+        # a cloud target without cloud-vision consent). A tool screenshot then
+        # stays on the device and the model is told so.
+        self._tool_images = tool_images
         # Caller-supplied keys for every tool's ``ExecutionContext.config``
         # (see BrainDispatcher.tool_context). Per-turn keys set below win.
         self._tool_context = dict(tool_context or {})
@@ -1049,6 +1054,8 @@ class ToolUseLoop:
             final_agg.finish_reason = agg.finish_reason
             for k, v in agg.usage.items():
                 final_agg.usage[k] = final_agg.usage.get(k, 0) + int(v)
+            # Tools an agent brain ran on its own side (BrainDelta.agent_tools).
+            final_agg.executed_tool_names.update(agg.executed_tool_names)
 
             # Budget tracking
             self._budget.record_turn(
@@ -1631,7 +1638,15 @@ class ToolUseLoop:
                     _img_blocks = _images_from_artifacts(
                         getattr(result, "artifacts", ()) or ()
                     )
-                    if _img_blocks:
+                    if _img_blocks and not self._tool_images:
+                        current_messages.append(BrainMessage(
+                            role="user",
+                            content=(
+                                "(The tool captured an image. It stays on this "
+                                "device and is not shown to you; do not describe it.)"
+                            ),
+                        ))
+                    elif _img_blocks:
                         current_messages.append(BrainMessage(
                             role="user",
                             content="(Tool screenshot — describe or use it as needed.)",

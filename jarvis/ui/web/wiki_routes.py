@@ -1061,6 +1061,79 @@ def _visible_markdown_count(vault_root: Path) -> int:
     )
 
 
+class WikiImportRequest(BaseModel):
+    """A folder or file on this machine to bring into the wiki."""
+
+    path: str = Field(min_length=1, max_length=1024)
+
+
+def _import_targets(request: Request) -> tuple[Path, Path]:
+    """The vault root and FTS database an import writes to (503 when unset)."""
+    from jarvis.memory.wiki.db_path import resolve_wiki_db_path
+
+    vault_root = _resolve_vault_root(request)
+    if vault_root is None:
+        raise HTTPException(status_code=503, detail="Jarvis memory is not set up yet.")
+    config = getattr(request.app.state, "config", None)
+    data_dir = getattr(getattr(config, "memory", None), "data_dir", "./data")
+    return vault_root, resolve_wiki_db_path(data_dir)
+
+
+@router.post("/import/pick-folder")
+async def pick_import_folder() -> dict[str, Any]:
+    """Open the system folder dialog for an import (desktop only)."""
+    try:
+        from jarvis.agentic_ide import native_picker
+    except Exception as exc:  # noqa: BLE001 — no picker module on this install
+        raise HTTPException(status_code=501, detail="no folder dialog here") from exc
+    result = await asyncio.to_thread(native_picker.choose_folder)
+    if result.error:
+        raise HTTPException(status_code=501, detail=result.error)
+    return {"path": result.path, "cancelled": result.cancelled}
+
+
+@router.post("/import", openapi_extra={"x-jarvis-risk-tier": "monitor"})
+async def start_wiki_import(request: Request, payload: WikiImportRequest) -> dict[str, Any]:
+    """Import a folder (an Obsidian vault, a notes folder) or one file.
+
+    Runs in the background; poll ``GET /import/{job_id}`` for progress. Pages
+    land under ``imports/`` in the vault and are indexed as they are written.
+    """
+    from jarvis.memory.wiki.importer import IMPORT_JOBS, ImportRefused
+
+    vault_root, db_path = _import_targets(request)
+    try:
+        job = await asyncio.to_thread(
+            IMPORT_JOBS.start, Path(payload.path.strip()), vault_root, db_path=db_path
+        )
+    except ImportRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"job_id": job.job_id, **job.progress.to_dict()}
+
+
+@router.get("/import/{job_id}", openapi_extra={"x-jarvis-readonly": True})
+def get_wiki_import(job_id: str) -> dict[str, Any]:
+    """Progress of one import."""
+    from jarvis.memory.wiki.importer import IMPORT_JOBS
+
+    job = IMPORT_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No such import.")
+    return {"job_id": job.job_id, "running": job.running, **job.progress.to_dict()}
+
+
+@router.post("/import/{job_id}/cancel", openapi_extra={"x-jarvis-dangerous": True})
+def cancel_wiki_import(job_id: str) -> dict[str, Any]:
+    """Stop an import after the file it is on; pages already written stay."""
+    from jarvis.memory.wiki.importer import IMPORT_JOBS
+
+    if not IMPORT_JOBS.cancel(job_id):
+        raise HTTPException(status_code=404, detail="No such import.")
+    return {"job_id": job_id, "cancelling": True}
+
+
 @router.post("/reindex")
 async def reindex_wiki(
     request: Request,

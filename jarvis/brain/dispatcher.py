@@ -49,6 +49,7 @@ class BrainDispatcher:
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
         loop_control: LoopControl | None = None,
+        tool_images: bool = True,
     ) -> None:
         self._brain = brain
         self._tools = tools or {}
@@ -75,6 +76,8 @@ class BrainDispatcher:
         self._reasoning_effort = reasoning_effort
         # Steering / phases / verification for this turn's loop, or None.
         self._loop_control = loop_control
+        # Whether tool screenshots may be shown to this dispatcher's model.
+        self._tool_images = tool_images
 
     @property
     def brain(self) -> Brain:
@@ -163,6 +166,7 @@ class BrainDispatcher:
                 reasoning_effort=self._reasoning_effort,
                 tool_context=self._tool_context,
                 loop_control=self._loop_control,
+                tool_images=self._tool_images,
             )
             return await loop.run(
                 messages,

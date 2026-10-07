@@ -18,6 +18,7 @@ Visual contract (maintainer-approved 2026-07-15):
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 import threading
@@ -48,6 +49,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QApplication, QWidget
 
 from jarvis.cu.indicator import protocol
+from jarvis.cu.indicator.geometry import arrow_geometry
 from jarvis.cu.indicator.win32 import exclude_from_capture, harden_window
 
 # Jarvis gold — matches ui/orb BUBBLE_BORDER_HEX (#FFE500) at the crisp
@@ -360,6 +362,173 @@ class _SnapWindow(QWidget):
         painter.end()
 
 
+# "Point at": a glowing arrow lands on one element and fades on its own.
+_POINT_FLY_MS = 380
+_POINT_HOLD_UNTIL_MS = 4600
+_POINT_OUT_MS = 420
+_POINT_TOTAL_MS = _POINT_HOLD_UNTIL_MS + _POINT_OUT_MS
+_POINT_BOB_PERIOD_MS = 900.0
+_POINT_BOB_PX = 9.0
+_POINT_FLY_PX = 260.0
+_POINT_SHAFT_PX = 9.0
+_POINT_HEAD_PX = 34.0
+_POINT_RING_PAD_PX = 6.0
+
+
+class _PointWindow(QWidget):
+    """One monitor-sized, click-through canvas for one pointing arrow."""
+
+    def __init__(self, screen, rect_frac: list[float], label: str, on_done) -> None:
+        super().__init__(None)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowTransparentForInput
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.Tool
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if sys.platform == "darwin":
+            mac_always_show = getattr(Qt.WidgetAttribute, "WA_MacAlwaysShowToolWindow", None)
+            if mac_always_show is not None:
+                self.setAttribute(mac_always_show)
+        self.setScreen(screen)
+        self.setGeometry(screen.geometry())
+        self._label = label
+        self._on_done = on_done
+        w, h = float(screen.geometry().width()), float(screen.geometry().height())
+        fx, fy, fw, fh = (max(0.0, min(1.0, float(v))) for v in rect_frac)
+        self._target = QRectF(fx * w, fy * h, max(1.0, fw * w), max(1.0, fh * h))
+        self._tip, self._tail, self._dir = arrow_geometry(
+            w,
+            h,
+            (self._target.x(), self._target.y(), self._target.width(), self._target.height()),
+        )
+        self._t = 0.0
+        self._anim = QVariantAnimation(self)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(float(_POINT_TOTAL_MS))
+        self._anim.setDuration(_POINT_TOTAL_MS)
+        self._anim.valueChanged.connect(self._on_tick)
+        self._anim.finished.connect(self._finish)
+
+    def start(self) -> None:
+        self.show()
+        self._anim.start()
+
+    def finish_now(self) -> None:
+        self._anim.stop()
+        self._finish()
+
+    def _on_tick(self, value) -> None:
+        self._t = float(value)
+        self.update()
+
+    def _finish(self) -> None:
+        self.hide()
+        callback, self._on_done = self._on_done, None
+        if callback is not None:
+            callback(self)
+        self.deleteLater()
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        hwnd = int(self.winId())
+        harden_window(hwnd)
+        exclude_from_capture(hwnd)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        del event
+        t = self._t
+        fly = _ease_out_cubic(t / _POINT_FLY_MS)
+        out = _ease_out_cubic((t - _POINT_HOLD_UNTIL_MS) / _POINT_OUT_MS)
+        opacity = fly * (1.0 - out)
+        if opacity <= 0.0:
+            return
+        bob = _POINT_BOB_PX * (0.5 - 0.5 * math.cos(2.0 * math.pi * t / _POINT_BOB_PERIOD_MS))
+        shift = (1.0 - fly) * _POINT_FLY_PX + bob
+        ux, uy = self._dir
+        tip_x, tip_y = self._tip[0] + ux * shift, self._tip[1] + uy * shift
+        tail_x, tail_y = self._tail[0] + ux * shift, self._tail[1] + uy * shift
+        base_x, base_y = tip_x + ux * _POINT_HEAD_PX, tip_y + uy * _POINT_HEAD_PX
+        # Perpendicular for the arrow head's wings.
+        px, py = -uy, ux
+        half = _POINT_HEAD_PX * 0.62
+        head = QPainterPath()
+        head.moveTo(tip_x, tip_y)
+        head.lineTo(base_x + px * half, base_y + py * half)
+        head.lineTo(base_x - px * half, base_y - py * half)
+        head.closeSubpath()
+        shaft = QPainterPath()
+        shaft.moveTo(tail_x, tail_y)
+        shaft.lineTo(base_x, base_y)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(opacity)
+        r, g, b = _EDGE_RGB
+        sr, sg, sb = _SOFT_RGB
+
+        # Ring around the element, breathing with the bob.
+        ring = self._target.adjusted(
+            -_POINT_RING_PAD_PX, -_POINT_RING_PAD_PX, _POINT_RING_PAD_PX, _POINT_RING_PAD_PX
+        )
+        for width, alpha in ((14.0, 40), (8.0, 80), (3.0, 255)):
+            pen = QPen(QColor(sr, sg, sb, alpha) if width > 3.0 else QColor(r, g, b, alpha))
+            pen.setWidthF(width)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(ring, 8.0, 8.0)
+
+        # Glow, then the crisp arrow on top.
+        for width, alpha in ((_POINT_SHAFT_PX + 18.0, 45), (_POINT_SHAFT_PX + 8.0, 90)):
+            pen = QPen(QColor(sr, sg, sb, alpha))
+            pen.setWidthF(width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(QColor(sr, sg, sb, alpha))
+            painter.drawPath(shaft)
+            painter.drawPath(head)
+        pen = QPen(QColor(r, g, b))
+        pen.setWidthF(_POINT_SHAFT_PX)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawPath(shaft)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(r, g, b))
+        painter.drawPath(head)
+
+        if self._label:
+            self._paint_label(painter, tail_x, tail_y, ux, uy)
+        painter.end()
+
+    def _paint_label(self, painter: QPainter, x: float, y: float, ux: float, uy: float) -> None:
+        font = QFont()
+        font.setPointSizeF(12.5)
+        font.setWeight(QFont.Weight.DemiBold)
+        metrics = QFontMetricsF(font)
+        text_w = metrics.horizontalAdvance(self._label)
+        pad_x, pad_y = 14.0, 7.0
+        pill_w = text_w + 2 * pad_x
+        pill_h = metrics.height() + 2 * pad_y
+        # Beyond the tail, kept fully on screen.
+        cx = x + ux * (pill_w / 2.0 + 10.0)
+        cy = y + uy * (pill_h / 2.0 + 10.0)
+        left = max(4.0, min(self.width() - pill_w - 4.0, cx - pill_w / 2.0))
+        top = max(4.0, min(self.height() - pill_h - 4.0, cy - pill_h / 2.0))
+        pill = QRectF(left, top, pill_w, pill_h)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(20, 20, 20, 225))
+        painter.drawRoundedRect(pill, pill_h / 2.0, pill_h / 2.0)
+        painter.setFont(font)
+        painter.setPen(QColor(*_EDGE_RGB))
+        painter.drawText(pill, int(Qt.AlignmentFlag.AlignCenter), self._label)
+
+
 class Renderer(QObject):
     """Owns the per-monitor windows, the animations, and the IPC slots."""
 
@@ -368,6 +537,7 @@ class Renderer(QObject):
         self._app = app
         self._windows: list[_GlowWindow] = []
         self._snaps: list[_SnapWindow] = []
+        self._points: list[_PointWindow] = []
         self._hint = ""
         self._active = False  # "show" was requested and not yet "hide"
         self._blanked = False  # capture guard currently hiding the border
@@ -427,6 +597,8 @@ class Renderer(QObject):
                     self._unblank()
                 elif cmd == protocol.CMD_SNAP:
                     self._snap(payload)
+                elif cmd == protocol.CMD_POINT:
+                    self._point(payload)
                 elif cmd == protocol.CMD_QUIT:
                     _ack(cmd)
                     self._app.quit()
@@ -482,10 +654,29 @@ class Renderer(QObject):
         with suppress(ValueError):
             self._snaps.remove(win)
 
+    def _point(self, payload: dict) -> None:
+        rect = payload.get("rect")
+        if not isinstance(rect, list) or len(rect) != 4:
+            return
+        monitor = payload.get("monitor")
+        screen = _match_screen(monitor if isinstance(monitor, list) else [])
+        if screen is None:
+            return
+        # One arrow at a time: a new question moves the arrow.
+        for old in list(self._points):
+            old.finish_now()
+        win = _PointWindow(screen, rect, str(payload.get("label") or "")[:60], self._point_done)
+        self._points.append(win)
+        win.start()
+
+    def _point_done(self, win) -> None:
+        with suppress(ValueError):
+            self._points.remove(win)
+
     def _blank(self) -> None:
-        # A resting thumbnail must never end up inside the next capture.
-        for snap in list(self._snaps):
-            snap.finish_now()
+        # A resting thumbnail or an arrow must never end up inside the next capture.
+        for effect in [*self._snaps, *self._points]:
+            effect.finish_now()
         if not self._active:
             return
         self._blanked = True

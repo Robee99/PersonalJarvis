@@ -27,6 +27,8 @@ name: Desktop installers
 
 on:
   push:
+    branches:
+      - "jarvis/local-qwen-build"
     tags:
       - "v*.*.*"
   workflow_dispatch: {}
@@ -240,7 +242,9 @@ jobs:
           mount_point="${RUNNER_TEMP}/jarvis-browser-dmg"
           mkdir -p "$mount_point"
           hdiutil attach "dist/installers/PersonalJarvis-macOS-${{ matrix.arch }}.dmg" -readonly -nobrowse -mountpoint "$mount_point"
-          trap 'hdiutil detach "$mount_point"' EXIT
+          # The app's helpers can still hold the image for a moment after the
+          # check exits ("Resource busy"), so retry and then force the detach.
+          trap 'hdiutil detach "$mount_point" || { sleep 5; hdiutil detach -force "$mount_point"; }' EXIT
           python scripts/ci/check_frozen_browser.py --executable "$mount_point/Personal Jarvis.app/Contents/MacOS/PersonalJarvis" --output frozen-browser-proof
 
       - name: Preserve frozen browser evidence

@@ -174,6 +174,9 @@ PROVIDER_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
     # NVIDIA NIM (OpenAI-compatible). Only the build.nvidia.com key (nvapi-),
     # not the legacy NGC key. One key, many NVIDIA-hosted models.
     "nvidia": (("nvidia_api_key", "NVIDIA_API_KEY"),),
+    # Nous Portal (OpenAI-compatible cloud host, portal.nousresearch.com).
+    # One sk-nous- key reaches the Hermes family and the :free routes.
+    "nous": (("nous_api_key", "NOUS_API_KEY"),),
     "gemini": (
         ("gemini_api_key", "GEMINI_API_KEY"),
         ("google_aistudio_api_key", "GOOGLE_AIStudio_API_KEY"),
@@ -266,6 +269,10 @@ JARVIS_AGENT_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
     "nvidia": (
         ("jarvis_agent_nvidia_api_key", "JARVIS_AGENT_NVIDIA_API_KEY"),
         *PROVIDER_SECRET_CANDIDATES["nvidia"],
+    ),
+    "nous": (
+        ("jarvis_agent_nous_api_key", "JARVIS_AGENT_NOUS_API_KEY"),
+        *PROVIDER_SECRET_CANDIDATES["nous"],
     ),
     "vertex": (
         ("jarvis_agent_vertex_api_key", "JARVIS_AGENT_VERTEX_API_KEY"),
@@ -875,7 +882,8 @@ class BrainProviderConfig(BaseModel):
     #             needs no reasoning).
     # ``-1``    → dynamic-auto (provider decides per request).
     # ``> 0``   → fixed token cap for the thinking portion.
-    # Currently only evaluated by ``GeminiBrain``; other providers ignore it.
+    # Evaluated by ``GeminiBrain``; ``NousBrain`` and ``HermesBrain`` read ``0``
+    # as "never think". Other providers ignore it.
     thinking_budget: int | None = None
     # Per-model Ollama options keyed by model tag (``"qwen3.5:9b"``), read by
     # the Ollama brain plugin on every turn. Only meaningful for the Ollama
@@ -1590,6 +1598,64 @@ class EvidenceDomainsConfig(BaseModel):
     )
 
 
+class RouteTargetConfig(BaseModel):
+    """One routing target: a configured provider id and an optional model.
+
+    ``local`` declares that this target runs on this machine (a local model
+    server), so images may go to it. A provider id alone cannot tell: a
+    loopback gateway can forward to a cloud model. Unset means "may leave the
+    device", the safe reading.
+    """
+
+    provider: str = ""
+    model: str | None = None
+    local: bool = False
+
+
+class RouteEscalationConfig(BaseModel):
+    """Bounded escalation to a delegate agent (Paperclip), never a direct call.
+
+    ``agent`` names the Paperclip agent that takes the task (for example the
+    install's Claude agent). ``trigger_phrases`` are the words that count as an
+    explicit request; nothing else escalates, so the delegate is never an
+    automatic fallback. ``deadline_s`` bounds how long a voice turn waits for
+    the delegate before it reports a recoverable timeout.
+    """
+
+    enabled: bool = False
+    via: str = "paperclip"
+    agent: str = ""
+    trigger_phrases: list[str] = Field(default_factory=list)
+    deadline_s: float = Field(default=180.0, ge=5.0, le=3600.0)
+    poll_interval_s: float = Field(default=3.0, ge=0.5, le=60.0)
+    max_per_session: int = Field(default=5, ge=0, le=100)
+    max_context_chars: int = Field(default=4000, ge=200, le=50_000)
+
+
+class BrainRoutePolicyConfig(BaseModel):
+    """``[brain.route_policy]``: configured fast/deep/escalation routing.
+
+    Off by default, so an install without this table keeps the normal chain.
+    When enabled, ``jarvis.brain.route_policy.decide_route`` picks the tier per
+    turn from the intent level and the targets' declared capabilities, and the
+    deny lists keep listed providers or model prefixes off every chain (for
+    example to make sure a delegate is the only way to reach a given family).
+    ``allow_cloud_vision`` is the explicit consent for screenshots, camera
+    frames and dropped images to reach a target not marked ``local``; while it
+    is off such a turn uses local targets only or says it cannot look.
+    ``test_override_tier`` pins a tier only while JARVIS_ROUTE_POLICY_TEST_MODE=1.
+    """
+
+    enabled: bool = False
+    fast: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    deep: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    escalation: RouteEscalationConfig = Field(default_factory=RouteEscalationConfig)
+    deny_providers: list[str] = Field(default_factory=list)
+    deny_model_prefixes: list[str] = Field(default_factory=list)
+    allow_cloud_vision: bool = False
+    test_override_tier: str | None = None
+
+
 class BrainConfig(BaseModel):
     # populate_by_name=True lets callers use the Python field name alongside the
     # validation aliases (needed so both new and old TOML keys populate the fields).
@@ -1645,6 +1711,8 @@ class BrainConfig(BaseModel):
     reply_language: str = "auto"
     # Persona mandate Phase 3: deterministic spawn heuristic for the router.
     routing: BrainRoutingConfig = Field(default_factory=BrainRoutingConfig)
+    # Configured fast/deep/escalation routing (off unless the table enables it).
+    route_policy: BrainRoutePolicyConfig = Field(default_factory=BrainRoutePolicyConfig)
     # Persona mandate Phase 4: plausibility thresholds for tool execution.
     plausibility: BrainPlausibilityConfig = Field(
         default_factory=BrainPlausibilityConfig,
@@ -2144,16 +2212,17 @@ class UIConfig(BaseModel):
     # switches live (a ConfigReloaded / UiLanguageChanged event reaches the
     # frontend over /ws). Distinct from brain.reply_language (what Jarvis SPEAKS).
     language: Literal["en", "de", "es"] = "en"
-    # Colour theme of the whole desktop app: "dark" (the product default —
-    # matte black + signal yellow), "light" (warm paper + dark gold), or
-    # "system" (follow the OS appearance, re-evaluated live when the OS flips).
+    # Colour theme of the whole desktop app: "jarvis" (this build's default),
+    # "dark" (matte black + signal yellow), "light" (warm paper + dark gold), or
+    # "system" (follow the OS appearance, re-evaluated live when the OS flips),
+    # or "jarvis" (the dark theme with a cyan arc-reactor palette).
     # Persisted here rather than only in the browser so the CHOICE survives a
     # cleared web store, so the native window frame can be painted in the right
     # colour before the web view has loaded anything (jarvis/ui/shell/window.py),
     # and so `jarvis api settings put-appearance` can drive it like every other
     # user-facing action. The frontend caches it in localStorage purely to paint
     # the boot splash without waiting for HTTP.
-    theme: Literal["dark", "light", "system"] = "dark"
+    theme: Literal["dark", "light", "system", "jarvis"] = "jarvis"
     # Dev mode: the frontend is not mounted from frontend/dist/ but loaded from
     # a running Vite dev server (HMR). Activated via ENV JARVIS_DEV=1 or CLI
     # --dev; the fields here simply hold the parameters.
@@ -4478,6 +4547,24 @@ class VoiceEngineConfig(BaseModel):
     llm_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
+    #: Model server API: ``ollama`` (default) or ``openai`` for any
+    #: OpenAI-compatible server. With ``openai`` and no ``llm_base_url`` the
+    #: engine answers with the ``local-openai`` brain's server and model, so a
+    #: llama-server already running for the brain is the only resident model.
+    llm_api: str = "ollama"
+    #: Model server root. Empty = automatic: Ollama's configured root, or the
+    #: ``local-openai`` card's server for ``llm_api = "openai"``.
+    llm_base_url: str = ""
+
+    @field_validator("llm_api", mode="before")
+    @classmethod
+    def _known_api(cls, value: object) -> str:
+        return "openai" if str(value or "").strip().lower() == "openai" else "ollama"
+
+    @field_validator("llm_base_url", mode="before")
+    @classmethod
+    def _strip_url(cls, value: object) -> str:
+        return str(value or "").strip()
 
     @field_validator("tts", mode="before")
     @classmethod
@@ -5741,6 +5828,7 @@ _SECRET_BASE_FAMILIES: tuple[str, ...] = (
     "openrouter",
     "groq",
     "nvidia",
+    "nous",
     "gemini",
     "vertex",
     "grok",
@@ -6110,6 +6198,44 @@ def resolve_provider_endpoint(
         return ResolvedEndpoint(base_url=route.base_url, credential=token, via_proxy=True)
     credential = get_provider_secret(provider_id)
     return ResolvedEndpoint(base_url=route.base_url, credential=credential, via_proxy=False)
+
+
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_loopback_url(url: str | None) -> bool:
+    """True when ``url`` points at this machine (localhost, 127.0.0.0/8, ::1).
+
+    A server on the loopback interface is the user's own process, so it can
+    legitimately run without a client key (e.g. a local gateway that forwards
+    with its own login). Anything else — including a LAN address — is remote.
+    """
+    from urllib.parse import urlsplit
+
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    try:
+        host = (urlsplit(raw).hostname or "").lower()
+    except ValueError:  # a malformed URL is simply not loopback; callers then require a key
+        return False
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+
+
+def configured_base_url_is_loopback(provider_id: str) -> bool:
+    """Whether ``provider_id``'s own base-URL override points at loopback.
+
+    Only the user's ``[brain.providers.<id>].base_url`` counts: the vendor
+    default is never loopback, and a team-proxy route is remote by definition.
+    Never raises.
+    """
+    try:
+        ep = resolve_provider_endpoint(provider_id)
+    except Exception:  # noqa: BLE001 — an unreadable config is "not configured"
+        return False
+    return not ep.via_proxy and is_loopback_url(ep.base_url)
 
 
 def set_secret(key: str, value: str) -> bool:

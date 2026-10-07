@@ -28,7 +28,7 @@ import {
   RunsCard,
   TerminalsCard,
 } from "@/components/deck/DeckActivityCards";
-import { ApiStatsCard, CaptureCard, LiveCounter } from "@/components/deck/DeckSignalCards";
+import { ApiStatsCard, CaptureCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
 import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
 import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
@@ -40,6 +40,7 @@ import { useElementSize } from "@/hooks/useElementSize";
 import { orbSizeFor, stageVignette, stageWashSize } from "@/lib/deckStage";
 import { HANDOFF, autoLaunchAfterMs, resolvePhase, type BoardSlot } from "@/lib/deckStandby";
 import { writeDeckMode } from "@/lib/deckMode";
+import { useDeckAvatar, writeDeckAvatar } from "@/lib/deckAvatar";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
@@ -55,7 +56,7 @@ import { useT } from "@/i18n";
  *   ┌ gigi · voice bars · lamps · counter ── name · brain · switch · chrome ┐
  *   │ dock │ [log — the     [response][api]        [ WIKI — 3D, tall    ] │
  *   │      │  terminal]     (      ORB      )       [                    ] │
- *   │      │ [outputs][run]   [capture]            [terminals] [ide grid] │
+ *   │      │ [outputs][run]   [capture][vitals]    [terminals] [ide grid] │
  *   └──────┴───────────────────────────────────────────────────────────────┘
  *
  * Two of the sketch's cards were re-thought on 2026-08-18 (maintainer): the
@@ -96,9 +97,12 @@ import { useT } from "@/i18n";
  */
 export function MissionDeckView({
   headerAccessory,
+  dock = true,
 }: {
   /** The surface switch, handed down by the shell that owns the mode. */
   headerAccessory?: ReactNode;
+  /** Its own section dock; off where the app's sidebar already navigates. */
+  dock?: boolean;
 }) {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
@@ -116,6 +120,7 @@ export function MissionDeckView({
   const boardOpen = useDeckStore((s) => s.boardOpen);
   const openBoard = useDeckStore((s) => s.openBoard);
   const { warming } = useVoiceReadiness();
+  const avatar = useDeckAvatar();
   // Header + orb name the engine that will answer the next spoken turn, not
   // the dormant sibling. Pipeline and realtime are independent picks; the
   // sidebar footer already followed this rule and the deck was still showing
@@ -297,6 +302,12 @@ export function MissionDeckView({
             testId="deck-stat-model"
             onClick={() => setActiveSection("apikeys")}
           />
+          <HeaderStat
+            label={t("deck.stat_avatar")}
+            value={t(`deck.avatar_${avatar}`)}
+            testId="deck-stat-avatar"
+            onClick={() => writeDeckAvatar(avatar === "gigi" ? "reactor" : "gigi")}
+          />
           {headerAccessory}
         </div>
 
@@ -319,7 +330,7 @@ export function MissionDeckView({
 
       {/* Stage */}
       <div className="flex min-h-0 flex-1">
-        <DockRail />
+        {dock && <DockRail />}
 
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           {phase === "board" && (
@@ -388,15 +399,17 @@ export function MissionDeckView({
                 <RunsCard className="min-h-0" />
               </DeckReveal>
 
-              {/* CENTRE bottom: the last capture (briefly), then the ledger; centred and not too wide */}
+              {/* CENTRE bottom: the last capture (briefly), then the ledger, beside
+                  the machine's vitals; each centred and not too wide */}
               <DeckReveal
                 slot="centre-bottom"
                 reveal={revealBoard}
                 className={cn("min-h-[8rem]", depthSlot("centre-bottom").className)}
                 style={depthSlot("centre-bottom").style}
-                bodyClassName="flex items-stretch justify-center"
+                bodyClassName="flex items-stretch justify-center gap-3"
               >
-                <CaptureCard className="w-full max-w-[28rem]" />
+                <CaptureCard className="w-full min-w-0 max-w-[24rem]" />
+                <VitalsCard className="w-full min-w-0 max-w-[24rem]" />
               </DeckReveal>
 
               {/* RIGHT bottom: terminals and the coding workspace */}
