@@ -28,6 +28,8 @@ import {
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
 
+import { MemoryOrbImport } from "./MemoryOrbImport";
+
 type DrawNode = NodeObject<OrbNode> & OrbNode;
 
 /** Family hubs hang off the core; category hubs hang off a family hub. */
@@ -254,6 +256,7 @@ export function MemoryOrbView() {
             </button>
           )}
         </label>
+        <MemoryOrbImport />
         <button
           type="button"
           onClick={() => graphRef.current?.zoomToFit(600, 60)}
