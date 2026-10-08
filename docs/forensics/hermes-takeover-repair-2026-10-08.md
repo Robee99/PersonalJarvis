@@ -142,3 +142,33 @@ Validation on 2026-10-08:
 Live local/cloud inference, actual gateway fallback, installed-app and voice-device
 acceptance remain unverified for this stage. The broader connected-app bridge,
 project intelligence/Orb/navigation and Windows installer acceptance remain open.
+# Connected apps through native Hermes consent
+
+The new authenticated `/api/control/mcp/hermes` surface projects active Jarvis
+mail, Calendar, Drive, camera, contact and wiki tools, plus connected marketplace
+MCP tools, through the existing supervisor gateway and ToolExecutor. Recursive
+Jarvis/Hermes links and worker-spawn tools are withheld. Existing stateless MCP
+surfaces are unchanged. This surface is stateful because native MCP elicitation
+must carry a server request and its human response on the same session.
+
+An action needing approval is parked privately in ToolExecutor. Native Hermes
+elicitation presents that exact action as a native approval, and an accepted
+response consumes the saved arguments once. Denial, timeout, cancellation or a
+changed connector retires it. No model-visible resume token or standing grant is
+created. Results include a trace identifier for execution evidence; credentials
+and provider error bodies remain redacted. Confirmed execution retains its
+cancellation token.
+
+Focused contracts: 44 passed. Connected MCP, marketplace, Calendar, redaction,
+gateway/setup and all four shared guards: 833 passed. An actual loopback MCP
+handshake checks authentication, reads, action approval and cancellation. The
+canonical native runner also passed 3 integration contracts using the installed
+native Hermes SDK and approval handler, private fixture servers, native runtime
+selection, and detached delegation cancellation. No real account write or paid
+model request was made.
+
+The native SDK 2.x sends a courtesy cancellation notification on coroutine
+abandonment; Jarvis's SDK 1.x requires an explicit MCP cancellation notification.
+Both paths are tested. A dropped socket alone is not claimed as native Stop;
+unanswered private receipts expire. Linux device behavior, live account/browser
+consent, installer provisioning and installed desktop acceptance remain unverified.

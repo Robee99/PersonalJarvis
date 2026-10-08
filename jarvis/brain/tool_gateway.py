@@ -257,6 +257,7 @@ class BrainSupervisorToolGateway:
             trace_id,
             user_utterance=request.user_utterance,
             config_snapshot=config_snapshot,
+            cancel_token=request.cancel_token,
         )
 
     async def cancel_pending(self, trace_id: UUID, *, reason: str = "voice_vetoed") -> bool:

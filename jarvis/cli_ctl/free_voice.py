@@ -9,7 +9,7 @@ It configures the RUNNING app through its own API, so every write goes through
 the same validated writers the settings UI uses (TOML, drift baseline and the
 boot ENV layer stay in step). Nothing here edits ``jarvis.toml`` directly, and
 nothing here configures Hermes: its models, local servers, MCP servers and
-memory live in Hermes's own config. The one exception is the memory link
+memory live in Hermes's own config. The exception is the connected-app link
 below, which adds a single MCP entry through Hermes's own ``config set``.
 
 What it sets, and what it only reports:
@@ -25,9 +25,10 @@ What it sets, and what it only reports:
   own (no second tier, no Paperclip escalation), and paid providers stay
   deny-listed so a failure never becomes a paid fallback inside Jarvis.
 * Missions: the sub-agent worker is Hermes too.
-* Memory: Hermes gets Jarvis's wiki recall as an MCP server (``jarvis`` in
-  Hermes's ``mcp_servers``, only the wiki tools), so notes imported into the
-  memory orb are knowledge Hermes can look up. The Jarvis control key it needs
+* Connected apps and memory: Hermes gets Jarvis's existing account connections
+  and wiki recall as an MCP server (``jarvis`` in Hermes's ``mcp_servers``).
+  Jarvis owns execution permissions; Hermes presents per-call approval in its
+  native voice/chat surface. The Jarvis control key it needs
   is written to Hermes's own ``.env``, never to its ``config.yaml``.
 * Voice: Pipeline mode (the brain answers; Realtime would hand every turn to the
   realtime provider instead). Speech-to-text and text-to-speech are switched to
@@ -175,9 +176,6 @@ def probe_hermes(
     return True, f"answered in {elapsed:.1f}s on {used}"
 
 
-#: The Jarvis tools Hermes may call over MCP: wiki recall only. Everything else
-#: (computer use, the browser, files) is Hermes's own.
-HERMES_MEMORY_TOOLS: tuple[str, ...] = ("wiki-recall", "wiki-list")
 #: The name of the ``.env`` variable that carries Jarvis's control key.
 CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"
 
@@ -189,6 +187,7 @@ def _run(argv: list[str]) -> tuple[int, str]:
         argv,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=60,
         check=False,
         creationflags=NO_WINDOW_CREATIONFLAGS,
@@ -203,6 +202,7 @@ def _run_long(argv: list[str]) -> tuple[int, str]:
             argv,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=600,
             check=False,
             creationflags=NO_WINDOW_CREATIONFLAGS,
@@ -225,11 +225,18 @@ def write_env_value(env_file: Any, name: str, value: str) -> None:
 
 
 def hermes_memory_entry(jarvis_url: str) -> dict[str, Any]:
-    """Hermes's ``mcp_servers.jarvis`` entry: Jarvis's wiki tools over MCP."""
+    """Hermes's ``mcp_servers.jarvis`` entry: existing connected apps and memory."""
     return {
-        "url": jarvis_url.rstrip("/") + "/api/control/mcp/",
+        "url": jarvis_url.rstrip("/") + "/api/control/mcp/hermes",
         "headers": {"Authorization": "Bearer ${" + CONTROL_KEY_ENV + "}"},
-        "tools": {"include": list(HERMES_MEMORY_TOOLS), "resources": False, "prompts": False},
+        "tools": {"resources": False, "prompts": False},
+        # This authenticated first-party server gates writes in ToolExecutor
+        # and asks Hermes via elicitation. A second untrusted-server gate would
+        # ask twice without adding an account permission boundary.
+        "trust": "full",
+        "sampling": {"enabled": False},
+        "elicitation": {"enabled": True, "timeout": 300},
+        "timeout": 360,
     }
 
 
@@ -241,7 +248,7 @@ def connect_hermes_memory(
     hermes_argv: list[str] | None,
     run: Runner = _run,
 ) -> tuple[str, str]:
-    """Mount Jarvis's wiki recall in Hermes. Returns ``(status, detail)``."""
+    """Mount Jarvis's connected-app surface in Hermes. Returns ``(status, detail)``."""
     if not control_key:
         return "failed", "Jarvis has no control key yet; start Jarvis once and run this again"
     if not hermes_argv:
@@ -252,7 +259,7 @@ def connect_hermes_memory(
     if code != 0:
         return "failed", f"hermes config set failed: {output[:300]}"
     return "changed", (
-        "Hermes can search Jarvis's memory (wiki-recall, wiki-list); "
+        "Hermes can use Jarvis's connected apps and memory, with native per-call approval; "
         "restart the Hermes gateway to load it"
     )
 

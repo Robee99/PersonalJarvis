@@ -8,8 +8,14 @@ isolated homes; the injected child runner performs no external action.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
+import os
+import site
+import subprocess
 import threading
+import time
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +33,193 @@ from hermes_constants import reset_hermes_home_override, set_hermes_home_overrid
 
 from jarvis.cli_ctl.hermes_controls import install_controls
 from tools import async_delegation as registry
+
+
+def _wait_for_fixture(predicate, timeout=8):
+    """File/process readiness crosses processes; poll outside the event loop."""
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Fixture did not become ready")
+        time.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_native_mcp_consent_and_cancel_reach_jarvis_executor(tmp_path, monkeypatch, request):
+    """Actual installed Hermes SDK/approval system against Jarvis's separate SDK.
+
+    No agent/model call or real account: the child offers a fixture Gmail tool.
+    SDK 2.x abandonment and native approval withdrawal must both fail closed.
+    """
+    jarvis_python = request.config.getoption("--jarvis-test-python", default=None) or os.getenv(
+        "JARVIS_TEST_PYTHON"
+    )
+    if not jarvis_python:
+        pytest.skip("JARVIS_TEST_PYTHON must point to the isolated Jarvis test environment")
+    runtime_site = request.config.getoption("--hermes-runtime-site", default=None) or os.getenv(
+        "HERMES_TEST_RUNTIME_SITE"
+    )
+    if runtime_site:
+        # Process installed Windows .pth files too (pywin32 DLL bootstrap). A
+        # plain path in the private verifier does not run those bootstraps.
+        site.addsitedir(runtime_site)
+    import httpx2
+    from gateway.session_context import clear_session_vars, set_session_vars
+    from tools.mcp_tool_sampling import ElicitationHandler
+
+    from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
+    from tools import approval, approval_context, mcp_tool
+
+    mcp_tool._ensure_mcp_sdk()
+    assert mcp_tool._MCP_AVAILABLE and mcp_tool._MCP_ELICITATION_TYPES
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
+    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "api_server")
+    monkeypatch.setenv("HERMES_CRON_SESSION", "")
+    monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "")
+    endpoint_file, receipts_file = tmp_path / "endpoint.txt", tmp_path / "receipts.jsonl"
+    source = (await asyncio.to_thread(Path(__file__).resolve)).parents[2]
+    log_file = tmp_path / "fixture-server.log"
+    with log_file.open("w", encoding="utf-8") as output:
+        process = await asyncio.to_thread(
+            subprocess.Popen,
+            [
+                jarvis_python,
+                "-m",
+                "tests.fakes.hermes_connected_apps_server",
+                str(endpoint_file),
+                str(receipts_file),
+            ],
+            cwd=source,
+            env={**os.environ, "PYTHONPATH": str(source)},
+            stdout=output,
+            stderr=output,
+            text=True,
+            encoding="utf-8",
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+        )
+        session_key = "fixture/native-connected-apps"
+        session_tokens = set_session_vars(
+            platform="api_server", session_key=session_key, session_id="fixture-session"
+        )
+        context_token = approval_context._approval_session_key.set(session_key)
+        captured = contextvars.copy_context()
+        queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def notify(data):
+            loop.call_soon_threadsafe(queue.put_nowait, dict(data))
+
+        def receipts():
+            return (
+                [
+                    json.loads(line)
+                    for line in receipts_file.read_text(encoding="utf-8").splitlines()
+                ]
+                if receipts_file.exists()
+                else []
+            )
+
+        try:
+
+            def ready():
+                assert process.poll() is None, log_file.read_text(encoding="utf-8")
+                return endpoint_file.exists()
+
+            await asyncio.to_thread(_wait_for_fixture, ready)
+            endpoint = endpoint_file.read_text(encoding="utf-8")
+            handler = ElicitationHandler(
+                "jarvis-fixture", {"timeout": 5}, call_context=lambda: captured
+            )
+            async with httpx2.AsyncClient(
+                headers={"Authorization": "Bearer fixture-control"}
+            ) as http:
+                async with mcp_tool.streamable_http_client(endpoint, http_client=http) as streams:
+                    async with mcp_tool.ClientSession(
+                        streams[0], streams[1], elicitation_callback=handler
+                    ) as client:
+                        await client.initialize()
+                        approval.register_gateway_notify(session_key, notify)
+                        task = asyncio.create_task(client.call_tool("gmail", {"action": "send"}))
+                        event = await asyncio.wait_for(queue.get(), 3)
+                        assert event["request_id"] and receipts() == []
+                        assert (
+                            approval.resolve_gateway_approval(
+                                session_key, "once", request_id=event["request_id"]
+                            )
+                            == 1
+                        )
+                        result = await asyncio.wait_for(task, 3)
+                        assert not getattr(result, "is_error", getattr(result, "isError", False))
+                        assert (
+                            len([row for row in receipts() if row["event"] == "ActionExecuted"])
+                            == 1
+                        )
+                        assert (
+                            approval.resolve_gateway_approval(
+                                session_key, "once", request_id=event["request_id"]
+                            )
+                            == 0
+                        )
+
+                        task = asyncio.create_task(client.call_tool("gmail", {"action": "send"}))
+                        event = await asyncio.wait_for(queue.get(), 3)
+                        assert (
+                            approval.resolve_gateway_approval(
+                                session_key, "deny", request_id=event["request_id"]
+                            )
+                            == 1
+                        )
+                        result = await asyncio.wait_for(task, 3)
+                        assert getattr(result, "is_error", getattr(result, "isError", False))
+
+                        # Same withdrawal primitive used by native run teardown
+                        # after Stop. No late exact-ID reply can revive the action.
+                        task = asyncio.create_task(client.call_tool("gmail", {"action": "send"}))
+                        event = await asyncio.wait_for(queue.get(), 3)
+                        approval.unregister_gateway_notify(session_key)
+                        result = await asyncio.wait_for(task, 3)
+                        assert getattr(result, "is_error", getattr(result, "isError", False))
+                        assert (
+                            approval.resolve_gateway_approval(
+                                session_key, "once", request_id=event["request_id"]
+                            )
+                            == 0
+                        )
+
+                        # Actual Hermes SDK 2.x sends notifications/cancelled on
+                        # coroutine abandonment; SDK 1.x's explicit notification
+                        # is covered separately in the Jarvis transport tests.
+                        approval.register_gateway_notify(session_key, notify)
+                        task = asyncio.create_task(client.call_tool("gmail", {"action": "send"}))
+                        event = await asyncio.wait_for(queue.get(), 3)
+                        task.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+                        await asyncio.to_thread(
+                            _wait_for_fixture,
+                            lambda: (
+                                len([row for row in receipts() if row["event"] == "ActionDenied"])
+                                >= 3
+                            ),
+                            3,
+                        )
+                        approval.unregister_gateway_notify(session_key)
+                        assert (
+                            approval.resolve_gateway_approval(
+                                session_key, "once", request_id=event["request_id"]
+                            )
+                            == 0
+                        )
+                        assert (
+                            len([row for row in receipts() if row["event"] == "ActionExecuted"])
+                            == 1
+                        )
+        finally:
+            approval.unregister_gateway_notify(session_key)
+            approval_context._approval_session_key.reset(context_token)
+            clear_session_vars(session_tokens)
+            process.terminate()
+            await asyncio.to_thread(process.wait, 5)
 
 
 @pytest.mark.asyncio
