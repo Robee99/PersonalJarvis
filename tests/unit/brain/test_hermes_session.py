@@ -29,6 +29,7 @@ from tests.fakes.fake_hermes_api import FakeHermesApi, FakeRun, asks_approval, s
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hermes, "_SESSIONS", {})
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr(hermes, "configured_base_url", lambda: "http://127.0.0.1:8642")
     monkeypatch.setattr(hermes, "thinking_off_by_config", lambda: False)
@@ -283,3 +284,208 @@ def test_the_chat_pick_uses_the_hermes_bridge_even_when_voice_has_another_brain(
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: other)
     assert resolve_runner("hermes", surface="jarvis") == "brain"
     assert resolve_runner("hermes", surface="agent") == "hermes-cli"
+
+
+@pytest.mark.asyncio
+async def test_native_approval_keeps_voice_listening(hermes_manager: Any) -> None:
+    server = FakeHermesApi(asks_approval("Deleted.", "Left it."))
+    brain = hermes_manager._get_brain(*hermes_manager._build_fallback_chain("fast")[0])
+    brain.transport = server.transport
+    try:
+        await hermes_manager.generate("delete my notes file", use_history=False)
+        assert hermes_manager.has_pending_voice_confirm()
+    finally:
+        await hermes_manager.generate("no", use_history=False)
+    assert not hermes_manager.has_pending_voice_confirm()
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_pending_approval_and_continue_uses_same_history(
+    hermes_manager: Any,
+) -> None:
+    server = FakeHermesApi(
+        asks_approval("Deleted.", "Left it."), say("I will check the file first."),
+    )
+    brain = hermes_manager._get_brain(*hermes_manager._build_fallback_chain("fast")[0])
+    brain.transport = server.transport
+    await hermes_manager.generate("delete my notes file", use_history=False)
+    reply = await hermes_manager.generate("stop", use_history=False)
+    assert server.runs[0].stopped
+    assert brain.pending_approval is None
+    assert not hermes_manager.has_pending_voice_confirm()
+    assert "Nothing was running" not in reply
+    await hermes_manager.generate("continue", use_history=False)
+    assert len(server.runs) == 2
+    assert server.runs[1].body["session_id"] == server.runs[0].body["session_id"]
+    assert all(a["choice"] == "deny" for a in server.approvals)
+
+
+@pytest.mark.asyncio
+async def test_other_brain_instance_can_stop_active_conversation() -> None:
+    async def endless(_server: FakeHermesApi, _run: FakeRun):
+        yield {"event": "message.delta", "delta": "Working "}
+        await asyncio.Event().wait()
+
+    server = FakeHermesApi(endless)
+    voice, chat = _brain(server), _brain(server)
+    stream = voice.complete(_req("check my project"))
+    while not (await anext(stream)).content:
+        pass
+    assert await chat.cancel_conversation() == 1
+    assert server.runs[0].stopped
+    with pytest.raises(asyncio.CancelledError):
+        await anext(stream)
+    assert await voice.cancel_conversation() == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_stop_is_reported_and_remains_retryable(hermes_manager: Any) -> None:
+    import httpx
+
+    class RefusesStop(FakeHermesApi):
+        refuse = True
+
+        async def __call__(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/stop") and self.refuse:
+                return httpx.Response(503, text="sensitive provider body")
+            return await super().__call__(request)
+
+    server = RefusesStop(asks_approval("Deleted.", "Left it."))
+    brain = hermes_manager._get_brain(*hermes_manager._build_fallback_chain("fast")[0])
+    brain.transport = server.transport
+    await hermes_manager.generate("delete my notes file", use_history=False)
+    try:
+        with pytest.raises(RuntimeError, match="could not confirm.*stop") as exc:
+            await hermes_manager.generate("stop", use_history=False)
+        assert "sensitive" not in str(exc.value)
+        assert brain.pending_approval is not None
+        assert not server.runs[0].stopped
+    finally:
+        server.refuse = False
+        await hermes_manager.generate("stop", use_history=False)
+    assert server.runs[0].stopped
+
+
+@pytest.mark.asyncio
+async def test_conversation_stop_leaves_housekeeping_session_alone() -> None:
+    server = FakeHermesApi(asks_approval("Deleted.", "Left it."))
+    background = HermesBrain()
+    background.transport = server.transport
+    await _say(background, "delete my notes file")
+    assert await _brain(server).cancel_conversation() == 0
+    assert not server.runs[0].stopped
+    await _say(background, "no")
+
+
+@pytest.mark.asyncio
+async def test_native_tool_events_reach_chat_and_persist(hermes_manager, tmp_path, monkeypatch):
+    from jarvis.agent_chat import runner_brain
+    from jarvis.agent_chat.service import AgentChatService
+    from jarvis.agent_chat.store import AgentChatStore
+
+    server = FakeHermesApi(say("Opened Notepad.", tools=("computer_use",)))
+    original_init = HermesBrain.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.transport = server.transport
+
+    monkeypatch.setattr(HermesBrain, "__init__", init)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: hermes_manager)
+    monkeypatch.setattr(runner_brain, "_agent_secret", lambda *_: None)
+    svc = AgentChatService(
+        AgentChatStore(":memory:"), assistant_name=lambda: "Jarvis",
+        bus=lambda: hermes_manager._bus,
+    )
+    session = svc.create_session(
+        provider="hermes", model="hermes-agent", effort="", cwd=str(tmp_path),
+        permission_mode="ask", surface="jarvis",
+    )
+    queue = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "open notepad")
+    events = []
+    async with asyncio.timeout(10):
+        while not events or events[-1]["kind"] != "turn_finished":
+            events.append(await queue.get())
+    calls = [e["payload"] for e in events if e["kind"] == "tool_call"]
+    results = [e["payload"] for e in events if e["kind"] == "tool_result"]
+    assert len(calls) == len(results) == 1
+    assert calls[0]["name"] == "hermes:computer_use"
+    assert calls[0]["call_id"] == results[0]["call_id"]
+    assert results[0]["is_error"] is False
+    assert results[0]["duration_ms"] == 100
+    assert events[-1]["payload"]["status"] == "done"
+    persisted = svc.store.list_events(session.session_id)
+    assert any(e["kind"] == "tool_call" for e in persisted)
+    assert any(e["kind"] == "tool_result" for e in persisted)
+
+
+def test_start_or_failure_is_not_successful_tool_evidence():
+    brain = HermesBrain()
+    for name, payload in (
+        ("tool.started", {"tool": "terminal"}),
+        ("tool.completed", {"tool": "terminal", "error": True}),
+        ("tool.completed", {"tool": "terminal"}),
+    ):
+        assert not any(d.agent_tools for d in brain._deltas_for(name, payload))
+    assert any(d.agent_tools == ("hermes:terminal",) for d in brain._deltas_for(
+        "tool.completed", {"tool": "terminal", "error": False},
+    ))
+
+
+@pytest.mark.asyncio
+async def test_stop_discards_queued_events_instead_of_rearming_approval():
+    async def queued(_server, _run):
+        yield {"event": "message.delta", "delta": "Working "}
+        yield {"event": "approval.request", "request_id": "late", "description": "delete a file"}
+        await asyncio.Event().wait()
+
+    server = FakeHermesApi(queued)
+    brain = _brain(server)
+    stream = brain.complete(_req("check my project"))
+    while not (await anext(stream)).content:
+        pass
+    await brain.cancel_conversation()
+    with pytest.raises(asyncio.CancelledError):
+        await anext(stream)
+    assert brain.pending_approval is None
+
+
+@pytest.mark.asyncio
+async def test_native_tool_previews_are_redacted_and_scoped_to_the_turn():
+    from uuid import uuid4
+
+    from jarvis.agent_chat.runner_brain import _StepMirror
+    from jarvis.core.agent_turn import AgentTurnContext, current_agent_turn
+    from jarvis.core.bus import EventBus
+
+    bus = EventBus()
+    ours, theirs = uuid4(), uuid4()
+    events = []
+
+    async def emit(kind, payload):
+        events.append((kind, payload))
+
+    mirror = _StepMirror(emit, "our-turn", bus, ours)
+    mirror.start()
+    server = FakeHermesApi()
+    brain = _brain(server)
+    run = hermes._OpenRun("http://127.0.0.1:8642", "test", asyncio.Queue())
+    for trace in (theirs, ours):
+        token = current_agent_turn.set(AgentTurnContext(trace, bus.publish))
+        try:
+            await brain._tool_activity(run, "tool.started", {
+                "tool": "terminal", "preview": "password=not-a-real-credential",
+            })
+            await brain._tool_activity(run, "tool.completed", {
+                "tool": "terminal", "preview": "password=not-a-real-credential",
+                "error": True, "duration": 0.25,
+            })
+        finally:
+            current_agent_turn.reset(token)
+    mirror.stop()
+    assert [kind for kind, _ in events] == ["tool_call", "tool_result"]
+    assert "not-a-real-credential" not in str(events)
+    assert "redacted" in str(events)
+    assert events[-1][1]["is_error"] is True
+    assert events[-1][1]["duration_ms"] == 250

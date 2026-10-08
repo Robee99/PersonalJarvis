@@ -19,7 +19,7 @@ used comes back as ``runtime`` and is logged and kept on ``last_runtime``.
 
 Because Hermes runs the tools, the manager treats it as the owner of the turn
 (``orchestrates_tools``) and its own shortcuts stand down. The tools Hermes
-reports starting (``tool.started`` events) are passed on as
+reports completing successfully (``tool.completed`` events) are passed on as
 ``BrainDelta.agent_tools`` so Jarvis's honesty guard can still tell a real
 action from a promise.
 
@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -53,8 +54,10 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from jarvis.core import config as cfg
+from jarvis.core.agent_turn import AgentPolicyError
 from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
 
 from .cli_prompt_context import (
@@ -99,6 +102,7 @@ class _SessionState:
 
     pending_approval: _PendingApproval | None = None
     watcher: asyncio.Task[None] | None = None
+    runs: dict[str, _OpenRun] = field(default_factory=dict)
 
 
 _SESSIONS: dict[str, _SessionState] = {}
@@ -142,14 +146,6 @@ OBSERVE_ONLY_INSTRUCTIONS = (
     "type, press keys, open, close, launch, send, write or change anything. "
     "Describe what you see."
 )
-
-#: Tools that change something; one starting in an observation-only turn
-#: stops the run. ``computer_use`` input actions ask for approval first, and
-#: Jarvis denies those itself in such a turn.
-_ACTING_TOOLS = frozenset({
-    "browser_click", "browser_type", "browser_press", "browser_vault_fill",
-    "browser_vault_save_login", "write_file", "patch",
-})
 
 
 def _hermes_home_candidates() -> list[Path]:
@@ -335,6 +331,9 @@ class _OpenRun:
     queue: asyncio.Queue[Any]
     task: asyncio.Task[None] | None = None
     finished: bool = False
+    stop_requested: bool = False
+    close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    open_tools: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -345,13 +344,6 @@ class _PendingApproval:
     request_id: str
     language: str
     reasks: int = field(default=0)
-
-
-def observe_only_stop_message(tool: str) -> str:
-    """What Jarvis says when Hermes tried to act in a look-only turn."""
-    return (
-        f"I stopped Hermes: you asked me only to look, and it started to act ({tool})."
-    )
 
 
 async def _single(text: str) -> AsyncIterator[BrainDelta]:
@@ -391,7 +383,6 @@ class HermesBrain:
         self.announce: Callable[[str, str], Awaitable[None]] | None = None
         self.delivery_poll_s = DELIVERY_POLL_S
         self._delegated = False
-        self._observe_only = False
 
     def join_conversation(self) -> None:
         """Put this brain on the person's conversation session (voice and chat)."""
@@ -413,6 +404,31 @@ class HermesBrain:
     @_watcher.setter
     def _watcher(self, value: asyncio.Task[None] | None) -> None:
         _session_state(self.session_id).watcher = value
+
+    def has_pending_confirmation(self) -> bool:
+        """Shared across the voice and typed instances of this conversation."""
+        return self.pending_approval is not None
+
+    async def cancel_conversation(self) -> int:
+        """Request native cancellation, including a run parked on approval.
+
+        A failed request remains tracked for another Stop; never report that
+        it stopped merely because its local event reader was cancelled.
+        """
+        state = _session_state(self.session_id)
+        count = 0
+        for run in list(state.runs.values()):
+            pending = state.pending_approval
+            if await self._close(run, require_stop=True):
+                count += 1
+                if pending is not None and pending.run is run:
+                    # Release the approval waiter after the native interrupt.
+                    # This can only deny, never grant a now-stale approval.
+                    await self._post_approval(run, pending.request_id, "deny")
+        if state.watcher is not None and not state.watcher.done():
+            state.watcher.cancel()
+            state.watcher = None
+        return count
 
     def can_call_tools(self) -> bool:
         return True
@@ -449,6 +465,16 @@ class HermesBrain:
         return body
 
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        # The runs API has no client-supplied read-only execution policy.
+        # A prompt or tool.started event cannot prevent an already-started
+        # terminal/MCP action. Refuse before starting any native run.
+        if observation_only(latest_user_text(req)):
+            if self.pending_approval is not None:
+                await self.cancel_conversation()
+            raise AgentPolicyError(
+                "Hermes cannot enforce look-only access with this gateway. "
+                "No new agent run was started."
+            )
         pending, self.pending_approval = self.pending_approval, None
         if pending is not None:
             relay = await self._answer_pending(pending, latest_user_text(req))
@@ -459,7 +485,6 @@ class HermesBrain:
                 return
         self.last_runtime = None
         self._delegated = False
-        self._observe_only = observation_only(latest_user_text(req))
         run = await self._start(self.request_body(req))
         # Closed with this turn, so a turn the user cuts off stops the run.
         async with aclosing(self._relay(run)) as relay:
@@ -495,6 +520,7 @@ class HermesBrain:
         if not run_id:
             raise RuntimeError("Hermes Agent started a run without a run id")
         run = _OpenRun(base_url=base_url, run_id=run_id, queue=asyncio.Queue())
+        _session_state(self.session_id).runs[run_id] = run
         run.task = asyncio.create_task(self._pump(run), name="hermes-run-events")
         return run
 
@@ -520,6 +546,8 @@ class HermesBrain:
         try:
             while True:
                 item = await run.queue.get()
+                if run.stop_requested:
+                    raise asyncio.CancelledError
                 if item is _END:
                     if not run.finished:
                         raise RuntimeError("Hermes Agent disconnected before completing this task.")
@@ -527,18 +555,6 @@ class HermesBrain:
                 if isinstance(item, BaseException):
                     raise item
                 name = str(item.get("event") or "") if isinstance(item, dict) else ""
-                if name == "approval.request" and self._observe_only:
-                    # The user asked only to look: nothing that needs approval runs.
-                    await self._post_approval(run, str(item.get("request_id") or ""), "deny")
-                    log.info("Hermes approval denied: the user asked only to look")
-                    continue
-                if name == "tool.started" and self._observe_only:
-                    tool = tool_name_of(item)
-                    if tool in _ACTING_TOOLS:
-                        log.warning("Hermes started %s in a look-only turn; stopping it", tool)
-                        yield BrainDelta(content=observe_only_stop_message(tool))
-                        yield BrainDelta(finish_reason="stop")
-                        return
                 if name == "approval.request":
                     parked = True
                     language = phrase_language()
@@ -548,6 +564,8 @@ class HermesBrain:
                     yield BrainDelta(content=approval_question(item, language))
                     yield BrainDelta(finish_reason="stop")
                     return
+                if name in {"tool.started", "tool.completed"}:
+                    await self._tool_activity(run, name, item)
                 if name in _FINISHED:
                     run.finished = True
                     if name != "run.completed" or (
@@ -576,24 +594,87 @@ class HermesBrain:
                     yield delta
         finally:
             if not parked:
-                await self._close(run)
+                try:
+                    for tool, call_id in list(run.open_tools):
+                        await self._publish_tool(run, tool, call_id, "interrupted",
+                                                 "No tool completion was reported.")
+                    run.open_tools.clear()
+                finally:
+                    await self._close(run)
         if self._delegated:
             self._watch_delivery()
 
-    async def _close(self, run: _OpenRun) -> None:
-        """Stop a run the user cut off; dropping its event stream alone would not."""
-        if not run.finished:
-            try:
-                async with self._client() as client:
-                    await client.post(
-                        f"{run.base_url}/v1/runs/{run.run_id}/stop",
-                        headers=self._headers(run.base_url),
-                    )
-                log.info("Hermes run %s stopped: the turn ended early", run.run_id)
-            except Exception as exc:  # noqa: BLE001 — Hermes ends the run on its own timeout
-                log.warning("Hermes run %s could not be stopped: %s", run.run_id, exc)
-        if run.task is not None:
-            run.task.cancel()
+    async def _publish_tool(
+        self, run: _OpenRun, tool: str, call_id: str, state: Any,
+        preview: str, duration_ms: int = 0,
+    ) -> None:
+        from jarvis.core.agent_turn import current_agent_turn
+        from jarvis.core.events import AgentToolActivity
+        from jarvis.core.redact import safe_preview
+
+        turn = current_agent_turn.get()
+        if turn is not None and turn.publish is not None:
+            await turn.publish(AgentToolActivity(
+                trace_id=turn.trace_id, source_layer="brain.hermes",
+                run_id=run.run_id, call_id=call_id, tool_name=f"hermes:{tool}",
+                state=state, preview=safe_preview(preview, max_chars=2000),
+                duration_ms=duration_ms,
+            ))
+
+    async def _tool_activity(self, run: _OpenRun, name: str, item: dict[str, Any]) -> None:
+        tool = tool_name_of(item) or "tool"
+        if name == "tool.started":
+            call_id = uuid4().hex
+            run.open_tools.append((tool, call_id))
+            await self._publish_tool(run, tool, call_id, "started", str(item.get("preview") or ""))
+            return
+        # Hermes currently supplies tool names, not per-call IDs. Pair the
+        # native stream's oldest matching start, independently for each run.
+        index = next((i for i, (name, _) in enumerate(run.open_tools) if name == tool), None)
+        call_id = run.open_tools.pop(index)[1] if index is not None else uuid4().hex
+        try:
+            duration = float(item.get("duration") or 0)
+            duration_ms = int(max(0, duration) * 1000) if math.isfinite(duration) else 0
+        except (ValueError, TypeError, OverflowError):
+            duration_ms = 0
+        success = item.get("error") is False
+        preview = str(item.get("preview") or ("Completed." if success else "Tool did not succeed."))
+        await self._publish_tool(run, tool, call_id, "completed" if success else "failed",
+                                 preview, duration_ms)
+
+    async def _close(self, run: _OpenRun, *, require_stop: bool = False) -> bool:
+        """Retire a completed run or request its native stop, once per run."""
+        async with run.close_lock:
+            requested = False
+            if not run.finished and not run.stop_requested:
+                try:
+                    async with self._client() as client:
+                        resp = await client.post(
+                            f"{run.base_url}/v1/runs/{run.run_id}/stop",
+                            headers=self._headers(run.base_url),
+                        )
+                    if resp.status_code not in (200, 202) or resp.json().get("status") not in {
+                        "stopping", "stopped", "completed", "failed", "cancelled", "interrupted",
+                    }:
+                        raise RuntimeError("Native stop was not accepted")
+                    run.stop_requested = True
+                    requested = True
+                    # Wake an active relay as well as retiring a parked one.
+                    run.queue.put_nowait(asyncio.CancelledError())
+                except Exception as exc:  # noqa: BLE001 — no raw provider body or key
+                    log.warning("Hermes run stop could not be confirmed (%s)", type(exc).__name__)
+                    if require_stop:
+                        raise RuntimeError(
+                            "Jarvis could not confirm the agent's stop. Try Stop again."
+                        ) from None
+            if run.finished or run.stop_requested:
+                state = _session_state(self.session_id)
+                state.runs.pop(run.run_id, None)
+                if state.pending_approval is not None and state.pending_approval.run is run:
+                    state.pending_approval = None
+            if run.task is not None:
+                run.task.cancel()
+            return requested
 
     async def _answer_pending(
         self, pending: _PendingApproval, text: str
@@ -751,7 +832,7 @@ class HermesBrain:
         if name == "message.delta":
             text = item.get("delta")
             return [BrainDelta(content=text if isinstance(text, str) and text else None)]
-        if name == "tool.started":
+        if name == "tool.completed" and item.get("error") is False:
             tool = tool_name_of(item)
             if tool == DELEGATE_TOOL:
                 self._delegated = True

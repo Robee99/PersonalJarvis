@@ -51,6 +51,17 @@ class Event:
 # ----------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
+class AgentToolActivity(Event):
+    """Native-agent tool evidence, distinct from a Jarvis execution request."""
+    run_id: str = ""
+    call_id: str = ""
+    tool_name: str = ""
+    state: Literal["started", "completed", "failed", "interrupted"] = "started"
+    preview: str = ""
+    duration_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class HotkeyPressed(Event):
     combo: str = ""
 

@@ -10099,7 +10099,12 @@ class BrainManager:
         voice_screen_pending = any(
             surface == "voice" for surface, _conversation_id in screen_pending
         )
-        return self._pending_voice_confirm is not None or voice_screen_pending
+        agent_pending = any(
+            bool(check())
+            for brain in self._conversation_brains()
+            if callable(check := getattr(brain, "has_pending_confirmation", None))
+        )
+        return self._pending_voice_confirm is not None or voice_screen_pending or agent_pending
 
     async def _resolve_screen_context_turn(
         self,
@@ -10648,6 +10653,21 @@ class BrainManager:
             else "I couldn't find anything on that."
         )
 
+    def _conversation_brains(self) -> list[Any]:
+        """Instantiated conversation adapters, excluding housekeeping scopes."""
+        return [
+            brain for (name, _model), brain in self._brain_cache.items()
+            if "@" not in name or name.endswith("@agent")
+        ]
+
+    async def _cancel_agent_conversations(self) -> int:
+        count = 0
+        for brain in self._conversation_brains():
+            cancel = getattr(brain, "cancel_conversation", None)
+            if callable(cancel):
+                count += await cancel()
+        return count
+
     def _cancel_all_background_tasks(self) -> int:
         """Cancels all running background Jarvis-Agent tasks.
 
@@ -11172,6 +11192,12 @@ class BrainManager:
         effort with extra tools and tool context (the typed chat's pick) —
         the live brain, its config and its dead-lists are left untouched.
         """
+        from jarvis.core.agent_turn import AgentTurnContext, current_agent_turn
+
+        trace_id = trace_id or uuid4()
+        agent_token = current_agent_turn.set(AgentTurnContext(
+            trace_id=trace_id, publish=getattr(getattr(self, "_bus", None), "publish", None),
+        ))
         token = _PUBLISH_RESPONSE_EVENT.set(bool(publish_response))
         history_token = _TURN_HISTORY_OVERRIDE.set(
             tuple(history_override) if history_override is not None else None
@@ -11208,6 +11234,7 @@ class BrainManager:
             _TURN_OVERRIDE.reset(override_token)
             _TURN_HISTORY_OVERRIDE.reset(history_token)
             _PUBLISH_RESPONSE_EVENT.reset(token)
+            current_agent_turn.reset(agent_token)
 
     async def _generate(self, user_text: str, *args: Any, **kwargs: Any) -> str:
         """A voice turn. Its spend is published on ``BrainTurnCompleted`` with
@@ -11234,6 +11261,8 @@ class BrainManager:
         force_output_language: str | None = None,
         consume_pending_voice_attachments: bool = False,
     ) -> str:
+        from jarvis.core.agent_turn import AgentPolicyError
+
         # 1. Intercept meta-commands (cancel, switch, depth override).
         # User request 2026-04-25: no standardised confirmation phrases
         # ("OK, ich wechsle auf X", "Abgebrochen ..."). State changes remain
@@ -11333,7 +11362,17 @@ class BrainManager:
                 return screen_reply
 
         if self._detect_cancel_intent(user_text):
-            confirmation = self._cancel_readback(self._cancel_all_background_tasks())
+            cancelled = self._cancel_all_background_tasks()
+            requested = await self._cancel_agent_conversations()
+            if requested:
+                language = self._resolve_turn_lang()
+                confirmation = {
+                    "en": "The agent accepted the stop request.",
+                    "de": "Der Agent hat die Stopp-Anfrage angenommen.",
+                    "es": "El agente ha aceptado la solicitud de detenerse.",
+                }.get(language, "The agent accepted the stop request.")
+            else:
+                confirmation = self._cancel_readback(cancelled)
             await self._record_response_side_effects(
                 user_text=user_text,
                 response_text=confirmation,
@@ -12333,6 +12372,8 @@ class BrainManager:
                     if turn_override is not None
                     else self._get_brain(prov_name, model)
                 )
+            except AgentPolicyError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 msg = str(exc)
@@ -12841,6 +12882,8 @@ class BrainManager:
                             to_provider=prov_name,
                         ))
                 break
+            except AgentPolicyError:
+                raise
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 msg = str(exc)

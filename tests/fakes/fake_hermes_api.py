@@ -134,6 +134,7 @@ def asks_approval(after_yes: str, after_no: str, *, description: str = "delete a
         await run.decided.wait()
         if run.approvals[-1]["choice"] == "once":
             yield {"event": "tool.started", "tool": "terminal", "preview": "del"}
+            yield {"event": "tool.completed", "tool": "terminal", "duration": 0.1, "error": False}
             text = after_yes
         else:
             text = after_no

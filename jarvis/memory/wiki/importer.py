@@ -417,6 +417,9 @@ def _write(
         existing = (
             target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
         )
+        # Decoders may preserve CRLF while read_text uses universal newlines.
+        # Canonical Markdown newlines make a Windows reimport idempotent.
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
         if existing == content:
             progress.unchanged += 1
             return

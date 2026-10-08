@@ -289,7 +289,10 @@ class _StepMirror:
     defensive: a malformed event never reaches the brain (AP-18).
     """
 
-    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id")
+    __slots__ = (
+        "_bus", "_children", "_emit", "_open", "_seen_text",
+        "_trace_id", "_turn_id", "_native_calls",
+    )
 
     def __init__(self, emit: Any, turn_id: str, bus: Any | None, trace_id: UUID) -> None:
         self._emit = emit
@@ -299,6 +302,7 @@ class _StepMirror:
         self._open: list[tuple[str, str]] = []  # (tool name, call id)
         self._children: set[UUID] = set()
         self._seen_text: set[str] = set()
+        self._native_calls: set[str] = set()
 
     def start(self) -> None:
         if self._bus is not None and hasattr(self._bus, "subscribe_all"):
@@ -361,7 +365,22 @@ class _StepMirror:
 
     async def _translate(self, event: Any) -> None:
         name = type(event).__name__
-        if name == "ActionProposed" and self._mine(event):
+        if name == "AgentToolActivity" and self._mine(event):
+            call_id = event.call_id
+            if call_id not in self._native_calls:
+                self._native_calls.add(call_id)
+                await self._emit("tool_call", {
+                    "turn_id": self._turn_id, "call_id": call_id,
+                    "name": event.tool_name,
+                    "input": {"preview": event.preview} if event.state == "started" else {},
+                })
+            if event.state != "started":
+                await self._emit("tool_result", {
+                    "turn_id": self._turn_id, "call_id": call_id,
+                    "output": event.preview, "is_error": event.state != "completed",
+                    "duration_ms": event.duration_ms,
+                })
+        elif name == "ActionProposed" and self._mine(event):
             text = (getattr(event, "rationale", "") or "").strip()
             if text and text not in self._seen_text:
                 self._seen_text.add(text)
