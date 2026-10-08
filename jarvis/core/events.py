@@ -62,6 +62,34 @@ class AgentToolActivity(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class AgentApprovalRequested(Event):
+    """Projection of a native pending request; grants remain agent-owned."""
+    approval_id: str = ""
+    run_id: str = ""
+    conversation_id: str = ""
+    chat_session_id: str = ""
+    chat_turn_id: str = ""
+    call_id: str = ""
+    tool_name: str = ""
+    description: str = ""
+    command: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentApprovalResolved(Event):
+    approval_id: str = ""
+    decision: Literal["allow", "deny", "cancel", "expired"] = "deny"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentApprovalReply(Event):
+    """Native continuation result, without inventing tool-success evidence."""
+    approval_id: str = ""
+    text: str = ""
+    is_error: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class HotkeyPressed(Event):
     combo: str = ""
 

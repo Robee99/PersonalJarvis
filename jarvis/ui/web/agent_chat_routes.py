@@ -1047,7 +1047,14 @@ async def resolve_approval(
     svc = _service(request)
     if body.decision not in DECISIONS:
         raise HTTPException(status_code=400, detail=f"decision must be one of {list(DECISIONS)}")
-    ok = svc.resolve_approval(session_id, approval_id, body.decision)
+    try:
+        ok = await svc.resolve_native_approval(session_id, approval_id, body.decision)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=503, detail="The agent could not confirm this approval."
+        ) from None
+    if ok is None:
+        ok = svc.resolve_approval(session_id, approval_id, body.decision)
     if not ok:
         raise HTTPException(status_code=404, detail="no such pending approval")
     return {"ok": True, "approval_id": approval_id, "decision": body.decision}

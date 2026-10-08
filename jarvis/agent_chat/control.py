@@ -540,6 +540,9 @@ class ChatControls:
         self.jobs[sid] = asyncio.create_task(self._goal_loop(sid), name=f"chat-goal-{sid}")
 
     async def pause(self, sid: str, reason: str) -> None:
+        cancel_native = getattr(self.service, "cancel_native_agent_work", None)
+        if callable(cancel_native):
+            await cancel_native(sid)
         state = self.state(sid)
         if self.service.is_running(sid):
             state.last_status = "interrupted"

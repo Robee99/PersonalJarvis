@@ -73,3 +73,19 @@ explicitly says no new run or action occurred. Refusals do not launch memory cur
 and English/German/Spanish voice response language. These remain fixture checks,
 not microphone or installed-app acceptance. UTF-8 text was preserved after correcting
 an editing-helper encoding defect; no installed file was changed.
+
+
+## Native approval cards (follow-up stage)
+
+Native `approval.request` events now create ordinary persisted chat permission cards. The adapter owns one pending exact request identity per Hermes conversation. Cards are evidence routes only: they contain no second permission Future or standing grant. Clicks, spoken answers and Stop resolve the same native request. The UI offers **Allow once** and **Deny**, never an always/session grant. Original turn trace and chat identity follow resumed native work; starts alone never count as success.
+
+Native denial, cancellation and expiry retire the card. Reopened persisted cards without live authority expire. A failed native resolver leaves the exact pending identity retryable and returns a safe explanation. Native `approval_not_pending` retires the card and requests native Stop. Command/description/result previews are redacted. Approval-only outcomes show permission status, rather than a completed action.
+
+Validation on the supported private MCP environment (`mcp==1.28.1`):
+
+- Shared voice/chat/adapter suites and all four routing/language guards: **1082 passed, 1 skipped, 2 baseline failures**. Exact committed HEAD `707158c` comparison under the same environment: **1073 passed, 1 skipped, the same 2 failures**. Both are `test_runner_brain.py` tool-set expectations with an extra `society_browser` after earlier suites; they pass in isolation. No expectations or baseline were weakened.
+- Isolated affected approval, immediate cancellation, MCP harness and brain runner contracts: **41 passed**, including 11 new approval cases. Cases cover voice/chat origin with allow/deny, Stop, stale/replayed clicks, other-chat rejection, redaction, restart expiry, native expiry, unavailable-resolver retry and repeated approvals retaining their original turn after the visible chat changes.
+- Frontend reducers, actual approval component, Hermes Armory and Memory Orb import: **63 passed**. TypeScript and production build passed; actual component inspected in light/dark themes with harmless fixture cards.
+- Ruff identities compared with HEAD: **32 existing findings, 0 added**. Windows generated HTML line endings normalized; diff whitespace checked.
+
+The production UI bundle is included. These are source/contract/component checks, not microphone, installed-app, live-provider, connector or installer acceptance. Installed Jarvis and the installed Hermes core were not changed by this stage. P1 canonical model ownership, wider connected-app bridging and P2 project intelligence remain open.

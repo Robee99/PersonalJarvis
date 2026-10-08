@@ -10661,6 +10661,17 @@ class BrainManager:
             if "@" not in name or name.endswith("@agent")
         ]
 
+    def pending_agent_approval_ids(self) -> set[str]:
+        return {aid for brain in self._conversation_brains()
+                if (aid := getattr(brain, "pending_confirmation_id", None))}
+
+    async def resolve_agent_approval(self, approval_id: str, decision: str) -> bool:
+        for brain in self._conversation_brains():
+            resolve = getattr(brain, "resolve_confirmation", None)
+            if callable(resolve) and await resolve(approval_id, decision):
+                return True
+        return False
+
     async def _cancel_agent_conversations(self) -> int:
         count = 0
         for brain in self._conversation_brains():

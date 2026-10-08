@@ -41,6 +41,8 @@ export interface ApprovalState {
   summary: string;
   /** Set once the person (or a cancel) decided. */
   decision: string | null;
+  decisions?: ("allow" | "allow_always" | "deny")[];
+  external?: boolean;
 }
 
 /** One prepared answer on an agent's question card. */
@@ -211,6 +213,7 @@ export interface PendingApproval {
   name: string;
   input: unknown;
   summary: string;
+  external?: boolean;
 }
 
 export interface Timeline {
@@ -647,6 +650,7 @@ export function reduceEvent(tl: Timeline, ev: AgentChatEvent): Timeline {
         name: str(p.name),
         input: p.input,
         summary: str(p.summary),
+        external: p.external === true,
       };
       const withTurn = updateTurn(base, turnId, (turn) =>
         upsertBlock<ToolBlock>(
@@ -660,7 +664,11 @@ export function reduceEvent(tl: Timeline, ev: AgentChatEvent): Timeline {
             output: ex?.output ?? null,
             isError: ex?.isError ?? false,
             durationMs: ex?.durationMs ?? null,
-            approval: { approvalId, summary: pending.summary, decision: null },
+            approval: {
+              approvalId, summary: pending.summary, decision: null,
+              external: pending.external,
+              decisions: p.external === true ? ["allow", "deny"] : undefined,
+            },
             startedMs: ex?.startedMs ?? ev.ts_ms,
           }),
         ),
@@ -772,7 +780,7 @@ export function reduceEvent(tl: Timeline, ev: AgentChatEvent): Timeline {
       }));
       return {
         ...finished,
-        pendingApprovals: finished.pendingApprovals.filter((a) => a.turnId !== turnId),
+        pendingApprovals: finished.pendingApprovals.filter((a) => a.turnId !== turnId || a.external),
       };
     }
 

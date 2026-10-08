@@ -6,6 +6,7 @@ import {
   reduceEvent,
   reduceEvents,
   runningTurn,
+  type ToolBlock,
   type TurnItem,
   type UserItem,
 } from "./reduce";
@@ -247,4 +248,18 @@ describe("agent-chat reduce: notices", () => {
     );
     expect(orphan.items).toHaveLength(1);
   });
+});
+
+it("keeps a native approval actionable after its spoken turn parks, then retires it", () => {
+  let tl = reduceEvents(EMPTY_TIMELINE, [
+    ev("turn_started", {turn_id:"native-turn",provider:"hermes",runner:"voice"}),
+    ev("approval_required", {turn_id:"native-turn",approval_id:"native-one",call_id:"native-call",name:"hermes:terminal",summary:"Remove fixture",external:true,decisions:["allow","deny"]}),
+    ev("turn_finished", {turn_id:"native-turn",status:"done",usage:{}}),
+  ]);
+  expect(tl.pendingApprovals.map(a => a.approvalId)).toEqual(["native-one"]);
+  const block = (tl.items[0] as TurnItem).blocks[0] as ToolBlock;
+  expect(block.approval?.decisions).toEqual(["allow","deny"]);
+  tl = reduceEvent(tl, ev("approval_resolved", {turn_id:"native-turn",approval_id:"native-one",decision:"cancel"}));
+  expect(tl.pendingApprovals).toEqual([]);
+  expect(((tl.items[0] as TurnItem).blocks[0] as ToolBlock).approval?.decision).toBe("cancel");
 });

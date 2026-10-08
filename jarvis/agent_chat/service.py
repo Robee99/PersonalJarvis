@@ -259,6 +259,7 @@ class AgentChatService:
         self._running: dict[str, _Running] = {}
         self._subscribers: dict[str, set[Subscriber]] = {}
         self._approvals: dict[str, asyncio.Future[str]] = {}
+        self._native_approval_mirror: Any | None = None
         self._approval_session: dict[str, str] = {}
         # Questions an agent is waiting on (questions.py), by question id.
         self._questions: dict[str, _OpenQuestion] = {}
@@ -451,14 +452,40 @@ class AgentChatService:
         return True
 
     def pending_approvals(self, session_id: str) -> list[str]:
-        return [aid for aid, sid in self._approval_session.items() if sid == session_id]
+        result = [aid for aid, sid in self._approval_session.items() if sid == session_id]
+        mirror = getattr(self, "_native_approval_mirror", None)
+        return result + (mirror.pending(session_id) if mirror is not None else [])
 
     # ----------------------------------------------------------- subscribe
 
     def subscribe(self, session_id: str) -> Subscriber:
         q: Subscriber = asyncio.Queue(maxsize=4096)
         self._subscribers.setdefault(session_id, set()).add(q)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # A synchronous subscriber cannot schedule reconciliation; the
+            # native resolver still rejects every stale identity.
+            return q
+        loop.create_task(self._expire_native_cards(session_id), name="expire-native-cards")
         return q
+
+    async def _expire_native_cards(self, session_id: str) -> None:
+        from .runner_brain import brain_manager
+        manager = brain_manager()
+        pending_ids = getattr(manager, "pending_agent_approval_ids", lambda: set())()
+        unresolved = {}
+        for event in self.store.list_events(session_id):
+            payload = event["payload"]
+            if event["kind"] == "approval_required" and payload.get("external"):
+                unresolved[payload["approval_id"]] = payload["turn_id"]
+            elif event["kind"] == "approval_resolved":
+                unresolved.pop(payload.get("approval_id"), None)
+        for aid, turn_id in unresolved.items():
+            if aid not in pending_ids:
+                await self._emit(session_id, make_event("approval_resolved", {
+                    "turn_id": turn_id, "approval_id": aid, "decision": "expired",
+                }))
 
     def unsubscribe(self, session_id: str, q: Subscriber) -> None:
         subs = self._subscribers.get(session_id)
@@ -1272,6 +1299,26 @@ class AgentChatService:
     def always_allowed(self, session_id: str) -> set[str]:
         """The tools waved through with "always allow" in this session (Jarvis surface)."""
         return self._always_allowed.setdefault(session_id, set())
+
+    async def resolve_native_approval(
+        self, session_id: str, approval_id: str, decision: str
+    ) -> bool | None:
+        if not approval_id.startswith("native-"):
+            return None
+        mirror = self._native_approval_mirror
+        if mirror is None:
+            return False
+        return await mirror.resolve(self, session_id, approval_id, decision)
+
+    async def cancel_native_agent_work(self, session_id: str) -> int:
+        session = self.store.get_session(session_id)
+        if session is None or session.provider != "hermes" or session.surface != "jarvis":
+            return 0
+        from .runner_brain import brain_manager
+
+        manager = brain_manager()
+        cancel = getattr(manager, "_cancel_agent_conversations", None)
+        return await cancel() if callable(cancel) else 0
 
     def resolve_approval(self, session_id: str, approval_id: str, decision: str) -> bool:
         if decision not in DECISIONS:

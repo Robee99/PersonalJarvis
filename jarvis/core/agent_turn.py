@@ -11,7 +11,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from uuid import UUID
 
-from jarvis.core.events import AgentToolActivity
+from jarvis.core.events import Event
 
 
 class AgentPolicyError(RuntimeError):
@@ -44,7 +44,7 @@ def policy_response(language: str) -> str:
 @dataclass(frozen=True, slots=True)
 class AgentTurnContext:
     trace_id: UUID
-    publish: Callable[[AgentToolActivity], Awaitable[None]] | None = None
+    publish: Callable[[Event], Awaitable[None]] | None = None
 
 
 current_agent_turn: ContextVar[AgentTurnContext | None] = ContextVar(

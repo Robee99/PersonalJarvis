@@ -57,7 +57,7 @@ from typing import Any
 from uuid import uuid4
 
 from jarvis.core import config as cfg
-from jarvis.core.agent_turn import AgentPolicyError
+from jarvis.core.agent_turn import AgentPolicyError, AgentTurnContext, current_agent_turn
 from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
 
 from .cli_prompt_context import (
@@ -91,6 +91,10 @@ SESSION_ID = "jarvis-main"
 BACKGROUND_SESSION_ID = "jarvis-background"
 
 
+class _ApprovalExpired(RuntimeError):
+    """The native exact request is no longer pending; no permission was granted."""
+
+
 @dataclass(slots=True)
 class _SessionState:
     """What belongs to a Hermes session, not to one HermesBrain object.
@@ -105,6 +109,7 @@ class _SessionState:
     runs: dict[str, _OpenRun] = field(default_factory=dict)
     delegations: dict[str, str] = field(default_factory=dict)
     control_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    continuations: set[asyncio.Task[None]] = field(default_factory=set)
 
 
 _SESSIONS: dict[str, _SessionState] = {}
@@ -293,9 +298,10 @@ def phrase_language() -> str:
 
 def approval_question(payload: dict[str, Any], language: str) -> str:
     """Jarvis's spoken question for one Hermes ``approval.request``."""
+    from jarvis.core.redact import safe_preview
     from jarvis.voice.tool_confirmation import format_tool_confirmation
 
-    what = str(payload.get("description") or payload.get("command") or "").strip()
+    what = safe_preview(str(payload.get("description") or payload.get("command") or "").strip())
     level = "destructive" if _DESTRUCTIVE_WORDS.search(what) else "modify"
     return format_tool_confirmation(
         "hermes", language=language, impact_level=level, impact_commands=what
@@ -336,6 +342,8 @@ class _OpenRun:
     stop_requested: bool = False
     close_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     open_tools: list[tuple[str, str]] = field(default_factory=list)
+    chat_session_id: str = ""
+    chat_turn_id: str = ""
 
 
 @dataclass
@@ -346,6 +354,9 @@ class _PendingApproval:
     request_id: str
     language: str
     reasks: int = field(default=0)
+    approval_id: str = field(default_factory=lambda: "native-" + uuid4().hex)
+    context: AgentTurnContext | None = None
+    voice_origin: bool = True
 
 
 async def _single(text: str) -> AsyncIterator[BrainDelta]:
@@ -406,6 +417,11 @@ class HermesBrain:
     @_watcher.setter
     def _watcher(self, value: asyncio.Task[None] | None) -> None:
         _session_state(self.session_id).watcher = value
+
+    @property
+    def pending_confirmation_id(self) -> str | None:
+        pending = self.pending_approval
+        return pending.approval_id if pending is not None else None
 
     def has_pending_confirmation(self) -> bool:
         """Shared across the voice and typed instances of this conversation."""
@@ -536,7 +552,7 @@ class HermesBrain:
                 "Hermes cannot enforce look-only access with this gateway. "
                 "No new agent run was started."
             )
-        pending, self.pending_approval = self.pending_approval, None
+        pending = self.pending_approval
         if pending is not None:
             relay = await self._answer_pending(pending, latest_user_text(req))
             if relay is not None:
@@ -584,7 +600,16 @@ class HermesBrain:
         run_id = str((resp.json() or {}).get("run_id") or "")
         if not run_id:
             raise RuntimeError("Hermes Agent started a run without a run id")
-        run = _OpenRun(base_url=base_url, run_id=run_id, queue=asyncio.Queue())
+        from jarvis.core.protocols import current_chat_turn
+
+        chat = current_chat_turn.get()
+        run = _OpenRun(
+            base_url=base_url,
+            run_id=run_id,
+            queue=asyncio.Queue(),
+            chat_session_id=chat.session_id if chat is not None else "",
+            chat_turn_id=chat.turn_id if chat is not None else "",
+        )
         _session_state(self.session_id).runs[run_id] = run
         run.task = asyncio.create_task(self._pump(run), name="hermes-run-events")
         return run
@@ -623,9 +648,24 @@ class HermesBrain:
                 if name == "approval.request":
                     parked = True
                     language = phrase_language()
-                    self.pending_approval = _PendingApproval(
-                        run=run, request_id=str(item.get("request_id") or ""), language=language
+                    request_id = str(item.get("request_id") or "")
+                    if not request_id:
+                        parked = False
+                        raise RuntimeError("Hermes did not identify its pending approval.")
+                    pending = _PendingApproval(
+                        run=run, request_id=request_id, language=language,
+                        context=current_agent_turn.get(),
                     )
+                    async with _session_state(self.session_id).control_lock:
+                        if run.stop_requested:
+                            parked = False
+                            raise asyncio.CancelledError
+                        old = self.pending_approval
+                        if old is not None and old.run is not run:
+                            await self._close(old.run, require_stop=True)
+                            await self._post_approval(old.run, old.request_id, "deny")
+                        self.pending_approval = pending
+                        await self._present_approval(pending, item)
                     yield BrainDelta(content=approval_question(item, language))
                     yield BrainDelta(finish_reason="stop")
                     return
@@ -736,7 +776,9 @@ class HermesBrain:
                 state = _session_state(self.session_id)
                 state.runs.pop(run.run_id, None)
                 if state.pending_approval is not None and state.pending_approval.run is run:
+                    pending = state.pending_approval
                     state.pending_approval = None
+                    await self._approval_event(pending, "cancel")
             if run.task is not None:
                 run.task.cancel()
             return requested
@@ -755,18 +797,148 @@ class HermesBrain:
         verdict = classify_response(text, language=pending.language)
         if verdict == "ambiguous" and pending.reasks < MAX_APPROVAL_REASKS:
             pending.reasks += 1
-            self.pending_approval = pending
             return _single(format_confirm_outcome("unclear", "hermes", language=pending.language))
-        choice = "once" if verdict == "confirm" else "deny"
-        resolved = await self._post_approval(pending.run, pending.request_id, choice)
-        if resolved and verdict != "unknown":
-            return self._relay(pending.run)
-        # The user moved on, or the run had already ended: let Hermes finish it
-        # with the denial before the new turn takes the session.
+        decision = "allow" if verdict == "confirm" else "deny"
+        resolved = await self._resolve_confirmation(pending.approval_id, decision)
+        if not resolved:
+            return _single("That approval is no longer available. No new permission was granted.")
+        if verdict != "unknown":
+            return self._resume_relay(pending)
         await self._drain(pending.run)
         return None
 
-    async def _post_approval(self, run: _OpenRun, request_id: str, choice: str) -> bool:
+    async def _present_approval(self, pending: _PendingApproval, item: dict[str, Any]) -> None:
+        from jarvis.core.events import AgentApprovalRequested
+        from jarvis.core.redact import safe_preview
+
+        turn = pending.context
+        pending.voice_origin = not pending.run.chat_session_id
+        if turn is None or turn.publish is None:
+            return
+        tool = tool_name_of(item) or (
+            pending.run.open_tools[-1][0] if pending.run.open_tools else "approval"
+        )
+        call_id = pending.run.open_tools[-1][1] if pending.run.open_tools else pending.approval_id
+        await turn.publish(
+            AgentApprovalRequested(
+                trace_id=turn.trace_id,
+                source_layer="brain.hermes",
+                approval_id=pending.approval_id,
+                run_id=pending.run.run_id,
+                conversation_id=self.session_id,
+                chat_session_id=pending.run.chat_session_id,
+                chat_turn_id=pending.run.chat_turn_id,
+                call_id=call_id,
+                tool_name=f"hermes:{tool}",
+                description=safe_preview(str(item.get("description") or "Permission required")),
+                command=safe_preview(str(item.get("command") or "")),
+            )
+        )
+
+    async def _approval_event(self, pending: _PendingApproval, decision: Any) -> None:
+        from jarvis.core.events import AgentApprovalResolved
+
+        if pending.context is not None and pending.context.publish is not None:
+            await pending.context.publish(
+                AgentApprovalResolved(
+                    trace_id=pending.context.trace_id,
+                    source_layer="brain.hermes",
+                    approval_id=pending.approval_id,
+                    decision=decision,
+                )
+            )
+
+    async def _resolve_confirmation(
+        self, approval_id: str, decision: str
+    ) -> _PendingApproval | None:
+        if decision not in {"allow", "deny"}:
+            return None
+        async with _session_state(self.session_id).control_lock:
+            pending = self.pending_approval
+            if pending is None or pending.approval_id != approval_id or pending.run.stop_requested:
+                return None
+            choice = "once" if decision == "allow" else "deny"
+            try:
+                accepted = await self._post_approval(
+                    pending.run,
+                    pending.request_id,
+                    choice,
+                    require_live=True,
+                )
+            except _ApprovalExpired:
+                self.pending_approval = None
+                await self._approval_event(pending, "expired")
+                await self._close(pending.run, require_stop=True)
+                return None
+            if not accepted:
+                raise RuntimeError(
+                    "The agent could not confirm this approval. Try again or choose Stop."
+                )
+            self.pending_approval = None
+            await self._approval_event(pending, decision)
+            return pending
+
+    async def resolve_confirmation(self, approval_id: str, decision: str) -> bool:
+        """Exact-id, allow-once resolution used by the existing chat card route."""
+        pending = await self._resolve_confirmation(approval_id, decision)
+        if pending is None:
+            return False
+        task = asyncio.create_task(
+            self._resume_clicked(pending), name="hermes-approved-continuation"
+        )
+        # The native run remains in state.runs until the real terminal event.
+        # Consume a background exception in _resume_clicked, not at UI shutdown.
+        tasks = _session_state(self.session_id).continuations
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        task.add_done_callback(
+            lambda finished: finished.exception() if not finished.cancelled() else None
+        )
+        return True
+
+    async def _resume_relay(self, pending: _PendingApproval) -> AsyncIterator[BrainDelta]:
+        token = current_agent_turn.set(pending.context)
+        try:
+            async with aclosing(self._relay(pending.run)) as relay:
+                async for delta in relay:
+                    yield delta
+        finally:
+            current_agent_turn.reset(token)
+
+    async def _resume_clicked(self, pending: _PendingApproval) -> None:
+        from jarvis.core.events import AgentApprovalReply
+        from jarvis.core.redact import safe_preview
+
+        text, failed = "", False
+        try:
+            async for delta in self._resume_relay(pending):
+                text += delta.content or ""
+        except asyncio.CancelledError:
+            failed, text = True, "The agent's continuation was stopped."
+        except Exception as exc:  # noqa: BLE001 — safe explanation, no provider body
+            log.warning("Approved native continuation failed (%s)", type(exc).__name__)
+            failed, text = True, "The agent did not complete this continuation."
+        if pending.voice_origin and text.strip():
+            await self._announce(text.strip())
+        if pending.context is not None and pending.context.publish is not None:
+            await pending.context.publish(
+                AgentApprovalReply(
+                    trace_id=pending.context.trace_id,
+                    source_layer="brain.hermes",
+                    approval_id=pending.approval_id,
+                    text=safe_preview(text),
+                    is_error=failed,
+                )
+            )
+
+    async def _post_approval(
+        self,
+        run: _OpenRun,
+        request_id: str,
+        choice: str,
+        *,
+        require_live: bool = False,
+    ) -> bool:
         body: dict[str, Any] = {"choice": choice}
         if request_id:
             body["request_id"] = request_id
@@ -775,10 +947,25 @@ class HermesBrain:
             async with self._client() as client:
                 resp = await client.post(url, json=body, headers=self._headers(run.base_url))
         except Exception as exc:  # noqa: BLE001 — an unreachable Hermes counts as unresolved
-            log.warning("Hermes approval %s could not be sent: %s", choice, exc)
+            log.warning("Hermes approval %s could not be sent (%s)", choice, type(exc).__name__)
             return False
         if resp.status_code != 200:
+            if require_live and resp.status_code == 409:
+                try:
+                    code = resp.json().get("error", {}).get("code")
+                except (ValueError, AttributeError):
+                    code = None  # An invalid body is an unresolved response, never a grant.
+                if code == "approval_not_pending":
+                    raise _ApprovalExpired
             log.info("Hermes approval %s not taken (HTTP %s)", choice, resp.status_code)
+            return False
+        try:
+            resolved = resp.json().get("resolved")
+            if require_live and resolved == 0:
+                raise _ApprovalExpired
+            if type(resolved) is not int or resolved != 1:
+                return False
+        except (ValueError, AttributeError):
             return False
         log.info("Hermes approval resolved: %s", choice)
         return True
