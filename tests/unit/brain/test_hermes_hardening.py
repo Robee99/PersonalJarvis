@@ -63,14 +63,11 @@ async def test_plan_never_dispatches_to_an_agent_with_unfiltered_tools(hermes_ma
     server = FakeHermesApi(say("changed a file"))
     brain = agent(server)
     monkeypatch.setattr(hermes_manager, "_get_brain", lambda *_a, **_k: brain)
-    with pytest.raises(RuntimeError, match="cannot enforce Plan mode"):
-        await hermes_manager.generate(
-            "open notepad",
-            use_history=False,
-            turn_override=TurnOverride(
-                provider="hermes", model="", tool_context={"chat_read_only": True}
-            ),
-        )
+    pick = TurnOverride(provider="hermes", model="", tool_context={"chat_read_only": True})
+    reply = await hermes_manager.generate("open notepad", use_history=False, turn_override=pick)
+    assert "did not start a new run" in reply
+    assert pick.receipt.finish_reason == "policy_refusal"
+    assert pick.receipt.policy_refusal == "read_only_unavailable"
     assert not server.runs
 
 

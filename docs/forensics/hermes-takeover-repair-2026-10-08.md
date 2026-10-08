@@ -59,3 +59,17 @@ Validation on 2026-10-08:
 The installed app/gateway have not been changed by these checks. Clickable native
 approval cards, policy response rendering, canonical selection, connector bridge,
 project intelligence and installer/device acceptance remain separate follow-ups.
+
+## Intentional read-only refusal follow-up
+
+Unsupported look-only and Plan requests now return a concise, localized response
+through the normal voice/chat response path. The policy exception still bypasses
+provider retry, fallback and outage classification. No native run starts. A pending
+native approval is stopped before the refusal. Chat's persisted `turn_finished`
+receipt carries `policy_refusal=read_only_unavailable`; the displayed response
+explicitly says no new run or action occurred. Refusals do not launch memory curation.
+
+659 affected Python and shared-guard tests passed, including saved chat evidence
+and English/German/Spanish voice response language. These remain fixture checks,
+not microphone or installed-app acceptance. UTF-8 text was preserved after correcting
+an editing-helper encoding defect; no installed file was changed.

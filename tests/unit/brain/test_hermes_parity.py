@@ -153,7 +153,7 @@ async def test_a_plain_brightness_command_is_answered_before_hermes_and_verified
     assert reply == "Brightness is now 40%."
     assert server.runs == [], "the reflex answered; Hermes was not asked"
 
-    with pytest.raises(RuntimeError, match="cannot enforce look-only"):
-        await hermes_manager.generate("Don't change brightness.", use_history=False)
+    refusal = await hermes_manager.generate("Don't change brightness.", use_history=False)
+    assert "did not start a new run" in refusal
     assert level["now"] == 40, "a negation never changes anything"
     assert server.runs == [], "a refusal is not retried as a provider outage"

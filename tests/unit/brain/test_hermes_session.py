@@ -565,3 +565,62 @@ async def test_completed_detached_work_and_idle_stop_are_noops():
     assert await brain.cancel_conversation() == 0
     assert not completed.is_set()
     assert server.delegation_stops == []
+
+
+@pytest.mark.asyncio
+async def test_policy_refusal_is_a_normal_persisted_chat_response(
+    hermes_manager, tmp_path, monkeypatch
+):
+    from jarvis.agent_chat import runner_brain
+    from jarvis.agent_chat.service import AgentChatService
+    from jarvis.agent_chat.store import AgentChatStore
+
+    server = FakeHermesApi()
+    original_init = HermesBrain.__init__
+
+    def init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.transport = server.transport
+
+    monkeypatch.setattr(HermesBrain, "__init__", init)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: hermes_manager)
+    monkeypatch.setattr(runner_brain, "_agent_secret", lambda *_: None)
+    svc = AgentChatService(AgentChatStore(":memory:"), bus=lambda: hermes_manager._bus)
+    session = svc.create_session(
+        provider="hermes", permission_mode="plan", surface="jarvis", cwd=str(tmp_path)
+    )
+    queue = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "open notepad")
+    events = []
+    async with asyncio.timeout(10):
+        while not events or events[-1]["kind"] != "turn_finished":
+            events.append(await queue.get())
+    finish = events[-1]["payload"]
+    assert finish["status"] == "done"
+    assert finish["policy_refusal"] == "read_only_unavailable"
+    assert finish["error"] is None
+    assert not server.runs
+    assert not [e for e in events if e["kind"] in ("tool_call", "tool_result")]
+    persisted = svc.store.list_events(session.session_id)
+    assert any("did not start a new run" in e["payload"].get("text", "") for e in persisted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "de", "es"])
+async def test_voice_policy_refusal_preserves_turn_language_without_fallback(
+    hermes_manager, language
+):
+    from jarvis.core.agent_turn import policy_response
+    from jarvis.core.events import ResponseGenerated
+
+    hermes_manager._reply_language = language
+    server = FakeHermesApi()
+    brain = hermes_manager._get_brain(*hermes_manager._build_fallback_chain("fast")[0])
+    brain.transport = server.transport
+    published = []
+    hermes_manager._bus.subscribe(ResponseGenerated, lambda event: published.append(event))
+    reply = await hermes_manager.generate("just look, don't click anything", use_history=False)
+    assert reply == policy_response(language)
+    assert len(published) == 1 and published[0].language == language
+    assert not server.runs
+    assert not hermes_manager._last_turn_all_failed

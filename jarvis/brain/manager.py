@@ -1,4 +1,4 @@
-﻿"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
+"""BrainManager: Intent-Router + Smart-Fallback + Pipeline-Adapter.
 
 Architecture:
 
@@ -10052,6 +10052,7 @@ class BrainManager:
         response_text: str,
         use_history: bool,
         trace_id: UUID | None = None,
+        curate: bool = True,
     ) -> None:
         """Apply the normal response side effects for non-provider paths too."""
         if use_history:
@@ -10065,7 +10066,7 @@ class BrainManager:
             text=response_text,
         )
 
-        if self._curator is not None and not (
+        if curate and self._curator is not None and not (
             (profile_override := _TURN_OVERRIDE.get()) is not None
             and profile_override.tool_context.get("tool_origin") == "society"
         ):
@@ -11192,12 +11193,20 @@ class BrainManager:
         effort with extra tools and tool context (the typed chat's pick) —
         the live brain, its config and its dead-lists are left untouched.
         """
-        from jarvis.core.agent_turn import AgentTurnContext, current_agent_turn
+        from jarvis.core.agent_turn import (
+            AgentPolicyError,
+            AgentTurnContext,
+            current_agent_turn,
+            policy_response,
+        )
 
         trace_id = trace_id or uuid4()
-        agent_token = current_agent_turn.set(AgentTurnContext(
-            trace_id=trace_id, publish=getattr(getattr(self, "_bus", None), "publish", None),
-        ))
+        agent_token = current_agent_turn.set(
+            AgentTurnContext(
+                trace_id=trace_id,
+                publish=getattr(getattr(self, "_bus", None), "publish", None),
+            )
+        )
         token = _PUBLISH_RESPONSE_EVENT.set(bool(publish_response))
         history_token = _TURN_HISTORY_OVERRIDE.set(
             tuple(history_override) if history_override is not None else None
@@ -11222,6 +11231,18 @@ class BrainManager:
                     consume_pending_voice_attachments
                 ),
             )
+        except AgentPolicyError as exc:
+            reply = policy_response(self._resolve_turn_lang())
+            if turn_override is not None:
+                turn_override.receipt.finish_reason = "policy_refusal"
+                turn_override.receipt.policy_refusal = exc.reason
+            if text_consumer is not None:
+                text_consumer(reply)
+            await self._record_response_side_effects(
+                user_text=user_text, response_text=reply, use_history=use_history,
+                trace_id=trace_id, curate=False,
+            )
+            return reply
         finally:
             # Keep the last completed turn inspectable for diagnostics/tests,
             # while active concurrent turns continue reading their own
@@ -11542,7 +11563,9 @@ class BrainManager:
         if agent_owned and private is not None and private.tool_context.get("chat_read_only"):
             # Our filtered tool set cannot restrict an external agent's own
             # tools. Fail before dispatch rather than silently acting in Plan.
-            raise RuntimeError(
+            if self.has_pending_voice_confirm():
+                await self._cancel_agent_conversations()
+            raise AgentPolicyError(
                 "The selected agent controls its own tools and cannot enforce Plan mode. "
                 "Switch this chat to Build mode before asking it to act."
             )

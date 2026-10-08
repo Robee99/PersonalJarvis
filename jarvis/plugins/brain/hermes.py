@@ -187,7 +187,7 @@ def thinking_off_by_config() -> bool:
     """Whether ``[brain.providers.hermes].thinking_budget = 0`` is set."""
     try:
         provider = cfg.load_config().brain.providers.get("hermes")
-    except Exception:  # noqa: BLE001 â€” an unreadable config keeps Hermes's own reasoning setting
+    except Exception:  # noqa: BLE001 — an unreadable config keeps Hermes's own reasoning setting
         return False
     return provider is not None and getattr(provider, "thinking_budget", None) == 0
 
@@ -196,7 +196,7 @@ def configured_base_url() -> str:
     """The card's server URL, else Hermes's default API server address."""
     try:
         provider = cfg.load_config().brain.providers.get("hermes")
-    except Exception:  # noqa: BLE001 â€” an unreadable config falls back to the default address
+    except Exception:  # noqa: BLE001 — an unreadable config falls back to the default address
         provider = None
     raw = (getattr(provider, "base_url", "") or "").strip() if provider is not None else ""
     from .ollama import normalize_server_root
@@ -286,7 +286,7 @@ def phrase_language() -> str:
 
     try:
         pinned = str(cfg.load_config().brain.reply_language or "")
-    except Exception:  # noqa: BLE001 â€” an unreadable config speaks the default language
+    except Exception:  # noqa: BLE001 — an unreadable config speaks the default language
         pinned = ""
     return pinned if pinned in ("de", "en", "es") else DEFAULT_LOCALE
 
@@ -601,7 +601,7 @@ class HermesBrain:
                 async for item in self._events(resp.aiter_lines()):
                     run.queue.put_nowait(item)
             run.queue.put_nowait(_END)
-        except Exception as exc:  # noqa: BLE001 â€” handed to the reader, which raises it
+        except Exception as exc:  # noqa: BLE001 — handed to the reader, which raises it
             run.queue.put_nowait(exc)
 
     async def _relay(self, run: _OpenRun) -> AsyncIterator[BrainDelta]:
@@ -726,7 +726,7 @@ class HermesBrain:
                     requested = True
                     # Wake an active relay as well as retiring a parked one.
                     run.queue.put_nowait(asyncio.CancelledError())
-                except Exception as exc:  # noqa: BLE001 â€” no raw provider body or key
+                except Exception as exc:  # noqa: BLE001 — no raw provider body or key
                     log.warning("Hermes run stop could not be confirmed (%s)", type(exc).__name__)
                     if require_stop:
                         raise RuntimeError(
@@ -774,7 +774,7 @@ class HermesBrain:
         try:
             async with self._client() as client:
                 resp = await client.post(url, json=body, headers=self._headers(run.base_url))
-        except Exception as exc:  # noqa: BLE001 â€” an unreachable Hermes counts as unresolved
+        except Exception as exc:  # noqa: BLE001 — an unreachable Hermes counts as unresolved
             log.warning("Hermes approval %s could not be sent: %s", choice, exc)
             return False
         if resp.status_code != 200:
@@ -817,7 +817,7 @@ class HermesBrain:
                     headers=self._headers(base_url),
                 )
             rows = resp.json().get("data") if resp.status_code == 200 else None
-        except Exception as exc:  # noqa: BLE001 â€” the watcher tries again on its next tick
+        except Exception as exc:  # noqa: BLE001 — the watcher tries again on its next tick
             log.debug("Hermes session read failed: %s", exc)
             return None
         return {

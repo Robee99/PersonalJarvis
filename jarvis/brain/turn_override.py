@@ -44,6 +44,7 @@ class TurnReceipt:
     tokens_out: int = 0
     cost_usd: float = 0.0
     finish_reason: str = ""
+    policy_refusal: str = ""
     # Provider completion is separate from a later honesty guard rejecting
     # its answer. Callers must not label a full fallback as completed work.
     guard_failure: bool = False
@@ -70,6 +71,7 @@ class TurnReceipt:
         self.tokens_out = int(tokens_out)
         self.cost_usd = float(cost_usd)
         self.finish_reason = finish_reason
+        self.policy_refusal = ""
         self.guard_failure = False
         self.failure_reason = ""
 

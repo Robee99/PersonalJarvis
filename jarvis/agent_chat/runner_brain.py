@@ -445,7 +445,9 @@ async def run_brain_turn(
     mirror = _StepMirror(emit, turn_id, handle.bus, handle.trace_id)
     ref = approval_ref(session.session_id)
 
-    async def finish(status: str, usage: dict[str, Any], error: str | None = None) -> None:
+    async def finish(
+        status: str, usage: dict[str, Any], error: str | None = None, policy: str = "",
+    ) -> None:
         await emit(
             "turn_finished",
             {
@@ -454,6 +456,7 @@ async def run_brain_turn(
                 "duration_ms": int((time.monotonic() - started) * 1000),
                 "usage": usage,
                 "error": error,
+                **({"policy_refusal": policy} if policy else {}),
             },
         )
 
@@ -570,7 +573,7 @@ async def run_brain_turn(
         elif override.receipt.finish_reason in ("error", "length"):
             status = "error"
             error = "The selected agent did not complete this turn."
-    await finish(status, override.receipt.usage(), error)
+    await finish(status, override.receipt.usage(), error, override.receipt.policy_refusal)
 
 
 async def _generate(
