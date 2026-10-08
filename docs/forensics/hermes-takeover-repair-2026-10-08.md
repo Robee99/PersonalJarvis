@@ -89,3 +89,56 @@ Validation on the supported private MCP environment (`mcp==1.28.1`):
 - Ruff identities compared with HEAD: **32 existing findings, 0 added**. Windows generated HTML line endings normalized; diff whitespace checked.
 
 The production UI bundle is included. These are source/contract/component checks, not microphone, installed-app, live-provider, connector or installer acceptance. Installed Jarvis and the installed Hermes core were not changed by this stage. P1 canonical model ownership, wider connected-app bridging and P2 project intelligence remain open.
+
+
+## Canonical Hermes model selection (P1 follow-up)
+
+The native Hermes conversation's durable `browser_model_lock` is the selected
+model authority. The voice settings picker and typed chat picker both read/write
+this preference through the packaged control plugin. Main-conversation turns send
+the virtual `hermes-agent` model so a stale Jarvis per-chat or voice value cannot
+supersede the native choice. Other isolated Hermes sessions keep their explicit
+selection contract. Existing Jarvis session rows are display/history projections;
+acknowledged changes refresh their live UI, rather than re-pin a second config.
+
+Picking before the first turn creates the native API conversation and its peer in
+one native atomic upsert, preserving an existing peer in a race. Reads/writes check
+the authenticated profile, conversation key and resumed lineage. Selection writes
+require a durable acknowledgement. Failures return a safe retry/setup explanation,
+leave the old preference intact and never run a health/model probe. Controls have
+an eight-second timeout. Updating the packaged plugin requires free-voice setup
+and a Hermes gateway restart; this stage has not updated the installed gateway.
+
+An explicit pin uses native Hermes's strict lock: an unavailable model fails closed
+rather than substituting another provider. **Hermes decides** releases that lock
+and the previous raw model to Hermes's own session/default routing, including any
+native `/model` override; it is not a promise of an automatic six-model optimizer.
+Reported runtime metadata and fallback notices are kept separate from preference,
+sanitized and logged; a response/failure never changes the saved selection.
+
+Validation on 2026-10-08:
+
+- Selector/voice/chat/approval/picker regression batch: **99 passed, 6 skipped**.
+  Seven new Python cases cover both selector directions, stale values, adapter
+  rebuild, unavailable-control writes, acknowledged display/history updates and
+  a gateway-reported cloud fallback retaining the Hermes-routing preference.
+- Wider source/shared-guard batch: **1180 passed, 7 skipped, 4 baseline failures**.
+  Exact committed HEAD `87bca8d` under the same private environment: **1173 passed,
+  7 skipped, the same 4 failures**. Two are the previously recorded order-dependent
+  `society_browser` expectations. The other two are unchanged provider-list tests:
+  an extra section-health tab and a public `~/.grok/auth.json` help path rejected by
+  a blanket substring expectation. No test expectation or baseline was weakened.
+- Real native Hermes runner: **2 passed**. Model preference tests use the actual
+  plugin loader, adapter, DB persistence and runtime precedence. Reconstructing
+  the DB adapter retains the selection. A stale override cannot shadow a confirmed
+  pin; an unavailable fixture runtime and a foreign peer cannot alter it. Native
+  detached-stop contract remains green. No model inference or real credentials.
+- Frontend: **84 passed** across selector, remembered selection, reducer and
+  WorkTrace components. TypeScript/production build passed. Light/dark browser
+  previews of the actual selector show a chat change updating the voice label.
+- Ruff comparison with exact HEAD: **32 existing findings, zero new findings**;
+  whitespace checked. The generated production bundle is included.
+
+Live local/cloud inference, actual gateway fallback, installed-app and voice-device
+acceptance remain unverified for this stage. The broader connected-app bridge,
+project intelligence/Orb/navigation and Windows installer acceptance remain open.

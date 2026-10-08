@@ -65,6 +65,22 @@ afterEach(() => {
 });
 
 describe("BrainModelSelector", () => {
+  it("reads Hermes's native pick and refreshes it after a chat selection without saving again", async () => {
+    let model = "gemma";
+    const fetch = vi.fn(async (_input: string) => ({ ok: true, json: async () => ({
+      ...MODELS, provider: "hermes", current_model: model,
+      models: [{ id: "gemma", label: "Cached Gemma" }, { id: "nous::fixture", label: "Free cloud" }],
+    }) }));
+    vi.stubGlobal("fetch", fetch);
+    render(<BrainModelSelector providerId="hermes" currentModel="old-voice-pick" />);
+    await waitFor(() => expect(screen.getByLabelText("apikeys_model.model_label").textContent).toContain("Cached Gemma"));
+    model = "nous::fixture";
+    fireEvent(window, new CustomEvent("jarvis:secret-configured", { detail: { key: "brain.providers.hermes.model" } }));
+    await waitFor(() => expect(screen.getByLabelText("apikeys_model.model_label").textContent).toContain("Free cloud"));
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch.mock.calls.every((call) => String(call[0]).endsWith("/models"))).toBe(true);
+  });
+
   it("opens a dropdown listing the provider's models", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<BrainModelSelector providerId="gemini" currentModel="gemini-3-flash-preview" />);

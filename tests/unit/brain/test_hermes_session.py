@@ -269,7 +269,10 @@ async def test_a_typed_chat_turn_on_the_hermes_seat_reaches_the_same_hermes_sess
     assert spoken == "I opened Notepad."
     typed_run, spoken_run = server.runs
     assert typed_run.body["session_id"] == spoken_run.body["session_id"] == SESSION_ID
-    assert typed_run.body["model"] == "stepfun/step-3.7-flash:free"
+    # The per-chat display/history value is not a second routing authority.
+    # Both surfaces let the native session's durable model preference win.
+    assert typed_run.body["model"] == spoken_run.body["model"] == "hermes-agent"
+    assert "provider" not in typed_run.body and "provider" not in spoken_run.body
     assert typed_run.body["input"].endswith("Open Notepad and type hello from JARVIS")
     assert "Always reply in English" in typed_run.body["instructions"]
 

@@ -115,11 +115,45 @@ async def save_chat_selection(body: ChatSelectionBody, request: Request) -> dict
         row = provider_row(provider)
         if account is None or row is None or account.platform != row.agent:
             raise HTTPException(400, "This subscription account does not belong to the provider")
+    model = await _hermes_model(body.model, request) if provider == "hermes" else body.model.strip()
     selection = ChatSelection(
-        provider, body.model.strip(), normalize_effort(provider, body.effort), body.account_id
+        provider, model, normalize_effort(provider, body.effort), body.account_id
     )
     _service(request).store.save_chat_selection(selection)
     return selection.to_dict()
+
+
+async def _hermes_model(model: str | None = None, request: Request | None = None) -> str:
+    from jarvis.brain.hermes_selection import SelectionError, get_selection, set_selection
+
+    try:
+        selection = await get_selection() if model is None else await set_selection(model)
+    except SelectionError as exc:
+        raise HTTPException(503, str(exc)) from None
+    chosen = str(selection["selection"])
+    if model is not None and request is not None:
+        await _hermes_model_notice(request, chosen)
+    return chosen
+
+
+async def _hermes_model_notice(request: Request, model: str) -> None:
+    """Project an acknowledged native preference into existing display/history rows."""
+    from jarvis.agent_chat.store import ChatSelection
+    from jarvis.core.events import SecretConfigured
+    from jarvis.ui.web.provider_routes import _emit
+
+    svc = _service_from_state(request.app.state)
+    if svc is not None:
+        for session in svc.store.list_sessions(surface="jarvis"):
+            if session.provider == "hermes" and session.model != model:
+                svc.store.update_session(session.session_id, model=model)
+                await svc._emit(session.session_id, make_event("session_updated", {"model": model}))
+        saved = svc.store.chat_selection()
+        if saved is not None and saved.provider == "hermes":
+            svc.store.save_chat_selection(
+                ChatSelection(saved.provider, model, saved.effort, saved.account_id)
+            )
+    await _emit(request, SecretConfigured(key="brain.providers.hermes.model", action="set"))
 
 
 class VoiceChatBody(BaseModel):
@@ -390,15 +424,15 @@ async def get_catalog(
         # to a seat that would read it as plain text.
         d["typeahead"] = list(typeahead.triggers_for(runner, surface))
         rows.append(d)
+    selection = svc.store.chat_selection() if surface == "jarvis" else None
+    saved = selection.to_dict() if selection is not None else None
+    if saved is not None and saved["provider"] == "hermes":
+        saved["model"] = await _hermes_model()
     return {
         "providers": rows,
         "default_cwd": svc.default_cwd(surface),
         "shell": shell_label(),
-        "selection": (
-            selection.to_dict()
-            if surface == "jarvis" and (selection := svc.store.chat_selection()) is not None
-            else None
-        ),
+        "selection": saved,
     }
 
 
@@ -804,7 +838,7 @@ def _title_jarvis_chats(request: Request, svc: Any, rows: list[dict[str, Any]]) 
 
 
 @router.post("/sessions", status_code=201)
-def create_session(body: CreateSessionBody, request: Request) -> dict[str, Any]:
+async def create_session(body: CreateSessionBody, request: Request) -> dict[str, Any]:
     svc = _service(request)
     if body.account_id:
         from jarvis import agent_accounts
@@ -824,10 +858,17 @@ def create_session(body: CreateSessionBody, request: Request) -> dict[str, Any]:
             ),
         )
     cwd = _validate_cwd(body.cwd)
+    # Creating a UI chat must not re-pin a stale per-chat value over a model
+    # the voice settings just selected for the same native conversation.
+    model = (
+        await _hermes_model()
+        if body.surface == "jarvis" and body.provider == "hermes"
+        else body.model
+    )
     try:
         session = svc.create_session(
             provider=body.provider,
-            model=body.model,
+            model=model,
             effort=body.effort,
             cwd=cwd,
             permission_mode=normalize_permission(ladder, body.permission_mode),
@@ -849,7 +890,7 @@ def create_session(body: CreateSessionBody, request: Request) -> dict[str, Any]:
 
 
 @router.get("/sessions/{session_id}")
-def get_session(
+async def get_session(
     session_id: str,
     request: Request,
     tail: int | None = Query(
@@ -861,6 +902,8 @@ def get_session(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     d = session.to_dict()
+    if session.surface == "jarvis" and session.provider == "hermes":
+        d["model"] = await _hermes_model()
     d["running"] = svc.is_running(session_id)
     return {"session": d, "events": svc.store.list_events(session_id, tail=tail)}
 
@@ -944,6 +987,9 @@ async def patch_session(
             await svc.controls._clear_saved_native(session_id)
     if current.surface == "society" and svc.is_running(session_id):
         raise HTTPException(status_code=409, detail="Agent chat is working")
+    if current.surface == "jarvis" and (fields.get("provider") or current.provider) == "hermes":
+        if "model" in fields or ("provider" in fields and current.provider != "hermes"):
+            fields["model"] = await _hermes_model(fields.get("model", ""), request)
     session = svc.store.update_session(session_id, **fields)
     assert session is not None
     if session.surface == "jarvis" and {"provider", "model", "effort"}.intersection(fields):

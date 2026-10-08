@@ -532,7 +532,7 @@ class HermesBrain:
     def request_body(self, req: BrainRequest) -> dict[str, Any]:
         """One run in the Jarvis session: Hermes loads the history itself."""
         body: dict[str, Any] = {
-            **model_fields(self._model),
+            **model_fields(AGENT_MODEL if self.session_id == SESSION_ID else self._model),
             "input": run_input(req),
             "instructions": build_instructions(req),
             "session_id": self.session_id,
@@ -1092,7 +1092,28 @@ class HermesBrain:
         if name == "run.completed":
             runtime = item.get("runtime")
             if isinstance(runtime, dict):
-                self.last_runtime = runtime
+                from jarvis.core.redact import safe_preview
+
+                # Keep actual runtime evidence separate from the saved pick.
+                # Provider bodies or transport credentials never belong here.
+                self.last_runtime = {
+                    key: safe_preview(str(runtime[key]), max_chars=200)
+                    for key in (
+                        "provider", "model", "route_source", "model_lock", "fallback_reason"
+                    )
+                    if key in runtime
+                }
+                if isinstance(runtime.get("requested"), dict):
+                    self.last_runtime["requested"] = {
+                        key: safe_preview(str(runtime["requested"].get(key) or ""), max_chars=200)
+                        for key in ("provider", "model")
+                    }
+                if self.last_runtime.get("fallback_reason"):
+                    log.info(
+                        "Hermes reported fallback to %s/%s: %s",
+                        self.last_runtime.get("provider"), self.last_runtime.get("model"),
+                        self.last_runtime["fallback_reason"],
+                    )
             out = [BrainDelta(finish_reason="stop")]
             usage = item.get("usage")
             if isinstance(usage, dict):

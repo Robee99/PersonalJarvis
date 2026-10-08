@@ -47,6 +47,8 @@ class FakeHermesApi:
         self.delegation_stops: list[str] = []
         self.reject_delegation_stop = False
         self.approval_failure_status: int | None = None
+        self.model_selection = "hermes-agent"
+        self.reject_model_selection = False
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -73,6 +75,16 @@ class FakeHermesApi:
         parts = path.strip("/").split("/")
         if parts[:3] == ["api", "jarvis", "conversations"]:
             sid = parts[3]
+            if parts[-1] == "model":
+                if request.method == "POST":
+                    if self.reject_model_selection:
+                        return httpx.Response(503, text="private provider response")
+                    self.model_selection = json.loads(request.content)["selection"]
+                return httpx.Response(200, json={
+                    "conversation_id": sid, "session_id": sid,
+                    "selection": self.model_selection, "persisted": True,
+                    "source": "session_model_lock",
+                })
             records = {
                 rid: row for rid, row in self.delegations.items() if row["session_id"] == sid
             }

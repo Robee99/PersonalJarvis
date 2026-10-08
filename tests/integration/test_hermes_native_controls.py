@@ -8,6 +8,7 @@ isolated homes; the injected child runner performs no external action.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 
 import pytest
@@ -149,4 +150,123 @@ async def test_real_native_child_stop_is_owned_retryable_and_idempotent(tmp_path
         for adapter in adapters:
             adapter._close_cached_session_dbs()
         registry._reset_for_tests()
+        _reset_plugin_managers_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_native_model_preference_is_durable_owned_and_used_by_runtime(tmp_path, monkeypatch):
+    """Exercise the real DB/route/precedence contract without calling a model."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _reset_plugin_managers_for_tests()
+    tmp_path.joinpath("config.yaml").write_text(
+        "plugins:\n  enabled: [jarvis-control]\n", encoding="utf-8"
+    )
+    install_controls(home=tmp_path, argv=["hermes"], run=lambda _a: (0, "enabled"))
+    discover_plugins()
+    config = PlatformConfig(
+        enabled=True,
+        extra={
+            "key": "fixture-control-key-long-enough",
+            "model_name": "hermes-agent",
+            "model_routes": {"gemma": {"model": "fixture-gemma", "provider": "local-gemma"}},
+        },
+    )
+    adapter = APIServerAdapter(config)
+    reloaded_adapters = []
+    app = web.Application()
+    adapter._wire_plugin_handlers(app)
+    path = "/api/jarvis/conversations/jarvis-main/model"
+    headers = {
+        "Authorization": "Bearer fixture-control-key-long-enough",
+        "X-Hermes-Session-Key": "jarvis:main",
+    }
+    try:
+        async with TestClient(TestServer(app)) as client:
+            assert (await client.get(path)).status == 401
+            response = await client.get(path, headers=headers)
+            assert (await response.json())["selection"] == "hermes-agent"
+            for choice, model, provider in [
+                ("gemma", "fixture-gemma", "local-gemma"),
+                ("nous::fixture-free-model", "fixture-free-model", "nous"),
+            ]:
+                response = await client.post(path, headers=headers, json={"selection": choice})
+                assert response.status == 200, await response.text()
+                assert (await response.json())["selection"] == choice
+                # Close/reopen the real native DB: the preference is not an
+                # adapter-local cache and survives the gateway rebuilding it.
+                reloaded = APIServerAdapter(config)
+                reloaded_adapters.append(reloaded)
+                db = await reloaded._ensure_session_db_async()
+                row = db.get_session("jarvis-main")
+                assert row["session_key"] == "jarvis:main"
+                runtime = adapter._effective_session_runtime_request(
+                    session=row, body={"model": "hermes-agent"}
+                )
+                assert runtime["persisted_lock"] and runtime["require_model_lock"]
+                # A stale native /model override also cannot shadow this lock.
+                monkeypatch.setattr(
+                    adapter,
+                    "_session_model_override_for",
+                    lambda _k: {
+                        "model": "stale-other-model",
+                        "provider": "other-provider",
+                    },
+                )
+
+                def provider_runtime(
+                    kwargs, chosen, *, target_model, required=False, provider=provider, model=model
+                ):
+                    assert required and chosen == provider and target_model == model
+                    kwargs["provider"] = chosen
+                    return True
+
+                monkeypatch.setattr(adapter, "_apply_provider_runtime", provider_runtime)
+                kwargs = {"provider": "old-default"}
+                resolved, override, _, _ = adapter._select_agent_runtime(
+                    kwargs,
+                    "old-model",
+                    requested_model=runtime["requested"]["model"],
+                    requested_provider=runtime["requested"]["provider"],
+                    route=runtime["route"],
+                    session_model=row["model"],
+                    confirmed_runtime_lock=True,
+                    gateway_session_key="jarvis:main",
+                    session_id="jarvis-main",
+                )
+                assert (resolved, kwargs["provider"], override) == (model, provider, None)
+                before = db.get_session("jarvis-main")["model_config"]
+
+                def unavailable(*_a, **_kw):
+                    raise RuntimeError("fixture local model unavailable")
+
+                monkeypatch.setattr(adapter, "_apply_provider_runtime", unavailable)
+                with pytest.raises(RuntimeError, match="unavailable"):
+                    adapter._select_agent_runtime(
+                        {},
+                        "old-model",
+                        requested_model=runtime["requested"]["model"],
+                        requested_provider=runtime["requested"]["provider"],
+                        route=runtime["route"],
+                        session_model=row["model"],
+                        confirmed_runtime_lock=True,
+                        gateway_session_key="jarvis:main",
+                        session_id="jarvis-main",
+                    )
+                assert db.get_session("jarvis-main")["model_config"] == before
+                foreign = {**headers, "X-Hermes-Session-Key": "another-chat"}
+                assert (
+                    await client.post(path, headers=foreign, json={"selection": "gemma"})
+                ).status == 403
+                assert db.get_session("jarvis-main")["model_config"] == before
+            response = await client.post(path, headers=headers, json={"selection": "hermes-agent"})
+            assert response.status == 200
+            assert (await response.json())["source"] == "hermes_routing"
+            row = db.get_session("jarvis-main")
+            assert not json.loads(row["model_config"])["browser_model_lock"]["confirmed"]
+            assert adapter._runtime_request_from_persisted_session_lock(row, {}) is None
+            assert row["model"] == ""
+    finally:
+        adapter._close_cached_session_dbs()
+        for reloaded in reloaded_adapters:
+            reloaded._close_cached_session_dbs()
         _reset_plugin_managers_for_tests()

@@ -163,6 +163,130 @@ def _wire(app, adapter):
                 status=503 if failed else 200,
             )
 
+    async def model_session(request, *, create=False):
+        # The control key authenticates the caller; the declared key fences
+        # the durable conversation. Compression tips must keep that ownership.
+        if not adapter._expected_api_key() or get_hermes_home().resolve() != home:
+            return (
+                None,
+                None,
+                web.json_response({"error": "Model controls unavailable."}, status=403),
+            )
+        error = adapter._check_auth(request)
+        if error is not None:
+            return None, None, error
+        key, error = adapter._parse_session_key_header(request)
+        if error is not None or not key:
+            return (
+                None,
+                None,
+                error
+                if error is not None
+                else web.json_response({"error": "Conversation key required."}, status=403),
+            )
+        sid = request.match_info["session_id"]
+        from gateway.session import _is_path_unsafe
+
+        if not sid or len(sid) > 128 or _is_path_unsafe(sid):
+            return None, None, web.json_response({"error": "Invalid conversation."}, status=400)
+        db = await adapter._ensure_session_db_async()
+        if db is None:
+            return (
+                None,
+                None,
+                web.json_response({"error": "Session store unavailable."}, status=503),
+            )
+        session = await asyncio.to_thread(db.get_session, sid)
+        if session is None and create:
+            # Native upsert records ownership in the same atomic write and
+            # preserves an existing peer if another caller won the race.
+            await asyncio.to_thread(db.create_session, sid, source="api_server", session_key=key)
+            session = await asyncio.to_thread(db.get_session, sid)
+        if session is None:
+            return db, None, None
+        if session.get("source") != "api_server" or session.get("session_key") != key:
+            return (
+                None,
+                None,
+                web.json_response({"error": "Conversation key does not match."}, status=403),
+            )
+        tip = await asyncio.to_thread(db.resolve_resume_session_id, sid)
+        session = await asyncio.to_thread(db.get_session, tip)
+        if (
+            session is None
+            or session.get("source") != "api_server"
+            or session.get("session_key") != key
+        ):
+            return (
+                None,
+                None,
+                web.json_response({"error": "Conversation lineage does not match."}, status=403),
+            )
+        return db, session, None
+
+    def model_payload(request, session):
+        config = adapter._parse_session_model_config((session or {}).get("model_config"))
+        lock = config.get("browser_model_lock")
+        lock = lock if isinstance(lock, dict) else {}
+        model, provider = adapter._requested_ids(lock)
+        if lock.get("confirmed") and model:
+            selection = f"{provider}::{model}" if provider else model
+            source = "session_model_lock"
+        else:
+            selection, source = "hermes-agent", "hermes_routing"
+        return {
+            "conversation_id": request.match_info["session_id"],
+            "session_id": (session or {}).get("id"),
+            "selection": selection,
+            "source": source,
+            "persisted": session is not None,
+        }
+
+    async def get_model(request):
+        _, session, error = await model_session(request)
+        if error is not None:
+            return error
+        return web.json_response(model_payload(request, session))
+
+    async def set_model(request):
+        async with control_lock:
+            body, error = await adapter._read_json_body(request)
+            if error is not None:
+                return error
+            selection = body.get("selection")
+            if not isinstance(selection, str) or not selection.strip() or len(selection) > 256:
+                return web.json_response({"error": "A model selection is required."}, status=400)
+            selection = selection.strip()
+            native = {"model": selection, "require_model_lock": True}
+            provider, separator, model = selection.partition("::")
+            if separator:
+                native = {"provider": provider, "model": model, "require_model_lock": True}
+            runtime = adapter._session_runtime_request_from_body(native)
+            if selection != "hermes-agent":
+                error = adapter._runtime_lock_error(runtime)
+                if error is not None:
+                    return error
+            db, session, error = await model_session(request, create=True)
+            if error is not None:
+                return error
+            sid = session["id"]
+            if selection == "hermes-agent":
+                # Native reset preserves lineage but clears the lock and the
+                # previous raw model; future routing belongs to Hermes.
+                await asyncio.to_thread(
+                    db.update_session_runtime_lock, sid, model="", confirmed=False
+                )
+            elif not await asyncio.to_thread(adapter._persist_session_runtime_lock, sid, runtime):
+                return web.json_response(
+                    {"error": "Model selection was not persisted."}, status=503
+                )
+            session = await asyncio.to_thread(db.get_session, sid)
+            return web.json_response(model_payload(request, session))
+
+    model_path = "/api/jarvis/conversations/{session_id}/model"
+    app.router.add_get(model_path, get_model)
+    app.router.add_post(model_path, set_model)
+
     path = "/api/jarvis/conversations/{session_id}/delegations"
     app.router.add_get(path, roster)
     app.router.add_post(path + "/stop", stop)
