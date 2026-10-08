@@ -489,3 +489,79 @@ async def test_native_tool_previews_are_redacted_and_scoped_to_the_turn():
     assert "redacted" in str(events)
     assert events[-1][1]["is_error"] is True
     assert events[-1][1]["duration_ms"] == 250
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_detached_task_from_the_other_surface():
+    server = FakeHermesApi(say("Started.", tools=("delegate_task",)))
+    voice, chat = _brain(server), _brain(server)
+    interrupted, finished = asyncio.Event(), asyncio.Event()
+
+    async def child():
+        await interrupted.wait()
+        finished.set()
+
+    task = asyncio.create_task(child())
+    server.delegations["deleg-owned"] = {
+        "session_id": SESSION_ID,
+        "status": "running",
+        "interrupt": interrupted,
+    }
+    unrelated = asyncio.Event()
+    server.delegations["deleg-other"] = {
+        "session_id": "another-conversation",
+        "status": "running",
+        "interrupt": unrelated,
+    }
+    await _say(voice, "research my project")
+    assert not server.runs[0].stopped  # foreground already completed
+    assert await chat.cancel_conversation() == 1
+    await asyncio.wait_for(finished.wait(), 2)
+    await task
+    assert not unrelated.is_set()
+    assert voice._watcher is None
+    assert hermes._session_state(SESSION_ID).delegations["deleg-owned"] == "interrupt_requested"
+    assert await voice.cancel_conversation() == 0
+    assert server.delegation_stops == ["deleg-owned"]
+
+
+@pytest.mark.asyncio
+async def test_detached_stop_failure_retains_work_for_retry():
+    server = FakeHermesApi()
+    brain = _brain(server)
+    interrupted = asyncio.Event()
+    server.delegations["deleg-owned"] = {
+        "session_id": SESSION_ID,
+        "status": "running",
+        "interrupt": interrupted,
+    }
+    brain._watcher = asyncio.create_task(asyncio.Event().wait())
+    watcher = brain._watcher
+    server.reject_delegation_stop = True
+    with pytest.raises(RuntimeError, match="could not confirm background") as exc:
+        await brain.cancel_conversation()
+    assert "private" not in str(exc.value)
+    assert brain._watcher is watcher and not watcher.cancelled()
+    assert not interrupted.is_set()
+    server.reject_delegation_stop = False
+    assert await brain.cancel_conversation() == 1
+    assert interrupted.is_set()
+    assert brain._watcher is None
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_completed_detached_work_and_idle_stop_are_noops():
+    server = FakeHermesApi()
+    brain = _brain(server)
+    assert await brain.cancel_conversation() == 0
+    completed = asyncio.Event()
+    server.delegations["deleg-done"] = {
+        "session_id": SESSION_ID,
+        "status": "completed",
+        "interrupt": completed,
+    }
+    assert await brain.cancel_conversation() == 0
+    assert await brain.cancel_conversation() == 0
+    assert not completed.is_set()
+    assert server.delegation_stops == []

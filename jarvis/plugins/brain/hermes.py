@@ -103,6 +103,8 @@ class _SessionState:
     pending_approval: _PendingApproval | None = None
     watcher: asyncio.Task[None] | None = None
     runs: dict[str, _OpenRun] = field(default_factory=dict)
+    delegations: dict[str, str] = field(default_factory=dict)
+    control_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 _SESSIONS: dict[str, _SessionState] = {}
@@ -185,7 +187,7 @@ def thinking_off_by_config() -> bool:
     """Whether ``[brain.providers.hermes].thinking_budget = 0`` is set."""
     try:
         provider = cfg.load_config().brain.providers.get("hermes")
-    except Exception:  # noqa: BLE001 — an unreadable config keeps Hermes's own reasoning setting
+    except Exception:  # noqa: BLE001 â€” an unreadable config keeps Hermes's own reasoning setting
         return False
     return provider is not None and getattr(provider, "thinking_budget", None) == 0
 
@@ -194,7 +196,7 @@ def configured_base_url() -> str:
     """The card's server URL, else Hermes's default API server address."""
     try:
         provider = cfg.load_config().brain.providers.get("hermes")
-    except Exception:  # noqa: BLE001 — an unreadable config falls back to the default address
+    except Exception:  # noqa: BLE001 â€” an unreadable config falls back to the default address
         provider = None
     raw = (getattr(provider, "base_url", "") or "").strip() if provider is not None else ""
     from .ollama import normalize_server_root
@@ -284,7 +286,7 @@ def phrase_language() -> str:
 
     try:
         pinned = str(cfg.load_config().brain.reply_language or "")
-    except Exception:  # noqa: BLE001 — an unreadable config speaks the default language
+    except Exception:  # noqa: BLE001 â€” an unreadable config speaks the default language
         pinned = ""
     return pinned if pinned in ("de", "en", "es") else DEFAULT_LOCALE
 
@@ -416,19 +418,78 @@ class HermesBrain:
         it stopped merely because its local event reader was cancelled.
         """
         state = _session_state(self.session_id)
-        count = 0
-        for run in list(state.runs.values()):
-            pending = state.pending_approval
-            if await self._close(run, require_stop=True):
-                count += 1
-                if pending is not None and pending.run is run:
-                    # Release the approval waiter after the native interrupt.
-                    # This can only deny, never grant a now-stale approval.
-                    await self._post_approval(run, pending.request_id, "deny")
-        if state.watcher is not None and not state.watcher.done():
-            state.watcher.cancel()
-            state.watcher = None
-        return count
+        async with state.control_lock:
+            count = 0
+            for run in list(state.runs.values()):
+                pending = state.pending_approval
+                if await self._close(run, require_stop=True):
+                    count += 1
+                    if pending is not None and pending.run is run:
+                        await self._post_approval(run, pending.request_id, "deny")
+            # A completed foreground run may have left native children alive.
+            # Discover them in Hermes, including after a Jarvis restart. The
+            # watcher is retired only after native cancellation is accepted.
+            count += await self._stop_delegations(state)
+            if state.watcher is not None and not state.watcher.done():
+                state.watcher.cancel()
+                state.watcher = None
+            return count
+
+    async def _stop_delegations(self, state: _SessionState) -> int:
+        base = configured_base_url()
+        path = f"{base}/api/jarvis/conversations/{self.session_id}/delegations"
+        try:
+            async with self._client() as client:
+                resp = await client.get(path, headers=self._headers(base))
+                if resp.status_code != 200:
+                    raise ValueError("Native delegation roster unavailable")
+                payload = resp.json()
+                roster = self._delegation_roster(payload)
+                state.delegations = roster
+                active = [
+                    rid for rid, status in roster.items() if status in {"running", "stalling"}
+                ]
+                if not active:
+                    return 0
+                resp = await client.post(
+                    path + "/stop", json={"delegation_ids": active}, headers=self._headers(base)
+                )
+                if resp.status_code != 200:
+                    raise ValueError("Native delegation stop rejected")
+                payload = resp.json()
+                after = self._delegation_roster(payload)
+                requested = payload.get("requested")
+                if (payload.get("failed") != [] or not isinstance(requested, list)
+                        or any(rid not in active for rid in requested)
+                        or any(after.get(rid) not in {
+                            "interrupt_requested", "completed", "interrupted", "error", "stalled",
+                            "cancelled", "unknown", "finalizing",
+                        } for rid in active)):
+                    raise ValueError("Native delegation cancellation not confirmed")
+                state.delegations = after
+                return len(set(requested))
+        except Exception as exc:  # noqa: BLE001 — never include provider bodies or credentials
+            log.warning("Hermes background stop could not be confirmed (%s)", type(exc).__name__)
+            raise RuntimeError(
+                "Jarvis could not confirm background work's stop. Try Stop again. "
+                "If this repeats, run free-voice setup and restart Hermes."
+            ) from None
+
+    def _delegation_roster(self, payload: Any) -> dict[str, str]:
+        if not isinstance(payload, dict) or payload.get("session_id") != self.session_id:
+            raise ValueError("Mismatched native conversation")
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            raise ValueError("Invalid native delegation roster")
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("delegation_id"), str):
+                raise ValueError("Missing native delegation id")
+            rid, status = row["delegation_id"], row.get("status")
+            if not rid or not isinstance(status, str) or rid in result:
+                raise ValueError("Invalid native delegation state")
+            result[rid] = status
+        return result
 
     def can_call_tools(self) -> bool:
         return True
@@ -503,6 +564,10 @@ class HermesBrain:
         The reader outlives the turn only while the run waits for an approval
         the user was asked about.
         """
+        async with _session_state(self.session_id).control_lock:
+            return await self._start_unlocked(body)
+
+    async def _start_unlocked(self, body: dict[str, Any]) -> _OpenRun:
         base_url = configured_base_url()
         headers = self._headers(base_url)
         async with self._client() as client:
@@ -536,7 +601,7 @@ class HermesBrain:
                 async for item in self._events(resp.aiter_lines()):
                     run.queue.put_nowait(item)
             run.queue.put_nowait(_END)
-        except Exception as exc:  # noqa: BLE001 — handed to the reader, which raises it
+        except Exception as exc:  # noqa: BLE001 â€” handed to the reader, which raises it
             run.queue.put_nowait(exc)
 
     async def _relay(self, run: _OpenRun) -> AsyncIterator[BrainDelta]:
@@ -661,7 +726,7 @@ class HermesBrain:
                     requested = True
                     # Wake an active relay as well as retiring a parked one.
                     run.queue.put_nowait(asyncio.CancelledError())
-                except Exception as exc:  # noqa: BLE001 — no raw provider body or key
+                except Exception as exc:  # noqa: BLE001 â€” no raw provider body or key
                     log.warning("Hermes run stop could not be confirmed (%s)", type(exc).__name__)
                     if require_stop:
                         raise RuntimeError(
@@ -709,7 +774,7 @@ class HermesBrain:
         try:
             async with self._client() as client:
                 resp = await client.post(url, json=body, headers=self._headers(run.base_url))
-        except Exception as exc:  # noqa: BLE001 — an unreachable Hermes counts as unresolved
+        except Exception as exc:  # noqa: BLE001 â€” an unreachable Hermes counts as unresolved
             log.warning("Hermes approval %s could not be sent: %s", choice, exc)
             return False
         if resp.status_code != 200:
@@ -752,7 +817,7 @@ class HermesBrain:
                     headers=self._headers(base_url),
                 )
             rows = resp.json().get("data") if resp.status_code == 200 else None
-        except Exception as exc:  # noqa: BLE001 — the watcher tries again on its next tick
+        except Exception as exc:  # noqa: BLE001 â€” the watcher tries again on its next tick
             log.debug("Hermes session read failed: %s", exc)
             return None
         return {

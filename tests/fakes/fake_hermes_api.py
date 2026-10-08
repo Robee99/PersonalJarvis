@@ -43,6 +43,9 @@ class FakeHermesApi:
         self.scripts = list(scripts)
         self.runs: list[FakeRun] = []
         self.session_rows: list[dict[str, Any]] = []
+        self.delegations: dict[str, dict[str, Any]] = {}
+        self.delegation_stops: list[str] = []
+        self.reject_delegation_stop = False
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -67,6 +70,35 @@ class FakeHermesApi:
             self.runs.append(run)
             return httpx.Response(202, json={"run_id": run.run_id, "status": "started"})
         parts = path.strip("/").split("/")
+        if parts[:3] == ["api", "jarvis", "conversations"]:
+            sid = parts[3]
+            records = {
+                rid: row for rid, row in self.delegations.items() if row["session_id"] == sid
+            }
+            requested = []
+            if request.method == "POST":
+                if self.reject_delegation_stop:
+                    return httpx.Response(503, text="private provider response")
+                ids = json.loads(request.content)["delegation_ids"]
+                for rid in ids:
+                    row = records[rid]
+                    if row["status"] == "running":
+                        row["interrupt"].set()
+                        row["status"] = "interrupt_requested"
+                        self.delegation_stops.append(rid)
+                        requested.append(rid)
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": sid,
+                    "requested": requested,
+                    "failed": [],
+                    "data": [
+                        {"delegation_id": rid, "status": row["status"]}
+                        for rid, row in records.items()
+                    ],
+                },
+            )
         if parts[:2] == ["v1", "runs"] and len(parts) == 4:
             run = self._run(parts[2])
             if parts[3] == "events":

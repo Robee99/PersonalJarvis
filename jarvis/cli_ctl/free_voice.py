@@ -312,6 +312,7 @@ def run_free_voice(
     free_aux: Callable[[], tuple[str, str]] | None = None,
     lean_context: Callable[[], tuple[str, str]] | None = None,
     computer_use: Callable[[], tuple[str, str]] | None = None,
+    controls: Callable[[], tuple[str, str]] | None = None,
 ) -> FreeVoiceReport:
     report = FreeVoiceReport()
 
@@ -432,6 +433,14 @@ def run_free_voice(
             report.add("hermes-computer-use", *computer_use())
         except OSError as exc:
             report.add("hermes-computer-use", "failed", f"{type(exc).__name__}: {exc}")
+
+    if controls is not None:
+        try:
+            report.add("hermes-controls", *controls())
+        except OSError as exc:
+            report.add(
+                "hermes-controls", "failed", f"Native control setup failed ({type(exc).__name__})"
+            )
 
     return report
 
