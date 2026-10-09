@@ -30,7 +30,9 @@ async def collect(brain):
 async def test_all_free_cloud_choices_explicitly_select_nous():
     catalog = await ModelCatalog().list_models("hermes")
     choices = [m for m in catalog.models if m.id.startswith("nous::")]
-    assert len(choices) == 7
+    # The live Nous free catalog GROWS over time (7 choices when this test was
+    # written, 9 by 2026-10-09) — never pin an exact count, only a floor.
+    assert len(choices) >= 7
     for choice in choices:
         server = FakeHermesApi(say("ready"))
         await collect(agent(server, choice.id))
