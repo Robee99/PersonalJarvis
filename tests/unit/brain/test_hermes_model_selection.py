@@ -29,7 +29,9 @@ def setup(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["nous::cloud-one:free", "local-gemma::gemma", "hermes-agent"])
+@pytest.mark.parametrize(
+    "model", ["nous::cloud-one:free", "local-gemma::gemma", "local-qwen::qwen", "hermes-agent"]
+)
 async def test_native_selection_survives_adapter_rebuild_and_ignores_old_per_surface_pick(
     setup, model
 ):
@@ -203,3 +205,116 @@ async def test_gateway_reported_cloud_fallback_keeps_user_preference(setup, capl
     assert brain.last_runtime == runtime
     assert "fallback to nous/fixture-free-cloud: local unavailable" in caplog.text
     assert (await hermes_selection.get_selection())["selection"] == "hermes-agent"
+
+
+@pytest.mark.asyncio
+async def test_one_model_pick_activates_voice_and_all_jarvis_chats(app, setup, monkeypatch):
+    from jarvis.agent_chat.store import ChatSelection
+
+    class Brain:
+        active_provider = "local-openai"
+        last_persist_ok = True
+
+        async def switch(self, provider, *, persist):
+            assert persist
+            self.active_provider = provider
+
+    monkeypatch.setattr("jarvis.local_models.autostart.release", lambda _cfg: None)
+    voice_modes = []
+    monkeypatch.setattr("jarvis.core.config_writer.set_voice_mode", voice_modes.append)
+    app.state.brain = Brain()
+    app.state.config.brain.primary = "local-openai"
+    app.state.config.voice.mode = "realtime"
+    svc = app.state.agent_chat
+    svc.store.save_chat_selection(ChatSelection("local-openai", "old", "", ""))
+    chat = svc.create_session(provider="local-openai", model="old", surface="jarvis")
+    agent = svc.create_session(provider="local-openai", model="agent-model", surface="agent")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
+    ) as client:
+        result = await client.put(
+            "/api/providers/hermes/model",
+            json={
+                "model": "local-qwen::qwen",
+                "activate": True,
+            },
+        )
+    assert result.status_code == 200, result.text
+    assert result.json()["applied_live"] and result.json()["persisted"]
+    assert app.state.brain.active_provider == app.state.config.brain.primary == "hermes"
+    assert app.state.config.voice.mode == "pipeline" and voice_modes == ["pipeline"]
+    assert svc.store.chat_selection().provider == "hermes"
+    assert svc.store.get_session(chat.session_id).provider == "hermes"
+    assert svc.store.get_session(chat.session_id).model == "local-qwen::qwen"
+    assert svc.store.get_session(agent.session_id).model == "agent-model"
+    assert (await hermes_selection.get_selection())["selection"] == "local-qwen::qwen"
+
+
+@pytest.mark.asyncio
+async def test_activation_failure_restores_model_without_rewriting_chat(app, setup, monkeypatch):
+    class Brain:
+        active_provider = "local-openai"
+
+        async def switch(self, _provider, *, persist):
+            raise RuntimeError("fixture activation failure")
+
+    app.state.brain = Brain()
+    await hermes_selection.set_selection("gemma")
+    chat = app.state.agent_chat.create_session(
+        provider="local-openai", model="old", surface="jarvis"
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
+    ) as client:
+        result = await client.put(
+            "/api/providers/hermes/model",
+            json={
+                "model": "local-qwen::qwen",
+                "activate": True,
+            },
+        )
+    assert result.status_code == 500
+    assert app.state.brain.active_provider == "local-openai"
+    assert (await hermes_selection.get_selection())["selection"] == "gemma"
+    assert app.state.agent_chat.store.get_session(chat.session_id).provider == "local-openai"
+
+
+@pytest.mark.asyncio
+async def test_voice_save_failure_restores_previous_brain_model_and_mode(app, setup, monkeypatch):
+    from jarvis.ui.web import settings_routes
+
+    class Brain:
+        active_provider = "local-openai"
+        last_persist_ok = True
+
+        async def switch(self, provider, *, persist):
+            assert persist
+            self.active_provider = provider
+
+    def save_voice(mode):
+        if mode == "pipeline":
+            raise OSError("fixture disk failure")
+
+    monkeypatch.setattr("jarvis.local_models.autostart.release", lambda _cfg: None)
+    monkeypatch.setattr("jarvis.core.config_writer.set_voice_mode", save_voice)
+    monkeypatch.setattr(settings_routes, "_realtime_available_provider", lambda _cfg: "fixture")
+    app.state.brain = Brain()
+    app.state.config.brain.primary = "local-openai"
+    app.state.config.voice.mode = "realtime"
+    await hermes_selection.set_selection("gemma")
+    chat = app.state.agent_chat.create_session(
+        provider="local-openai", model="old", surface="jarvis"
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://fixture"
+    ) as client:
+        result = await client.put(
+            "/api/providers/hermes/model",
+            json={"model": "local-qwen::qwen", "activate": True},
+        )
+    assert result.status_code == 503, result.text
+    assert "Pipeline voice could not be saved" in result.text
+    assert app.state.brain.active_provider == app.state.config.brain.primary == "local-openai"
+    assert app.state.config.voice.mode == "realtime"
+    assert (await hermes_selection.get_selection())["selection"] == "gemma"
+    assert app.state.agent_chat.store.get_session(chat.session_id).provider == "local-openai"

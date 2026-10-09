@@ -123,20 +123,87 @@ async def save_chat_selection(body: ChatSelectionBody, request: Request) -> dict
     return selection.to_dict()
 
 
-async def _hermes_model(model: str | None = None, request: Request | None = None) -> str:
+async def _hermes_model(
+    model: str | None = None, request: Request | None = None, *, activate: bool = False
+) -> str:
     from jarvis.brain.hermes_selection import SelectionError, get_selection, set_selection
 
+    if model is not None and request is not None:
+        lock = getattr(request.app.state, "hermes_selection_lock", None)
+        if lock is None:
+            lock = asyncio.Lock()
+            request.app.state.hermes_selection_lock = lock
+        async with lock:
+            previous = None
+            try:
+                if activate:
+                    previous = await get_selection()
+                chosen = str((await set_selection(model))["selection"])
+            except SelectionError as exc:
+                raise HTTPException(503, str(exc)) from None
+            if activate:
+                from jarvis.ui.web.provider_routes import SwitchBody, _resolve_cfg, brain_switch
+                from jarvis.ui.web.settings_routes import VoiceModeBody, put_voice_mode
+
+                config = _resolve_cfg(request)
+                brain = getattr(request.app.state, "brain", None)
+                prior_provider = getattr(brain, "active_provider", None)
+                prior_voice = getattr(getattr(config, "voice", None), "mode", "pipeline")
+                try:
+                    result = await brain_switch(
+                        SwitchBody(provider="hermes", persist=True), request
+                    )
+                    if (
+                        not result.get("persisted") or result.get("active") != "hermes"
+                        or result.get("requires_restart")
+                    ):
+                        raise HTTPException(503, "Hermes activation was not confirmed. Try again.")
+                    if prior_voice != "pipeline":
+                        voice = await put_voice_mode(
+                            VoiceModeBody(mode="pipeline", persist=True), request
+                        )
+                        if not voice.get("persisted"):
+                            raise HTTPException(
+                                503, "Pipeline voice could not be saved. Try again."
+                            )
+                except HTTPException:
+                    try:
+                        await set_selection(previous["selection"])
+                        if (
+                            prior_provider
+                            and getattr(brain, "active_provider", None) != prior_provider
+                        ):
+                            restored = await brain_switch(
+                                SwitchBody(provider=prior_provider, persist=True), request
+                            )
+                            if (
+                                not restored.get("persisted") or restored.get("requires_restart")
+                            ):
+                                raise SelectionError("Brain activation could not be restored")
+                        if getattr(getattr(config, "voice", None), "mode", None) != prior_voice:
+                            restored_voice = await put_voice_mode(
+                                VoiceModeBody(mode=prior_voice, persist=True), request
+                            )
+                            if not restored_voice.get("persisted"):
+                                raise SelectionError("Voice mode could not be restored")
+                    except (SelectionError, HTTPException):
+                        log.warning("Could not restore native selection after activation failure")
+                        raise HTTPException(
+                            503, "Hermes activation failed and the previous settings could not "
+                            "be fully restored. Refresh brain and voice settings before retrying."
+                        ) from None
+                    raise
+            await _hermes_model_notice(request, chosen, activate=activate)
+            return chosen
     try:
         selection = await get_selection() if model is None else await set_selection(model)
     except SelectionError as exc:
         raise HTTPException(503, str(exc)) from None
     chosen = str(selection["selection"])
-    if model is not None and request is not None:
-        await _hermes_model_notice(request, chosen)
     return chosen
 
 
-async def _hermes_model_notice(request: Request, model: str) -> None:
+async def _hermes_model_notice(request: Request, model: str, *, activate: bool = False) -> None:
     """Project an acknowledged native preference into existing display/history rows."""
     from jarvis.agent_chat.store import ChatSelection
     from jarvis.core.events import SecretConfigured
@@ -145,13 +212,20 @@ async def _hermes_model_notice(request: Request, model: str) -> None:
     svc = _service_from_state(request.app.state)
     if svc is not None:
         for session in svc.store.list_sessions(surface="jarvis"):
-            if session.provider == "hermes" and session.model != model:
-                svc.store.update_session(session.session_id, model=model)
-                await svc._emit(session.session_id, make_event("session_updated", {"model": model}))
+            if (activate or session.provider == "hermes") and (
+                session.model != model or session.provider != "hermes"
+            ):
+                svc.store.update_session(session.session_id, provider="hermes", model=model)
+                await svc._emit(session.session_id, make_event(
+                    "session_updated", {"provider": "hermes", "model": model}
+                ))
         saved = svc.store.chat_selection()
-        if saved is not None and saved.provider == "hermes":
+        if activate or saved is not None and saved.provider == "hermes":
             svc.store.save_chat_selection(
-                ChatSelection(saved.provider, model, saved.effort, saved.account_id)
+                ChatSelection(
+                    "hermes", model,
+                    normalize_effort("hermes", saved.effort if saved is not None else ""), ""
+                )
             )
     await _emit(request, SecretConfigured(key="brain.providers.hermes.model", action="set"))
 

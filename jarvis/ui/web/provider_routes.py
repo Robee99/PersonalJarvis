@@ -207,6 +207,7 @@ class BrainModelBody(BaseModel):
     # Empty string is meaningful: reset the provider to its frontier default.
     model: str = Field(default="", max_length=200)
     persist: bool = Field(default=True)
+    activate: bool = Field(default=False)
 
 
 class BrainModelProbe(BaseModel):
@@ -2600,20 +2601,14 @@ async def _apply_brain_model(
 ) -> BrainModelSaveResponse:
     """Persist + live-apply a brain provider's model, optionally probing it."""
     if provider_id == "hermes":
-        from jarvis.brain.hermes_selection import SelectionError, set_selection
+        from jarvis.ui.web.agent_chat_routes import _hermes_model
 
-        try:
-            selection = await set_selection(model)
-        except SelectionError as exc:
-            raise HTTPException(503, str(exc)) from None
+        chosen = await _hermes_model(model, request, activate=body.activate)
         # Hermes owns the durable preference. No second config pin or paid
         # health probe may disagree with its conversation lock.
-        from jarvis.ui.web.agent_chat_routes import _hermes_model_notice
-
-        await _hermes_model_notice(request, selection["selection"])
         _invalidate_section_health_state(request)
         return BrainModelSaveResponse(
-            ok=True, provider=provider_id, model=selection["selection"],
+            ok=True, provider=provider_id, model=chosen,
             persisted=True, applied_live=True, restart_required=False, probe=None,
         )
     persisted = False

@@ -69,8 +69,9 @@ def test_hermes_becomes_the_brain_for_everything_and_paid_providers_stay_blocked
     assert client.body("PUT", "/api/providers/hermes/base-url") == {
         "base_url": "http://127.0.0.1:8642"
     }
-    # Empty model: Hermes picks it, Jarvis does not.
-    assert client.body("PUT", "/api/providers/hermes/model") == {"model": ""}
+    # Setup reads the native preference; it must never reset a saved pin to Auto.
+    assert client.body("GET", "/api/providers/hermes/models") is None
+    assert not any(m == "PUT" and p == "/api/providers/hermes/model" for m, p, _ in client.calls)
     assert client.body("POST", "/api/brain/switch")["provider"] == "hermes"
     assert client.body("PUT", "/api/providers/hermes/thinking-budget") == {"budget": 0}
     policy = client.body("PUT", "/api/brain/route-policy")

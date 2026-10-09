@@ -42,6 +42,7 @@ import { GigiMark } from "@/components/GigiMark";
 import { useVoiceModeSwitch } from "@/components/home/assistantStatus";
 import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { requestApiKeysTab } from "@/lib/apiKeysTab";
 
 /**
  * The composer — the front page's one control for talking to Jarvis by
@@ -690,33 +691,19 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
             </button>
           )}
           <span className="flex-1" />
-          <Pick
-            testId="composer-model"
-            ariaLabel={t("agent_chat.pick_model")}
-            value={brainValue(draft.provider, draft.model)}
-            groups={brainGroups}
-            onChange={(v) => {
+          {provider?.id === "hermes" ? (
+            <button type="button" data-testid="composer-model" aria-label={t("assistant_brain.open")} onClick={() => {
+              requestApiKeysTab("brain");
+              setActiveSection("apikeys");
+            }} className="max-w-[240px] truncate rounded-full px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground">
+              {modelList.find((m) => m.id === draft.model)?.label ?? (draft.model || provider.label)}
+            </button>
+          ) : (
+            <Pick testId="composer-model" ariaLabel={t("agent_chat.pick_model")} value={brainValue(draft.provider, draft.model)} groups={brainGroups} onChange={(v) => {
               const [nextProvider, nextModel] = splitBrainValue(v);
-              void setDraft(
-                nextProvider !== draft.provider ? { provider: nextProvider, model: nextModel } : { model: nextModel },
-              );
-            }}
-            fallbackLabel={
-              catalogError
-                ? t("agent_chat.catalog_unavailable")
-                : provider
-                  ? draft.model || provider.label
-                  : t("agent_chat.pick_provider")
-            }
-            searchPlaceholder={t("agent_chat.search_models")}
-            disabled={!catalog || (Boolean(locks?.provider) && Boolean(locks?.model))}
-            title={locks?.model ?? locks?.provider}
-            className="max-w-[240px]"
-            // The model reads as a word; the provider's mark (with its red
-            // dot) only joins it when that seat is failing.
-            triggerIcon={Boolean(provider?.connected && liveHealthFor(provider, health[provider.id])?.status === "error")}
-            chevron={false}
-          />
+              void setDraft(nextProvider !== draft.provider ? { provider: nextProvider, model: nextModel } : { model: nextModel });
+            }} fallbackLabel={catalogError ? t("agent_chat.catalog_unavailable") : provider ? draft.model || provider.label : t("agent_chat.pick_provider")} searchPlaceholder={t("agent_chat.search_models")} disabled={!catalog || (Boolean(locks?.provider) && Boolean(locks?.model))} title={locks?.model ?? locks?.provider} className="max-w-[240px]" triggerIcon={Boolean(provider?.connected && liveHealthFor(provider, health[provider.id])?.status === "error")} chevron={false} />
+          )}
           {provider && effortLevels.length > 1 && (
             <Pick
               testId="composer-effort"

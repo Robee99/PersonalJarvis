@@ -817,7 +817,7 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
                         "Ling 3.0 Flash Sante (Nous free)",
                     ),
                     ("nous::inclusionai/ling-3.0-flash-fin:free", "Ling 3.0 Flash Fin (Nous free)"),
-                    ("local-qwen::qwen", "Qwen (local Hermes provider)"),
+                    ("local-qwen::qwen", "Qwen3.6 35B A3B (local llama.cpp)"),
                     ("local-gemma::gemma-4-12b-qat", "Gemma 12B QAT (local Hermes provider)"),
                 ]
             )

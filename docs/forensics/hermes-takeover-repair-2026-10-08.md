@@ -172,3 +172,47 @@ abandonment; Jarvis's SDK 1.x requires an explicit MCP cancellation notification
 Both paths are tested. A dropped socket alone is not claimed as native Stop;
 unanswered private receipts expire. Linux device behavior, live account/browser
 consent, installer provisioning and installed desktop acceptance remain unverified.
+## Shared brain panel and cached Qwen (2026-10-09)
+
+The main Brain settings panel now owns the Hermes model choice for both Jarvis
+chat and Pipeline voice. Selecting a model activates Hermes and, when needed,
+Pipeline in the same acknowledged operation. Existing Jarvis chats and their
+remembered selection update; isolated agent/IDE choices remain independent.
+The Hermes chat model label opens this settings panel. Other provider connections
+remain behind a secondary section. A failed activation restores the native pin;
+a voice persistence failure restores the previous provider and mode. Failure to
+restore is reported explicitly. Selection changes do not run inference probes.
+
+The cached Qwen3.6 35B A3B entry uses the existing native `local-qwen::qwen`
+provider and llama.cpp server. On this PC, the optimized launch setup is in the
+2026-10-04 Codex workspace and its existing GGUF is in C:/models. No weights were
+downloaded or modified. Its authenticated local model inventory returned qwen.
+The original optimization report uses a 65,536-token context and memory limits;
+this stage has not rerun its performance benchmark. Gemma's local server was not
+listening at inspection time. Re-running free-voice setup now reads the native
+preference instead of clearing it to Auto, preserving explicit selections.
+
+Validation:
+
+- Final selection/activation/recovery and free-voice tests: 28 passed, using
+  private temporary fixtures. Includes failure after live brain activation when
+  voice persistence fails, restoring the prior brain, voice mode, and model pin.
+- Wider Hermes, chat, Pipeline and four mandatory guards: 1103 passed, 1 skipped,
+  2 existing failures. Exact HEAD a1dbe0b under the same environment: 1100 passed,
+  1 skipped, identical test_runner_brain failures caused by society_browser
+  contamination from an earlier suite. No expectations/baselines changed.
+- The model-catalog batch has two unchanged Deepgram failures (missing catalog
+  and missing Nova list). Both identities and causes reproduce on exact HEAD.
+- Frontend: 88 passed across nine affected picker/settings/context/i18n files.
+  Final TypeScript, production Vite bundle and audio-worklet checks passed.
+  Actual shared panel inspected in light/dark browser previews with fixtures.
+- Touched Python lint: 32 existing findings, zero added; model_catalog separately
+  passes. Bundle HTML line endings normalized and whitespace check passed.
+
+The shipped native controls plugin was installed through Hermes's plugin loader
+and its gateway restarted through the native Windows CLI. Native health and the
+canonical model control both return successfully with authenticated conversation
+headers. The saved choice remains Hermes decides. Hermes core was not edited.
+The installed desktop application has not yet been upgraded. Installer, actual
+voice devices, project intelligence/Orb/navigation, and full parity acceptance
+remain outstanding. A source preview is not installed-app evidence.

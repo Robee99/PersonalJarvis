@@ -6254,5 +6254,17 @@
     "restored": "Enrutamiento restaurado.",
     "loading": "Cargando enrutamiento…",
     "load_failed": "No se pudieron cargar los ajustes de enrutamiento: {detail}"
+  },
+  "assistant_brain": {
+    "title": "Modelo y voz de Jarvis",
+    "description": "Elige un modelo de Hermes para el chat y la voz Pipeline. La selección se guarda para ambos.",
+    "model": "Modelo de respuesta",
+    "activate_note": "Proveedor actual: {provider}. Elegir un modelo aquí también activa Hermes para Jarvis.",
+    "unset": "Sin seleccionar",
+    "pin_note": "El modelo elegido se mantiene fijo. Si no está disponible, Jarvis muestra el error. «Hermes decide» permite elegir la ruta a Hermes. Los modelos locales requieren un servidor activo.",
+    "stt": "Entrada de voz · voz a texto",
+    "tts": "Salida de voz · texto a voz",
+    "other_providers": "Otros proveedores y conexiones",
+    "open": "Abrir ajustes de modelo y voz de Jarvis"
   }
 }

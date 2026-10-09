@@ -341,7 +341,8 @@ def run_free_voice(
     brain_ok = False
     try:
         _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/base-url", {"base_url": hermes})
-        _call(client, "PUT", f"/api/providers/{HERMES_PROVIDER}/model", {"model": ""})
+        # Re-running setup must not clear the person's durable native pin.
+        _call(client, "GET", f"/api/providers/{HERMES_PROVIDER}/models")
         _call(
             client,
             "POST",
@@ -349,7 +350,7 @@ def run_free_voice(
             {"provider": HERMES_PROVIDER, "persist": True},
         )
         brain_ok = True
-        report.add("brain", "changed", f"Hermes Agent at {hermes}; Hermes picks the model")
+        report.add("brain", "changed", f"Hermes Agent at {hermes}; existing model choice preserved")
     except ApiError as exc:
         report.add("brain", "failed", str(exc))
     # A reasoning pass costs seconds before the first spoken word.
