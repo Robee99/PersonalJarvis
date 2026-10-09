@@ -1,4 +1,4 @@
-"""Jarvis' two outward MCP surfaces, on one mount.
+"""Jarvis' outward MCP surfaces, on one mount.
 
 * ``/api/control/mcp``        — Jarvis' own TOOLS, so a session Jarvis spawned
   can reach back in and drive the app: open an app, read the wiki, switch
@@ -6,13 +6,15 @@
 * ``/api/control/mcp/agents`` — the AGENT ECOSYSTEM, for any client holding the
   control key: the roster, the board, rooms, assignments, approvals. This is
   what lets Claude Desktop, Cursor or another Jarvis talk to the team.
+* ``/api/control/mcp/hermes`` — connected apps and memory for native Hermes.
+  Stateful SSE carries per-call MCP approval requests and their exact replies.
 
 Mounted as a raw ASGI sub-app rather than a FastAPI router: the MCP Streamable
 HTTP transport needs the untouched ``(scope, receive, send)`` triple — it
 streams, negotiates its own content types and answers ``GET``/``DELETE`` as
 well as ``POST``. Wrapping that in a response model would fight it.
 
-ONE mount serves both, choosing on the rest of the path (``_surface_for``); two
+ONE mount serves them, choosing on the rest of the path (``_surface_for``); two
 Starlette mounts cannot, because a ``Mount`` requires a path segment AFTER its
 prefix and a plain ``POST /api/control/mcp/agents`` would silently fall through
 to the shorter one.
@@ -23,9 +25,10 @@ dependency for the same reason. The rule is the Control API's rule (see
 these surfaces safe to exist — anything on the machine could otherwise open a
 socket and start driving the person's calendar, or their agents.
 
-Each surface keeps its own stateless session manager (a fresh transport per
-request), so a chat turn that dies mid-tool leaves nothing to clean up. Their
-task groups start on first use and live for the process — there is no lifespan
+The tools and agents surfaces keep stateless transports. Hermes keeps a
+stateful SSE transport so an approval reply returns to the exact pending RPC;
+its idle sessions expire. Task groups start on first use and live for the
+process — there is no lifespan
 hook on this app to hang them from, and one background task per surface is
 cheaper than one per request.
 """
@@ -50,16 +53,18 @@ _NOT_A_SURFACE_BODY = (
 class _Surface:
     """One mounted MCP server: its builder plus the session manager it runs on.
 
-    Two surfaces share this machinery — ``tools`` (Jarvis' hands, for a session
-    Jarvis spawned) and ``agents`` (the ecosystem, for any client holding the
-    control key). Each keeps its OWN manager because the transport's task group
+    Tools, agents and native connected apps share this machinery. Each keeps
+    its OWN manager because the transport's task group
     is per server; sharing one would put both catalogs on one connection and
     make a client choose tools it was never offered.
     """
 
-    def __init__(self, name: str, builder: Callable[[], Any]) -> None:
+    def __init__(
+        self, name: str, builder: Callable[[], Any], *, native_consent: bool = False
+    ) -> None:
         self.name = name
         self._builder = builder
+        self._native_consent = native_consent
         self._manager: Any | None = None
         self._ready: asyncio.Event | None = None
         self._task: asyncio.Task[None] | None = None
@@ -91,7 +96,10 @@ class _Surface:
         except Exception:  # noqa: BLE001 — no MCP library → the surface is simply absent
             log.warning("jarvis MCP: %s server unavailable", self.name, exc_info=True)
             return None
-        manager = StreamableHTTPSessionManager(app=server, json_response=True, stateless=True)
+        manager = StreamableHTTPSessionManager(
+            app=server, json_response=not self._native_consent, stateless=not self._native_consent,
+            **({"session_idle_timeout": 1800.0} if self._native_consent else {}),
+        )
         ready = asyncio.Event()
         self._manager = manager
         self._ready = ready
@@ -113,8 +121,15 @@ def _build_agents_server() -> Any:
     return build_server()
 
 
+def _build_hermes_server() -> Any:
+    from jarvis.mcp.hermes_tools_server import build_server
+
+    return build_server()
+
+
 _TOOLS_SURFACE = _Surface("tools", _build_tools_server)
 _AGENTS_SURFACE = _Surface("agents", _build_agents_server)
+_HERMES_SURFACE = _Surface("hermes", _build_hermes_server, native_consent=True)
 
 
 def _bearer(scope: dict[str, Any]) -> str | None:
@@ -181,6 +196,7 @@ async def _run_manager(manager: Any, ready: asyncio.Event) -> None:
 _SUFFIX_SURFACES: dict[str, _Surface] = {
     "": _TOOLS_SURFACE,
     "agents": _AGENTS_SURFACE,
+    "hermes": _HERMES_SURFACE,
 }
 
 
@@ -283,6 +299,11 @@ def build_mcp_asgi_app() -> Any:
         manager = await surface.manager()
         if manager is None:
             await _reject(send, 503, b'{"error":"Jarvis MCP server is not available."}')
+            return
+        if surface is _HERMES_SURFACE:
+            # Its approval belongs to the same MCP request, not an ambient
+            # chat header. Native Hermes renders and resolves the consent.
+            await manager.handle_request(scope, receive, send)
             return
         if surface is _AGENTS_SURFACE:
             # A remote client is not one of Jarvis' own spawned sessions, so

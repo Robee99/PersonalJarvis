@@ -5677,6 +5677,10 @@
     "completed": "Completed",
     "allow": "Approve",
     "allow_always": "Always allow",
+    "allow_once": "Allow once",
+    "allowed": "Permission allowed once",
+    "expired": "Approval expired",
+    "cancelled": "Approval cancelled",
     "deny": "Deny",
     "approval_elsewhere": "Review this request in the active chat.",
     "working": "Working",
@@ -6250,5 +6254,17 @@
     "restored": "Routing restored to how it was.",
     "loading": "Loading routing…",
     "load_failed": "Routing settings could not load: {detail}"
+  },
+  "assistant_brain": {
+    "title": "Jarvis brain & voice",
+    "description": "Choose one Hermes model for typed chat and Pipeline voice. Your choice is saved for both.",
+    "model": "Brain model",
+    "activate_note": "Currently using {provider}. Choosing a model here also activates Hermes for Jarvis.",
+    "unset": "Not selected",
+    "pin_note": "An explicit model stays pinned. If it is unavailable, Jarvis shows the failure. “Hermes decides” lets Hermes choose a route. Local models need their server running.",
+    "stt": "Voice input · speech to text",
+    "tts": "Voice output · text to speech",
+    "other_providers": "Other brain providers and connections",
+    "open": "Open Jarvis brain & voice settings"
   }
 }

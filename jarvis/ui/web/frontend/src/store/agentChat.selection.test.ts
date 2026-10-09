@@ -42,6 +42,22 @@ beforeEach(() => { localStorage.clear(); vi.stubGlobal("WebSocket", Socket); });
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("remembered Jarvis chat model", () => {
+  it("refreshes an open Hermes chat's displayed pick from native settings without re-pinning", async () => {
+    const hermes = { ...provider, id: "hermes", family: "hermes", label: "Hermes", keyless: true };
+    const fetch = vi.fn(async (input: string) => {
+      if (input.startsWith("/api/agent-chat/catalog")) return reply({
+        providers: [hermes], selection: { provider: "hermes", model: "gemma", effort: "" }, default_cwd: "", shell: "test",
+      });
+      return reply({ mapping: [], providers: [] });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const store = createAgentChatStore("jarvis");
+    store.setState({ activeSessionId: "open-hermes", draft: { ...draft, provider: "hermes", model: "old-chat-model" } });
+    await store.getState().loadCatalog();
+    expect(store.getState().draft.model).toBe("gemma");
+    expect(fetch.mock.calls.some((call) => call[0] === "/api/agent-chat/selection")).toBe(false);
+  });
+
   it("restores the backend pick after local storage is cleared", async () => {
     backend();
     const store = createAgentChatStore("jarvis");

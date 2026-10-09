@@ -14,6 +14,7 @@ import { ViewHeader } from "@/views/ChatsView";
 import { JarvisAgentSection } from "@/components/JarvisAgentSection";
 import { VoiceProviderSettings } from "@/components/providers/VoiceProviderSettings";
 import { RoutePolicyCard } from "@/components/routing/RoutePolicyCard";
+import { AssistantBrainPanel } from "@/components/providers/AssistantBrainPanel";
 import { TelephonyPanel } from "@/views/TelephonyView";
 import { WikiProviderCard } from "@/views/settings/WikiProviderCard";
 import { JarvisApiGroup } from "@/views/settings/JarvisApiGroup";
@@ -47,7 +48,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
-// Voice owns its thinking backend. Text and background work use the Agents selection.
+// Hermes owns one model preference for Jarvis chat and Pipeline voice.
 type CategoryKey =
   | Exclude<ProviderTier, "computer-use">
   | "subagents"
@@ -148,6 +149,7 @@ export function ApiKeysView() {
   }, [liveMode, liveModeLoading]);
 
   const modeTabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
+  const hasHermes = providers.some((p) => p.id === "hermes" && p.tier === "brain");
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-tour="apikeys-page">
@@ -157,7 +159,7 @@ export function ApiKeysView() {
         subtitle={t("apikeys_view.subtitle")}
         right={
           <div className="flex items-center gap-3">
-            <LocalModeSwitch enabled={localMode} onToggle={setLocalMode} />
+            {(active !== "brain" || !hasHermes) && <LocalModeSwitch enabled={localMode} onToggle={setLocalMode} />}
             <EngineModeSwitch
               mode={engineMode}
               liveMode={liveMode}
@@ -186,7 +188,19 @@ export function ApiKeysView() {
           key={`${engineMode}-${active}`}
           className="profile-rise mx-auto w-full max-w-[1440px]"
         >
-          {(active === "brain" ||
+          {active === "brain" && hasHermes && (
+            <>
+              <AssistantBrainPanel providers={providers} onChanged={refetch} onVoice={selectTab} />
+              <details className="mt-5 rounded-xl border border-border bg-card p-4">
+                <summary className="cursor-pointer text-sm text-muted-foreground">{t("assistant_brain.other_providers")}</summary>
+                <div className="pt-4">
+                  <ProviderCategory meta={categories.brain} tier="brain" providers={providers.filter((p) => p.id !== "hermes")} loading={loading} error={error} onChanged={refetch} onActivateOptimistic={setActiveOptimistic} health={health.brain} wideGrid />
+                  {!providers.some((p) => p.id === "hermes" && p.active) && <RoutePolicyCard providers={providers} />}
+                </div>
+              </details>
+            </>
+          )}
+          {((active === "brain" && !hasHermes) ||
             active === "tts" ||
             active === "stt" ||
             active === "dictation") && (
@@ -204,7 +218,7 @@ export function ApiKeysView() {
               wideGrid
             />
           )}
-          {active === "brain" && <RoutePolicyCard providers={providers} />}
+          {active === "brain" && !hasHermes && <RoutePolicyCard providers={providers} />}
           {active === "realtime" && (
             <VoiceProviderSettings
               providers={providers}

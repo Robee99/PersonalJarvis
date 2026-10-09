@@ -402,7 +402,9 @@ function TraceToolRow({ block, status, onDecide }: { block: ToolBlock; status: T
   const rail = useRail();
   const pending = Boolean(block.approval && block.approval.decision === null);
   const denied = block.approval?.decision === "deny";
-  const running = status === "running" && block.output === null && !pending && !denied;
+  const retired = block.approval?.decision === "cancel" || block.approval?.decision === "expired";
+  const allowed = block.approval?.decision === "allow";
+  const running = status === "running" && block.output === null && !pending && !denied && !retired;
   const elapsed = useClock(block.startedMs, running);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
@@ -413,7 +415,7 @@ function TraceToolRow({ block, status, onDecide }: { block: ToolBlock; status: T
   const label = action ? t(`work_trace.${action}`) : description.labelKey ? t(description.labelKey) : readable;
   const detail = description.detail || (typeof block.input === "object" && block.input !== null
     ? String((block.input as Record<string, unknown>).file_path ?? (block.input as Record<string, unknown>).path ?? "") : "");
-  const state = pending ? "approval" : denied ? "denied" : block.isError ? "failed" : running ? "running" : block.output === null ? "interrupted" : "completed";
+  const state = pending ? "approval" : denied ? "denied" : retired ? block.approval?.decision === "expired" ? "expired" : "cancelled" : block.isError ? "failed" : running ? "running" : allowed && block.output === null ? "allowed" : block.output === null ? "interrupted" : "completed";
   const ActionIcon = action === "command" ? Terminal : action === "edit" || action === "write" || action === "memory" ? FilePenLine
     : action === "read" ? FileText : action === "search" || action === "list" ? FolderSearch : view.identity.Glyph;
   const Icon = pending ? ShieldQuestion : block.isError ? CircleAlert : ActionIcon;
@@ -430,10 +432,10 @@ function TraceToolRow({ block, status, onDecide }: { block: ToolBlock; status: T
   const approvalUi = pending ? <div className={cn("space-y-2 text-sm", rail ? "mb-2 pl-7" : "mb-3 ml-6")} role="group" aria-label={t("work_trace.approval")}>
     <p className={cn("[overflow-wrap:anywhere]", rail && "text-foreground")}>{block.approval?.summary}</p>
     {onDecide ? <div className="flex flex-wrap gap-2">
-      {(["allow", "allow_always", "deny"] as const).map(decision => <button key={decision} type="button" disabled={busy}
+      {(block.approval?.decisions ?? ["allow", "allow_always", "deny"] as const).map(decision => <button key={decision} type="button" disabled={busy}
         onClick={() => void decide(decision)} className={cn("rounded-md px-3 py-1.5 text-xs focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50",
           rail && decision === "allow" ? "bg-primary text-primary-foreground hover:opacity-90" : "border border-border text-foreground hover:bg-secondary")}>
-        {t(`work_trace.${decision}`)}
+        {t(`work_trace.${block.approval?.external && decision === "allow" ? "allow_once" : decision}`)}
       </button>)}
     </div> : <p className="text-xs text-muted-foreground">{t("work_trace.approval_elsewhere")}</p>}
     {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
@@ -649,8 +651,12 @@ function WorkTraceBody({ blocks: rawBlocks, status, startedMs, durationMs, error
   const pending = asking || blocks.some(block => block.kind === "tool" && block.approval?.decision === null);
   const toolFailed = blocks.some(block => block.kind === "tool" && block.isError);
   const failed = status === "error";
-  const outcome = asking ? "question" : pending ? "approval" : live ? "working" : failed ? "failed" : status === "cancelled" ? "stopped" : "done";
-  const Icon = asking ? MessageCircleQuestion : pending ? ShieldQuestion : live ? CircleDashed : failed ? CircleAlert : Check;
+  const nativeDecision = blocks.some(block => block.kind === "tool" && block.output !== null) ? null
+    : [...blocks].reverse().find(block => block.kind === "tool" && block.approval?.external);
+  const permissionOutcome = nativeDecision?.kind === "tool" ? nativeDecision.approval?.decision : null;
+  const outcome = asking ? "question" : pending ? "approval" : live ? "working" : failed ? "failed" : status === "cancelled" ? "stopped"
+    : permissionOutcome === "allow" ? "allowed" : permissionOutcome === "deny" ? "denied" : permissionOutcome === "cancel" ? "cancelled" : permissionOutcome === "expired" ? "expired" : "done";
+  const Icon = asking ? MessageCircleQuestion : pending || permissionOutcome ? ShieldQuestion : live ? CircleDashed : failed ? CircleAlert : Check;
   const groupProps = { live, status, onDecide, renderText, conversation, rail, t };
   // A turn-level error next to a reply folds with the work — it stays one
   // tap away behind the toggle. With no reply the error IS the outcome, so

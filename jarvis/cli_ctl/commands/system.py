@@ -142,6 +142,7 @@ def free_voice(
         render_report,
         run_free_voice,
     )
+    from jarvis.cli_ctl.hermes_controls import controls_for
 
     with make_client() as client:
         report = run_free_voice(
@@ -152,6 +153,7 @@ def free_voice(
             free_aux=free_aux_for(),
             lean_context=lean_context_for(),
             computer_use=computer_use_for(),
+            controls=controls_for(),
         )
     if as_json():
         render.emit(report.as_dict(), as_json=True)

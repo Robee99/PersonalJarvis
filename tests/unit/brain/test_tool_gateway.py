@@ -124,6 +124,13 @@ async def test_confirmation_and_denial_operations_stay_behind_gateway() -> None:
     )
     request = _request()
 
+    from jarvis.control.cancel import CancelToken
+
+    request = SupervisorToolRequest(
+        trace_id=request.trace_id, origin=request.origin, user_utterance=request.user_utterance,
+        cancel_token=CancelToken(),
+    )
+
     confirmed = await gateway.execute_confirmed(request.trace_id, request)
     cancelled = await gateway.cancel_pending(request.trace_id)
     await gateway.publish_guard_denied(
@@ -135,6 +142,7 @@ async def test_confirmation_and_denial_operations_stay_behind_gateway() -> None:
     assert confirmed.success is True
     assert cancelled is True
     assert executor.confirmed[0][0] == request.trace_id
+    assert executor.confirmed[0][1]["cancel_token"] is request.cancel_token
     assert executor.cancelled == [request.trace_id]
     assert executor.denied == [
         ("gmail", "blocked for test", request.trace_id)

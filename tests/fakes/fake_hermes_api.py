@@ -43,6 +43,12 @@ class FakeHermesApi:
         self.scripts = list(scripts)
         self.runs: list[FakeRun] = []
         self.session_rows: list[dict[str, Any]] = []
+        self.delegations: dict[str, dict[str, Any]] = {}
+        self.delegation_stops: list[str] = []
+        self.reject_delegation_stop = False
+        self.approval_failure_status: int | None = None
+        self.model_selection = "hermes-agent"
+        self.reject_model_selection = False
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -67,6 +73,45 @@ class FakeHermesApi:
             self.runs.append(run)
             return httpx.Response(202, json={"run_id": run.run_id, "status": "started"})
         parts = path.strip("/").split("/")
+        if parts[:3] == ["api", "jarvis", "conversations"]:
+            sid = parts[3]
+            if parts[-1] == "model":
+                if request.method == "POST":
+                    if self.reject_model_selection:
+                        return httpx.Response(503, text="private provider response")
+                    self.model_selection = json.loads(request.content)["selection"]
+                return httpx.Response(200, json={
+                    "conversation_id": sid, "session_id": sid,
+                    "selection": self.model_selection, "persisted": True,
+                    "source": "session_model_lock",
+                })
+            records = {
+                rid: row for rid, row in self.delegations.items() if row["session_id"] == sid
+            }
+            requested = []
+            if request.method == "POST":
+                if self.reject_delegation_stop:
+                    return httpx.Response(503, text="private provider response")
+                ids = json.loads(request.content)["delegation_ids"]
+                for rid in ids:
+                    row = records[rid]
+                    if row["status"] == "running":
+                        row["interrupt"].set()
+                        row["status"] = "interrupt_requested"
+                        self.delegation_stops.append(rid)
+                        requested.append(rid)
+            return httpx.Response(
+                200,
+                json={
+                    "session_id": sid,
+                    "requested": requested,
+                    "failed": [],
+                    "data": [
+                        {"delegation_id": rid, "status": row["status"]}
+                        for rid, row in records.items()
+                    ],
+                },
+            )
         if parts[:2] == ["v1", "runs"] and len(parts) == 4:
             run = self._run(parts[2])
             if parts[3] == "events":
@@ -76,6 +121,18 @@ class FakeHermesApi:
                     headers={"content-type": "text/event-stream"},
                 )
             if parts[3] == "approval":
+                if self.approval_failure_status is not None:
+                    code = (
+                        "approval_not_pending"
+                        if self.approval_failure_status == 409
+                        else "unavailable"
+                    )
+                    return httpx.Response(
+                        self.approval_failure_status,
+                        json={
+                            "error": {"code": code, "message": "api_key=private-provider-fixture"},
+                        },
+                    )
                 run.approvals.append(json.loads(request.content))
                 run.decided.set()
                 return httpx.Response(200, json={"resolved": 1})
@@ -134,6 +191,7 @@ def asks_approval(after_yes: str, after_no: str, *, description: str = "delete a
         await run.decided.wait()
         if run.approvals[-1]["choice"] == "once":
             yield {"event": "tool.started", "tool": "terminal", "preview": "del"}
+            yield {"event": "tool.completed", "tool": "terminal", "duration": 0.1, "error": False}
             text = after_yes
         else:
             text = after_no

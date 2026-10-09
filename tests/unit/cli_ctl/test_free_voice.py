@@ -69,8 +69,9 @@ def test_hermes_becomes_the_brain_for_everything_and_paid_providers_stay_blocked
     assert client.body("PUT", "/api/providers/hermes/base-url") == {
         "base_url": "http://127.0.0.1:8642"
     }
-    # Empty model: Hermes picks it, Jarvis does not.
-    assert client.body("PUT", "/api/providers/hermes/model") == {"model": ""}
+    # Setup reads the native preference; it must never reset a saved pin to Auto.
+    assert client.body("GET", "/api/providers/hermes/models") is None
+    assert not any(m == "PUT" and p == "/api/providers/hermes/model" for m, p, _ in client.calls)
     assert client.body("POST", "/api/brain/switch")["provider"] == "hermes"
     assert client.body("PUT", "/api/providers/hermes/thinking-budget") == {"budget": 0}
     policy = client.body("PUT", "/api/brain/route-policy")
@@ -204,7 +205,7 @@ def test_missing_local_speech_never_enables_an_api_speech_provider() -> None:
     assert speech == ["nemotron-local", "faster-whisper", "piper-local"]
 
 
-def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_path) -> None:
+def test_hermes_gets_connected_apps_with_native_consent_and_key_stays_in_its_env(tmp_path) -> None:
     import json
 
     from jarvis.cli_ctl.free_voice import CONTROL_KEY_ENV, connect_hermes_memory
@@ -233,9 +234,13 @@ def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_pa
     (argv,) = calls
     assert argv[:4] == ["hermes", "config", "set", "mcp_servers.jarvis"]
     entry = json.loads(argv[4])
-    assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp/"
+    assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp/hermes"
     assert entry["headers"] == {"Authorization": "Bearer ${JARVIS_CONTROL_KEY}"}
-    assert entry["tools"]["include"] == ["wiki-recall", "wiki-list"]
+    assert entry["tools"] == {"resources": False, "prompts": False}
+    assert entry["trust"] == "full"
+    assert entry["sampling"] == {"enabled": False}
+    assert entry["elicitation"] == {"enabled": True, "timeout": 300}
+    assert entry["timeout"] > entry["elicitation"]["timeout"]
     assert "ck-new" not in argv[4], "the key never goes on a command line or into config.yaml"
 
 

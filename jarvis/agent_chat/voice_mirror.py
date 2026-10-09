@@ -39,6 +39,8 @@ class VoiceChatMirror:
     def __init__(self, get_service: Callable[[], Any | None]) -> None:
         self._get_service = get_service
         self._attached = False
+        from .native_approval_mirror import NativeApprovalMirror
+        self._native_approvals = NativeApprovalMirror(get_service)
 
     def attach(self, bus: Any) -> None:
         """Subscribe to completed voice turns. Idempotent."""
@@ -48,6 +50,7 @@ class VoiceChatMirror:
             from jarvis.core.events import VoiceTurnCompleted
 
             bus.subscribe(VoiceTurnCompleted, self._on_turn)
+            self._native_approvals.attach(bus)
         except Exception as exc:  # noqa: BLE001 — mirroring must never break boot
             log.warning("voice chat mirror could not attach: %s", exc)
             return

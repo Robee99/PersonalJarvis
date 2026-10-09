@@ -207,6 +207,7 @@ class BrainModelBody(BaseModel):
     # Empty string is meaningful: reset the provider to its frontier default.
     model: str = Field(default="", max_length=200)
     persist: bool = Field(default=True)
+    activate: bool = Field(default=False)
 
 
 class BrainModelProbe(BaseModel):
@@ -2573,6 +2574,13 @@ async def list_brain_models(
     # catalog stays the complete list a download route can work from.
     models = _derived_alias_free(provider_id, _installed_local_models(provider_id, result.models))
     current = _current_selection(cfg, provider_id, cat)
+    if provider_id == "hermes" and cat.tier == "brain":
+        from jarvis.brain.hermes_selection import SelectionError, get_selection
+
+        try:
+            current = (await get_selection())["selection"]
+        except SelectionError as exc:
+            raise HTTPException(503, str(exc)) from None
     # Safety net: for a curated TTS/STT list, never echo a value that isn't in the
     # list (e.g. a stale global value belonging to a different provider) — show the
     # placeholder instead. Brain keeps its value (custom model ids are allowed).
@@ -2592,6 +2600,17 @@ async def _apply_brain_model(
     provider_id: str, model: str, body: BrainModelBody, request: Request, *, probe: bool
 ) -> BrainModelSaveResponse:
     """Persist + live-apply a brain provider's model, optionally probing it."""
+    if provider_id == "hermes":
+        from jarvis.ui.web.agent_chat_routes import _hermes_model
+
+        chosen = await _hermes_model(model, request, activate=body.activate)
+        # Hermes owns the durable preference. No second config pin or paid
+        # health probe may disagree with its conversation lock.
+        _invalidate_section_health_state(request)
+        return BrainModelSaveResponse(
+            ok=True, provider=provider_id, model=chosen,
+            persisted=True, applied_live=True, restart_required=False, probe=None,
+        )
     persisted = False
     if body.persist:
         try:

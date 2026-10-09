@@ -1808,11 +1808,12 @@ export async function saveBrainProviderModel(
   providerId: string,
   model: string,
   persist = true,
+  activate = false,
 ): Promise<BrainModelSaveResult> {
   const res = await fetch(`/api/providers/${encodeURIComponent(providerId)}/model`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, persist }),
+    body: JSON.stringify({ model, persist, activate }),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {

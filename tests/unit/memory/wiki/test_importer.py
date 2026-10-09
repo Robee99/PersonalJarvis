@@ -177,7 +177,9 @@ def test_destinations_cannot_escape_the_import_folder(tmp_path: Path) -> None:
     root = tmp_path / "vault" / IMPORT_DIR / "src"
     root.mkdir(parents=True)
     assert destination_for(Path("../../etc/passwd"), root) == root / "etc" / "passwd.md"
-    assert destination_for(Path('a:b/c?.txt'), root) == root / "a_b" / "c_.md"
+    assert destination_for(Path('folder:a/c?.txt'), root) == root / "folder_a" / "c_.md"
+    # A single-letter colon is a drive prefix on Windows, a filename on POSIX.
+    assert destination_for(Path('a:b/c?.txt'), root).is_relative_to(root)
 
 
 def test_a_cancelled_import_keeps_its_pages_and_a_retry_finishes_without_duplicates(

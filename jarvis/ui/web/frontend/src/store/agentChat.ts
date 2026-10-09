@@ -478,6 +478,11 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
           if (surface === "jarvis" && !sessionId && revision === selectionRevision && catalog.selection) {
             draft = { ...draft, provider: catalog.selection.provider, model: catalog.selection.model, effort: catalog.selection.effort, accountId: catalog.selection.account_id ?? "" };
           }
+          // Hermes voice settings and chat share one native conversation pick.
+          // Refresh its display even while this chat is open; no setter runs.
+          if (surface === "jarvis" && draft.provider === "hermes" && catalog.selection?.provider === "hermes" && revision === selectionRevision) {
+            draft = { ...draft, model: catalog.selection.model };
+          }
           const known = options.find((o) => o.id === draft.provider);
           if (!known) {
             const pick = options.find((o) => o.active && o.connected) ?? options.find((o) => o.connected) ?? options[0];

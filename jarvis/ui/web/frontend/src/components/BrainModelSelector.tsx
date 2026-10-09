@@ -219,7 +219,9 @@ export function BrainModelSelector({
       // Uncontrolled: adopt the catalog's current selection as the pinned value.
       // Controlled (CU picker): the parent owns the pinned value (cu_model) —
       // never overwrite it with the provider's main model from GET /models.
-      if (!controlled && !pinned && res.current_model) setPinned(res.current_model);
+      if (!controlled && res.current_model && (!pinned || providerId === "hermes")) {
+        setPinned(res.current_model);
+      }
     } catch (e) {
       pushToast("error", `${t("apikeys_model.load_failed")}: ${(e as Error).message}`);
     } finally {
@@ -231,6 +233,17 @@ export function BrainModelSelector({
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId]);
+
+  useEffect(() => {
+    if (providerId !== "hermes" || controlled) return;
+    const changed = (event: Event) => {
+      const key = (event as CustomEvent<{ key?: string }>).detail?.key;
+      if (key === "brain.providers.hermes.model") void load();
+    };
+    window.addEventListener("jarvis:secret-configured", changed);
+    return () => window.removeEventListener("jarvis:secret-configured", changed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId, controlled]);
 
   // Controlled mode: keep the displayed pinned value in sync with the parent's
   // currentModel (e.g. the CU picker resolves cu_model asynchronously after

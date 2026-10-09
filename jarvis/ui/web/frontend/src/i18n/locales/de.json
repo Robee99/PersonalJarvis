@@ -5677,6 +5677,10 @@
     "completed": "Abgeschlossen",
     "allow": "Freigeben",
     "allow_always": "Immer erlauben",
+    "allow_once": "Einmal erlauben",
+    "allowed": "Berechtigung einmal erlaubt",
+    "expired": "Bestätigung abgelaufen",
+    "cancelled": "Bestätigung abgebrochen",
     "deny": "Ablehnen",
     "approval_elsewhere": "Diese Anfrage im aktiven Chat prüfen.",
     "working": "In Arbeit",
@@ -6250,5 +6254,17 @@
     "restored": "Routing wurde zurückgesetzt.",
     "loading": "Routing wird geladen…",
     "load_failed": "Routing-Einstellungen konnten nicht geladen werden: {detail}"
+  },
+  "assistant_brain": {
+    "title": "Jarvis: Modell und Stimme",
+    "description": "Ein Hermes-Modell für Textchat und Pipeline-Stimme. Die Auswahl wird für beide gespeichert.",
+    "model": "Antwortmodell",
+    "activate_note": "Aktuell: {provider}. Eine Modellauswahl hier aktiviert auch Hermes für Jarvis.",
+    "unset": "Nicht ausgewählt",
+    "pin_note": "Ein gewähltes Modell bleibt fest eingestellt. Ist es nicht verfügbar, zeigt Jarvis den Fehler. „Hermes entscheidet“ erlaubt Hermes die Routenwahl. Lokale Modelle benötigen einen laufenden Server.",
+    "stt": "Spracheingabe · Sprache zu Text",
+    "tts": "Sprachausgabe · Text zu Sprache",
+    "other_providers": "Weitere Modellanbieter und Verbindungen",
+    "open": "Jarvis-Modell und Stimme öffnen"
   }
 }

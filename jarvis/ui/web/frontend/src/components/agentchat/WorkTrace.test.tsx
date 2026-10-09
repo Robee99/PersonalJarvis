@@ -256,3 +256,25 @@ describe("rail look", () => {
     expect(toggle.querySelector("img, [data-logo]")).toBeTruthy();
   });
 });
+
+it("offers only allow once and deny for a parked native permission card", async () => {
+  const onDecide = vi.fn(async () => {});
+  const pending = tool("native", {name:"hermes:terminal",output:null,approval:{approvalId:"native-one",summary:"Remove fixture",decision:null,external:true,decisions:["allow","deny"]}});
+  const {rerender} = render(<WorkTrace {...props} blocks={[pending]} onDecide={onDecide} />);
+  fireEvent.click(screen.getByRole("button",{name:"Allow once"}));
+  await waitFor(() => expect(onDecide).toHaveBeenCalledWith("native-one","allow"));
+  expect(screen.queryByRole("button",{name:"Always allow"})).toBeNull();
+  rerender(<WorkTrace {...props} blocks={[{...pending,approval:{...pending.approval!,decision:"allow"}}]} onDecide={onDecide} />);
+  expect(screen.queryByRole("button",{name:"Allow once"})).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain("Permission allowed once");
+  expect(screen.getByRole("status").textContent).not.toContain("Done");
+});
+
+it.each(["deny","cancel","expired"])("disables a retired native card (%s)", decision => {
+  const onDecide = vi.fn();
+  render(<WorkTrace {...props} blocks={[tool("native", {output:null,approval:{approvalId:"native-old",summary:"Old permission",decision,external:true,decisions:["allow","deny"]}})]} onDecide={onDecide} />);
+  expect(screen.queryByRole("button",{name:"Allow once"})).toBeNull();
+  expect(screen.queryByRole("button",{name:"Deny"})).toBeNull();
+  expect(screen.getByRole("status").textContent).not.toContain("Done");
+  expect(onDecide).not.toHaveBeenCalled();
+});

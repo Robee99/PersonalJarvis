@@ -289,7 +289,10 @@ class _StepMirror:
     defensive: a malformed event never reaches the brain (AP-18).
     """
 
-    __slots__ = ("_bus", "_children", "_emit", "_open", "_seen_text", "_trace_id", "_turn_id")
+    __slots__ = (
+        "_bus", "_children", "_emit", "_open", "_seen_text",
+        "_trace_id", "_turn_id", "_native_calls",
+    )
 
     def __init__(self, emit: Any, turn_id: str, bus: Any | None, trace_id: UUID) -> None:
         self._emit = emit
@@ -299,6 +302,7 @@ class _StepMirror:
         self._open: list[tuple[str, str]] = []  # (tool name, call id)
         self._children: set[UUID] = set()
         self._seen_text: set[str] = set()
+        self._native_calls: set[str] = set()
 
     def start(self) -> None:
         if self._bus is not None and hasattr(self._bus, "subscribe_all"):
@@ -361,7 +365,22 @@ class _StepMirror:
 
     async def _translate(self, event: Any) -> None:
         name = type(event).__name__
-        if name == "ActionProposed" and self._mine(event):
+        if name == "AgentToolActivity" and self._mine(event):
+            call_id = event.call_id
+            if call_id not in self._native_calls:
+                self._native_calls.add(call_id)
+                await self._emit("tool_call", {
+                    "turn_id": self._turn_id, "call_id": call_id,
+                    "name": event.tool_name,
+                    "input": {"preview": event.preview} if event.state == "started" else {},
+                })
+            if event.state != "started":
+                await self._emit("tool_result", {
+                    "turn_id": self._turn_id, "call_id": call_id,
+                    "output": event.preview, "is_error": event.state != "completed",
+                    "duration_ms": event.duration_ms,
+                })
+        elif name == "ActionProposed" and self._mine(event):
             text = (getattr(event, "rationale", "") or "").strip()
             if text and text not in self._seen_text:
                 self._seen_text.add(text)
@@ -426,7 +445,9 @@ async def run_brain_turn(
     mirror = _StepMirror(emit, turn_id, handle.bus, handle.trace_id)
     ref = approval_ref(session.session_id)
 
-    async def finish(status: str, usage: dict[str, Any], error: str | None = None) -> None:
+    async def finish(
+        status: str, usage: dict[str, Any], error: str | None = None, policy: str = "",
+    ) -> None:
         await emit(
             "turn_finished",
             {
@@ -435,6 +456,7 @@ async def run_brain_turn(
                 "duration_ms": int((time.monotonic() - started) * 1000),
                 "usage": usage,
                 "error": error,
+                **({"policy_refusal": policy} if policy else {}),
             },
         )
 
@@ -551,7 +573,7 @@ async def run_brain_turn(
         elif override.receipt.finish_reason in ("error", "length"):
             status = "error"
             error = "The selected agent did not complete this turn."
-    await finish(status, override.receipt.usage(), error)
+    await finish(status, override.receipt.usage(), error, override.receipt.policy_refusal)
 
 
 async def _generate(
