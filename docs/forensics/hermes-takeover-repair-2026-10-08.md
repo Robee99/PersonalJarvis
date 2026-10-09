@@ -283,3 +283,42 @@ Full voice/device acceptance, recovery of the oversized native conversation,
 Gemma live execution, project intelligence/Orb/navigation and full parity remain
 open. The new plugin must be included in the next installer so rerunning setup
 cannot replace it with the older bridge.
+
+### Final installer and cancellation qualification
+
+Windows job `113704674171` in installer run `37895134141` succeeded for repair
+commit `1de6b48a738f5d0b0a73df4de7882d2ecb1a8ee2`. Artifact `11600317243`
+SHA-256 `41d7c6bc0f5b18830e91439d29a6dec6e26a28d206e0f1952137efc579c83dd4`
+and extracted installer SHA-256
+`79321475c935f45598b51975a446fc8fee28f02539674d71979323f3a5970c82`
+were verified. The installed application was upgraded, the installer returned
+zero, and Jarvis reopened healthy. The bundled `jarvis-control` version 1.2.0
+code and metadata exactly match the pushed repair, preventing a setup downgrade.
+
+The installed API and actual settings UI show twelve choices: nine current free
+Nous models, Qwen, Gemma and Hermes decides. Both speech engines remained ready
+and active in Pipeline after the upgrade. The actual post-upgrade MCP handshake
+initialized successfully and listed the same eight connected tools. Browser,
+terminal, files, skills and computer-use toolset metadata remained enabled.
+The client's newer SDK reports session metadata differently; the handshake's
+success is established by initialization and listing, not by inventing a session
+id getter. No real account action was performed.
+
+A further check qualified the native Stop result: `cancelled` is the native run's
+terminal state, but does not prove the local llama.cpp slot is immediately idle.
+An earlier test left a large prefill processing; the identity-checked launcher
+restarted only its own Qwen server to clear this stranded test. From a known idle
+server, a fresh bounded run constructed Qwen and cancelled natively. Its slot
+remained busy beyond forty seconds, then released at a batch boundary. Server
+timing records show about 54 seconds between launch and release, with 512 tokens
+processed. The server was verified idle afterward. Fast local Stop and cold
+35B voice latency are therefore **not** acceptance claims. No optimized model
+weights, quantization, context, batch or memory-cap settings were changed.
+
+The prior Hermes decides preference was restored through the installed shared
+panel and durably acknowledged by the native model endpoint. Qwen and Gemma
+remain available as explicit choices. Screenshots of the actual installed panel
+and scrolled model menu were saved outside the repository; temporary desktop
+viewport overrides were reset. Full microphone/speaker acceptance, oversized
+conversation recovery, fast local interruption, Gemma inference and the P2
+project/Orb/navigation work remain open.
