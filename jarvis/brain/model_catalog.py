@@ -799,7 +799,7 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
     # Hermes remains the orchestrator for every choice. Qualify cloud/local
     # models with their Hermes provider: a bare model id can be ignored by the
     # gateway when direct-model requests are disabled. The free Nous roster was
-    # checked against its authenticated /v1/models catalog on 2026-10-05.
+    # checked against its authenticated /v1/models catalog on 2026-10-09.
     cat["hermes"] = CatalogSpec(
         "brain",
         "model",
@@ -808,6 +808,8 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
                 [
                     ("hermes-agent", "Hermes decides"),
                     ("nous::stepfun/step-3.7-flash:free", "Step 3.7 Flash (Nous free)"),
+                    ("nous::stepfun/step-5-preview:free", "Step 5 Preview (Nous free)"),
+                    ("nous::upstage/solar-mini4:free", "Solar Mini 4 (Nous free)"),
                     ("nous::poolside/laguna-s-2.1:free", "Laguna S 2.1 (Nous free)"),
                     ("nous::poolside/laguna-xs-2.1:free", "Laguna XS 2.1 (Nous free)"),
                     ("nous::meituan/longcat-2.0:free", "LongCat 2.0 (Nous free)"),

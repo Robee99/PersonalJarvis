@@ -26,6 +26,7 @@ def _wire(app, adapter):
     from tools import async_delegation as registry
 
     home = get_hermes_home().resolve()
+    _bind_main_model_factory(adapter, home)
     accepted = {}
     control_lock = asyncio.Lock()
 
@@ -290,3 +291,79 @@ def _wire(app, adapter):
     path = "/api/jarvis/conversations/{session_id}/delegations"
     app.router.add_get(path, roster)
     app.router.add_post(path + "/stop", stop)
+
+
+def _bind_main_model_factory(adapter, home):
+    """Apply the canonical lock where tracked runs construct their agent.
+
+    Native /api/sessions chat reads this lock, but /v1/runs only passes its
+    request fields into the factory. Scope the bridge to Jarvis's owned main
+    conversation (including its compression tip); isolated sessions retain
+    native routing. Use the native resolver and strict-lock behavior rather
+    than copying model state into the Jarvis client or Hermes core.
+    """
+    if getattr(adapter, "_jarvis_model_factory_bound", False):
+        return
+    from hermes_constants import get_hermes_home
+
+    create = adapter._create_agent
+    set_status = adapter._set_run_status
+
+    def create_for_conversation(**kwargs):
+        key = kwargs.get("gateway_session_key")
+        if key != "jarvis:main":
+            return create(**kwargs)
+        if get_hermes_home().resolve() != home:
+            raise RuntimeError("Jarvis model control profile does not match.")
+        db = adapter._ensure_session_db()
+        if db is None:
+            raise RuntimeError("Jarvis model selection store is unavailable.")
+        tip = db.resolve_resume_session_id("jarvis-main")
+        if kwargs.get("session_id") not in {"jarvis-main", tip}:
+            return create(**kwargs)
+        session = db.get_session(tip)
+        if session is None:
+            return create(**kwargs)
+        if session.get("source") != "api_server" or session.get("session_key") != key:
+            raise RuntimeError("Jarvis model selection conversation does not match.")
+        runtime = adapter._runtime_request_from_persisted_session_lock(
+            session, {"model_options": kwargs.get("model_options")}
+        )
+        if runtime is not None:
+            error = adapter._runtime_lock_error(runtime)
+            if error is not None:
+                raise RuntimeError("The selected Jarvis model cannot be routed.")
+            model, provider = adapter._requested_ids(runtime.get("requested"))
+            kwargs.update(
+                requested_model=model,
+                requested_provider=provider,
+                route=runtime["route"],
+                model_options=runtime["model_options"],
+                session_model=adapter._stored_session_model(session),
+                confirmed_runtime_lock=True,
+            )
+        agent = create(**kwargs)
+        if runtime is not None:
+            agent._jarvis_model_lock = {"model": model, "provider": provider}
+        return agent
+
+    def status_for_run(run_id, status, **fields):
+        # Native tracked runs reduce the factory metadata to provider/model.
+        # Keep that actual served pair; attach the lock provenance from THIS
+        # run's agent, never from a preference that may have changed mid-turn.
+        runtime = fields.get("runtime")
+        agent = adapter._active_run_agents.get(run_id)
+        lock = getattr(agent, "_jarvis_model_lock", None)
+        if isinstance(runtime, dict) and isinstance(lock, dict):
+            runtime.update(
+                adapter._sanitize_runtime_metadata(
+                    runtime={**runtime, "route_source": "session_model_lock"},
+                    requested_runtime=lock,
+                    model_lock="confirmed",
+                )
+            )
+        return set_status(run_id, status, **fields)
+
+    adapter._create_agent = create_for_conversation
+    adapter._set_run_status = status_for_run
+    adapter._jarvis_model_factory_bound = True

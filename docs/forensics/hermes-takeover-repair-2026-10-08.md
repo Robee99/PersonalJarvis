@@ -216,3 +216,70 @@ headers. The saved choice remains Hermes decides. Hermes core was not edited.
 The installed desktop application has not yet been upgraded. Installer, actual
 voice devices, project intelligence/Orb/navigation, and full parity acceptance
 remain outstanding. A source preview is not installed-app evidence.
+
+## Tracked-run model execution repair and installed acceptance (2026-10-09)
+
+Installed build `823e54a` exposed a gap the earlier precedence tests missed:
+native `/api/sessions` chat reads the persisted browser model lock, but native
+`/v1/runs` constructs its agent from request fields without applying that lock.
+Jarvis uses the tracked endpoint, so a correctly saved Qwen preference still
+constructed the gateway's default Step client. Testing the precedence helper
+alone did not prove the execution path.
+
+The packaged `jarvis-control` plugin now binds the adapter's actual agent factory
+for the authenticated Jarvis main conversation and its compression tip. It reads
+the canonical native pin and passes it to the native strict runtime resolver.
+Other sessions retain their routing. A mismatched profile, unavailable store or
+foreign conversation fails closed. An unavailable pinned provider cannot use the
+fallback chain or rewrite the preference. No Hermes core source is changed.
+
+Native terminal runtime metadata keeps the actual served provider/model and adds
+the lock provenance captured by that run's agent. Changing the selection during
+a turn changes the next turn, rather than relabelling the current result. Metadata
+never substitutes the preference for the actual served model.
+
+Validation and actual installed evidence:
+
+- Six canonical native integration contracts pass through the plugin loader,
+  real DB and real HTTP run admission. Fixture inference checks Qwen, Gemma and
+  Nous pins, stale overrides, unavailable pins, independent sessions, mid-turn
+  changes, Auto release and compression-tip routing. Native MCP consent and
+  detached cancellation contracts also pass. No paid inference or account write.
+- Affected Python/shared guards: 651 passed. Final catalog/shared-selection
+  checks: 19 passed. Touched plugin/native test lint and whitespace pass.
+- Windows installer run `37868232200` built commit `823e54a`. Artifact SHA-256
+  `e1c17d6d6efc8acd39ba2b05f4294c304ca3dfe5c114532f0790789d9bcd5c6d`
+  was verified before installation. Silent installer returned zero. Installed
+  Jarvis reopened healthy on its authenticated loopback API. Its actual config
+  is in the installation's `_internal` directory; an earlier guessed AppData
+  config location was incorrect and is not acceptance evidence.
+- The actual installed shared panel selected Qwen and retained it after reload
+  and application relaunch. Hermes/Pipeline, Nemotron and Piper persisted. The
+  unused dictation polish path was disabled through the app API.
+- Actual Piper provider test generated 23,040 audio bytes in about 2.4 seconds;
+  actual Nemotron provider test loaded and decoded its local fixture in about
+  2.3 seconds. These prove local engines, not microphone/speaker/wake-word quality.
+- Actual authenticated Jarvis-to-Hermes MCP handshake negotiated protocol
+  `2025-11-25` and listed eight camera/contact/mail/Calendar/Drive/wiki tools.
+  Native logs confirm their registration. Browser, file, terminal, skills and
+  computer-use toolsets are enabled; the native inventory reports 97 skills.
+  OAuth account actions and physical desktop actions have not been exercised.
+- With the updated packaged plugin installed and the native gateway restarted,
+  an actual Jarvis turn constructed `custom/qwen` at `127.0.0.1:11437/v1`, rather
+  than Step. That turn failed before inference because the existing native
+  conversation estimated 122,005 tokens against Qwen's 65,536 window. The server
+  reports the correct context size. No conversation history was deleted.
+- A separate bounded native run with explicit short history constructed that
+  same Qwen runtime. Its Stop returned HTTP 200 and settled as `cancelled` with
+  `run.cancelled`. It does not prove a complete cold Qwen reply on the oversized
+  saved conversation. Cached weights and their optimization were unchanged.
+
+The authenticated Nous catalog returned nine free models on this date. The
+fallback picker roster now also includes `stepfun/step-5-preview:free` and
+`upstage/solar-mini4:free`, with explicit Nous provider qualification. Catalog
+enumeration did not execute those models.
+
+Full voice/device acceptance, recovery of the oversized native conversation,
+Gemma live execution, project intelligence/Orb/navigation and full parity remain
+open. The new plugin must be included in the next installer so rerunning setup
+cannot replace it with the older bridge.

@@ -347,6 +347,211 @@ async def test_real_native_child_stop_is_owned_retryable_and_idempotent(tmp_path
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("choice", "provider", "model"),
+    [
+        ("local-qwen::fixture-qwen", "local-qwen", "fixture-qwen"),
+        ("local-gemma::fixture-gemma", "local-gemma", "fixture-gemma"),
+        ("nous::fixture-free-model", "nous", "fixture-free-model"),
+    ],
+)
+async def test_tracked_run_factory_uses_canonical_model_lock(
+    tmp_path, monkeypatch, choice, provider, model
+):
+    """Real HTTP run admission must reach the native strict runtime resolver.
+
+    Inference is a fixture, but plugin loading, persistence, /v1/runs,
+    agent-factory dispatch, native precedence and completion metadata are real.
+    """
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _reset_plugin_managers_for_tests()
+    tmp_path.joinpath("config.yaml").write_text(
+        "plugins:\n  enabled: [jarvis-control]\n", encoding="utf-8"
+    )
+    install_controls(home=tmp_path, argv=["hermes"], run=lambda _a: (0, "enabled"))
+    discover_plugins()
+    adapter = APIServerAdapter(
+        PlatformConfig(enabled=True, extra={"key": "fixture-control-key-long-enough"})
+    )
+    creations = []
+    calls = []
+    unavailable = set()
+    waiting = threading.Event()
+    release = threading.Event()
+    pause_run = False
+
+    class Agent:
+        def __init__(self, chosen, runtime, kwargs):
+            self.model = chosen
+            self.provider = runtime["provider"]
+            self.session_id = kwargs["session_id"]
+            self._hermes_api_runtime = {
+                "model": chosen,
+                "provider": self.provider,
+                "route_source": "session_model_lock"
+                if kwargs.get("confirmed_runtime_lock")
+                else "global",
+            }
+
+        def run_conversation(self, **_kwargs):
+            calls.append((self.provider, self.model))
+            if pause_run:
+                waiting.set()
+                assert release.wait(5), "Fixture run was not released"
+            return {"final_response": "ready", "completed": True}
+
+    def provider_runtime(kwargs, chosen, *, target_model, required=False):
+        assert required
+        if chosen in unavailable:
+            raise RuntimeError("Fixture selected model unavailable")
+        kwargs["provider"] = chosen
+        return True
+
+    monkeypatch.setattr(adapter, "_apply_provider_runtime", provider_runtime)
+    monkeypatch.setattr(
+        adapter, "_session_model_override_for",
+        lambda _k: {"model": "stale-step", "provider": "stale-provider"},
+    )
+
+    def create(**kwargs):
+        creations.append(kwargs)
+        runtime = {"provider": "fixture-default"}
+        selected, _, _, _ = adapter._select_agent_runtime(
+            runtime, "fixture-default-model",
+            **{k: kwargs.get(k) for k in (
+                "requested_model", "requested_provider", "route", "session_model",
+                "confirmed_runtime_lock", "gateway_session_key", "session_id",
+            )},
+        )
+        return Agent(selected, runtime, kwargs)
+
+    # Replace only inference construction BEFORE plugin registration. The
+    # actual tracked endpoint must dispatch through the plugin's factory seam.
+    monkeypatch.setattr(adapter, "_create_agent", create)
+    app = web.Application()
+    adapter._wire_plugin_handlers(app)
+    app.router.add_post("/v1/runs", adapter._handle_runs)
+    app.router.add_get("/v1/runs/{run_id}", adapter._handle_get_run)
+    headers = {
+        "Authorization": "Bearer fixture-control-key-long-enough",
+        "X-Hermes-Session-Key": "jarvis:main",
+    }
+
+    async def run(client, session_id="jarvis-main"):
+        response = await client.post(
+            "/v1/runs", headers=headers,
+            json={"model": "hermes-agent", "session_id": session_id, "input": "fixture"},
+        )
+        assert response.status == 202, await response.text()
+        run_id = (await response.json())["run_id"]
+        for _ in range(100):
+            status = await (await client.get("/v1/runs/" + run_id, headers=headers)).json()
+            if status["status"] in {"completed", "failed", "cancelled"}:
+                return status
+            await asyncio.sleep(0.01)
+        pytest.fail("Fixture tracked run did not settle")
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            selection_path = "/api/jarvis/conversations/jarvis-main/model"
+            response = await client.post(
+                selection_path, headers=headers, json={"selection": choice}
+            )
+            assert response.status == 200
+            db = await adapter._ensure_session_db_async()
+            pin = db.get_session("jarvis-main")["model_config"]
+            status = await run(client)
+            assert status["status"] == "completed", status
+            assert calls == [(provider, model)]
+            assert creations[-1]["confirmed_runtime_lock"] is True
+            assert status["runtime"]["provider"] == provider
+            assert status["runtime"]["model"] == model
+            assert status["runtime"]["route_source"] == "session_model_lock"
+            assert db.get_session("jarvis-main")["model_config"] == pin
+
+            unavailable.add(provider)
+            status = await run(client)
+            assert status["status"] == "failed"
+            assert calls == [(provider, model)]  # no default fallback ran
+            assert db.get_session("jarvis-main")["model_config"] == pin
+
+            # Isolated sessions do not inherit the Jarvis main pin.
+            monkeypatch.setattr(adapter, "_session_model_override_for", lambda _k: None)
+            status = await run(client, "jarvis-background")
+            assert status["status"] == "completed", status
+            assert calls[-1] == ("fixture-default", "fixture-default-model")
+            assert not creations[-1].get("confirmed_runtime_lock")
+            assert db.get_session("jarvis-main")["model_config"] == pin
+
+            # Changing the saved choice while a run finishes must not rewrite
+            # that run's provenance to the model selected for the NEXT turn.
+            unavailable.clear()
+            pause_run = True
+            response = await client.post(
+                "/v1/runs", headers=headers,
+                json={"model": "hermes-agent", "session_id": "jarvis-main", "input": "fixture"},
+            )
+            assert response.status == 202
+            running_id = (await response.json())["run_id"]
+            await asyncio.to_thread(_wait_for_fixture, waiting.is_set, 3)
+            response = await client.post(
+                selection_path, headers=headers,
+                json={"selection": "nous::fixture-next-model"},
+            )
+            assert response.status == 200
+            release.set()
+            for _ in range(100):
+                status = await (
+                    await client.get("/v1/runs/" + running_id, headers=headers)
+                ).json()
+                if status["status"] == "completed":
+                    break
+                await asyncio.sleep(0.01)
+            assert status["status"] == "completed", status
+            assert status["runtime"]["requested"] == {"provider": provider, "model": model}
+            assert status["runtime"]["model_lock"] == "confirmed"
+            assert status["runtime"]["model"] == model
+            preference = await (await client.get(selection_path, headers=headers)).json()
+            assert preference["selection"] == "nous::fixture-next-model"
+            pause_run = False
+
+            response = await client.post(
+                selection_path, headers=headers, json={"selection": "hermes-agent"}
+            )
+            assert response.status == 200
+            status = await run(client)
+            assert status["status"] == "completed"
+            assert calls[-1] == ("fixture-default", "fixture-default-model")
+            assert not creations[-1].get("confirmed_runtime_lock")
+
+            # Compaction rotates the native transcript id. Both the canonical
+            # caller and a caller using its current tip must read the same pin.
+            response = await client.post(
+                selection_path, headers=headers, json={"selection": choice}
+            )
+            assert response.status == 200
+            config = db.get_session("jarvis-main")["model_config"]
+            if isinstance(config, str):
+                config = json.loads(config)
+            db.end_session("jarvis-main", "compression")
+            db.create_session(
+                "jarvis-main-compacted", "api_server", parent_session_id="jarvis-main",
+                model_config=config,
+            )
+            assert db.resolve_resume_session_id("jarvis-main") == "jarvis-main-compacted"
+            for sid in ("jarvis-main", "jarvis-main-compacted"):
+                status = await run(client, sid)
+                assert status["status"] == "completed", status
+                assert calls[-1] == (provider, model)
+                assert status["runtime"]["requested"] == {"provider": provider, "model": model}
+                assert status["runtime"]["model_lock"] == "confirmed"
+    finally:
+        release.set()
+        adapter._close_cached_session_dbs()
+        _reset_plugin_managers_for_tests()
+
+
+@pytest.mark.asyncio
 async def test_native_model_preference_is_durable_owned_and_used_by_runtime(tmp_path, monkeypatch):
     """Exercise the real DB/route/precedence contract without calling a model."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
