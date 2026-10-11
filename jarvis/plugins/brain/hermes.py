@@ -275,9 +275,12 @@ FRONT_END_INSTRUCTIONS = (
 #: Chrome behind the Jarvis window, the model said "I have opened Chrome",
 #: and the person, seeing nothing, rightly called it a lie.
 PC_CONTROL_INSTRUCTIONS = (
-    "On this Windows PC, open, switch to, resize or close apps with the "
-    "windows App tool, which brings the window to the front; use PowerShell "
-    "only for what App cannot do. Before saying something is open, closed, "
+    "On this Windows PC, launch apps with the windows App tool. To minimize, "
+    "maximize, restore, bring back, focus or close a window use "
+    "mcp__jarvis__window_control; for the computer's volume or mute use "
+    "mcp__jarvis__system_volume (never a music app). Resizing is not "
+    "maximizing. Use PowerShell only for what these tools cannot do. Before "
+    "saying something is open, closed, "
     "playing, added or sent, check the result (a Snapshot, the window list, "
     "the page) and say what you actually see. Never say a cart, order, "
     "message or file changed unless a tool result in this turn shows it."

@@ -22,6 +22,7 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from jarvis.core.protocols import ExecutionContext, ToolResult
@@ -44,14 +45,14 @@ def _process_name(pid: int | None) -> str:
         return ""
 
 
-def _candidates(target: str) -> list[Any]:
+def _candidates(target: str, *, program_only: bool = False) -> list[Any]:
     from jarvis.platform.window_state import list_windows  # noqa: PLC0415
 
     needle = target.strip().lower()
     titled = [w for w in list_windows() if (w.title or "").strip() and w.handle]
     if not needle:
         return titled
-    by_title = [w for w in titled if needle in w.title.lower()]
+    by_title = [] if program_only else [w for w in titled if needle in w.title.lower()]
     by_program = [w for w in titled if needle.replace(" ", "") in _process_name(w.pid)]
     seen: set[int] = set()
     out = []
@@ -87,21 +88,29 @@ def _state(user32: Any, hwnd: int) -> str:
     return "normal"
 
 
-def apply(action: str, target: str) -> str:
-    """Do ``action`` on the first window matching ``target``; say its state after."""
+@dataclass(frozen=True)
+class WindowResult:
+    """The window acted on and its state read back afterwards."""
+
+    title: str
+    state: str
+
+
+def change(action: str, target: str, *, program_only: bool = False) -> WindowResult:
+    """Do ``action`` (not list) on the first window matching ``target``.
+
+    ``program_only`` matches the program name alone, never title text, for a
+    caller that acts on a spoken word without a model checking the match.
+    """
     if os.name != "nt":
         raise RuntimeError("Window control is only available on Windows.")
     import ctypes  # noqa: PLC0415
 
     from jarvis.platform.window_state import _force_foreground_windows  # noqa: PLC0415
 
-    windows = _candidates(target)
-    if action == "list":
-        if not windows:
-            return "No open windows."
-        return "Open windows: " + "; ".join(w.title for w in windows[:25])
     if not target.strip():
         raise ValueError("Say which window, by its title or program name.")
+    windows = _candidates(target, program_only=program_only)
     if not windows:
         raise LookupError(f"No open window matches '{target}'.")
     win = windows[0]
@@ -122,10 +131,22 @@ def apply(action: str, target: str) -> str:
         if action != "minimize":
             _force_foreground_windows(hwnd)
         time.sleep(0.15)
-    state = _state(user32, hwnd)
-    if action == "close" and state != "closed":
-        return f"Asked '{win.title}' to close; it is still open (it may be asking to save)."
-    return f"'{win.title}' is now {state}."
+    return WindowResult(win.title, _state(user32, hwnd))
+
+
+def apply(action: str, target: str) -> str:
+    """Do ``action`` on the first window matching ``target``; say its state after."""
+    if action == "list":
+        if os.name != "nt":
+            raise RuntimeError("Window control is only available on Windows.")
+        windows = _candidates(target)
+        if not windows:
+            return "No open windows."
+        return "Open windows: " + "; ".join(w.title for w in windows[:25])
+    result = change(action, target)
+    if action == "close" and result.state != "closed":
+        return f"Asked '{result.title}' to close; it is still open (it may be asking to save)."
+    return f"'{result.title}' is now {result.state}."
 
 
 class WindowControlTool:
