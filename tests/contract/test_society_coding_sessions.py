@@ -460,11 +460,13 @@ async def test_mcp_lists_the_tool_only_for_society_sessions(rig, monkeypatch):
     finally:
         jarvis_tools_server.CHAT_SESSION_REF.reset(token)
     result = await handler(types.ListToolsRequest(method="tools/list"))
-    # Outside the society session only the read-only project brain map remains
-    # (offered to Hermes, which calls with no session); no coding session.
+    # Outside the society session only the read-only project brain map and the
+    # read-only local media tools remain (offered to Hermes, which calls with no
+    # session); no coding session.
     from jarvis.memory.brain_map.mcp_tools import TOOL_NAMES
+    from jarvis.multimodal.tools import TOOL_NAMES as MEDIA_TOOL_NAMES
 
-    assert {tool.name for tool in result.root.tools} <= set(TOOL_NAMES)
+    assert {tool.name for tool in result.root.tools} <= set(TOOL_NAMES) | MEDIA_TOOL_NAMES
 
 
 def test_account_discovery_reports_connection_without_credentials(monkeypatch):

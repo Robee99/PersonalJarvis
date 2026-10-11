@@ -278,3 +278,17 @@ auto_approve_tool_families = [
   "wiki-ingest",
   "session-latest-turn",
 ]
+
+# -- Local media understanding (jarvis/multimodal) --
+# Three read-only MCP tools for Hermes: media-describe-image,
+# media-transcribe-audio, media-understand-video. Every model call stays on
+# this computer: a non-local server_url is refused, never used. Without this
+# section Jarvis auto-detects a running llama-server that accepts images or
+# audio (started with --mmproj) and uses the downloaded faster-whisper model.
+# [multimodal]
+# server_url = "http://127.0.0.1:11439"   # "" = auto-detect on this computer
+# transcriber = "auto"                    # auto | whisper | server
+# whisper_model = ""                      # "" = [stt].model, then [stt].wake_model
+# allowed_dirs = []                       # on top of Pictures, Videos, Music, Downloads, ...
+# video_frames = 8
+# max_video_seconds = 1200

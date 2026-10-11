@@ -430,6 +430,29 @@ def _brain_map_offered(taken: set[str]) -> list[Any]:
     return [spec for spec in TOOLS if spec.name not in taken]
 
 
+def _media_offered(taken: set[str]) -> list[Any]:
+    """The read-only media tools (``jarvis/multimodal/tools.py``).
+
+    Answered in-process like the brain map: each call reads one local file and
+    asks a model on this computer (loopback only) about it, so it changes
+    nothing and sends nothing off the machine; risk tier safe, with folder,
+    size and duration limits instead of an approval. Offered to the same
+    callers as the brain map: an ordinary chat session and Hermes. A society
+    seat or a task grant gets only its granted tools. A gateway tool of the
+    same name always wins.
+    """
+    from jarvis.core.task_agent import scope_for
+
+    session_id = CHAT_SESSION_REF.get()
+    if session_id and session_id.startswith(("task-", "society:")):
+        return []
+    if session_id and scope_for(session_id) is not None:
+        return []
+    from jarvis.multimodal.tools import TOOLS
+
+    return [spec for spec in TOOLS if spec.name not in taken]
+
+
 def build_server() -> Any:
     """A low-level MCP server bound to the live tool gateway.
 
@@ -475,6 +498,17 @@ def build_server() -> Any:
                     annotations=types.ToolAnnotations(readOnlyHint=True),
                 )
             )
+        for spec in _media_offered({tool.name for tool in tools}):
+            tools.append(
+                types.Tool(
+                    name=spec.name,
+                    description=spec.description,
+                    inputSchema=spec.input_schema,
+                    annotations=types.ToolAnnotations(
+                        readOnlyHint=True, destructiveHint=False, openWorldHint=False
+                    ),
+                )
+            )
         return tools
 
     @server.call_tool()  # type: ignore[misc, no-untyped-call]
@@ -500,6 +534,21 @@ def build_server() -> Any:
                     )
             except Exception as exc:  # noqa: BLE001 — a read failure is data for the model, not a crash
                 log.warning("jarvis MCP: brain map tool %s raised", name, exc_info=True)
+                return failed(f"Tool failed: {type(exc).__name__}")
+        from jarvis.multimodal.tools import TOOL_NAMES as media_names
+
+        if name in media_names:
+            try:
+                taken = set((await _session_wire_catalog()).keys())
+                if any(spec.name == name for spec in _media_offered(taken)):
+                    from jarvis.multimodal.tools import call as media_call
+
+                    text, is_error = await media_call(name, arguments)
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text=text)], isError=is_error
+                    )
+            except Exception as exc:  # noqa: BLE001 — a media failure is data for the model, not a crash
+                log.warning("jarvis MCP: media tool %s raised", name, exc_info=True)
                 return failed(f"Tool failed: {type(exc).__name__}")
         gateway = _gateway()
         if gateway is None:

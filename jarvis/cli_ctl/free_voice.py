@@ -199,6 +199,11 @@ HERMES_JARVIS_TOOLS: tuple[str, ...] = (
     "find_source",
     "next_action",
     "make_report",
+    # Local media understanding, read-only (jarvis/multimodal): a picture, a
+    # recording or a video on this computer, described by a local model.
+    "media-describe-image",
+    "media-transcribe-audio",
+    "media-understand-video",
 )
 #: The name of the ``.env`` variable that carries Jarvis's control key.
 CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"
