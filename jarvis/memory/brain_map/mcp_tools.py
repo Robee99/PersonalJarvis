@@ -116,6 +116,7 @@ def answer(name: str, args: dict[str, Any], service: BrainMapService) -> tuple[s
                         "title",
                         "status",
                         "status_reason",
+                        "health",
                         "confidence",
                         "priority",
                         "summary",

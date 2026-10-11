@@ -2,11 +2,14 @@
 
 Endpoints (mounted by the WebServer; ``jarvis api brain-map <op>`` on the CLI):
 
-    GET  /api/brain-map/projects            → every project, highest priority first
-    GET  /api/brain-map/projects/{id}       → one project: summary, state, timeline,
-                                              decisions, tasks, blockers, files,
-                                              branches, agents, reports, next actions,
-                                              priority
+    GET  /api/brain-map/projects            → every project, highest priority first,
+                                              each with its health, plus the health
+                                              rule table the colours come from
+    GET  /api/brain-map/projects/{id}       → one project: summary, state, health,
+                                              timeline, decisions, tasks, blockers,
+                                              files, branches, agents, reports, next
+                                              actions, priority, and the conversation
+                                              thread as a branching tree
     GET  /api/brain-map/graph               → nodes + edges with status colours
     GET  /api/brain-map/entities/{id}       → one entity with its evidence and the
                                               jump to its source message
@@ -51,6 +54,14 @@ RelationKindLiteral = Literal[
 ]
 AssignmentLiteral = Literal["confirmed", "suggested"]
 OriginLiteral = Literal["native", "extracted", "derived"]
+# Mirrors jarvis/memory/brain_map/health.py and thread.py; the parity test is
+# tests/unit/memory/brain_map/test_health.py (Python, routes and the Orb's TS).
+HealthRuleLiteral = Literal[
+    "blocked", "failed", "verified", "stalled", "partial", "review", "active", "idle"
+]
+ThreadBranchLiteral = Literal[
+    "topic", "decision", "experiment", "subtask", "blocker", "milestone", "artifact"
+]
 
 
 class SourceRef(BaseModel):
@@ -93,10 +104,30 @@ class ProjectCounts(BaseModel):
     suggested: int
 
 
+class HealthOut(BaseModel):
+    """The project's colour from ``health.HEALTH_RULES``, with the rule that fired."""
+
+    colour: StatusLiteral
+    rule: HealthRuleLiteral
+    reason: str
+    progress: float | None = Field(default=None, ge=0.0, le=1.0)
+    done: int
+    total: int
+    open_blockers: int
+    open_tasks: int
+
+
+class HealthRuleOut(BaseModel):
+    id: HealthRuleLiteral
+    colour: StatusLiteral
+    when: str
+
+
 class ProjectOut(EntityOut):
     summary: str
     counts: ProjectCounts
     locator: str = ""
+    health: HealthOut
 
 
 class RunOut(BaseModel):
@@ -116,6 +147,7 @@ class RunOut(BaseModel):
 class ProjectsOut(BaseModel):
     projects: list[ProjectOut]
     last_run: RunOut | None = None
+    health_rules: list[HealthRuleOut]
 
 
 class StateOut(BaseModel):
@@ -159,6 +191,28 @@ class PriorityOut(BaseModel):
     reason: str
 
 
+class ThreadBranchOut(BaseModel):
+    id: str
+    kind: EntityKindLiteral
+    branch: ThreadBranchLiteral
+    title: str
+    status: StatusLiteral
+    status_reason: str
+    assignment: AssignmentLiteral
+    first_seen_ms: int
+    last_activity_ms: int
+    source: SourceRef
+    children: list[ThreadBranchOut]
+    hidden_children: int
+
+
+class ThreadOut(BaseModel):
+    project_id: str
+    branches: list[ThreadBranchOut]
+    hidden_branches: int
+    counts: dict[ThreadBranchLiteral, int]
+
+
 class ProjectDetailOut(ProjectOut):
     state: StateOut
     timeline: list[TimelineItem]
@@ -173,11 +227,13 @@ class ProjectDetailOut(ProjectOut):
     reports: list[EntityOut]
     next_actions: list[NextAction]
     priority: PriorityOut
+    thread: ThreadOut
 
 
 class GraphNode(EntityOut):
     color: str
     suggested: bool
+    health: HealthOut | None = None
 
 
 class GraphEdge(BaseModel):
@@ -192,6 +248,7 @@ class GraphOut(BaseModel):
     nodes: list[GraphNode]
     edges: list[GraphEdge]
     status_colours: dict[str, str]
+    health_rules: list[HealthRuleOut]
 
 
 class EvidenceOut(BaseModel):
@@ -254,7 +311,11 @@ def _service(request: Request) -> BrainMapService:
 )
 def list_brain_map_projects(request: Request) -> dict[str, Any]:
     service = _service(request)
-    return {"projects": query.list_projects(service.store), "last_run": service.last_run()}
+    return {
+        "projects": query.list_projects(service.store),
+        "last_run": service.last_run(),
+        "health_rules": query.health_rules(),
+    }
 
 
 @router.get(

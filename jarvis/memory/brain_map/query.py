@@ -8,14 +8,17 @@ stored as evidence.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
 from .constants import CONFIDENCE_FLOOR
 from .engine import agents_of, members_of
+from .health import project_health, rules_payload, work_of
 from .sources import conversation_id_of, git_branch
 from .status import day
 from .store import BrainMapStore
+from .thread import build_thread
 
 #: Default colours per status for a consumer without its own theme tokens.
 STATUS_COLOURS: dict[str, str] = {
@@ -26,6 +29,10 @@ STATUS_COLOURS: dict[str, str] = {
 }
 
 _OPEN = ("red", "blue", "yellow")
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _iso_day(ms: int) -> str:
@@ -104,20 +111,47 @@ def _counts(members: list[Any]) -> dict[str, int]:
     }
 
 
-def _project_summary(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
-    members = members_of(conn, str(row["entity_id"]))
+def _health(row: sqlite3.Row, members: list[Any], now_ms: int) -> dict[str, Any]:
+    return project_health(
+        status=str(row["status"]),
+        status_reason=str(row["status_reason"] or ""),
+        last_activity_ms=int(row["last_activity_ms"] or 0),
+        work=work_of(members),
+        now_ms=now_ms,
+    ).to_dict()
+
+
+def _project_summary(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    now_ms: int,
+    members: list[Any] | None = None,
+) -> dict[str, Any]:
+    if members is None:
+        members = members_of(conn, str(row["entity_id"]))
     out = _entity(row)
-    out.update(summary=row["summary"], counts=_counts(members), locator=row["locator"])
+    out.update(
+        summary=row["summary"],
+        counts=_counts(members),
+        locator=row["locator"],
+        health=_health(row, members, now_ms),
+    )
     return out
 
 
-def list_projects(store: BrainMapStore) -> list[dict[str, Any]]:
+def health_rules() -> list[dict[str, str]]:
+    """The ordered health rule table (``health.HEALTH_RULES``), JSON-ready."""
+    return rules_payload()
+
+
+def list_projects(store: BrainMapStore, *, now_ms: int | None = None) -> list[dict[str, Any]]:
+    now = _now_ms() if now_ms is None else now_ms
     with store.read() as conn:
         rows = conn.execute(
             "SELECT * FROM brain_map_entities WHERE kind='PROJECT'"
             " ORDER BY priority_score DESC, last_activity_ms DESC"
         ).fetchall()
-        return [_project_summary(conn, r) for r in rows]
+        return [_project_summary(conn, r, now) for r in rows]
 
 
 def next_actions(project: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
@@ -163,13 +197,16 @@ def next_actions(project: dict[str, Any], limit: int = 5) -> list[dict[str, Any]
     return actions[:limit]
 
 
-def project_detail(store: BrainMapStore, project_id: str) -> dict[str, Any] | None:
+def project_detail(
+    store: BrainMapStore, project_id: str, *, now_ms: int | None = None
+) -> dict[str, Any] | None:
+    now = _now_ms() if now_ms is None else now_ms
     with store.read() as conn:
         row = _project_row(conn, project_id)
         if row is None:
             return None
         members = members_of(conn, project_id)
-        out = _project_summary(conn, row)
+        out = _project_summary(conn, row, now, members)
         by_kind: dict[str, list[dict[str, Any]]] = {}
         for m in sorted(members, key=lambda m: -float(m.row["priority_score"] or 0)):
             assignment = (
@@ -180,6 +217,26 @@ def project_detail(store: BrainMapStore, project_id: str) -> dict[str, Any] | No
             by_kind.setdefault(str(m.row["kind"]), []).append(
                 _entity(m.row, assignment=assignment, confidence=m.confidence)
             )
+        thread = build_thread(
+            project_id,
+            (
+                {
+                    **_entity(
+                        m.row,
+                        assignment=(
+                            "suggested"
+                            if m.assignment == "suggested" or m.confidence < CONFIDENCE_FLOOR
+                            else "confirmed"
+                        ),
+                        confidence=m.confidence,
+                    ),
+                    "via": m.via,
+                    "first_seen_ms": int(m.row["first_seen_ms"] or 0),
+                    "source_kind": str(m.row["source_kind"] or ""),
+                }
+                for m in members
+            ),
+        )
         ids = [str(m.row["entity_id"]) for m in members]
         timeline: list[dict[str, Any]] = []
         if ids:
@@ -267,13 +324,19 @@ def project_detail(store: BrainMapStore, project_id: str) -> dict[str, Any] | No
         agents=agents,
         reports=by_kind.get("OUTPUT", []) + by_kind.get("DOCUMENT", []),
         priority={"score": out["priority_score"], "reason": out["priority_reason"]},
+        thread=thread,
     )
     out["next_actions"] = next_actions(out)
     return out
 
 
-def graph(store: BrainMapStore, *, limit: int = 600) -> dict[str, Any]:
-    """Nodes + edges for the Orb. Highest priority / most recent first."""
+def graph(store: BrainMapStore, *, limit: int = 600, now_ms: int | None = None) -> dict[str, Any]:
+    """Nodes + edges for the Orb. Highest priority / most recent first.
+
+    Project nodes carry their health, so the Orb colours a project by the same
+    rule table the project list uses.
+    """
+    now = _now_ms() if now_ms is None else now_ms
     with store.read() as conn:
         rows = conn.execute(
             "SELECT * FROM brain_map_entities ORDER BY (kind='PROJECT') DESC,"
@@ -306,15 +369,26 @@ def graph(store: BrainMapStore, *, limit: int = 600) -> dict[str, Any]:
             for r in conn.execute("SELECT * FROM brain_map_relations")
             if r["src_id"] in ids and r["dst_id"] in ids
         ]
+        healths = {
+            str(r["entity_id"]): _health(r, members_of(conn, str(r["entity_id"])), now)
+            for r in rows
+            if r["kind"] == "PROJECT"
+        }
     nodes = []
     for r in rows:
         node = _entity(r)
         node.update(
             color=STATUS_COLOURS.get(str(r["status"]), STATUS_COLOURS["blue"]),
             suggested=str(r["entity_id"]) in suggested and str(r["entity_id"]) not in confirmed,
+            health=healths.get(str(r["entity_id"])),
         )
         nodes.append(node)
-    return {"nodes": nodes, "edges": edges, "status_colours": STATUS_COLOURS}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "status_colours": STATUS_COLOURS,
+        "health_rules": rules_payload(),
+    }
 
 
 def entity_detail(store: BrainMapStore, entity_id: str) -> dict[str, Any] | None:
@@ -516,6 +590,7 @@ __all__ = [
     "entity_detail",
     "find_source",
     "graph",
+    "health_rules",
     "items",
     "list_projects",
     "make_report",
