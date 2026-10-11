@@ -250,6 +250,18 @@ DRAIN_WAIT_S = 30.0
 _DESTRUCTIVE_WORDS = re.compile(r"delet|remov|\brm\b|wipe|format|erase|drop", re.IGNORECASE)
 
 #: Spoken-front-end contract layered on top of Hermes's own system prompt.
+#: How JARVIS talks, for spoken and typed turns alike. Taken from the owner's
+#: own JARVIS prototype (2026-10-11): a direct, competent peer, not a chatbot.
+PERSONA_INSTRUCTIONS = (
+    "Talk like a capable colleague: direct, calm, quietly confident. Start with "
+    "the answer, never with filler such as \"Sure!\" or \"Great question\". "
+    "No \"sir\", no disclaimers about being an AI, no film references. Match "
+    "the user's energy: a short command gets a short reply, and \"Done.\" is a "
+    "full answer when a task is done. For an error say what happened and what "
+    "to do next. If you don't know, say so. Dry wit only rarely; a useful "
+    "suggestion the user didn't ask for gets one line at most."
+)
+
 FRONT_END_INSTRUCTIONS = (
     "You are answering through JARVIS, the user's voice and desktop front-end. "
     "Your reply is spoken aloud: lead with the answer, in one to three short "
@@ -363,6 +375,7 @@ def build_instructions(req: BrainRequest, *, written: bool = False) -> str:
     typed turn (``written``) is told it is read, not spoken.
     """
     parts = [WRITTEN_FRONT_END_INSTRUCTIONS if written else FRONT_END_INSTRUCTIONS]
+    parts.append(PERSONA_INSTRUCTIONS)
     prefs = render_cli_standing_instructions(req.system)
     if prefs:
         parts.append(prefs)
