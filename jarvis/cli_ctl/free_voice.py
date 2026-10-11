@@ -427,6 +427,21 @@ def run_free_voice(
         else:
             report.add(tier, "failed", "; ".join(reasons))
 
+    # --- The British "Jarvis" voice for English answers -----------------------
+    try:
+        state = _call(client, "POST", "/api/providers/piper-local/local-install")
+        if isinstance(state, dict) and state.get("already"):
+            report.add("jarvis-voice", "ok", "the British voice (George) is installed")
+        else:
+            report.add(
+                "jarvis-voice",
+                "changed",
+                "downloading the British voice (George, 330 MB); English answers use it "
+                "once it is there",
+            )
+    except ApiError as exc:
+        report.add("jarvis-voice", "failed", str(exc))
+
     # --- Memory: Hermes can recall what the wiki knows -----------------------
     if link_memory is not None:
         try:

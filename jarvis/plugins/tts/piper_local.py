@@ -140,6 +140,11 @@ class PiperLocalTTS:
         ]
         return (preferred or candidates)[0]
 
+    def _speaker(self, model_id: str) -> int:
+        """The speaker id inside the voice file (0 for a one-speaker Piper voice)."""
+        bundle = self._catalog().get(model_id)
+        return int(getattr(bundle, "speaker", 0) or 0)
+
     def list_voices(self, language: str | None = None) -> list[str]:
         """Installed voices, optionally filtered by language."""
         installed = self._installed_voices()
@@ -158,9 +163,13 @@ class PiperLocalTTS:
                 "on-device voice cannot speak. Install it from the API-Keys view."
             ) from exc
 
+        from jarvis.speech.local_models import SHERPA_BUNDLES
         from jarvis.speech.sherpa_models import model_paths
 
         paths = model_paths(model_id)
+        bundle = SHERPA_BUNDLES.get(model_id)
+        if bundle is not None and bundle.engine == "kokoro":
+            return self._build_kokoro(sherpa_onnx, model_id, paths)
         onnx = next(
             (p for name, p in paths.items() if name.endswith(".onnx")), None
         )
@@ -184,6 +193,29 @@ class PiperLocalTTS:
                     # espeak-ng's phoneme rules: how letters become sounds. A
                     # Piper voice cannot speak without them.
                     data_dir=str(data_dir),
+                ),
+                num_threads=self._num_threads,
+                provider="cpu",
+            ),
+        )
+        return sherpa_onnx.OfflineTts(config)
+
+    def _build_kokoro(self, sherpa_onnx: Any, model_id: str, paths: dict[str, Path]) -> Any:
+        """A Kokoro voice: one model, a voices file with its speakers, espeak data."""
+        missing = [name for name, path in paths.items() if not path.exists()]
+        if missing:
+            raise RuntimeError(
+                f"The voice '{model_id}' is not fully downloaded (missing: "
+                f"{', '.join(missing)}). Download it from the API-Keys view."
+            )
+        log.info("Loading local Kokoro voice %s", model_id)
+        config = sherpa_onnx.OfflineTtsConfig(
+            model=sherpa_onnx.OfflineTtsModelConfig(
+                kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                    model=str(paths["model.onnx"]),
+                    voices=str(paths["voices.bin"]),
+                    tokens=str(paths["tokens.txt"]),
+                    data_dir=str(paths["espeak-ng-data"]),
                 ),
                 num_threads=self._num_threads,
                 provider="cpu",
@@ -221,6 +253,7 @@ class PiperLocalTTS:
                 "voice output to a provider you have a key for."
             )
         engine = await self._engine_for(model_id)
+        speaker = self._speaker(model_id)
         sample_rate = int(getattr(engine, "sample_rate", 0) or 0)
         chunks: queue.Queue[bytes | object] = queue.Queue(maxsize=8)
         end = object()
@@ -251,8 +284,11 @@ class PiperLocalTTS:
             if data:
                 emitted.set()
                 if not _put(data):
-                    return 1
-            return 1 if stopped.is_set() else 0
+                    return 0
+            # sherpa-onnx reads the return value as "keep going": 1 continues
+            # with the next sentence, 0 stops. Returning 0 here used to end
+            # every reply after its first sentence.
+            return 0 if stopped.is_set() else 1
 
         nonlocal_rate = [sample_rate]
 
@@ -260,7 +296,7 @@ class PiperLocalTTS:
             try:
                 try:
                     audio = engine.generate(
-                        spoken, 0, self._speed, callback=_callback
+                        spoken, speaker, self._speed, callback=_callback
                     )
                 except TypeError as exc:
                     # Older sherpa-onnx builds and lightweight test engines do
@@ -276,7 +312,7 @@ class PiperLocalTTS:
                         )
                     ):
                         raise
-                    audio = engine.generate(spoken, 0, self._speed)
+                    audio = engine.generate(spoken, speaker, self._speed)
                 if not sample_rate:
                     rate = int(getattr(audio, "sample_rate", 0) or 0)
                     if rate:

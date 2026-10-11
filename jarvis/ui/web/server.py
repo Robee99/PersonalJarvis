@@ -344,6 +344,7 @@ class WebServer:
         from jarvis.runs.routes import router as runs_router
         from jarvis.runs.runs_ws import router as runs_ws_router
 
+        from .acceptance_routes import router as acceptance_router
         from .agent_accounts_routes import router as agent_accounts_router
         from .agent_chat_routes import router as agent_chat_router
         from .agent_mcp_routes import router as agent_mcp_router
@@ -383,17 +384,16 @@ class WebServer:
         from .friends_routes import router as friends_router
         from .frontier_routes import router as frontier_router
         from .grok_build_routes import router as grok_build_router
-        from .acceptance_routes import router as acceptance_router
         from .hermes_inventory_routes import router as hermes_inventory_router
-        from .local_server_routes import router as local_server_router
         from .holo_routes import api_router as holo_api_router
         from .holo_routes import router as holo_router
         from .live_routes import router as live_router
-        from .local_voice_routes import router as local_voice_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
         )
         from .local_models_routes import router as local_models_router
+        from .local_server_routes import router as local_server_router
+        from .local_voice_routes import router as local_voice_router
         from .marketplace_publish_routes import router as marketplace_publish_router
         from .marketplace_routes import router as marketplace_router
         from .mcp_routes import router as mcp_router
@@ -2810,6 +2810,23 @@ class WebServer:
         except Exception as exc:  # noqa: BLE001
             logger.opt(exception=exc).warning(
                 "Brain map tick init failed — the map updates only on reindex"
+            )
+
+        # The British "Jarvis" voice: when the local voice speaks already and
+        # its optional Kokoro voice is missing, fetch it in the background (a
+        # free 330 MB download; English answers switch to it once it is there).
+        try:
+            tts_provider = str(getattr(getattr(self.cfg, "tts", None), "provider", "") or "")
+            if tts_provider in ("piper-local", "piper"):
+                from jarvis.speech.local_install import fetch_missing_extras
+
+                self._jarvis_voice_task = asyncio.create_task(
+                    asyncio.to_thread(fetch_missing_extras, "piper-local"),
+                    name="jarvis-voice-fetch",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "British voice fetch did not start; English keeps the Piper voice"
             )
 
         # Reconcile the derived FTS5 index after readiness. This repairs stale
