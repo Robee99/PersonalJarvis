@@ -1,13 +1,9 @@
-import { KeyRound } from "lucide-react";
+import { KeyRound, Mic, Wand2 } from "lucide-react";
 
 import { ViewHeader } from "@/views/ChatsView";
-import {
-  makeProviderCategories,
-  ProviderCategory,
-  useTierHealth,
-} from "@/components/providers/ProviderTierSection";
-import { useProviders } from "@/hooks/useProviders";
 import { useT } from "@/i18n";
+import { openSettingsDestination } from "@/lib/openSettings";
+import { MovedSettingLink } from "@/views/settings/MovedSettingLink";
 
 export interface VoiceApiKeysTabProps {
   /**
@@ -21,17 +17,13 @@ export interface VoiceApiKeysTabProps {
 }
 
 /**
- * "API Keys" tab of the merged voice section — the providers and keys that turn
- * speech into text.
+ * "API Keys" tab of the merged voice section — where the providers that turn
+ * speech into text are picked.
  *
- * This is the SAME provider block the API-Keys view renders, scoped to the
- * `stt` tier: one shared `ProviderCategory`, not a second implementation. A key
- * saved here is therefore the same stored credential the API-Keys view shows,
- * and vice versa — the two screens are never mounted at the same time
- * (`MainView.SwitchOnActiveSection` renders exactly one section), and
- * `ApiKeyForm` announces every save/delete on the window event bus that
- * `useProviders` / `useSectionHealth` already listen to, so whichever screen is
- * opened next reads the current truth.
+ * Since 2026-10-11 it holds no picker of its own: speech-to-text is chosen in
+ * Settings › Voice and the optional wording pass under Settings › Advanced ›
+ * API keys & routing. The tab stays (its section id, `voice-api-keys`, is a
+ * voice-navigation target) and links to both.
  *
  * The Realtime|Pipeline engine switch deliberately does NOT ride along
  * (maintainer feedback 2026-07-29). This section is about turning speech into
@@ -42,10 +34,11 @@ export interface VoiceApiKeysTabProps {
  */
 export function VoiceApiKeysTab({ hideHeader = false }: VoiceApiKeysTabProps = {}) {
   const t = useT();
-  const { providers, loading, error, refetch, setActiveOptimistic } = useProviders();
-  const health = useTierHealth(providers);
-  const categories = makeProviderCategories(t);
 
+  // This tab used to render the speech-to-text (`stt`) and wording
+  // (`dictation`) provider pickers a second time, beside their copies on the
+  // API-Keys page — two controls for one config each (UI audit 2026-10-07,
+  // P0-3). Each lives in ONE place now; this tab sends people there.
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!hideHeader && (
@@ -59,35 +52,22 @@ export function VoiceApiKeysTab({ hideHeader = false }: VoiceApiKeysTabProps = {
         className="min-h-0 flex-1 overflow-y-auto scrollbar-jarvis p-6"
         data-testid="voice-api-keys-tab"
       >
-        {/* Two provider groups, 32px apart, at the page measure — the named
-            width for a card stack. `max-w-4xl` was an arbitrary step off the
-            scale, and 16px between two groups is what made every settings
-            screen read as one undifferentiated mesh. */}
-        <div className="mx-auto flex w-full max-w-page flex-col gap-group">
-          <ProviderCategory
-            meta={categories.stt}
-            tier="stt"
-            providers={providers}
-            loading={loading}
-            error={error}
-            onChanged={refetch}
-            onActivateOptimistic={setActiveOptimistic}
-            health={health.stt}
+        <div className="mx-auto flex w-full max-w-page flex-col gap-3">
+          <MovedSettingLink
+            testId="voice-api-keys-stt-link"
+            icon={<Mic />}
+            title={t("apikeys_view.tab_stt")}
+            description={t("settings_pages.stt_moved")}
+            actionLabel={t("settings_pages.open_voice")}
+            onOpen={() => openSettingsDestination("voice", "stt")}
           />
-
-          {/* The optional wording pass, right under the tier whose output it
-              cleans up. It belongs here and not only on the API-Keys screen:
-              this is the place someone configures dictation, and a key they
-              never find is a feature they never get. */}
-          <ProviderCategory
-            meta={categories.dictation}
-            tier="dictation"
-            providers={providers}
-            loading={loading}
-            error={error}
-            onChanged={refetch}
-            onActivateOptimistic={setActiveOptimistic}
-            health={health.dictation}
+          <MovedSettingLink
+            testId="voice-api-keys-wording-link"
+            icon={<Wand2 />}
+            title={t("apikeys_view.tab_dictation")}
+            description={t("settings_pages.wording_moved")}
+            actionLabel={t("settings_pages.open_apikeys")}
+            onOpen={() => openSettingsDestination("apikeys", "dictation")}
           />
         </div>
       </div>

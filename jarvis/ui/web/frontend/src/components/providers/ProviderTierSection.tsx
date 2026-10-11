@@ -1,3 +1,4 @@
+import { HumanError } from "@/components/ui/HumanError";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, Bot, Brain, Check, ChevronDown, Copy, Cpu, Download, HardDrive, KeyRound, Loader2, LogIn, LogOut, Mic, Play, PlugZap, Radio, Search, Sparkles, Square, Terminal, Volume2, Wand2, Waypoints, XCircle } from "lucide-react";
 import { AltCredentialNote } from "@/components/AltCredentialNote";
@@ -631,15 +632,13 @@ export function VoiceEngineContext({
       )}
 
       {liveMode === "realtime" && lastStartError && (
-        <p
-          data-testid="voice-engine-last-start-error"
-          className="pb-1 text-xs leading-snug text-foreground"
-          aria-live="polite"
-        >
-          {t("voice_state.connect_failed")
-            .replace("{0}", lastStartError.provider || "?")
-            .replace("{1}", lastStartError.message)}
-        </p>
+        <div aria-live="polite" className="pb-1 text-xs leading-snug">
+          <HumanError
+            raw={lastStartError.message}
+            prefix={t("errors_human.voice_connect_failed")}
+            testId="voice-engine-last-start-error"
+          />
+        </div>
       )}
 
       {mode === "realtime" && (

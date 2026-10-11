@@ -73,6 +73,9 @@ export function WikiView(): JSX.Element {
   // step-2-vs-step-3 starts from the most recent reality.
   const [setupHint, setSetupHint] = useState<ObsidianStatusType | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The first-visit Obsidian suggestion: a quiet line, never a modal (see the
+  // probe effect below). Holds the status that made it worth suggesting.
+  const [setupSuggestion, setSetupSuggestion] = useState<ObsidianStatusType | null>(null);
   const [isReindexing, setIsReindexing] = useState(false);
   const [reindexError, setReindexError] = useState<string | null>(null);
 
@@ -126,9 +129,13 @@ export function WikiView(): JSX.Element {
     return () => window.removeEventListener("keydown", onKey);
   }, [isGraphExpanded]);
 
-  // On the first visit to the Wiki tab, auto-open the Obsidian setup
-  // walkthrough — but only if the user has never marked it as completed
-  // AND the current status says action is required.
+  // On the first visit to the Wiki tab, SUGGEST the Obsidian setup — once,
+  // quietly, and never in the way. It used to open the walkthrough as a
+  // blocking modal, so "Open note" from the Orb landed on a setup wizard
+  // instead of the note it asked for, on every visit until confirmed (UI
+  // audit 2026-10-07, P1-6). The note is read here in the app either way;
+  // Obsidian is an optional editor, offered as a one-line notice with a
+  // "Set up" button and a "Not now" that remembers the answer.
   // Both requests run in parallel; AbortController cancels them if the
   // component unmounts before the network round trip finishes.
   useEffect(() => {
@@ -151,8 +158,7 @@ export function WikiView(): JSX.Element {
           state.obsidian_setup_seen === false &&
           status.recommended_action !== "ok"
         ) {
-          setSetupHint(status);
-          setDialogOpen(true);
+          setSetupSuggestion(status);
         }
       } catch (err) {
         // AbortError is expected on unmount; everything else we silently
@@ -256,12 +262,49 @@ export function WikiView(): JSX.Element {
         funnel={healthQuery.data?.capture_funnel}
       />
 
+      {setupSuggestion && !dialogOpen && (
+        <div
+          data-testid="obsidian-setup-suggestion"
+          role="status"
+          className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-2 text-meta text-muted-foreground"
+        >
+          <span className="min-w-0 flex-1">{t("wiki_view.obsidian_suggest")}</span>
+          <button
+            type="button"
+            data-testid="obsidian-setup-suggestion-open"
+            onClick={() => {
+              setSetupHint(setupSuggestion);
+              setDialogOpen(true);
+            }}
+            className="shrink-0 rounded-md border border-border px-2.5 py-1 font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {t("wiki_view.obsidian_suggest_open")}
+          </button>
+          <button
+            type="button"
+            data-testid="obsidian-setup-suggestion-dismiss"
+            onClick={() => {
+              setSetupSuggestion(null);
+              // Remember "not now" the same way a finished setup is
+              // remembered, so the line does not come back every visit.
+              void fetch("/api/setup/state/obsidian-seen", { method: "POST" }).catch((err) => {
+                console.debug("[WikiView] mark-obsidian-seen failed:", err);
+              });
+            }}
+            className="shrink-0 rounded-md px-2.5 py-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {t("wiki_view.obsidian_suggest_dismiss")}
+          </button>
+        </div>
+      )}
+
       {dialogOpen && setupHint && (
         <ObsidianSetupDialog
           open={dialogOpen}
           onClose={() => setDialogOpen(false)}
           initialStatus={setupHint}
           onComplete={async () => {
+            setSetupSuggestion(null);
             // Only when the user explicitly confirms that setup worked;
             // never on Escape or an outside click. Fire-and-forget — the
             // route never returns a 5xx, and a failed mark only means the

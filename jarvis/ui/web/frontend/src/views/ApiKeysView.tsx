@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  AudioLines,
   Bot,
+  ChevronDown,
   Brain,
   KeyRound,
   Mic,
@@ -9,8 +11,10 @@ import {
   SlidersHorizontal,
   Volume2,
   Wand2,
+  Waypoints,
 } from "lucide-react";
 import { ViewHeader } from "@/views/ChatsView";
+import { BrainPicker } from "@/components/providers/BrainPicker";
 import { JarvisAgentSection } from "@/components/JarvisAgentSection";
 import { VoiceProviderSettings } from "@/components/providers/VoiceProviderSettings";
 import { RoutePolicyCard } from "@/components/routing/RoutePolicyCard";
@@ -46,13 +50,55 @@ import {
 } from "@/lib/apiKeysTab";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
+import { useHermesBrain } from "@/hooks/useHermesBrain";
+import { openSettingsDestination } from "@/lib/openSettings";
 
 // Voice owns its thinking backend. Text and background work use the Agents selection.
 type CategoryKey =
   | Exclude<ProviderTier, "computer-use">
   | "subagents"
+  | "routing"
   | "jarvis-key"
   | "advanced";
+
+/**
+ * Which face of the provider settings this instance shows (P1-G, 2026-10-11).
+ *
+ * The Settings hub opens on MODEL and VOICE; everything else on this screen
+ * lives under its Advanced group as "API keys & routing". Each tier is shown
+ * on exactly ONE face, so no two controls set the same config:
+ *
+ * - `model`: the brain — provider and model that write chat and voice answers;
+ * - `voice`: the engine (Realtime | Pipeline) and either the realtime voice
+ *   or the voice output (TTS) and voice input (STT) providers;
+ * - `advanced`: wording, route policy, the agents' seat, the control key, and
+ *   the optional integrations (team proxy, telephony, wiki curator).
+ *
+ * Omitted, the view keeps its original all-in-one tab set.
+ */
+export type ApiKeysScope = "model" | "voice" | "advanced";
+
+/** The tabs a scoped face shows, per engine mode. */
+export function scopedTabs(
+  scope: ApiKeysScope,
+  engineMode: VoiceEngineMode,
+  hermesBrain: boolean,
+): CategoryKey[] {
+  switch (scope) {
+    case "model":
+      return ["brain"];
+    case "voice":
+      // With Hermes as the brain the backend forces voice onto the Pipeline
+      // (ADR-0042), so the realtime face would be a control with no effect.
+      return engineMode === "realtime" && !hermesBrain ? ["realtime"] : ["tts", "stt"];
+    case "advanced":
+      // Hermes picks model, route and fallback itself: the route policy is
+      // dead in that mode, so its tab is not offered.
+      return hermesBrain
+        ? ["dictation", "subagents", "jarvis-key", "advanced"]
+        : ["dictation", "routing", "subagents", "jarvis-key", "advanced"];
+  }
+}
 
 const PIPELINE_TABS: CategoryKey[] = [
   "brain",
@@ -78,8 +124,12 @@ function engineOwningTab(tab: CategoryKey): VoiceEngineMode | null {
   return pipeline ? "pipeline" : "realtime";
 }
 
-export function ApiKeysView() {
+export function ApiKeysView({ scope }: { scope?: ApiKeysScope } = {}) {
   const t = useT();
+  const hermesBrain = useHermesBrain();
+  // The Model page leads with the one-list picker; the full provider
+  // catalogue (switching the brain itself) stays one click away.
+  const [showAllBrains, setShowAllBrains] = useState(false);
   const { providers, loading, error, refetch, setActiveOptimistic } =
     useProviders();
   // Per-tab health (amber = the active provider isn't set up, red = it's set up
@@ -107,11 +157,19 @@ export function ApiKeysView() {
   // that no longer exists in the new mode (e.g. "tts").
   // A tab another part of the app asked for (the first-run guide) wins over
   // the mode's first tab while it is still in force.
+  const tabsFor = (mode: VoiceEngineMode): CategoryKey[] =>
+    scope
+      ? scopedTabs(scope, mode, hermesBrain)
+      : mode === "realtime"
+        ? REALTIME_TABS
+        : PIPELINE_TABS;
+
   useEffect(() => {
-    const tabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
+    const tabs = tabsFor(engineMode);
     const wanted = requestedApiKeysTab() as CategoryKey | null;
     setActive(wanted && tabs.includes(wanted) ? wanted : tabs[0]);
-  }, [engineMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tabsFor reads only scope + hermesBrain
+  }, [engineMode, scope, hermesBrain]);
 
   useEffect(() => {
     const onRequest = (event: Event) => {
@@ -119,16 +177,17 @@ export function ApiKeysView() {
       // A tab only the other engine has (the brain while Realtime is shown):
       // show that engine's tabs; the mode effect above then lands on it.
       const owner = wanted ? engineOwningTab(wanted) : null;
-      if (owner && owner !== engineMode) {
+      if (owner && owner !== engineMode && scope !== "model" && scope !== "advanced") {
         setEngineMode(owner);
         return;
       }
-      const tabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
+      const tabs = tabsFor(engineMode);
       setActive(wanted && tabs.includes(wanted) ? wanted : tabs[0]);
     };
     window.addEventListener(APIKEYS_TAB_EVENT, onRequest);
     return () => window.removeEventListener(APIKEYS_TAB_EVENT, onRequest);
-  }, [engineMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- tabsFor reads only scope + hermesBrain
+  }, [engineMode, scope, hermesBrain]);
 
   const selectTab = (key: CategoryKey) => {
     clearApiKeysTabRequest();
@@ -147,34 +206,52 @@ export function ApiKeysView() {
     setEngineMode(owner ?? (liveMode === "realtime" ? "realtime" : "pipeline"));
   }, [liveMode, liveModeLoading]);
 
-  const modeTabs = engineMode === "realtime" ? REALTIME_TABS : PIPELINE_TABS;
+  const modeTabs = tabsFor(engineMode);
+  // The engine switch belongs to the VOICE face only (it used to sit on the
+  // all-in-one page AND as a Realtime toggle in Settings › General). With
+  // Hermes as the brain voice always runs the Pipeline, so it is hidden there.
+  const showEngineSwitch = (scope === undefined || scope === "voice") && !(scope === "voice" && hermesBrain);
+  const header = scope === "model"
+    ? { icon: <Brain className="h-4 w-4 text-muted-foreground" />, title: t("settings_pages.model_title"), subtitle: t("settings_pages.model_subtitle") }
+    : scope === "voice"
+      ? { icon: <AudioLines className="h-4 w-4 text-muted-foreground" />, title: t("settings_pages.voice_title"), subtitle: t("settings_pages.voice_subtitle") }
+      : scope === "advanced"
+        ? { icon: <KeyRound className="h-4 w-4 text-muted-foreground" />, title: t("settings_pages.apikeys_title"), subtitle: t("settings_pages.apikeys_subtitle") }
+        : { icon: <KeyRound className="h-4 w-4 text-muted-foreground" />, title: t("apikeys_view.title"), subtitle: t("apikeys_view.subtitle") };
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-tour="apikeys-page">
+    <div className="flex h-full min-h-0 flex-col" data-tour="apikeys-page" data-scope={scope ?? "all"}>
       <ViewHeader
-        icon={<KeyRound className="h-4 w-4 text-muted-foreground" />}
-        title={t("apikeys_view.title")}
-        subtitle={t("apikeys_view.subtitle")}
+        icon={header.icon}
+        title={header.title}
+        subtitle={header.subtitle}
         right={
           <div className="flex items-center gap-3">
-            <LocalModeSwitch enabled={localMode} onToggle={setLocalMode} />
-            <EngineModeSwitch
-              mode={engineMode}
-              liveMode={liveMode}
-              realtimeAvailable={realtimeAvailable}
-              onSelect={setEngineMode}
-              onSetVoiceMode={setVoiceMode}
-            />
+            {scope !== "advanced" && (
+              <LocalModeSwitch enabled={localMode} onToggle={setLocalMode} />
+            )}
+            {showEngineSwitch && (
+              <EngineModeSwitch
+                mode={engineMode}
+                liveMode={liveMode}
+                realtimeAvailable={realtimeAvailable}
+                onSelect={setEngineMode}
+                onSetVoiceMode={setVoiceMode}
+              />
+            )}
           </div>
         }
       />
 
-      <CategoryTabs
-        active={active}
-        onSelect={selectTab}
-        health={health}
-        tabs={modeTabs}
-      />
+      {/* A face with one tab needs no tab bar: MODEL is the brain, nothing else. */}
+      {modeTabs.length > 1 && (
+        <CategoryTabs
+          active={active}
+          onSelect={selectTab}
+          health={health}
+          tabs={modeTabs}
+        />
+      )}
 
       <div
         data-testid="api-keys-provider-scroll"
@@ -186,10 +263,23 @@ export function ApiKeysView() {
           key={`${engineMode}-${active}`}
           className="profile-rise mx-auto w-full max-w-[1440px]"
         >
+          {scope === "model" && active === "brain" && <BrainPicker onChanged={refetch} />}
+          {scope === "model" && active === "brain" && (
+            <button
+              type="button"
+              data-testid="all-brain-providers-toggle"
+              aria-expanded={showAllBrains}
+              onClick={() => setShowAllBrains((v) => !v)}
+              className="mb-3 inline-flex items-center gap-1.5 text-meta text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !showAllBrains && "-rotate-90")} aria-hidden />
+              {t("brain_picker.all_providers")}
+            </button>
+          )}
           {(active === "brain" ||
             active === "tts" ||
             active === "stt" ||
-            active === "dictation") && (
+            active === "dictation") && !(scope === "model" && active === "brain" && !showAllBrains) && (
             <ProviderCategory
               meta={categories[active]}
               tier={active}
@@ -204,7 +294,12 @@ export function ApiKeysView() {
               wideGrid
             />
           )}
-          {active === "brain" && <RoutePolicyCard providers={providers} />}
+          {/* Scoped, the route policy is its own Advanced tab ("routing"). */}
+          {active === "brain" && scope === undefined && <RoutePolicyCard providers={providers} />}
+          {active === "routing" && <RoutePolicyCard providers={providers} />}
+          {scope === "model" && <ScopeNote kind="model" hermesBrain={hermesBrain} />}
+          {scope === "voice" && <ScopeNote kind="voice" hermesBrain={hermesBrain} />}
+          {scope === "advanced" && hermesBrain && <ScopeNote kind="advanced" hermesBrain />}
           {active === "realtime" && (
             <VoiceProviderSettings
               providers={providers}
@@ -217,7 +312,8 @@ export function ApiKeysView() {
               onDisableLocalMode={() => setLocalMode(false)}
               onUsePipeline={() => {
                 setVoiceMode("pipeline");
-                requestApiKeysTab("brain");
+                if (scope) openSettingsDestination("model", "brain");
+                else requestApiKeysTab("brain");
               }}
             />
           )}
@@ -259,6 +355,7 @@ function CategoryTabs({
     realtime: { label: t("apikeys_view.tab_realtime"), icon: Radio },
     dictation: { label: t("apikeys_view.tab_dictation"), icon: Wand2 },
     subagents: { label: t("apikeys_view.tab_subagents"), icon: Bot },
+    routing: { label: t("settings_pages.tab_routing"), icon: Waypoints },
   };
   const coreTabs = tabs.filter(
     (key): key is CoreTab => key !== "advanced" && key !== "jarvis-key",
@@ -492,5 +589,49 @@ function TelephonySection() {
       </h3>
       <TelephonyPanel />
     </section>
+  );
+}
+
+/**
+ * The one line under a scoped face that says where the rest went, and — with
+ * Hermes as the brain — which controls are hidden and why. A hidden control
+ * is said out loud; a control that silently does nothing is the defect this
+ * replaces.
+ */
+function ScopeNote({ kind, hermesBrain }: { kind: ApiKeysScope; hermesBrain: boolean }) {
+  const t = useT();
+  const lines: { text: string; link?: { label: string; onClick: () => void } }[] = [];
+  if (hermesBrain) {
+    lines.push({ text: t(`settings_pages.hermes_note_${kind}`) });
+  }
+  if (kind === "model") {
+    lines.push({
+      text: t("settings_pages.model_more"),
+      link: { label: t("settings_pages.open_apikeys"), onClick: () => openSettingsDestination("apikeys") },
+    });
+  }
+  if (kind === "voice") {
+    lines.push({
+      text: t("settings_pages.voice_more"),
+      link: { label: t("settings_pages.open_apikeys"), onClick: () => openSettingsDestination("apikeys", "dictation") },
+    });
+  }
+  return (
+    <div data-testid={`scope-note-${kind}`} className="mt-6 space-y-1.5 border-t border-border pt-4">
+      {lines.map((line) => (
+        <p key={line.text} className="text-meta text-muted-foreground">
+          {line.text}
+          {line.link && (
+            <button
+              type="button"
+              onClick={line.link.onClick}
+              className="ml-1.5 font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {line.link.label}
+            </button>
+          )}
+        </p>
+      ))}
+    </div>
   );
 }

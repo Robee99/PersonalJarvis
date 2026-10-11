@@ -90,6 +90,9 @@ vi.mock("@/views/feedback/FeedbackView", () => ({
 }));
 
 import { SettingsHubDialog, SettingsHubView as HubView } from "@/views/SettingsHubView";
+import { useSettingsPage } from "@/store/settingsPage";
+import { clearApiKeysTabRequest, requestApiKeysTab } from "@/lib/apiKeysTab";
+import { act } from "@testing-library/react";
 
 const noop = () => {};
 const SettingsHubView = () => <HubView onClose={noop} />;
@@ -107,7 +110,16 @@ const NAV_IDS = [
   "feedback",
 ] as const;
 
+/** Folded by default: API keys & routing, Local models, Pets, Socials… */
+const ADVANCED_IDS = ["apikeys", "local-models", "pets", "socials"] as const;
+
+function openAdvanced() {
+  fireEvent.click(screen.getByTestId("settings-hub-advanced-toggle"));
+}
+
 beforeEach(() => {
+  useSettingsPage.setState({ page: null });
+  clearApiKeysTabRequest();
   mockState.activeSection = "settings";
   mockState.setActiveSection = vi.fn();
   for (const key of Object.keys(mockHealth)) delete mockHealth[key];
@@ -155,6 +167,8 @@ describe("SettingsHubView header and navigation", () => {
   it("lists every mocked entry in the left navigation", async () => {
     render(<SettingsHubView />);
 
+    expect(screen.queryByTestId("settings-hub-advanced")).toBeNull();
+    openAdvanced();
     for (const id of NAV_IDS) {
       expect(screen.getByTestId(`settings-hub-nav-${id}`)).toBeTruthy();
     }
@@ -282,6 +296,9 @@ describe("SettingsHubView search", () => {
     fireEvent.change(search, { target: { value: "wall" } });
     expect(screen.queryByTestId("settings-hub-nav-profile")).toBeNull();
     fireEvent.change(search, { target: { value: "" } });
+    // Advanced folds again once nothing is being searched.
+    expect(screen.queryByTestId("settings-hub-nav-apikeys")).toBeNull();
+    openAdvanced();
     for (const id of NAV_IDS) {
       expect(screen.getByTestId(`settings-hub-nav-${id}`)).toBeTruthy();
     }
@@ -299,6 +316,9 @@ describe("SettingsHubView health signals", () => {
     render(<SettingsHubView />);
     await screen.findByTestId("TAB_SETTINGS");
 
+    // Folded, the Advanced header carries the dot; open, the entry does.
+    expect(screen.getByTestId("settings-hub-advanced-alert")).toBeTruthy();
+    openAdvanced();
     expect(screen.getByTestId("settings-hub-alert-apikeys")).toBeTruthy();
     expect(screen.queryByTestId("settings-hub-warn-local-models")).toBeNull();
   });
@@ -313,6 +333,8 @@ describe("SettingsHubView health signals", () => {
     render(<SettingsHubView />);
     await screen.findByTestId("TAB_SETTINGS");
 
+    expect(screen.getByTestId("settings-hub-advanced-warn")).toBeTruthy();
+    openAdvanced();
     expect(screen.getByTestId("settings-hub-warn-local-models")).toBeTruthy();
     expect(screen.queryByTestId("settings-hub-alert-apikeys")).toBeNull();
   });
@@ -323,5 +345,66 @@ describe("SettingsHubView health signals", () => {
 
     expect(screen.queryByTestId("settings-hub-alert-apikeys")).toBeNull();
     expect(screen.queryByTestId("settings-hub-warn-local-models")).toBeNull();
+    expect(screen.queryByTestId("settings-hub-advanced-alert")).toBeNull();
+    expect(screen.queryByTestId("settings-hub-advanced-warn")).toBeNull();
+  });
+});
+
+describe("SettingsHubView MODEL and VOICE first (P1-G)", () => {
+  it("shows Model and Voice as the first two entries, before every group", async () => {
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_SETTINGS");
+
+    const buttons = Array.from(
+      screen.getByTestId("settings-hub-sidebar").querySelectorAll("nav button[data-testid]"),
+    ).map((button) => button.getAttribute("data-testid"));
+    expect(buttons.slice(0, 2)).toEqual(["settings-hub-nav-model", "settings-hub-nav-voice"]);
+  });
+
+  it("keeps the rest of the provider screen under a folded Advanced group", async () => {
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_SETTINGS");
+
+    for (const id of ADVANCED_IDS) {
+      expect(screen.queryByTestId(`settings-hub-nav-${id}`)).toBeNull();
+    }
+    openAdvanced();
+    for (const id of ADVANCED_IDS) {
+      expect(screen.getByTestId(`settings-hub-nav-${id}`)).toBeTruthy();
+    }
+  });
+
+  it("lands on MODEL for the apikeys section when nothing else was asked for", async () => {
+    mockState.activeSection = "apikeys";
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_APIKEYS");
+
+    expect(screen.getByTestId("settings-hub-nav-model").getAttribute("aria-current")).toBe("page");
+    // Advanced stays folded: MODEL is not one of its pages.
+    expect(screen.queryByTestId("settings-hub-advanced")).toBeNull();
+  });
+
+  it("opens VOICE from its entry", async () => {
+    mockState.activeSection = "apikeys";
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_APIKEYS");
+
+    fireEvent.click(screen.getByTestId("settings-hub-nav-voice"));
+
+    expect(mockState.setActiveSection).toHaveBeenCalledWith("apikeys");
+    expect(useSettingsPage.getState().page).toBe("voice");
+    expect(screen.getByTestId("settings-hub-nav-voice").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("follows a request for a voice tier onto VOICE and a wording request onto Advanced", async () => {
+    mockState.activeSection = "apikeys";
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_APIKEYS");
+
+    act(() => requestApiKeysTab("stt"));
+    expect(screen.getByTestId("settings-hub-nav-voice").getAttribute("aria-current")).toBe("page");
+
+    act(() => requestApiKeysTab("dictation"));
+    expect(screen.getByTestId("settings-hub-nav-apikeys").getAttribute("aria-current")).toBe("page");
   });
 });

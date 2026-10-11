@@ -3758,7 +3758,10 @@
     "empty_body_b": "capta algo importante en una conversación, aparece aquí: personas, proyectos, preferencias y citas.",
     "manual_a": "También puedes colocar un archivo",
     "manual_b": "en",
-    "manual_c": "tú mismo en cualquier momento."
+    "manual_c": "tú mismo en cualquier momento.",
+    "obsidian_suggest": "¿Quieres editar estas notas también en Obsidian? Es opcional: las notas se abren aquí de todos modos.",
+    "obsidian_suggest_open": "Configurar Obsidian",
+    "obsidian_suggest_dismiss": "Ahora no"
   },
   "wiki_health": {
     "capture_aria": "Embudo de captura del wiki de las últimas {0} horas",
@@ -6250,5 +6253,90 @@
     "restored": "Enrutamiento restaurado.",
     "loading": "Cargando enrutamiento…",
     "load_failed": "No se pudieron cargar los ajustes de enrutamiento: {detail}"
+  },
+  "nav5": {
+    "chat": "Chat",
+    "orb": "Orbe",
+    "agents": "Agentes",
+    "work": "Trabajo",
+    "settings": "Ajustes",
+    "advanced": "Avanzado",
+    "work_outputs": "Resultados",
+    "work_projects": "Proyectos",
+    "work_live": "En vivo",
+    "work_activity": "Actividad",
+    "work_runs": "Ejecuciones",
+    "agents_agents": "Agentes",
+    "agents_tools": "Herramientas",
+    "agents_browse": "Explorar más",
+    "agents_clis": "CLIs",
+    "orb_map": "Mapa",
+    "orb_notes": "Notas"
+  },
+  "assistant_status": {
+    "acting": "Actuando",
+    "resumed": "Reanudado",
+    "interrupted": "Interrumpido – di «continúa»",
+    "cancelled": "Detenido – di «continúa»"
+  },
+  "banner_slot": {
+    "more": "+{count} más",
+    "show_fewer": "Mostrar menos"
+  },
+  "errors_human": {
+    "network": "No se puede llegar al servicio. Revisa la conexión e inténtalo de nuevo.",
+    "tls": "La conexión segura falló por un problema de certificado.",
+    "timeout": "La respuesta tardó demasiado. Inténtalo de nuevo.",
+    "auth": "Se rechazó el inicio de sesión o la clave. Revísalo en Ajustes.",
+    "rate_limit": "El proveedor está limitando las solicitudes ahora. Inténtalo en un momento.",
+    "not_found": "No se encontró algo que hace falta.",
+    "service_down": "El servicio no está en marcha o no responde ahora.",
+    "load_failed": "Una parte de la app no se pudo cargar. Inténtalo de nuevo.",
+    "unknown": "Algo salió mal.",
+    "details": "Detalles",
+    "hide_details": "Ocultar detalles",
+    "voice_connect_failed": "La voz no pudo conectarse"
+  },
+  "settings_pages": {
+    "model_title": "Modelo",
+    "model_subtitle": "El cerebro que escribe tus respuestas de chat y de voz.",
+    "voice_title": "Voz",
+    "voice_subtitle": "Cómo {name} escucha y habla: el motor de voz, la voz que oyes y el reconocimiento de voz.",
+    "apikeys_title": "Claves API y enrutamiento",
+    "apikeys_subtitle": "Redacción, enrutamiento, el modelo de los agentes, la clave de {name} e integraciones opcionales.",
+    "tab_routing": "Enrutamiento",
+    "group_advanced": "Avanzado",
+    "model_more": "El enrutamiento, el modelo de los agentes y las demás claves están en Avanzado.",
+    "voice_more": "La redacción del dictado está en Avanzado.",
+    "open_apikeys": "Abrir claves API y enrutamiento",
+    "open_voice": "Abrir ajustes de voz",
+    "realtime_moved": "Realtime o Pipeline se elige ahora en un solo lugar: Ajustes › Voz.",
+    "stt_moved": "El reconocimiento de voz, cómo {name} convierte tu voz en texto, se elige ahora en un solo lugar: Ajustes › Voz.",
+    "wording_moved": "La redacción del dictado se ajusta en Ajustes › Avanzado › Claves API y enrutamiento.",
+    "hermes_note_model": "Hermes Agent es el cerebro. Elige el modelo de cada turno por sí mismo; un modelo elegido aquí solo lo orienta.",
+    "hermes_note_voice": "Hermes Agent es el cerebro, así que la voz siempre pasa por el Pipeline y cada turno llega a Hermes. El motor Realtime está oculto.",
+    "hermes_note_advanced": "Hermes Agent es el cerebro: elige modelos, enrutamiento y alternativas por sí mismo, así que la política de rutas está oculta."
+  },
+  "brain_picker": {
+    "title": "Quién responde",
+    "subtitle_hermes": "Hermes ejecuta cada turno, sus herramientas y sus aprobaciones. Elige el modelo con el que piensa.",
+    "subtitle_plain": "Modelos que se ejecutan en este ordenador. Elige uno como cerebro.",
+    "rescan": "Buscar de nuevo",
+    "scanning": "Buscando servidores de modelos en este ordenador…",
+    "auto_title": "Hermes decide",
+    "auto_meta": "Recomendado. Hermes elige un modelo en cada turno.",
+    "group_local": "En este ordenador",
+    "group_cloud": "Nube gratuita",
+    "free_cloud_meta": "Gratis a través de Nous, sin tarjeta",
+    "none_found": "No se encontró ningún servidor de modelos. Inicia llama-server (llama.cpp), LM Studio u Ollama y pulsa Buscar de nuevo, o añade su dirección abajo.",
+    "off_hint": "Un servidor apagado se puede elegir igualmente; responde en cuanto se inicia (en llama.cpp: inicia llama-server con el modelo cargado y pulsa Buscar de nuevo).",
+    "add": "Añadir un servidor por dirección",
+    "add_label": "Dirección del servidor",
+    "add_connect": "Conectar",
+    "all_providers": "Cambiar el proveedor del cerebro (todos los proveedores)",
+    "selected": "Seleccionado",
+    "state_running": "En marcha",
+    "state_loading": "Cargando modelo",
+    "state_off": "Apagado"
   }
 }

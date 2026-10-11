@@ -3758,7 +3758,10 @@
     "empty_body_b": "in einem Gespräch etwas Wichtiges aufschnappt, landet es hier — Personen, Projekte, Vorlieben, Termine.",
     "manual_a": "Du kannst auch jederzeit selbst eine",
     "manual_b": "-Datei in",
-    "manual_c": "ablegen."
+    "manual_c": "ablegen.",
+    "obsidian_suggest": "Möchtest du diese Notizen auch in Obsidian bearbeiten? Das ist optional – die Notizen öffnen sich so oder so hier.",
+    "obsidian_suggest_open": "Obsidian einrichten",
+    "obsidian_suggest_dismiss": "Nicht jetzt"
   },
   "wiki_health": {
     "capture_aria": "Wiki-Erfassungsfunnel der letzten {0} Stunden",
@@ -6250,5 +6253,90 @@
     "restored": "Routing wurde zurückgesetzt.",
     "loading": "Routing wird geladen…",
     "load_failed": "Routing-Einstellungen konnten nicht geladen werden: {detail}"
+  },
+  "nav5": {
+    "chat": "Chat",
+    "orb": "Orb",
+    "agents": "Agenten",
+    "work": "Arbeit",
+    "settings": "Einstellungen",
+    "advanced": "Erweitert",
+    "work_outputs": "Ergebnisse",
+    "work_projects": "Projekte",
+    "work_live": "Live",
+    "work_activity": "Aktivität",
+    "work_runs": "Läufe",
+    "agents_agents": "Agenten",
+    "agents_tools": "Werkzeuge",
+    "agents_browse": "Mehr entdecken",
+    "agents_clis": "CLIs",
+    "orb_map": "Karte",
+    "orb_notes": "Notizen"
+  },
+  "assistant_status": {
+    "acting": "Handelt",
+    "resumed": "Fortgesetzt",
+    "interrupted": "Unterbrochen – sag „weiter“",
+    "cancelled": "Gestoppt – sag „weiter“"
+  },
+  "banner_slot": {
+    "more": "+{count} weitere",
+    "show_fewer": "Weniger zeigen"
+  },
+  "errors_human": {
+    "network": "Der Dienst ist nicht erreichbar. Prüfe die Verbindung und versuch es noch einmal.",
+    "tls": "Die sichere Verbindung ist an einem Zertifikatsproblem gescheitert.",
+    "timeout": "Die Antwort hat zu lange gedauert. Versuch es noch einmal.",
+    "auth": "Anmeldung oder Schlüssel wurde abgelehnt. Prüf das in den Einstellungen.",
+    "rate_limit": "Der Anbieter begrenzt gerade die Anfragen. Versuch es gleich noch einmal.",
+    "not_found": "Etwas, das gebraucht wird, wurde nicht gefunden.",
+    "service_down": "Der Dienst läuft nicht oder antwortet gerade nicht.",
+    "load_failed": "Ein Teil der App konnte nicht geladen werden. Versuch es noch einmal.",
+    "unknown": "Etwas ist schiefgelaufen.",
+    "details": "Details",
+    "hide_details": "Details ausblenden",
+    "voice_connect_failed": "Sprachverbindung fehlgeschlagen"
+  },
+  "settings_pages": {
+    "model_title": "Modell",
+    "model_subtitle": "Das Gehirn, das deine Chat- und Sprachantworten schreibt.",
+    "voice_title": "Stimme",
+    "voice_subtitle": "Wie {name} zuhört und spricht: die Sprach-Engine, die Stimme, die du hörst, und die Spracherkennung.",
+    "apikeys_title": "API-Schlüssel & Routing",
+    "apikeys_subtitle": "Formulierung, Routing, das Modell der Agenten, der {name}-Schlüssel und optionale Integrationen.",
+    "tab_routing": "Routing",
+    "group_advanced": "Erweitert",
+    "model_more": "Routing, das Modell der Agenten und die übrigen Schlüssel findest du unter Erweitert.",
+    "voice_more": "Die Formulierung für Diktate findest du unter Erweitert.",
+    "open_apikeys": "API-Schlüssel & Routing öffnen",
+    "open_voice": "Stimme-Einstellungen öffnen",
+    "realtime_moved": "Realtime oder Pipeline wählst du jetzt an einer Stelle: Einstellungen › Stimme.",
+    "stt_moved": "Die Spracherkennung, mit der {name} deine Sprache in Text umwandelt, wählst du jetzt an einer Stelle: Einstellungen › Stimme.",
+    "wording_moved": "Die Formulierung für Diktate stellst du unter Einstellungen › Erweitert › API-Schlüssel & Routing ein.",
+    "hermes_note_model": "Hermes Agent ist das Gehirn. Er wählt das Modell für jeden Zug selbst; ein hier gewähltes Modell gibt ihm nur die Richtung vor.",
+    "hermes_note_voice": "Hermes Agent ist das Gehirn, darum läuft Sprache immer über die Pipeline und jeder Zug erreicht Hermes. Die Realtime-Engine ist ausgeblendet.",
+    "hermes_note_advanced": "Hermes Agent ist das Gehirn: Er wählt Modelle, Routing und Ausweichpfade selbst, darum ist die Routing-Regel ausgeblendet."
+  },
+  "brain_picker": {
+    "title": "Wer antwortet",
+    "subtitle_hermes": "Hermes führt jede Runde, seine Werkzeuge und Freigaben aus. Wähle das Modell, mit dem er denkt.",
+    "subtitle_plain": "Modelle auf diesem Computer. Wähle eines als Gehirn.",
+    "rescan": "Neu suchen",
+    "scanning": "Suche Modellserver auf diesem Computer…",
+    "auto_title": "Hermes entscheidet",
+    "auto_meta": "Empfohlen. Hermes wählt für jede Runde ein Modell.",
+    "group_local": "Auf diesem Computer",
+    "group_cloud": "Kostenlose Cloud",
+    "free_cloud_meta": "Kostenlos über Nous, ohne Karte",
+    "none_found": "Kein Modellserver gefunden. Starte llama-server (llama.cpp), LM Studio oder Ollama und drücke Neu suchen, oder füge die Adresse unten hinzu.",
+    "off_hint": "Ein Server, der nicht läuft, kann trotzdem gewählt werden; er antwortet, sobald er gestartet ist (bei llama.cpp: llama-server mit geladenem Modell starten, dann Neu suchen).",
+    "add": "Server per Adresse hinzufügen",
+    "add_label": "Serveradresse",
+    "add_connect": "Verbinden",
+    "all_providers": "Gehirn-Anbieter wechseln (alle Anbieter)",
+    "selected": "Ausgewählt",
+    "state_running": "Läuft",
+    "state_loading": "Lädt Modell",
+    "state_off": "Läuft nicht"
   }
 }

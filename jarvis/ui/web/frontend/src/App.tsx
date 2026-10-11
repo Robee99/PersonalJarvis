@@ -23,6 +23,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { ReadyCelebration } from "@/components/ReadyCelebration";
 import { InputIsolationBanner } from "@/components/layout/InputIsolationBanner";
 import { VoiceWarmingBanner } from "@/components/layout/VoiceWarmingBanner";
+import { DestinationTabs } from "@/components/layout/DestinationTabs";
 import { MainView } from "@/components/layout/MainView";
 import { ToastLayer } from "@/components/ToastLayer";
 import { CommandActivityLayer } from "@/components/CommandActivityLayer";
@@ -402,8 +403,15 @@ export default function App() {
         {/* Outside input software (dictation, text expanders, auto-type) cannot
             reach an elevated window: an OS-level gate the user must be told
             about, since nothing else reports it. */}
+        {/* ONE banner slot (store/bannerSlot): of the admin-rights notice,
+            the voice warm-up band and the one-time "all set" note, only the
+            highest-priority active one renders, carrying a "+N" for the
+            rest. They used to stack to a third of the window. */}
         <InputIsolationBanner />
         <TopBar navToggle={navToggle} />
+        {/* A destination that spans several views (WORK, AGENTS, ORB) draws
+            one tab bar over them; see navGroups.PRIMARY_DESTINATIONS. */}
+        {!hideNavigation && <DestinationTabs />}
         {!(["agentic-ide", "chat-workspace", "agentic-ide-classic"].includes(activeSection)) && <VoiceWarmingBanner />}
         {/* The one-time "all lights green" note — the first time every
             section of the active voice mode answers. Never again after. */}

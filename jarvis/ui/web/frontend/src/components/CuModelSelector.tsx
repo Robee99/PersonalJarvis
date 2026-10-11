@@ -3,6 +3,7 @@ import { BrainModelSelector } from "@/components/BrainModelSelector";
 import { getCuModel, saveCuModel } from "@/hooks/useProviders";
 import { useEventStore } from "@/store/events";
 import { useT } from "@/i18n";
+import { useHermesBrain } from "@/hooks/useHermesBrain";
 
 /**
  * Per-provider "Computer-Use model" picker (Phase 3).
@@ -13,7 +14,23 @@ import { useT } from "@/i18n";
  * for the searchable dropdown (same live catalog as the main model picker) and
  * adds a "use my main model" reset. An empty selection means "use my main model".
  */
-export function CuModelSelector({
+type CuModelSelectorProps = {
+  providerId: string;
+  recommendedModel?: string | null;
+  healthActive?: boolean;
+};
+
+/**
+ * Hidden while Hermes Agent is the brain (ADR-0042): Hermes runs computer use
+ * with its own toolset and model, so a Jarvis computer-use model pick would be
+ * a control with no effect.
+ */
+export function CuModelSelector(props: CuModelSelectorProps) {
+  const hermesBrain = useHermesBrain();
+  return hermesBrain ? null : <CuModelSelectorInner {...props} />;
+}
+
+function CuModelSelectorInner({
   providerId,
   recommendedModel,
   healthActive = false,

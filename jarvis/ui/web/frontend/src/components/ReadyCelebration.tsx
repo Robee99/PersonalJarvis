@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { getReadiness, markReadyCelebrated, type ReadinessResponse } from "@/hooks/useStarterPlans";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { BANNER_PRIORITY, useBannerSlot } from "@/store/bannerSlot";
+import { BannerOverflowChip } from "@/components/layout/BannerOverflowChip";
 
 /**
  * The one-time "all set" note. It says the sections are set up — never that
@@ -69,7 +71,11 @@ export function ReadyCelebration({ inline = false }: { inline?: boolean }) {
   }, [reload]);
 
   const visible = Boolean(state?.ready && !state?.celebrated) && !dismissed;
+  // The inline copy inside onboarding is not a window banner; the top-of-app
+  // one shares the window's single banner slot (store/bannerSlot).
+  const slot = useBannerSlot("ready-note", BANNER_PRIORITY.readyNote, visible && !inline);
   if (!visible || !state) return null;
+  if (!inline && !slot.visible) return null;
 
   async function acknowledge() {
     setDismissed(true);
@@ -106,6 +112,7 @@ export function ReadyCelebration({ inline = false }: { inline?: boolean }) {
       <Button size="sm" onClick={() => void acknowledge()} className="h-8 shrink-0 rounded-control">
         {t("ready_note.go")}
       </Button>
+      {!inline && <BannerOverflowChip slot={slot} />}
       {!inline && (
         <button
           type="button"

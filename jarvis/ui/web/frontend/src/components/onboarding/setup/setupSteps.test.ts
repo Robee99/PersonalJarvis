@@ -58,8 +58,8 @@ describe("setup steps", () => {
       .join("\n");
     for (const beat of HOW_BEATS) {
       if (!beat.anchor) continue;
-      const literal = code.includes(`data-tour="${beat.anchor}"`);
-      const nav = beat.anchor.startsWith("nav-") && code.includes("data-tour={`nav-${item.id}`}");
+      const literal = code.includes(`data-tour="${beat.anchor}"`) || code.includes(`tourAnchor: "${beat.anchor}"`);
+      const nav = beat.anchor.startsWith("nav-") && code.includes("data-tour={tour ?? `nav-${item.id}`}");
       expect(literal || nav, beat.anchor).toBe(true);
     }
   });

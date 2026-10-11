@@ -3758,7 +3758,10 @@
     "empty_body_b": "picks up something important in a conversation, it lands here — people, projects, preferences, appointments.",
     "manual_a": "You can also drop a",
     "manual_b": "file into",
-    "manual_c": "yourself at any time."
+    "manual_c": "yourself at any time.",
+    "obsidian_suggest": "Want to edit these notes in Obsidian too? It's optional — notes open right here either way.",
+    "obsidian_suggest_open": "Set up Obsidian",
+    "obsidian_suggest_dismiss": "Not now"
   },
   "wiki_health": {
     "capture_aria": "Wiki capture funnel for the last {0} hours",
@@ -6250,5 +6253,90 @@
     "restored": "Routing restored to how it was.",
     "loading": "Loading routing…",
     "load_failed": "Routing settings could not load: {detail}"
+  },
+  "nav5": {
+    "chat": "Chat",
+    "orb": "Orb",
+    "agents": "Agents",
+    "work": "Work",
+    "settings": "Settings",
+    "advanced": "Advanced",
+    "work_outputs": "Outputs",
+    "work_projects": "Projects",
+    "work_live": "Live",
+    "work_activity": "Activity",
+    "work_runs": "Runs",
+    "agents_agents": "Agents",
+    "agents_tools": "Tools",
+    "agents_browse": "Browse more",
+    "agents_clis": "CLIs",
+    "orb_map": "Map",
+    "orb_notes": "Notes"
+  },
+  "assistant_status": {
+    "acting": "Acting",
+    "resumed": "Resumed",
+    "interrupted": "Interrupted — say continue",
+    "cancelled": "Stopped — say continue"
+  },
+  "banner_slot": {
+    "more": "+{count} more",
+    "show_fewer": "Show fewer"
+  },
+  "errors_human": {
+    "network": "Can't reach the service. Check the connection and try again.",
+    "tls": "The secure connection failed because of a certificate problem.",
+    "timeout": "It took too long to answer. Try again.",
+    "auth": "The sign-in or key was rejected. Check it in Settings.",
+    "rate_limit": "The provider is limiting requests right now. Try again in a moment.",
+    "not_found": "Something it needs could not be found.",
+    "service_down": "The service isn't running or isn't answering right now.",
+    "load_failed": "Part of the app failed to load. Try again.",
+    "unknown": "Something went wrong.",
+    "details": "Details",
+    "hide_details": "Hide details",
+    "voice_connect_failed": "Voice could not connect"
+  },
+  "settings_pages": {
+    "model_title": "Model",
+    "model_subtitle": "The brain that writes your chat and voice answers.",
+    "voice_title": "Voice",
+    "voice_subtitle": "How {name} listens and speaks: the voice engine, the voice you hear and the speech recognition.",
+    "apikeys_title": "API keys & routing",
+    "apikeys_subtitle": "Wording, routing, the agents' model, the {name} key and optional integrations.",
+    "tab_routing": "Routing",
+    "group_advanced": "Advanced",
+    "model_more": "Routing, the agents' model and the other keys live under Advanced.",
+    "voice_more": "The dictation wording pass lives under Advanced.",
+    "open_apikeys": "Open API keys & routing",
+    "open_voice": "Open Voice settings",
+    "realtime_moved": "Realtime or Pipeline is picked in one place now: Settings › Voice.",
+    "stt_moved": "Speech-to-text, how {name} turns your speech into text, is picked in one place now: Settings › Voice.",
+    "wording_moved": "The dictation wording pass is set under Settings › Advanced › API keys & routing.",
+    "hermes_note_model": "Hermes Agent is the brain. It picks the model for each turn itself; a model chosen here only steers it.",
+    "hermes_note_voice": "Hermes Agent is the brain, so voice always runs through the Pipeline and every turn reaches Hermes. The Realtime engine is hidden.",
+    "hermes_note_advanced": "Hermes Agent is the brain: it chooses models, routing and fallback itself, so the route policy is hidden."
+  },
+  "brain_picker": {
+    "title": "Who answers",
+    "subtitle_hermes": "Hermes runs every turn, its tools and its approvals. Pick the model it thinks with.",
+    "subtitle_plain": "Models running on this computer. Pick one to make it the brain.",
+    "rescan": "Rescan",
+    "scanning": "Looking for model servers on this computer…",
+    "auto_title": "Hermes decides",
+    "auto_meta": "Recommended. Hermes picks a model for each turn.",
+    "group_local": "On this computer",
+    "group_cloud": "Free cloud",
+    "free_cloud_meta": "Free through Nous, no card needed",
+    "none_found": "No model server found. Start llama-server (llama.cpp), LM Studio or Ollama, then press Rescan, or add its address below.",
+    "off_hint": "A server that is not running can still be picked; it answers once it is started (for llama.cpp: start llama-server with the model loaded, then Rescan).",
+    "add": "Add a server by address",
+    "add_label": "Server address",
+    "add_connect": "Connect",
+    "all_providers": "Switch the brain provider (all providers)",
+    "selected": "Selected",
+    "state_running": "Running",
+    "state_loading": "Loading model",
+    "state_off": "Not running"
   }
 }

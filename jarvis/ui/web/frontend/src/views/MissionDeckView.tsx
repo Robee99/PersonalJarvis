@@ -33,7 +33,8 @@ import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
 import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
-import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
+import { useAssistantStatus } from "@/hooks/useAssistantStatus";
+import { formatAssistantStatus } from "@/lib/assistantStatus";
 import { useWakeWord } from "@/hooks/useWakeWord";
 import { useVoiceCall } from "@/components/agentic/useVoiceCall";
 import { useElementSize } from "@/hooks/useElementSize";
@@ -119,7 +120,8 @@ export function MissionDeckView({
   const turnIndex = useDeckStore((s) => s.turn.index);
   const boardOpen = useDeckStore((s) => s.boardOpen);
   const openBoard = useDeckStore((s) => s.openBoard);
-  const { warming } = useVoiceReadiness();
+  const status = useAssistantStatus();
+  const warming = status.voice === "starting" || status.voice === "booting";
   const avatar = useDeckAvatar();
   // Header + orb name the engine that will answer the next spoken turn, not
   // the dormant sibling. Pipeline and realtime are independent picks; the
@@ -204,17 +206,15 @@ export function MissionDeckView({
     turnPhase === "think" ||
     turnPhase === "act";
 
-  const mood: DeckMood = !connected
-    ? "offline"
-    : voiceState === "error"
-      ? "fail"
-      : voiceState === "listening"
-        ? "listening"
-        : voiceState === "speaking"
-          ? "speaking"
-          : busy
-            ? "busy"
-            : "ready";
+  // The header and the ring's readout say what the ONE status source says
+  // (hooks/useAssistantStatus) — the sidebar dot and the banner read it too.
+  // The deck used to derive its own mood from `connected` + `voiceState`
+  // only, so it showed READY while the voice stack was still starting and
+  // the stand-by beside it said "starting" (UI audit 2026-10-07, P0-1).
+  // The deck's own turn signals (live steps, the turn card's phase) still
+  // count as working while the shared status is at rest.
+  const statusLabel =
+    status.phase === "ready" && busy ? t("voice_state.thinking") : formatAssistantStatus(status, t);
 
   const lastAssistant = useMemo(
     () => [...messages].reverse().find((m) => m.role === "assistant"),
@@ -229,7 +229,7 @@ export function MissionDeckView({
     ? t("deck.orb_hangup")
     : t("deck.orb_call").replace("{0}", wakePhrase);
   const readouts: OrbReadouts = {
-    nw: t(`deck.mood_${mood}`),
+    nw: statusLabel,
     ne: `${running.length} ${t("deck.orb_steps")}`,
     sw: engine.providerLabel,
     se: `${wordsSession} ${t("deck.orb_words")}`,
@@ -265,10 +265,12 @@ export function MissionDeckView({
           <span
             className={cn(
               "font-mono text-micro uppercase tracking-[0.18em]",
-              mood === "fail" ? "text-destructive" : "text-primary",
+              status.tone === "error" ? "text-destructive" : "text-primary",
             )}
+            data-testid="deck-status-label"
+            data-phase={status.phase}
           >
-            {t(`deck.mood_${mood}`)}
+            {statusLabel}
           </span>
         </div>
 
@@ -455,7 +457,6 @@ export function MissionDeckView({
   );
 }
 
-type DeckMood = "ready" | "busy" | "listening" | "speaking" | "fail" | "offline";
 
 /**
  * A slot's place in the display case (lib/deckDepth.ts) as the props its

@@ -14,7 +14,9 @@ import { OverlayTaskbarGroup } from "@/views/settings/OverlayTaskbarGroup";
 import { LanguagesGroup } from "@/views/settings/LanguagesGroup";
 import { MusicGroup } from "@/views/settings/MusicGroup";
 import { AppSettingsGroup } from "@/views/settings/AppSettingsGroup";
-import { RealtimeVoiceGroup } from "@/views/settings/RealtimeVoiceGroup";
+import { MovedSettingLink } from "@/views/settings/MovedSettingLink";
+import { openSettingsDestination } from "@/lib/openSettings";
+import { Radio } from "lucide-react";
 import { SilenceWindowGroup } from "@/views/settings/SilenceWindowGroup";
 import { VolumeGroup } from "@/views/settings/VolumeGroup";
 import { AudioDevicesGroup } from "@/views/settings/AudioDevicesGroup";
@@ -156,7 +158,10 @@ export function SettingsView({ searchTarget, onSearchTargetHandled }: {
 const SECTIONS: readonly { id: string; labelKey: string; render: () => React.ReactNode }[] = [
   { id: "languages", labelKey: "settings_view.nav.languages", render: () => <LanguagesGroup /> },
   { id: "app", labelKey: "settings_view.nav.app", render: () => <AppSettingsGroup /> },
-  { id: "realtime-voice", labelKey: "settings_view.nav.realtime_voice", render: () => <RealtimeVoiceGroup /> },
+  // The Realtime | Pipeline choice lives in ONE place, Settings › Voice. This
+  // group used to carry a second switch for the same `[voice].mode`; it is a
+  // link there now, kept under its old name so search and habit still find it.
+  { id: "realtime-voice", labelKey: "settings_view.nav.realtime_voice", render: () => <RealtimeVoiceMoved /> },
   { id: "system-prompt", labelKey: "settings_view.nav.system_prompt", render: () => <SystemPromptGroup /> },
   { id: "wake-word", labelKey: "settings_view.nav.wake_word", render: () => <WakeWordPanel /> },
   { id: "silence-window", labelKey: "settings_view.nav.silence_window", render: () => <SilenceWindowGroup /> },
@@ -166,6 +171,20 @@ const SECTIONS: readonly { id: string; labelKey: string; render: () => React.Rea
   { id: "more", labelKey: "settings_view.nav.more", render: () => <MoreSettings /> },
   { id: "overlay-taskbar", labelKey: "settings_view.nav.overlay_taskbar", render: () => <OverlayTaskbarGroup /> },
 ];
+
+function RealtimeVoiceMoved() {
+  const t = useT();
+  return (
+    <MovedSettingLink
+      testId="realtime-voice-moved"
+      icon={<Radio />}
+      title={t("settings_view.realtime_voice.title")}
+      description={t("settings_pages.realtime_moved")}
+      actionLabel={t("settings_pages.open_voice")}
+      onOpen={() => openSettingsDestination("voice")}
+    />
+  );
+}
 
 function SettingsSectionNav({
   sections,

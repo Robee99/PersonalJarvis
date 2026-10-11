@@ -30,9 +30,9 @@ describe("tour steps", () => {
       .map((f) => readFileSync(f, "utf8"))
       .join("\n");
     for (const step of TOUR_STEPS) {
-      const literal = code.includes(`data-tour="${step.anchor}"`);
+      const literal = code.includes(`data-tour="${step.anchor}"`) || code.includes(`tourAnchor: "${step.anchor}"`);
       // Sidebar rows get theirs from a template: data-tour={`nav-${item.id}`}.
-      const templated = step.anchor.startsWith("nav-") && code.includes("data-tour={`nav-${item.id}`}");
+      const templated = step.anchor.startsWith("nav-") && code.includes("data-tour={tour ?? `nav-${item.id}`}");
       expect(literal || templated, step.anchor).toBe(true);
     }
   });

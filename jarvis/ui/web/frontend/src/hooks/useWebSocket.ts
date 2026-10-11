@@ -28,6 +28,7 @@ import { isDictationStartFailure } from "@/lib/dictationRefusal";
 import { usePermissionToast } from "@/hooks/usePermissionToast";
 import { useDeckStore } from "@/store/deck";
 import { useHomeStore } from "@/store/home";
+import { useTurnStateStore } from "@/store/turnState";
 import { PANE_ACTIVITY_EVENT } from "@/store/workspacePanes";
 import { WSAudioLevel, WSEventEnvelope, WSWelcome } from "@/schema/ws";
 import { useI18nStore, hydrateUiLanguage, hydrateReplyLanguage, translate } from "@/i18n";
@@ -96,6 +97,9 @@ export function useWebSocket(): void {
           // this — not the raw open — is the authoritative "connected" signal.
           setConnected(true);
           setWarming(false);
+          // A turn state from before the gap is unknown now; the next
+          // ConversationStateChanged sets it again.
+          useTurnStateStore.getState().clearTurn();
           // Re-seed voiceReady on EVERY (re)connect. VoiceBootStatus is a
           // one-shot bus event, so a socket that (re)connects after readiness
           // already flipped — e.g. the fast-boot 1013 reconnect — or whose
@@ -253,6 +257,17 @@ export function useWebSocket(): void {
               setTranscription("", true);
             }
           }
+        }
+
+        // The brain's side of the live turn (ADR-0042): ACTING with a tool,
+        // INTERRUPTED, CANCELLED by "stop", RESUMED by "continue", COMPLETED.
+        // Folded into the one status source (hooks/useAssistantStatus) next
+        // to the microphone side SystemStateChanged carries above.
+        // payload: { state, detail, session_id }.
+        // Stamped with the ARRIVAL time, not the event's: freshness is judged
+        // against this window's clock (lib/assistantStatus::turnIsFresh).
+        if (env.event_name === "ConversationStateChanged") {
+          useTurnStateStore.getState().ingest(env.payload);
         }
 
         // The voice feature warms up ~20s after the window connects; the

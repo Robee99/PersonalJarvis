@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Mic } from "lucide-react";
 import { useT } from "@/i18n";
-import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
+import { useAssistantStatus } from "@/hooks/useAssistantStatus";
+import { BANNER_PRIORITY, useBannerSlot } from "@/store/bannerSlot";
+import { BannerOverflowChip } from "@/components/layout/BannerOverflowChip";
 
 /**
  * Honest "can I speak yet?" indicator.
@@ -19,10 +21,12 @@ import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
  */
 export function VoiceWarmingBanner() {
   const t = useT();
-  // Single source of truth shared with the Sidebar status line and the chat
-  // empty-state, so all three readiness surfaces agree (no more "banner says
-  // starting up while the centre says Ready for commands").
-  const { warming, ready } = useVoiceReadiness();
+  // The ONE status source (hooks/useAssistantStatus) shared with the sidebar
+  // dot and the HUD header and ring, so no surface can say "Ready" while this
+  // band says the assistant is starting up.
+  const status = useAssistantStatus();
+  const warming = status.voice === "starting" || status.voice === "booting";
+  const ready = status.voice === "ready";
 
   // Flash an explicit "you can speak now" confirmation on the warming -> ready
   // transition, so the go-ahead is a positive signal, not the banner silently
@@ -40,7 +44,10 @@ export function VoiceWarmingBanner() {
     return undefined;
   }, [warming, ready]);
 
-  if (!warming && !justReady) return null;
+  // One banner slot for the window (store/bannerSlot): a higher-priority
+  // banner folds this one behind its "+N".
+  const slot = useBannerSlot("voice-warming", BANNER_PRIORITY.voiceWarming, warming || justReady);
+  if (!slot.visible) return null;
 
   return (
     <div
@@ -59,7 +66,7 @@ export function VoiceWarmingBanner() {
       ) : (
         <Mic className="h-4 w-4 shrink-0 text-success" aria-hidden />
       )}
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col">
         <span className="text-body font-medium text-foreground-strong">
           {warming
             ? t("voice_state.warming_title")
@@ -71,6 +78,7 @@ export function VoiceWarmingBanner() {
           </span>
         )}
       </div>
+      <BannerOverflowChip slot={slot} />
     </div>
   );
 }

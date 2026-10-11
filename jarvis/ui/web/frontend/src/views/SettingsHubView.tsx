@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { isTourEvent } from "@/components/onboarding/tourEvents";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentType, type LazyExoticComponent } from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { AudioLines, Brain, ChevronDown, Loader2, Search, X, type LucideIcon } from "lucide-react";
 import {
   NAV_FOOTER_ITEMS,
   NAV_GROUPS,
@@ -16,16 +16,24 @@ import { useT, useUiLanguage } from "@/i18n";
 import { isComboboxPanelEvent } from "@/components/ui/combobox";
 import { searchSettingsOptions, searchSettingsPages } from "@/views/settings/settingsSearch";
 import { cn } from "@/lib/utils";
+import { pageForApiKeysTab, useSettingsPage, type ProviderPage } from "@/store/settingsPage";
+import { APIKEYS_TAB_EVENT, requestedApiKeysTab } from "@/lib/apiKeysTab";
+import type { ApiKeysScope } from "@/views/ApiKeysView";
 
 /**
  * The Settings hub — every personal/system section behind one dialog that
  * floats over the user's current section, with a searchable left navigation
- * (General · System · Activity) and the selected section on the right:
+ * and the selected section on the right:
  *
- *   General: Settings, Keyboard shortcuts, Appshots, My Pets, Profile,
- *            {name}.md, Contacts, Socials
- *   System: Computers, API Keys, Local models, Jarvis actions
+ *   (first)   Model, Voice — the two questions people come with
+ *   General:  Settings, Keyboard shortcuts, Profile, {name}.md, Contacts
  *   Activity: Spend, Feedback
+ *   Advanced (folded): API keys & routing, Local models, Computers,
+ *             Jarvis actions, Appshots, My Pets, Socials
+ *
+ * Model, Voice and "API keys & routing" are three faces of ONE section id,
+ * `apikeys` (see store/settingsPage.ts): each provider tier is shown on exactly
+ * one face, so no two controls set the same config (P1-G, 2026-10-11).
  *
  * Same merged-section pattern as VoiceHubView / ClisHubView: the active
  * section id IS the tab state, so deep links, voice commands ("open the API
@@ -64,7 +72,9 @@ const SocialsTab = lazy(() =>
   })),
 );
 const ApiKeysTab = lazy(() =>
-  import("@/views/ApiKeysView").then((m) => ({ default: m.ApiKeysView })),
+  import("@/views/ApiKeysView").then((m) => ({
+    default: (props: { scope?: ApiKeysScope }) => <m.ApiKeysView {...props} />,
+  })),
 );
 const TelephonySetupTab = lazy(() =>
   import("@/views/TelephonyView").then((m) => ({
@@ -117,37 +127,39 @@ type HubNavId =
   | "costs"
   | "feedback";
 
-const HUB_NAV_GROUPS: readonly { labelKey: string; ids: readonly HubNavId[] }[] = [
+/** The hub's first two entries: faces of the `apikeys` section, not ids of their own. */
+type ProviderPageEntry = { page: Exclude<ProviderPage, "apikeys">; labelKey: string; icon: LucideIcon };
+const PROVIDER_PAGE_ENTRIES: readonly ProviderPageEntry[] = [
+  { page: "model", labelKey: "settings_pages.model_title", icon: Brain },
+  { page: "voice", labelKey: "settings_pages.voice_title", icon: AudioLines },
+];
+
+const HUB_NAV_GROUPS: readonly { labelKey: string; ids: readonly HubNavId[]; advanced?: boolean }[] = [
   {
     labelKey: "settings_hub.group_general",
-    ids: [
-      "settings",
-      "shortcuts",
-      "appshots",
-      "pets",
-      "profile",
-      "agent-instructions",
-      "contacts",
-      "socials",
-    ],
-  },
-  {
-    labelKey: "settings_hub.group_system",
-    ids: ["computers", "apikeys", "local-models", "jarvis-actions"],
+    ids: ["settings", "shortcuts", "profile", "agent-instructions", "contacts"],
   },
   {
     labelKey: "settings_hub.group_activity",
     ids: ["costs", "feedback"],
   },
+  {
+    // Folded by default; opens by itself while one of its pages is shown.
+    labelKey: "settings_pages.group_advanced",
+    ids: ["apikeys", "local-models", "computers", "jarvis-actions", "appshots", "pets", "socials"],
+    advanced: true,
+  },
 ];
 
-const TAB_CONTENT: Record<HubNavId | "telephony-setup", LazyExoticComponent<ComponentType>> = {
+type HubContent = HubNavId | "telephony-setup" | "model" | "voice";
+type HubHighlight = HubNavId | "model" | "voice";
+
+const TAB_CONTENT: Record<Exclude<HubContent, "model" | "voice" | "apikeys">, LazyExoticComponent<ComponentType>> = {
   settings: SettingsTab,
   profile: ProfileTab,
   "agent-instructions": InstructionsTab,
   contacts: ContactsTab,
   socials: SocialsTab,
-  apikeys: ApiKeysTab,
   "telephony-setup": TelephonySetupTab,
   "local-models": LocalModelsTab,
   computers: ComputersTab,
@@ -164,7 +176,10 @@ const TAB_CONTENT: Record<HubNavId | "telephony-setup", LazyExoticComponent<Comp
  * section id. Plain ids name their own tab; the merged-in ids resolve to the
  * tab hosting their content; anything else falls back to Settings.
  */
-function resolveHubTab(active: string): { content: HubNavId | "telephony-setup"; highlight: HubNavId } {
+export function resolveHubTab(
+  active: string,
+  providerPage: ProviderPage = "model",
+): { content: HubContent; highlight: HubHighlight } {
   switch (active) {
     case "profile":
       return { content: "profile", highlight: "profile" };
@@ -175,6 +190,8 @@ function resolveHubTab(active: string): { content: HubNavId | "telephony-setup";
     case "socials":
       return { content: "socials", highlight: "socials" };
     case "apikeys":
+      // One section, three faces — see store/settingsPage.ts.
+      return { content: providerPage, highlight: providerPage };
     case "telephony":
       return { content: "apikeys", highlight: "apikeys" };
     case "telephony-setup":
@@ -249,8 +266,24 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
     if (target) setSearchTarget(target);
   }, [pendingJump]);
 
-  const { content, highlight } = resolveHubTab(active);
-  const Content = TAB_CONTENT[content];
+  // Which face of `apikeys` (Model / Voice / API keys & routing): an explicit
+  // pick wins, else the tab someone asked for, else Model.
+  const explicitPage = useSettingsPage((s) => s.page);
+  const openPage = useSettingsPage((s) => s.open);
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      openPage(pageForApiKeysTab((event as CustomEvent<string | null>).detail));
+    };
+    window.addEventListener(APIKEYS_TAB_EVENT, onRequest);
+    return () => window.removeEventListener(APIKEYS_TAB_EVENT, onRequest);
+  }, [openPage]);
+  // Closing the hub forgets the pick, so the next "open API keys" from
+  // elsewhere lands where its own request says.
+  useEffect(() => () => openPage(null), [openPage]);
+  const providerPage = explicitPage ?? pageForApiKeysTab(requestedApiKeysTab());
+
+  const { content, highlight } = resolveHubTab(active, providerPage);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const needle = query.trim().toLowerCase();
   const matches = (item: NavItem) =>
@@ -278,6 +311,44 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
   const localModelsNeedAttention =
     localModelsHealth?.status === "error" || localModelsHealth?.status === "needs_setup";
 
+  const renderPageEntry = (entry: ProviderPageEntry) => {
+    const Icon = entry.icon;
+    const isActive = highlight === entry.page;
+    const label = t(entry.labelKey);
+    if (needle && !label.toLowerCase().includes(needle)) return null;
+    return (
+      <li key={entry.page}>
+        <button
+          type="button"
+          data-testid={`settings-hub-nav-${entry.page}`}
+          onClick={() => {
+            setQuery("");
+            setSearchTarget(null);
+            openPage(entry.page);
+            setActive("apikeys");
+          }}
+          aria-current={isActive ? "page" : undefined}
+          className={cn(
+            "group flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-base font-medium transition-colors",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            isActive
+              ? "jarvis-nav-active bg-secondary text-foreground"
+              : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+          )}
+        >
+          <Icon
+            aria-hidden
+            className={cn(
+              "h-4 w-4 shrink-0 transition-colors",
+              isActive ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
+            )}
+          />
+          <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+        </button>
+      </li>
+    );
+  };
+
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
     const isActive = item.id === highlight;
@@ -296,6 +367,8 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
           onClick={() => {
             setQuery("");
             setSearchTarget(null);
+            // The advanced provider page is a face of `apikeys` too.
+            if (item.id === "apikeys") openPage("apikeys");
             setActive(item.id);
           }}
           title={hint}
@@ -315,7 +388,9 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
               isActive ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
             )}
           />
-          <span className="min-w-0 flex-1 truncate text-left">{resolveNavLabel(t, item)}</span>
+          <span className="min-w-0 flex-1 truncate text-left">
+            {item.id === "apikeys" ? t("settings_pages.apikeys_title") : resolveNavLabel(t, item)}
+          </span>
           {showAlert && (
             <span
               data-testid="settings-hub-alert-apikeys"
@@ -360,15 +435,61 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
         </div>
         <nav aria-label={t("nav.settings")}
           className="min-h-0 flex-1 overflow-y-auto px-3 pb-5 scrollbar-jarvis">
+          {/* MODEL and VOICE first: the two things people open Settings for. */}
+          <ul className="space-y-0.5 pt-2" data-testid="settings-hub-primary">
+            {PROVIDER_PAGE_ENTRIES.map(renderPageEntry)}
+          </ul>
           <ul className="space-y-1">
-            {visibleGroups.map((group) => (
-              <li key={group.labelKey}>
-                <p className="px-3 pb-1 pt-4 text-sm font-medium uppercase tracking-wide text-foreground-faint">
-                  {t(group.labelKey)}
-                </p>
-                <ul className="space-y-0.5">{group.items.map(renderNavItem)}</ul>
-              </li>
-            ))}
+            {visibleGroups.map((group) => {
+              if (!group.advanced) {
+                return (
+                  <li key={group.labelKey}>
+                    <p className="px-3 pb-1 pt-4 text-sm font-medium uppercase tracking-wide text-foreground-faint">
+                      {t(group.labelKey)}
+                    </p>
+                    <ul className="space-y-0.5">{group.items.map(renderNavItem)}</ul>
+                  </li>
+                );
+              }
+              // Searching unfolds it; so does showing one of its pages.
+              const open =
+                advancedOpen || needle !== "" || group.items.some((item) => item.id === highlight);
+              return (
+                <li key={group.labelKey}>
+                  <button
+                    type="button"
+                    data-testid="settings-hub-advanced-toggle"
+                    aria-expanded={open}
+                    onClick={() => setAdvancedOpen(!open)}
+                    className="flex w-full items-center gap-1.5 px-3 pb-1 pt-4 text-sm font-medium uppercase tracking-wide text-foreground-faint hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <ChevronDown aria-hidden className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} />
+                    {t(group.labelKey)}
+                    {/* Folded, the group still says when a page inside needs care. */}
+                    {!open && apikeysHasError && (
+                      <span
+                        data-testid="settings-hub-advanced-alert"
+                        role="status"
+                        aria-label={t("sidebar.apikeys_alert")}
+                        className="ml-auto h-2 w-2 shrink-0 rounded-full bg-destructive"
+                      />
+                    )}
+                    {!open && !apikeysHasError && localModelsNeedAttention && (
+                      <span
+                        data-testid="settings-hub-advanced-warn"
+                        role="status"
+                        className="ml-auto h-2 w-2 shrink-0 rounded-full bg-warning"
+                      />
+                    )}
+                  </button>
+                  {open && (
+                    <ul className="space-y-0.5" data-testid="settings-hub-advanced">
+                      {group.items.map(renderNavItem)}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
           </ul>
           {pageMatches.length > 0 && (
             <div data-testid="settings-hub-page-results">
@@ -432,9 +553,16 @@ export function SettingsHubView({ onClose }: { onClose: () => void }) {
         <div data-testid="settings-hub-content" className="min-h-0 flex-1 overflow-y-auto scrollbar-jarvis">
           <div className="h-full w-full max-w-[2000px]">
             <Suspense fallback={<HubLoadingFallback />}>
-              {content === "settings"
-                ? <SettingsTab searchTarget={searchTarget} onSearchTargetHandled={() => setSearchTarget(null)} />
-                : <Content />}
+              {content === "settings" ? (
+                <SettingsTab searchTarget={searchTarget} onSearchTargetHandled={() => setSearchTarget(null)} />
+              ) : content === "model" || content === "voice" || content === "apikeys" ? (
+                <ApiKeysTab key={content} scope={content === "apikeys" ? "advanced" : content} />
+              ) : (
+                (() => {
+                  const Content = TAB_CONTENT[content];
+                  return <Content />;
+                })()
+              )}
             </Suspense>
           </div>
         </div>

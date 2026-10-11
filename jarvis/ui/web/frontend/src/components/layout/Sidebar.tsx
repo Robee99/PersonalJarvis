@@ -7,21 +7,25 @@ import {
   Plus,
 } from "lucide-react";
 import {
-  NAV_GROUPS,
-  SETTINGS_HUB_IDS,
+  ADVANCED_NAV_ITEMS,
+  PRIMARY_DESTINATIONS,
   presentNavItem,
   resolveNavLabel,
   type NavItem,
+  type PrimaryDestination,
 } from "@/components/layout/navGroups";
 import { useEventStore } from "@/store/events";
 import { useSectionPrefetch } from "@/hooks/useSectionPrefetch";
-import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
 import { useVoiceMode } from "@/hooks/useVoiceMode";
+import { useAssistantStatus } from "@/hooks/useAssistantStatus";
+import { formatAssistantStatus, STATUS_DOT_CLASS } from "@/lib/assistantStatus";
+import { useTurnStateStore } from "@/store/turnState";
+import { openSettingsDestination } from "@/lib/openSettings";
 import { useSectionHealth } from "@/hooks/useProviders";
 import { usePluginAttention } from "@/hooks/usePluginAttention";
 import { clsx } from "clsx";
 import { cn } from "@/lib/utils";
-import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useT } from "@/i18n";
 import { RecentChats } from "@/components/home/RecentChats";
 import { useHomeStore } from "@/store/home";
@@ -33,7 +37,6 @@ import { useAppInstance } from "@/hooks/useAppInstance";
 // The query alone, not ./PublishIdentity: the sign-in UI stays out of the entry chunk.
 import { usePublishIdentity } from "@/components/marketplace/publishIdentityQuery";
 import { GigiMark } from "@/components/GigiMark";
-import { MarketplaceIcon } from "@/components/icons/sectionIcons";
 import { startNewTextChat } from "@/lib/newChat";
 import { useUserName } from "@/hooks/useUserName";
 import { useAgentChatStore } from "@/store/agentChat";
@@ -78,31 +81,14 @@ const IDE_SECTIONS: readonly string[] = [
   "agentic-ide-classic",
 ];
 
-/**
- * The voice status dot, in the three colours a status is allowed to have.
- *
- * It used to run on four shades of grey — `bg-muted-foreground/50`,
- * `bg-muted-foreground`, `bg-foreground/70`, `bg-foreground` — which is a ramp
- * nobody can read: "listening" and "idle" differed by an opacity, and the
- * loudest value on the ramp was "paused". Colour carries exactly three
- * meanings in this product, so the dot carries them too: green while the voice
- * path is actually doing something, red when it broke, amber while it is only
- * half up, and neutral ink when it is simply at rest.
+/*
+ * The status dot used to have its own state → colour table here, beside the
+ * banner's, the HUD header's and the ring's. All of them read
+ * `useAssistantStatus` now (lib/assistantStatus.ts): one phase, one colour —
+ * green while the assistant is doing something or at rest and ready, amber
+ * while it is only half up or a turn was stopped, red when it broke, neutral
+ * ink when it is simply unavailable.
  */
-const VOICE_STATE_STYLE: Record<string, { dot: string; pulse: boolean }> = {
-  // "Ready" IS a life state: the stack is up and waiting for the wake word.
-  // A grey dot beside the word "Ready" told the reader "off".
-  idle: { dot: "bg-success", pulse: false },
-  listening: { dot: "bg-success", pulse: true },
-  thinking: { dot: "bg-success", pulse: true },
-  speaking: { dot: "bg-success", pulse: true },
-  // The user muted or suspended the pipeline: neither working nor broken.
-  paused: { dot: "bg-muted-foreground", pulse: false },
-  error: { dot: "bg-destructive", pulse: false },
-  // Not a supervisor state — the surface's own "a realtime transport is
-  // negotiating" phase, which no backend state covers. Half up, so amber.
-  connecting: { dot: "bg-warning", pulse: true },
-};
 
 export interface SidebarProps {
   /**
@@ -179,7 +165,6 @@ export function Sidebar({
 }: SidebarProps = {}) {
   const t = useT();
   const profilePrefetch = useSectionPrefetch("profile");
-  const marketplacePrefetch = useSectionPrefetch("marketplace");
   const active = useEventStore((s) => s.activeSection);
   const openVoiceThread = useEventStore((s) => s.activeKind === "voice" && Boolean(s.activeThreadId));
   const agentChatOpen = useHomeStore((s) => s.agentChatId !== null);
@@ -187,7 +172,6 @@ export function Sidebar({
   const activeIdeWorkspaceId = useIdeProjectsStore((s) => s.activeWorkspaceId);
   const openIdeWorkspaceOptions = useIdeProjectsStore((s) => s.openWorkspaceOptions);
   const toggleIdeVoice = useIdeProjectsStore((s) => s.toggleVoice);
-  const voiceState = useEventStore((s) => s.voiceState);
   const assistantName = useEventStore((s) => s.assistantName);
   // The search bar takes the identity row's place while the quick
   // switcher is on; switched off, the row comes back as it was.
@@ -234,7 +218,15 @@ export function Sidebar({
    * long as any of them is running.
    */
   const onIdeSection = IDE_SECTIONS.includes(active);
-  const [moreOpen, setMoreOpen] = useState(false);
+  // Collapsed by default: the five destinations are the navigation; Advanced
+  // is the complete index of every other section, one click away. It opens
+  // by itself while the section on screen is one only Advanced lists, so the
+  // "you are here" row is never folded away.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const activeIsAdvancedOnly =
+    !PRIMARY_DESTINATIONS.some((d) => d.sections.includes(active)) &&
+    ADVANCED_NAV_ITEMS.some((item) => (item.matchIds ?? [item.id]).includes(active));
+  const showAdvanced = advancedOpen || activeIsAdvancedOnly;
   // An empty chat on the front page: nothing open, nothing being read.
   const onEmptyChat = useAgentChatStore(
     (st) => active === "chats" && !st.activeSessionId && st.timeline.items.length === 0,
@@ -247,10 +239,6 @@ export function Sidebar({
     userName?.split(/\s+/)[0] ||
     (identity.data?.signed_in && identity.data.login) ||
     t("nav.profile");
-  // Shared readiness derivation (same source the banner + chat empty-state use).
-  const { connected, voiceWarming, voiceUnavailable, bootWarming, warming } =
-    useVoiceReadiness();
-
   // Per-section provider health (same source as the API-Keys tab dots). The
   // sidebar surfaces only a hard "error" — a provider that is set up but failing
   // — so a broken key is visible from anywhere without opening the page. The
@@ -286,41 +274,25 @@ export function Sidebar({
     s.events.filter((e) => e.name === "AgentStateChange").length > 0 ? undefined : 0,
   );
 
-  // Read for the status line's connecting phase. Same resolver as the
-  // mission-deck header and orb (`useVoiceMode`): a negotiating realtime
-  // transport outranks the pipeline's own state.
+  // The status — the ONE derivation the banner, the HUD header and its ring
+  // read too (hooks/useAssistantStatus), so the dot here can never say
+  // "Ready" while another surface says "starting".
+  //
+  // A negotiating realtime transport is only known to `useVoiceMode`, whose
+  // answer is per hook instance; the sidebar is its one writer into the
+  // shared status (it is mounted for the main window's whole life).
   const voiceMode = useVoiceMode();
-
-  // The window connects in ~1s but the voice feature warms up ~20s in the
-  // background. During that gap show a "Voice starting…" spinner instead of the
-  // normal idle "Ready" dot (which would falsely imply the mic already works).
-  // Disconnected outranks warmup — "Offline" is the honest state with no socket.
-  // voiceWarming / bootWarming / warming come from the shared useVoiceReadiness
-  // hook so the sidebar dot, the banner and the chat empty-state never disagree.
-  const showSpinner = warming || voiceMode.connecting;
-  const vs = voiceMode.connecting
-    ? VOICE_STATE_STYLE.connecting
-    : voiceUnavailable
-      ? VOICE_STATE_STYLE.paused
-      : VOICE_STATE_STYLE[voiceState] ?? VOICE_STATE_STYLE.idle;
-  // A negotiating realtime transport outranks the pipeline's own state: the
-  // subscription route needs 15-45 s before it can hear anything, and showing
-  // the stale pre-call state there is what made a live handshake look frozen.
-  const voiceLabel = !connected
-    ? bootWarming
-      ? t("voice_state.booting")
-      : t("voice_state.offline")
-    : voiceWarming
-      ? t("voice_state.starting")
-      : voiceMode.connecting
-        ? t("voice_state.connecting")
-        : voiceUnavailable
-          ? t("voice_state.unavailable")
-          : t(`voice_state.${voiceState}`);
+  const setRealtimeConnecting = useTurnStateStore((s) => s.setRealtimeConnecting);
+  useEffect(() => {
+    setRealtimeConnecting(voiceMode.connecting);
+  }, [voiceMode.connecting, setRealtimeConnecting]);
+  const status = useAssistantStatus();
+  const showSpinner = status.spinner;
+  const vs = { dot: STATUS_DOT_CLASS[status.tone], pulse: status.pulse };
+  const voiceLabel = formatAssistantStatus(status, t);
   // The header spells the state out only when it is news — anything but a
-  // connected, warmed-up pipeline at rest. See the header row below.
-  const voiceHasNews =
-    !connected || showSpinner || voiceUnavailable || voiceState !== "idle";
+  // connected, warmed-up assistant at rest.
+  const voiceHasNews = status.hasNews;
 
   // Dragged past the snap point the sidebar becomes a rail of icons. Everything
   // that only makes sense with a label beside it steps aside; the
@@ -331,23 +303,9 @@ export function Sidebar({
   // the column narrow gets icons without having to also find the button.
   const railed = collapsed || width < SIDEBAR_RAIL_AT_WIDTH;
 
-  const allItems = NAV_GROUPS.flat();
-  const findItem = (id: string) => allItems.find((item) => item.id === id)!;
-  const toolIds = ["memory", "board", "docs", "sessions", "run_inspector", "clis"];
-  const toolItems = toolIds.map(findItem);
-  // Artifacts ("visualization") sits directly in the main list where the
-  // retired "Jarvis Tools" folder used to be — it was the only entry hiding
-  // behind "Show more" that users reached for daily, while the tools folder
-  // duplicated exactly what "Show more" already lists.
-  const primaryIds = ["chats", "deck", "orb", "armory", "agents", "dictation", "visualization", "agentic-ide", "plugins", "marketplace"];
-  // The Settings hub owns its entries — they live in the hub's left
-  // navigation now, so "Show more" must not list them a second time. The set
-  // itself is named once in `navGroups` (`SETTINGS_HUB_IDS`).
-  const assignedIds = new Set([...primaryIds, ...toolIds, ...SETTINGS_HUB_IDS]);
-  const moreItems = [...toolItems, ...allItems.filter((item) => !assignedIds.has(item.id))];
-  // Lit while any hub section is on screen — the profile button IS the hub's
-  // entry point now, so it carries the "you are here" state for all of them.
-  const hubActive = (SETTINGS_HUB_IDS as readonly string[]).includes(active);
+  // The SETTINGS destination carries "you are here" for the hub as a whole;
+  // the profile button is lit only for its own page.
+  const profileActive = active === "profile";
   // Rows read like the Claude app's column: regular weight, light ink at
   // rest (muted grey made every entry look disabled), the icon in the same
   // ink, a lift on hover. Section labels and tail rows stay muted.
@@ -355,6 +313,7 @@ export function Sidebar({
   const renderRow = (raw: NavItem, compact = railed) => {
     const item = presentNavItem(raw, surface);
     return <NavRow key={item.id} item={item} label={resolveNavLabel(t, item)} compact={compact}
+      testId={`nav-row-${item.id}`}
       active={item.matchIds ? item.matchIds.includes(active) : item.id === active}
       badge={item.id === "agents" ? agentsCount : undefined}
       betaLabel={item.beta ? t("nav.agentic_ide_beta") : undefined}
@@ -362,6 +321,42 @@ export function Sidebar({
       warn={item.id === "plugins" ? pluginsNeedReconnect : item.id === "local-models" && localModelsNeedAttention}
       warnTitle={item.id === "local-models" ? localModelsHealth?.detail || localModelsHealth?.reason || undefined : pluginWarnTitle}
       onClick={() => { setActive(item.id); }} />;
+  };
+  // One door: a fresh typed chat. Voice is a mode INSIDE the chat (its top
+  // bar's button), so there is nothing to choose between here (2026-10-01).
+  const startChat = () => { useHomeStore.getState().setSurface("chat"); startNewTextChat(); };
+  const newChatButton = (
+    <button type="button" data-testid="sidebar-new-chat" data-tour="new-chat"
+      aria-label={t("sidebar.new_chat")} title={t("sidebar.new_chat")}
+      className={cn(
+        railed
+          ? cn(rowClass, onEmptyChat && "bg-secondary text-foreground-strong")
+          : "flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-surface-raised hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+      onClick={startChat}>
+      <Plus aria-hidden strokeWidth={1.75} className={railed ? "h-[18px] w-[18px] shrink-0" : "h-4 w-4"} />
+      <span className="sr-only">{t("sidebar.new_chat")}</span>
+    </button>
+  );
+  const renderPrimary = (dest: PrimaryDestination) => {
+    const item: NavItem = {
+      id: dest.target,
+      labelKey: dest.labelKey,
+      fallbackLabel: dest.fallbackLabel,
+      icon: dest.icon,
+    };
+    return <NavRow key={dest.key} item={item} label={resolveNavLabel(t, item)} compact={railed}
+      testId={`nav-primary-${dest.key}`}
+      tour={dest.tourAnchor ?? `nav-${dest.key}`}
+      active={dest.sections.includes(active)}
+      alert={dest.key === "settings" && apikeysHasError} alertTitle={t("sidebar.apikeys_alert")}
+      warn={dest.key === "agents" ? pluginsNeedReconnect : dest.key === "settings" && localModelsNeedAttention}
+      warnTitle={dest.key === "settings" ? localModelsHealth?.detail || localModelsHealth?.reason || undefined : pluginWarnTitle}
+      trailing={dest.key === "chat" && !railed ? newChatButton : undefined}
+      onClick={() => {
+        if (dest.key === "settings") openSettingsDestination("model");
+        else setActive(dest.target);
+      }} />;
   };
 
   return (
@@ -539,35 +534,22 @@ export function Sidebar({
             </button>
           </div>}
         </nav> : <nav aria-label={t("sidebar.sections")} className="space-y-px px-2 py-2">
-          <ul className="space-y-px">
-            {/* One door: a fresh typed chat. Voice is a mode INSIDE the chat
-                now (its top bar's button), so there is nothing to choose
-                between here (2026-10-01). */}
-            <li><button type="button" data-testid="sidebar-new-chat" data-tour="new-chat"
-              aria-label={t("sidebar.new_chat")} title={t("sidebar.new_chat")}
-              className={cn(rowClass, onEmptyChat && "bg-secondary text-foreground-strong")}
-              onClick={() => { useHomeStore.getState().setSurface("chat"); startNewTextChat(); }}>
-              <Plus aria-hidden strokeWidth={1.75} className="h-[18px] w-[18px] shrink-0" />
-              {!railed && <span>{t("sidebar.new_chat")}</span>}
-            </button></li>
-            {/* The HUD: the mission deck, every instrument on one screen. */}
-            {renderRow(findItem("deck"))}
-            {renderRow(findItem("orb"))}
-            {renderRow(findItem("armory"))}
-            {renderRow(findItem("agents"))}
-            {renderRow(findItem("dictation"))}
+          {/* The five destinations (navGroups.PRIMARY_DESTINATIONS). A new
+              chat is an action, not a sixth place: it rides on the CHAT row
+              as its "+" (a separate icon on the rail, where a row has no
+              room for a second button). */}
+          <ul className="space-y-px" data-testid="sidebar-primary-nav">
+            {railed && <li>{newChatButton}</li>}
+            {PRIMARY_DESTINATIONS.map((dest) => renderPrimary(dest))}
           </ul>
-          <ul className="space-y-px">
-            {renderRow(findItem("visualization"))}
-            {renderRow(findItem("agentic-ide"))}
-            {renderRow({ ...findItem("plugins"), labelKey: "sidebar.extensions_label" })}
-          </ul>
-          <button type="button" onClick={() => { setMoreOpen(!moreOpen); }} aria-expanded={moreOpen}
-            aria-controls="sidebar-more" title={t("sidebar.more")} data-testid="sidebar-more-toggle" className={cn(rowClass, "text-muted-foreground")}>
-            <ChevronDown aria-hidden strokeWidth={1.75} className={cn("h-[18px] w-[18px] shrink-0 transition-transform", moreOpen && "rotate-180")} />
-            {!railed && <span>{t(moreOpen ? "sidebar.show_less" : "sidebar.more")}</span>}
+          <button type="button" onClick={() => { setAdvancedOpen(!showAdvanced); }} aria-expanded={showAdvanced}
+            aria-controls="sidebar-advanced" title={t("nav5.advanced")} data-testid="sidebar-advanced-toggle"
+            disabled={activeIsAdvancedOnly}
+            className={cn(rowClass, "mt-2 text-muted-foreground disabled:cursor-default")}>
+            <ChevronDown aria-hidden strokeWidth={1.75} className={cn("h-[18px] w-[18px] shrink-0 transition-transform", showAdvanced && "rotate-180")} />
+            {!railed && <span>{t("nav5.advanced")}</span>}
           </button>
-          {moreOpen && <ul id="sidebar-more" className="space-y-1">{moreItems.map((item) => renderRow(item))}</ul>}
+          {showAdvanced && <ul id="sidebar-advanced" data-testid="sidebar-advanced" className="space-y-px">{ADVANCED_NAV_ITEMS.map((item) => renderRow(item))}</ul>}
         </nav>}
         {!railed && (onIdeSection
           ? <IdeProjectTree />
@@ -584,8 +566,8 @@ export function Sidebar({
         <div className={cn("flex items-center gap-0.5", railed && "flex-col")}>
           <button type="button" {...profilePrefetch} onClick={() => setActive("profile")} title={t("nav.profile")}
             data-testid="sidebar-profile-toggle"
-            data-tour="settings"
-            className={cn(rowClass, "min-w-0 flex-1", hubActive && "jarvis-nav-active bg-secondary text-foreground")}>
+            data-tour="profile"
+            className={cn(rowClass, "min-w-0 flex-1", profileActive && "jarvis-nav-active bg-secondary text-foreground")}>
             <span className="relative shrink-0">
               <span aria-hidden data-testid="sidebar-profile-initial"
                 className="flex h-6 w-6 items-center justify-center rounded-full bg-secondary text-xs font-medium uppercase text-muted-foreground">
@@ -600,11 +582,6 @@ export function Sidebar({
           {/* The update lives here now, where Claude keeps its download icon:
               in sight on every screen, not among the window buttons. */}
           <Suspense fallback={null}><UpdateButton placement="sidebar" /></Suspense>
-          <button type="button" {...marketplacePrefetch} onClick={() => setActive("marketplace")} title={t("nav.marketplace")}
-            aria-label={t("nav.marketplace")} data-testid="nav-row-marketplace"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <MarketplaceIcon aria-hidden strokeWidth={1.75} className="h-4 w-4" />
-          </button>
         </div>
       </div>
     </aside>
@@ -613,6 +590,9 @@ export function Sidebar({
 
 function NavRow({
   compact = false,
+  testId,
+  tour,
+  trailing,
   item,
   label,
   active,
@@ -627,6 +607,12 @@ function NavRow({
   children,
 }: {
   compact?: boolean;
+  /** The row's test id (`nav-row-<id>` for a section row). */
+  testId?: string;
+  /** The onboarding tour's anchor (defaults to `nav-<id>`). */
+  tour?: string;
+  /** A second control at the row's end (the CHAT row's "+ new chat"). */
+  trailing?: ReactNode;
   item: NavItem;
   label: string;
   active: boolean;
@@ -677,12 +663,12 @@ function NavRow({
           open list lived in the same relative parent, `top-1/2` walked to
           the middle of the chats and the rows painted over the only control
           that folds them away (maintainer, 2026-09-02). */}
-      <div className={expand ? "relative" : undefined}>
+      <div className={expand || trailing ? "relative" : undefined}>
         <button
           type="button"
-          data-testid={`nav-row-${item.id}`}
+          data-testid={testId ?? `nav-row-${item.id}`}
           {...prefetch}
-          data-tour={`nav-${item.id}`}
+          data-tour={tour ?? `nav-${item.id}`}
           onClick={onClick}
           title={compact ? `${label}${hint ? ` — ${hint}` : ""}` : hint}
           aria-label={compact ? label : undefined}
@@ -690,7 +676,7 @@ function NavRow({
             "group relative flex h-8 w-full items-center gap-3 rounded-lg px-3 text-base transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             // Leave the chevron its own column so the two buttons never overlap.
-            expand && "pr-9",
+            (expand || trailing) && "pr-9",
             // Rest is muted ink; hover AND active are the same lift with body
             // ink, and only the active row carries the 2 px accent bar at the
             // left edge (`.jarvis-nav-active`).
@@ -744,6 +730,9 @@ function NavRow({
             </span>
           )}
         </button>
+        {trailing && (
+          <span className="absolute right-1.5 top-1/2 z-10 -translate-y-1/2">{trailing}</span>
+        )}
         {expand && (
           <button
             type="button"

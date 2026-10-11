@@ -1,3 +1,4 @@
+import { HumanError } from "@/components/ui/HumanError";
 import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -400,13 +401,14 @@ function VoiceNow({
       ? {
           key: "start-error",
           alert: true,
-          text: t("voice_state.connect_failed")
-            .replace("{0}", voice.lastStartError.provider || "?")
-            .replace("{1}", voice.lastStartError.message),
+          // The provider's raw message goes behind a Details toggle; the
+          // headline is one sentence (components/ui/HumanError).
+          text: t("errors_human.voice_connect_failed"),
+          raw: voice.lastStartError.message,
         }
       : null,
     offerDetail ? { key: "offer", alert: true, text: offerDetail } : null,
-  ].filter((note): note is { key: string; alert: boolean; text: string } => note !== null);
+  ].filter((note): note is { key: string; alert: boolean; text: string; raw?: string } => note !== null);
 
   return (
     <div
@@ -462,7 +464,15 @@ function VoiceNow({
           </span>
         )}
       </div>
-      {notes.map((note) => (
+      {notes.map((note) => note.raw !== undefined ? (
+        <HumanError
+          key={note.key}
+          raw={note.raw}
+          prefix={note.text}
+          testId={`voice-now-note-${note.key}`}
+          className="px-5 py-3 text-sm"
+        />
+      ) : (
         <p
           key={note.key}
           role={note.alert ? "alert" : "status"}

@@ -4,6 +4,33 @@ import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 import { useEventStore } from "@/store/events";
 import { useInputIsolation } from "@/hooks/useInputIsolation";
+import { BANNER_PRIORITY, useBannerSlot } from "@/store/bannerSlot";
+import { BannerOverflowChip } from "@/components/layout/BannerOverflowChip";
+
+/**
+ * Remembered per reason, so a dismissed notice stays dismissed across
+ * restarts (it used to come back on every launch, P1-7 of the 2026-10-07 UI
+ * audit). A NEW reason — the app was elevated before and runs as root now —
+ * still shows once. Storage can be missing (private mode, previews): the
+ * notice then simply behaves as before.
+ */
+const DISMISS_KEY = "jarvis.banner.input-isolation.dismissed";
+
+function readDismissed(): string | null {
+  try {
+    return window.localStorage.getItem(DISMISS_KEY);
+  } catch {
+    return null; // storage unavailable: nothing was remembered
+  }
+}
+
+function writeDismissed(reason: string): void {
+  try {
+    window.localStorage.setItem(DISMISS_KEY, reason);
+  } catch {
+    // storage unavailable: the dismissal lasts for this window only
+  }
+}
 
 /**
  * App-wide alert: outside input software cannot type into this window.
@@ -27,8 +54,12 @@ export function InputIsolationBanner() {
   const { report } = useInputIsolation();
   const [dismissed, setDismissed] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const rememberedDismissal = readDismissed();
+  const active =
+    Boolean(report?.blocked) && !dismissed && rememberedDismissal !== report?.reason;
+  const slot = useBannerSlot("input-isolation", BANNER_PRIORITY.inputIsolation, active);
 
-  if (!report?.blocked || dismissed) return null;
+  if (!report?.blocked || !slot.visible) return null;
   // The Windows copy talks about "Run as administrator"; a root process on
   // Linux or macOS gets the server's own wording, which names sudo instead.
   const windows = report.reason === "elevated";
@@ -94,13 +125,17 @@ export function InputIsolationBanner() {
             {t(restarting ? "input_isolation.restarting" : "input_isolation.restart_now")}
           </Button>
         )}
+        <BannerOverflowChip slot={slot} />
         <Button
           size="icon"
           variant="ghost"
           className="h-7 w-7 shrink-0"
           aria-label={t("input_isolation.dismiss")}
           title={t("input_isolation.dismiss")}
-          onClick={() => setDismissed(true)}
+          onClick={() => {
+            setDismissed(true);
+            writeDismissed(report.reason);
+          }}
         >
           <X className="h-3.5 w-3.5" aria-hidden />
         </Button>

@@ -1,3 +1,4 @@
+import { HumanError } from "@/components/ui/HumanError";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -237,7 +238,9 @@ function HermesPanel({ panel, data, onClose }: { panel: PanelId; data: HermesInv
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  // `text` is the sentence for people; `raw` is Hermes's own CLI output, kept
+  // behind a Details toggle instead of being the message (UI audit P1-8).
+  const [result, setResult] = useState<{ ok: boolean; text: string; raw?: string } | null>(null);
   const needsCatalog = panel === "mcp_catalog" || panel === "skill_catalog";
   const catalog = useQuery({
     queryKey: ["armory", "hermes-catalog"],
@@ -267,9 +270,9 @@ function HermesPanel({ panel, data, onClose }: { panel: PanelId; data: HermesInv
         .then((fresh) => queryClient.setQueryData(["armory", "hermes-inventory"], fresh))
         .catch(() => queryClient.invalidateQueries({ queryKey: ["armory", "hermes-inventory"] }));
       if (needsCatalog) await queryClient.invalidateQueries({ queryKey: ["armory", "hermes-catalog"] });
-      setResult({ ok: outcome.ok, text: `${head}${tail}${outcome.message ? `\n${outcome.message}` : ""}` });
+      setResult({ ok: outcome.ok, text: `${head}${tail}`, raw: outcome.message || undefined });
     } catch (error) {
-      setResult({ ok: false, text: error instanceof Error ? error.message : String(error) });
+      setResult({ ok: false, text: "", raw: error instanceof Error ? error.message : String(error) });
     } finally {
       setBusy(null);
     }
@@ -284,9 +287,11 @@ function HermesPanel({ panel, data, onClose }: { panel: PanelId; data: HermesInv
     );
   } else if (needsCatalog && (catalog.isError || !catalog.data?.available)) {
     list = (
-      <p role="alert" className="text-sm text-rose-200">
-        {catalog.data?.error || "Could not read Hermes's catalog."}
-      </p>
+      catalog.data?.error ? (
+        <HumanError raw={catalog.data.error} prefix="Could not read Hermes's catalog" testId="armory-hermes-catalog-error" />
+      ) : (
+        <p role="alert" className="text-sm text-destructive">Could not read Hermes&apos;s catalog.</p>
+      )
     );
   } else if (shown.length === 0) {
     list = <p className="text-sm text-slate-400">{rows.length ? "Nothing matches." : "Nothing here yet."}</p>;
@@ -349,13 +354,26 @@ function HermesPanel({ panel, data, onClose }: { panel: PanelId; data: HermesInv
         aria-label={`Filter ${PANEL_TITLES[panel]}`}
         className="mb-2 h-9 w-full rounded-lg border border-white/10 bg-transparent px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-cyan-300/50"
       />
-      {result && (
-        <p
-          role="status"
-          className={cn("mb-2 whitespace-pre-line text-xs", result.ok ? "text-emerald-200" : "text-rose-200")}
-        >
-          {result.text}
-        </p>
+      {result && result.text && (
+        <div className="mb-2">
+          <p
+            role="status"
+            className={cn("whitespace-pre-line text-xs", result.ok ? "text-success" : "text-destructive")}
+          >
+            {result.text}
+          </p>
+          {result.raw && (
+            <details className="mt-1 text-xs text-muted-foreground" data-testid="armory-hermes-result-details">
+              <summary className="cursor-pointer select-none hover:text-foreground">Details</summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-raised p-2 font-mono">
+                {result.raw}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+      {result && !result.text && result.raw && (
+        <HumanError raw={result.raw} className="mb-2" testId="armory-hermes-result-error" />
       )}
       {list}
       {panel === "skills" && data.skills.truncated && (

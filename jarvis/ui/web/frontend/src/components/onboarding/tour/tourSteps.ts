@@ -44,7 +44,16 @@ export const TOUR_STEPS: readonly TourStep[] = [
     skipIfMissing: true,
     pet: "thinking",
   },
-  { id: "voice_hub", anchor: "nav-dictation", placement: "right", onEnter: "back-home", pet: "listening" },
+  // Dictation sits under the collapsed "Advanced" group since the five-row
+  // sidebar; the step is skipped while that group is closed.
+  {
+    id: "voice_hub",
+    anchor: "nav-dictation",
+    placement: "right",
+    onEnter: "back-home",
+    skipIfMissing: true,
+    pet: "listening",
+  },
   { id: "settings", anchor: "settings", placement: "right", pet: "thinking" },
   { id: "done", anchor: "voice-bar", placement: "below", onEnter: "home-voice", pet: "success" },
 ];

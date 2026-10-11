@@ -15,6 +15,7 @@ import { useQuickSwitchSettings } from "@/store/quickSwitchSettings";
 import { useHomeStore } from "@/store/home";
 import { useIdeChatStore } from "@/store/ideChat";
 import { useIdeProjectsStore } from "@/store/ideProjects";
+import { useSettingsPage } from "@/store/settingsPage";
 import { sectionPrefetch } from "@/lib/sectionPrefetch";
 import { SECTION_PREFETCH_DELAY_MS } from "@/hooks/useSectionPrefetch";
 
@@ -27,14 +28,14 @@ test.each([SIDEBAR_DEFAULT_WIDTH, SIDEBAR_RAIL_WIDTH])(
       useEventStore.setState({ activeSection: "chats" });
       renderSidebar(width);
       expect(warm).not.toHaveBeenCalled();
-      fireEvent.mouseEnter(screen.getByTestId("nav-row-agents"));
+      fireEvent.mouseEnter(screen.getByTestId("nav-primary-agents"));
       act(() => { vi.advanceTimersByTime(SECTION_PREFETCH_DELAY_MS); });
       expect(warm).toHaveBeenCalledExactlyOnceWith("agents");
       expect(useEventStore.getState().activeSection).toBe("chats");
       fireEvent.focus(screen.getByTestId("sidebar-profile-toggle"));
       act(() => { vi.advanceTimersByTime(SECTION_PREFETCH_DELAY_MS); });
       expect(warm).toHaveBeenLastCalledWith("profile");
-      fireEvent.click(screen.getByTestId("nav-row-agents"));
+      fireEvent.click(screen.getByTestId("nav-primary-agents"));
       expect(useEventStore.getState().activeSection).toBe("agents");
     } finally {
       cleanup();
@@ -306,15 +307,24 @@ describe("Sidebar settings-hub entry", () => {
     expect(useEventStore.getState().activeSection).toBe("profile");
   });
 
-  test("the profile button stays lit while any hub section is on screen", () => {
-    // It IS the hub's entry point, so it carries "you are here" for all of
-    // the hub's sections — including ones only reachable from inside the hub.
+  test("the SETTINGS destination stays lit while any hub section is on screen", () => {
+    // SETTINGS is one of the five destinations now, so it carries "you are
+    // here" for every hub section — including ones only reachable from inside
+    // the hub. The profile button is lit only for its own page.
     useEventStore.setState({ activeSection: "local-models" });
     renderSidebar();
 
-    expect(screen.getByTestId("sidebar-profile-toggle").className).toMatch(
-      /jarvis-nav-active/,
-    );
+    expect(screen.getByTestId("nav-primary-settings").className).toMatch(/jarvis-nav-active/);
+    expect(screen.getByTestId("sidebar-profile-toggle").className).not.toMatch(/jarvis-nav-active/);
+  });
+
+  test("the SETTINGS destination opens the hub on its MODEL page", () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByTestId("nav-primary-settings"));
+
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("model");
   });
 
   test("the profile button is calm on non-hub sections", () => {
@@ -406,14 +416,17 @@ describe("Sidebar plugin reconnect indicator", () => {
     pluginAttentionMock.needsReconnect = false;
   });
 
-  test("shows an amber dot on Plugins, MCPs & Skills when a plugin needs reconnect", () => {
+  test("shows an amber dot on AGENTS (and on Plugins under Advanced) when a plugin needs reconnect", () => {
     // A revoked / expired plugin must be visible app-wide, not only on the
-    // Plugins page — the sidebar carries an amber dot on the row that fronts
-    // Plugins ("Plugins, MCPs & Skills", id "plugins").
+    // Plugins page — the AGENTS destination (whose Tools tab is the same
+    // catalog) carries the amber dot, and so does the Plugins row in the
+    // Advanced index once it is open.
     pluginAttentionMock.needsReconnect = true;
 
     renderSidebar();
 
+    expect(screen.getByTestId("nav-warn-agents")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     expect(screen.getByTestId("nav-warn-plugins")).toBeTruthy();
   });
 
@@ -423,6 +436,7 @@ describe("Sidebar plugin reconnect indicator", () => {
     renderSidebar();
 
     expect(screen.queryByTestId("nav-warn-plugins")).toBeNull();
+    expect(screen.queryByTestId("nav-warn-agents")).toBeNull();
   });
 });
 
@@ -525,7 +539,7 @@ describe("Sidebar icon rail", () => {
     renderSidebar(SIDEBAR_DEFAULT_WIDTH);
 
     expect(screen.getByTestId("sidebar").dataset.railed).toBe("false");
-    fireEvent.click(screen.getByTestId("sidebar-more-toggle"));
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     // The label is ON the row, and names the workspace rather than carrying
     // the retired generic "Chat" label shown in the product screenshot.
     expect(screen.getByTestId("nav-row-agentic-ide").textContent).toContain(
@@ -542,13 +556,13 @@ describe("Sidebar icon rail", () => {
     // shows half a word per row and reads as a rendering fault, so it is
     // skipped rather than rendered at the dragged width.
     expect(aside.style.width).toBe(`${SIDEBAR_RAIL_WIDTH}px`);
-    expect(screen.getByTestId("nav-row-agents").getAttribute("aria-label")).toBeTruthy();
+    expect(screen.getByTestId("nav-primary-agents").getAttribute("aria-label")).toBeTruthy();
   });
 
   test("keeps every destination named once its label is off the screen", () => {
     renderSidebar(SIDEBAR_RAIL_WIDTH);
 
-    const row = screen.getByTestId("nav-row-agents");
+    const row = screen.getByTestId("nav-primary-agents");
     expect(row.getAttribute("aria-label")).toBeTruthy();
     expect(row.getAttribute("title")).toBe(row.getAttribute("aria-label"));
   });
@@ -557,7 +571,7 @@ describe("Sidebar icon rail", () => {
     renderSidebar(SIDEBAR_RAIL_WIDTH);
 
     act(() => {
-      screen.getByTestId("nav-row-agents").click();
+      screen.getByTestId("nav-primary-agents").click();
     });
 
     expect(useEventStore.getState().activeSection).toBe("agents");
@@ -665,39 +679,70 @@ describe("compact sidebar navigation", () => {
   });
   afterEach(() => cleanup());
 
-  test("keeps core destinations above visible recent chats", () => {
+  test("shows exactly five destinations above the recent chats", () => {
     renderSidebar();
-    for (const id of ["agents", "dictation", "visualization", "agentic-ide", "plugins", "marketplace"]) {
-      expect(screen.getByTestId(`nav-row-${id}`)).toBeTruthy();
+    const primary = screen.getByTestId("sidebar-primary-nav");
+    const rows = Array.from(primary.querySelectorAll("[data-testid^='nav-primary-']"));
+    expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
+      "nav-primary-chat",
+      "nav-primary-orb",
+      "nav-primary-agents",
+      "nav-primary-work",
+      "nav-primary-settings",
+    ]);
+    // A new chat is the CHAT row's own "+", not a sixth row.
+    expect(primary.querySelector("[data-testid='sidebar-new-chat']")).toBeTruthy();
+    expect(screen.getByTestId("recent-chats")).toBeTruthy();
+    // Advanced is folded by default.
+    expect(screen.getByTestId("sidebar-advanced-toggle").getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("sidebar-advanced")).toBeNull();
+    expect(screen.queryByTestId("nav-row-memory")).toBeNull();
+  });
+
+  test("each destination lands on its section", () => {
+    renderSidebar();
+    const lands: Record<string, string> = {
+      chat: "chats",
+      orb: "orb",
+      agents: "agents",
+      work: "visualization",
+      settings: "apikeys",
+    };
+    for (const [key, section] of Object.entries(lands)) {
+      fireEvent.click(screen.getByTestId(`nav-primary-${key}`));
+      expect(useEventStore.getState().activeSection).toBe(section);
     }
-    expect(screen.getByTestId("recent-chats")).toBeTruthy();
-    expect(screen.queryByTestId("nav-row-wallpaper")).toBeNull();
-    expect(screen.queryByTestId("nav-row-memory")).toBeNull();
   });
 
-  test("opens Jarvis Voice directly with artifacts in the main list", () => {
-    useHomeStore.setState({ surface: "chat" });
-    renderSidebar();
-    // Artifacts sits directly in the main list (where the retired "Jarvis
-    // Tools" folder used to be) — no "Show more" needed to reach it.
-    expect(screen.getByTestId("nav-row-visualization")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("nav-row-dictation"));
-    expect(useHomeStore.getState().surface).toBe("chat");
-    expect(useEventStore.getState().activeSection).toBe("dictation");
-    expect(screen.getAllByTestId("nav-row-dictation")).toHaveLength(1);
-    fireEvent.click(screen.getByTestId("nav-row-visualization"));
-    expect(useEventStore.getState().activeSection).toBe("visualization");
+  test("WORK stays lit on every work view", () => {
+    // The coding workspace (WORK › Projects) swaps this column for its own
+    // project navigation, so it is covered by the IDE tests above instead.
+    for (const section of ["visualization", "deck", "board", "run_inspector"] as const) {
+      useEventStore.setState({ activeSection: section });
+      renderSidebar();
+      expect(screen.getByTestId("nav-primary-work").className, section).toMatch(/jarvis-nav-active/);
+      cleanup();
+    }
   });
 
-  test("expands tools through More without duplicating rows", () => {
+  test("expands Advanced without duplicating rows", () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId("sidebar-more-toggle"));
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     expect(screen.getByTestId("nav-row-memory")).toBeTruthy();
+    expect(screen.getAllByTestId("nav-row-dictation")).toHaveLength(1);
     fireEvent.click(screen.getByTestId("nav-row-memory"));
+    // Wiki is ORB › Notes, so Advanced may fold again.
     expect(useEventStore.getState().activeSection).toBe("memory");
-    fireEvent.click(screen.getByTestId("sidebar-more-toggle"));
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     expect(screen.queryByTestId("nav-row-memory")).toBeNull();
     expect(screen.getByTestId("recent-chats")).toBeTruthy();
+  });
+
+  test("Advanced opens by itself on a section only it lists", () => {
+    useEventStore.setState({ activeSection: "dictation" });
+    renderSidebar();
+    expect(screen.getByTestId("sidebar-advanced")).toBeTruthy();
+    expect(screen.getByTestId("nav-row-dictation").className).toMatch(/jarvis-nav-active/);
   });
 
   test("the profile button opens the hub — hub tabs are the hub's own tests", () => {
@@ -712,12 +757,14 @@ describe("compact sidebar navigation", () => {
 
   test("every registered destination remains reachable", () => {
     renderSidebar();
-    fireEvent.click(screen.getByTestId("sidebar-more-toggle"));
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
+    const primaryRow: Record<string, string> = { chats: "chat", orb: "orb", agents: "agents" };
     for (const item of [...NAV_GROUPS.flat(), ...NAV_FOOTER_ITEMS]) {
-      // Hub entries are one profile-button click away (covered above); the
-      // hub selects their tab itself (see SettingsHubView.test).
+      // Hub entries are one SETTINGS click away (covered above); the hub
+      // selects their tab itself (see SettingsHubView.test).
       if ((SETTINGS_HUB_IDS as readonly string[]).includes(item.id)) continue;
-      expect(screen.getByTestId(item.id === "chats" ? "sidebar-new-chat" : `nav-row-${item.id}`)).toBeTruthy();
+      const testId = item.id in primaryRow ? `nav-primary-${primaryRow[item.id]}` : `nav-row-${item.id}`;
+      expect(screen.getByTestId(testId), item.id).toBeTruthy();
     }
     // And every hub id is still a valid section id — an id the hub lists
     // that stops resolving strands deep links, the deck and voice commands.
