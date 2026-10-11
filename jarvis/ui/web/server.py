@@ -358,6 +358,7 @@ class WebServer:
         from .board_routes import (
             router as board_router,
         )
+        from .brain_map_routes import router as brain_map_router
         from .chat_library_routes import router as chat_library_router
         from .chats_routes import router as chats_router
         from .claude_routes import router as claude_router
@@ -662,6 +663,27 @@ class WebServer:
         # Forwards WikiPageChanged events from the shared EventBus to
         # subscribed UI clients. WikiWatcher is started in start().
         app.include_router(wiki_ws_router)
+        # Brain map — the project intelligence layer over every store above
+        # (jarvis/memory/brain_map). Building the service opens nothing; the
+        # database opens on the first request or tick (AP-26). The periodic
+        # tick is started in start().
+        try:
+            from jarvis.memory.brain_map.service import (
+                service_from_config,
+                set_shared_service,
+            )
+
+            brain_map = service_from_config(
+                self.cfg, outputs_roots=lambda: getattr(app.state, "outputs_roots", ()) or ()
+            )
+            set_shared_service(brain_map)
+            app.state.brain_map = brain_map
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "Brain map setup failed — /api/brain-map uses the default data dir"
+            )
+            app.state.brain_map = None
+        app.include_router(brain_map_router)
         # ConnectionManager singleton for the global event stream. Attached
         # to MissionBus.subscribe_all() in start().
         app.state.missions_ws_manager = _MissionsConnMgr()
@@ -2772,6 +2794,22 @@ class WebServer:
                 "Jarvis learning loop init failed — Jarvis will not learn this run"
             )
 
+        # Brain map tick: a task that SLEEPS first, then runs one deterministic
+        # incremental pass every few minutes in a worker thread. Rules only —
+        # no model, no provider, nothing that can bill a key. Off the boot path.
+        try:
+            from jarvis.memory.brain_map.service import BrainMapService, tick_loop
+
+            brain_map = getattr(self.app.state, "brain_map", None)
+            if isinstance(brain_map, BrainMapService):
+                self._brain_map_task = asyncio.create_task(
+                    tick_loop(brain_map), name="brain-map-tick"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "Brain map tick init failed — the map updates only on reindex"
+            )
+
         # Reconcile the derived FTS5 index after readiness. This repairs stale
         # rows after a vault switch without extending the startup critical path.
         try:
@@ -4090,6 +4128,17 @@ class WebServer:
             except TimeoutError:
                 logger.warning("retention_task: did not stop within 2s — may be blocking on I/O")
             self._screenshot_retention_task = None
+
+        # Brain map tick: cancel the loop; a pass already in its worker thread
+        # finishes its current short transaction on its own.
+        brain_map_task = getattr(self, "_brain_map_task", None)
+        if brain_map_task is not None:
+            brain_map_task.cancel()
+            try:
+                await asyncio.wait_for(brain_map_task, timeout=2.0)
+            except (TimeoutError, asyncio.CancelledError):  # cancelled, or busy in its thread
+                logger.debug("brain map tick stopped")
+            self._brain_map_task = None
 
         # Flush + close the flight-recorder audit log so the last buffered events
         # reach disk before shutdown (it otherwise auto-flushes every ~1s).

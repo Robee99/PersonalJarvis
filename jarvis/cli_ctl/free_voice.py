@@ -192,6 +192,13 @@ HERMES_JARVIS_TOOLS: tuple[str, ...] = (
     "camera",
     "contact-lookup",
     "call-contact",
+    # The project brain map, read-only: what is blocked, open, decided, next.
+    "project_summary",
+    "open_tasks",
+    "blockers",
+    "find_source",
+    "next_action",
+    "make_report",
 )
 #: The name of the ``.env`` variable that carries Jarvis's control key.
 CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"

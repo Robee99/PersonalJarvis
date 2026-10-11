@@ -408,6 +408,28 @@ async def _outside_call(gateway: Any, name: str, arguments: dict[str, Any]) -> A
     )
 
 
+def _brain_map_offered(taken: set[str]) -> list[Any]:
+    """The read-only brain map tools (``jarvis/memory/brain_map/mcp_tools.py``).
+
+    Answered in-process, not through the gateway: they only read the derived
+    project index — no side effect, no model call, nothing a risk tier or an
+    approval could apply to. An ordinary chat session and Hermes (an outside
+    caller with no session, the brain that answers the person) get them; a
+    society seat gets its roster-granted tool set, and a task grant names its
+    tools. A gateway tool of the same name always wins.
+    """
+    from jarvis.core.task_agent import scope_for
+
+    session_id = CHAT_SESSION_REF.get()
+    if session_id and session_id.startswith(("task-", "society:")):
+        return []
+    if session_id and scope_for(session_id) is not None:
+        return []
+    from jarvis.memory.brain_map.mcp_tools import TOOLS
+
+    return [spec for spec in TOOLS if spec.name not in taken]
+
+
 def build_server() -> Any:
     """A low-level MCP server bound to the live tool gateway.
 
@@ -444,6 +466,15 @@ def build_server() -> Any:
                     ),
                 )
             )
+        for spec in _brain_map_offered({tool.name for tool in tools}):
+            tools.append(
+                types.Tool(
+                    name=spec.name,
+                    description=spec.description,
+                    inputSchema=spec.input_schema,
+                    annotations=types.ToolAnnotations(readOnlyHint=True),
+                )
+            )
         return tools
 
     @server.call_tool()  # type: ignore[misc, no-untyped-call]
@@ -455,6 +486,21 @@ def build_server() -> Any:
                 content=[types.TextContent(type="text", text=message)], isError=True
             )
 
+        from jarvis.memory.brain_map.mcp_tools import TOOL_NAMES as brain_map_names
+
+        if name in brain_map_names:
+            try:
+                taken = set((await _session_wire_catalog()).keys())
+                if any(spec.name == name for spec in _brain_map_offered(taken)):
+                    from jarvis.memory.brain_map.mcp_tools import call as brain_map_call
+
+                    text, is_error = await brain_map_call(name, arguments)
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text=text)], isError=is_error
+                    )
+            except Exception as exc:  # noqa: BLE001 — a read failure is data for the model, not a crash
+                log.warning("jarvis MCP: brain map tool %s raised", name, exc_info=True)
+                return failed(f"Tool failed: {type(exc).__name__}")
         gateway = _gateway()
         if gateway is None:
             return failed("Jarvis is still starting up.")
