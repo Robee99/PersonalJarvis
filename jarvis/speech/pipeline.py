@@ -523,6 +523,15 @@ _TIMEOUT_TOOL_STALL_PHRASE: dict[str, str] = {
     "es": "No pude obtener una respuesta a tiempo. Una herramienta que esperaba no respondió.",
 }
 
+# A turn that ended while its Hermes run keeps working (hermes.finish_late):
+# the answer is announced when it lands, so the user is told to wait, never to
+# ask again (asking again would stop the run that is about to answer).
+_LATE_ANSWER_PHRASE: dict[str, str] = {
+    "de": "Das dauert länger als sonst. Ich sage dir die Antwort, sobald sie da ist.",
+    "en": "This is taking longer than usual. I'll tell you the answer when it's ready.",
+    "es": "Esto está tardando más de lo normal. Te diré la respuesta cuando esté lista.",
+}
+
 _TIMEOUT_NO_ANSWER_PHRASE: dict[str, str] = {
     "de": "Das konnte ich gerade nicht herausfinden.",
     "en": "I couldn't find that out just now.",
@@ -17644,6 +17653,7 @@ class SpeechPipeline:
         # also clears it, but the guard's poll loop can run first.
         self._brain_thinking_heartbeat = 0.0
         self._spoke_this_turn = False
+        self._brain_finishing_late = False
         start = time.monotonic()
         task: asyncio.Task[tuple[str, bool]] = asyncio.ensure_future(coro)
         monitor_task: asyncio.Task[bool] | None = None
@@ -17813,6 +17823,13 @@ class SpeechPipeline:
                     and (now - start) >= ceiling_s
                 )
                 if stalled or ceiling_hit:
+                    # A Hermes run that is still working is not stopped with the
+                    # turn: it finishes and its answer is spoken when it lands
+                    # (hermes.finish_late; live 2026-10-12, a 90 s compaction cut
+                    # off on every turn left "Hallo" without an answer).
+                    from jarvis.plugins.brain.hermes import finish_late
+
+                    self._brain_finishing_late = finish_late()
                     raise TimeoutError
         finally:
             if monitor_task is not None and not monitor_task.done():
@@ -17944,7 +17961,10 @@ class SpeechPipeline:
         # desktop tool was demonstrably active; otherwise honestly admit no
         # answer was found. Resolved through the one output-language decision.
         tool_active = getattr(self, "_long_tool_last_activity", 0.0) > 0.0
-        phrase = _resolve_timeout_phrase(site, lang, tool_active=tool_active)
+        if getattr(self, "_brain_finishing_late", False):
+            phrase = _LATE_ANSWER_PHRASE.get(picker_lang, _LATE_ANSWER_PHRASE["en"])
+        else:
+            phrase = _resolve_timeout_phrase(site, lang, tool_active=tool_active)
         # The outcome is now terminal for this utterance: arm the double-answer
         # guard BEFORE speaking so a concurrently-abandoned brain stream that
         # later reaches ``_speak`` (kind="reply") is suppressed, never voiced as

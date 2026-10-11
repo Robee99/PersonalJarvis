@@ -229,6 +229,12 @@ DELIVERY_PROMPT = (
     "now, in one to three short spoken sentences."
 )
 
+#: How long a run handed off with ``finish_late`` may still take before Jarvis stops it.
+LATE_ANSWER_MAX_S = 300.0
+
+#: Said when a run Jarvis let finish late ends without an answer.
+LATE_FAILED_MESSAGE = "The answer I was still working on didn't come through. Please ask again."
+
 #: How long a chat's approval card waits before the call is denied.
 CARD_TIMEOUT_S = 300.0
 #: How long a stopped task can still be picked up with "continue".
@@ -522,6 +528,10 @@ class _OpenRun:
     #: What the turn reading this run has done so far; ``None`` for a run
     #: Jarvis stopped itself (nothing to "continue").
     progress: Checkpoint | None = None
+    #: The turn gave up waiting but the run goes on; its answer is spoken
+    #: when it lands (``finish_late``).
+    late: bool = False
+    late_reader: bool = False
 
 
 @dataclass
@@ -532,6 +542,30 @@ class _PendingApproval:
     request_id: str
     language: str
     reasks: int = field(default=0)
+
+
+def finish_late(session_id: str = SESSION_ID) -> bool:
+    """Let the run a voice turn gave up on finish, and speak its answer then.
+
+    Live 2026-10-12 02:51: "Hallo" arrived when the session was due for
+    compaction. Hermes spent ~90 s summarising the history before the model
+    saw the turn; Jarvis's 90 s voice ceiling stopped the run, so the
+    compaction was thrown away, and the next turn started it again. Stopping a
+    run that is still working only loses its work, so the turn ends but the
+    run goes on and its answer is announced when it lands.
+
+    True when a run was handed off: a run of the session that is still going
+    and has not said anything yet (a run that already spoke keeps the old
+    ending, since repeating it would talk over what was heard).
+    """
+    state = _SESSIONS.get(session_id)
+    run = state.active if state is not None else None
+    if run is None or run.finished or run.closed or run.cancelled:
+        return False
+    if run.progress is None or run.progress.said:
+        return False
+    run.late = True
+    return True
 
 
 def observe_only_stop_message(tool: str) -> str:
@@ -649,6 +683,11 @@ class HermesBrain:
                     async for delta in relay:
                         yield delta
                 return
+        late = _session_state(self.session_id).active
+        if late is not None and late.late and not late.finished:
+            # A new turn supersedes the answer still on its way.
+            late.cancelled = True
+            await self._close(late)
         self.last_runtime = None
         self._delegated = False
         context = turn_context()
@@ -809,6 +848,12 @@ class HermesBrain:
         """
         if run.closed:
             return
+        if run.late and not run.finished and not run.cancelled and run.task is not None:
+            # The turn ends here; the run does not (``finish_late``).
+            if not run.late_reader:
+                run.late_reader = True
+                _background(self._finish_late(run), "hermes-late-answer")
+            return
         run.closed = True
         state = _session_state(self.session_id)
         if state.active is run:
@@ -835,6 +880,64 @@ class HermesBrain:
             run.task.cancel()
         # A turn still reading this run (stopped from another turn) ends now.
         run.queue.put_nowait(_END)
+
+    async def _finish_late(self, run: _OpenRun) -> None:
+        """Read a handed-off run to its end and speak its answer (``finish_late``)."""
+        said = ""
+        failed = False
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + LATE_ANSWER_MAX_S
+        try:
+            while True:
+                left = deadline - loop.time()
+                if left <= 0:
+                    log.info("Hermes run %s gave no answer in time; stopping it", run.run_id)
+                    break
+                try:
+                    item = await asyncio.wait_for(run.queue.get(), left)
+                except TimeoutError:
+                    continue
+                if item is _END or isinstance(item, BaseException):
+                    failed = not run.finished
+                    break
+                name = str(item.get("event") or "") if isinstance(item, dict) else ""
+                if name == "approval.request":
+                    # Asked aloud like any approval; the user's next words answer it.
+                    language = phrase_language()
+                    self.pending_approval = _PendingApproval(
+                        run=run, request_id=str(item.get("request_id") or ""), language=language
+                    )
+                    run.late = False
+                    await self._announce(approval_question(item, language))
+                    return
+                if name in _FINISHED:
+                    run.finished = True
+                    failed = name != "run.completed" or bool(
+                        item.get("completed") is False
+                        or item.get("partial")
+                        or item.get("failed")
+                        or item.get("error")
+                    )
+                    output = item.get("output")
+                    if not said and not failed and isinstance(output, str):
+                        said = output
+                for delta in self._deltas_for(name, item, run):
+                    said += delta.content or ""
+                if run.finished:
+                    break
+        finally:
+            run.late = False
+            if self.pending_approval is None or self.pending_approval.run is not run:
+                await self._close(run)
+        if run.cancelled:
+            return
+        if run.finished and not failed:
+            if said.strip():
+                await self._announce(said.strip())
+            else:
+                log.info("Hermes run %s finished late without words", run.run_id)
+            return
+        await self._announce(LATE_FAILED_MESSAGE)
 
     async def _answer_pending(
         self, pending: _PendingApproval, text: str

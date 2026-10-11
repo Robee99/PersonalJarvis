@@ -306,12 +306,14 @@ def keep_hermes_aux_free(*, hermes_argv: list[str] | None, run: Runner = _run) -
     return "changed", "Hermes's side models (vision, summaries) use free models only"
 
 
-#: Context size at which Hermes compacts the Jarvis session. Hermes's own
-#: prompt and tool schemas are about 20k tokens; without a cap the one
-#: long-lived ``jarvis-main`` session grew to 100k-200k tokens per turn on the
-#: owner's PC (6-52 s replies), because the ratio threshold only fires at half
-#: of a large model window.
-LEAN_CONTEXT_TOKENS = 40_000
+#: Context size at which Hermes compacts the Jarvis session. Without a cap the
+#: one long-lived ``jarvis-main`` session grew to 100k-200k tokens per turn on
+#: the owner's PC (6-52 s replies), because the ratio threshold only fires at
+#: half of a large model window. Too low is as bad: Hermes's own prompt and
+#: tool schemas are 33-39k tokens and a compaction summary adds ~5k, so at
+#: 40k-50k (2026-10-12) a compaction freed almost nothing and ran again on
+#: every turn, ~90 s each.
+LEAN_CONTEXT_TOKENS = 56_000
 
 
 def keep_hermes_context_lean(
