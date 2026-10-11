@@ -2290,6 +2290,13 @@ _CANCEL_NONE: dict[str, str] = {
     "es": "No había nada en curso que detener.",
 }
 
+# A "stop" that stopped Hermes: say so, and how to pick the task back up.
+_HERMES_STOPPED: dict[str, str] = {
+    "de": "Gestoppt. Sag „weiter“, dann mache ich da weiter.",  # i18n-allow: spoken reply
+    "en": "Stopped. Say \"continue\" and I'll pick it up where I left off.",
+    "es": "Detenido. Di «continúa» y sigo donde lo dejé.",  # i18n-allow: spoken reply
+}
+
 # Thinking-depth override — the voice_command_gate "depth_deep"/"depth_fast"
 # path. Confirms the new depth instead of staying silent (audit 2026-06-27).
 _DEPTH_CONFIRM: dict[str, dict[str, str]] = {
@@ -10670,6 +10677,35 @@ class BrainManager:
         log.info("Cancelled %d background Jarvis-Agent task(s)", cancelled)
         return cancelled
 
+    def _cancel_is_an_order(self, text: str) -> bool:
+        """With Hermes as the brain, "stop the music" or "cancel the meeting"
+        is an order for Hermes, not a cancel; only a bare "stop" (or "stop,
+        I meant …") stops what is running. Other brains keep the old gate."""
+        if not self._brain_orchestrates_tools():
+            return False
+        from jarvis.speech.interrupt_intent import INTERRUPT_REDIRECT, classify_interrupt
+
+        return classify_interrupt(text) == INTERRUPT_REDIRECT
+
+    async def _stop_hermes(self) -> Any:
+        """Stop the Hermes conversation's live run, parked approval and
+        delegated work (``HermesBrain.stop_everything``); ``None`` when no
+        Hermes conversation brain was ever built."""
+        for brain in list(self._brain_cache.values()):
+            stop = getattr(brain, "stop_everything", None)
+            if stop is not None and getattr(brain, "session_id", "") == "jarvis-main":
+                try:
+                    return await stop()
+                except Exception as exc:  # noqa: BLE001 — a failed stop still answers; the run ends on Hermes's timeout
+                    log.warning("Hermes stop failed: %s", exc)
+                    return None
+        return None
+
+    def _hermes_stop_readback(self) -> str:
+        """What a "stop" says when it stopped Hermes: done, and how to resume."""
+        lang = self._resolve_turn_lang()
+        return _HERMES_STOPPED.get(lang, _HERMES_STOPPED["en"])
+
     def _cancel_readback(self, count: int) -> str:
         """Honest spoken readback for a deterministic cancel: name the count, or
         say plainly that nothing was running. Never silent (audit 2026-06-27)."""
@@ -11172,6 +11208,13 @@ class BrainManager:
         effort with extra tools and tool context (the typed chat's pick) —
         the live brain, its config and its dead-lists are left untouched.
         """
+        # Only a real user turn can confirm an ask-tier Jarvis tool that Hermes
+        # called over MCP; this is where every voice and typed turn passes.
+        from jarvis.safety.spoken_consent import note_conversation_turn
+
+        note_conversation_turn(
+            user_text, in_conversation=use_history or history_override is not None
+        )
         token = _PUBLISH_RESPONSE_EVENT.set(bool(publish_response))
         history_token = _TURN_HISTORY_OVERRIDE.set(
             tuple(history_override) if history_override is not None else None
@@ -11332,8 +11375,13 @@ class BrainManager:
                 )
                 return screen_reply
 
-        if self._detect_cancel_intent(user_text):
-            confirmation = self._cancel_readback(self._cancel_all_background_tasks())
+        if self._detect_cancel_intent(user_text) and not self._cancel_is_an_order(user_text):
+            stopped = self._cancel_all_background_tasks()
+            hermes_report = await self._stop_hermes()
+            if hermes_report is not None and hermes_report.count:
+                confirmation = self._hermes_stop_readback()
+            else:
+                confirmation = self._cancel_readback(stopped)
             await self._record_response_side_effects(
                 user_text=user_text,
                 response_text=confirmation,

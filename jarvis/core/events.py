@@ -833,6 +833,23 @@ class SystemStateChanged(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationStateChanged(Event):
+    """Where the assistant's current turn stands, for voice and chat alike.
+
+    ``SystemStateChanged`` carries the microphone side (listening, thinking,
+    speaking); this carries what only the brain knows: it is ACTING with a
+    tool, the user INTERRUPTED it, a "stop" CANCELLED it, a "continue"
+    RESUMED it, or the turn COMPLETED. ``detail`` is a short, user-safe label
+    (a tool name, what was stopped); never prompt text or secrets.
+    """
+    #: LISTENING | THINKING | ACTING | SPEAKING | INTERRUPTED | CANCELLED |
+    #: RESUMED | COMPLETED
+    state: str = "COMPLETED"
+    detail: str = ""
+    session_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class NavigateSidebar(Event):
     """Ask the desktop UI to switch the active sidebar section.
 

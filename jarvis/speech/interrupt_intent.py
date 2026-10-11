@@ -233,10 +233,41 @@ def is_interrupt_intent(text: str | None) -> bool:
     return classify_interrupt(text) != INTERRUPT_NONE
 
 
+# "Pick it up again": the counterpart of a stop. Whole-utterance only, like a
+# pure stop, so "continue with the report on Rome" stays an ordinary order.
+_RESUME_PATTERNS: Final[tuple[str, ...]] = (
+    # --- English --------------------------------------------------------- #
+    r"(?:please\s+)?(?:continue|resume|go\s+on|carry\s+on|keep\s+going)"
+    r"(?:\s+(?:please|then|where\s+you\s+(?:left\s+off|stopped)))?",
+    r"pick\s+(?:it|that)\s+(?:back\s+)?up(?:\s+again)?",
+    # --- German ---------------------------------------------------------- #
+    r"(?:mach|fahr)\s+weiter",  # i18n-allow: spoken command
+    r"weiter(?:\s+(?:machen|bitte))?",  # i18n-allow: spoken command
+    r"fortfahren",  # i18n-allow: spoken command
+    # --- Spanish --------------------------------------------------------- #
+    r"contin(?:u|ú)a(?:r)?",  # i18n-allow: spoken command
+    r"sigue(?:\s+adelante)?",  # i18n-allow: spoken command
+)
+_RESUME_RE: Final[re.Pattern[str]] = re.compile(
+    rf"^\s*(?:{_FILLER}\b[\s,.!?]+)*(?:{'|'.join(_RESUME_PATTERNS)})\b"
+    rf"(?P<rest>[\s,.!?…]*.*)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def is_resume_intent(text: str | None) -> bool:
+    """True when ``text`` is nothing but "continue" (in any locale): pick up
+    the task that was stopped. Never raises; a malformed transcript is no."""
+    utterance = " ".join(str(text or "").split())
+    match = _RESUME_RE.match(utterance) if utterance else None
+    return match is not None and bool(_TAIL_RE.match(match.group("rest") or ""))
+
+
 __all__ = [
     "INTERRUPT_NONE",
     "INTERRUPT_REDIRECT",
     "INTERRUPT_STOP",
     "classify_interrupt",
     "is_interrupt_intent",
+    "is_resume_intent",
 ]

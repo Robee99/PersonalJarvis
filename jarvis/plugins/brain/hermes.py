@@ -48,6 +48,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -89,16 +90,45 @@ BACKGROUND_SESSION_ID = "jarvis-background"
 
 
 @dataclass(slots=True)
+class Checkpoint:
+    """What a turn had done when it was cut off: enough to pick it up again."""
+
+    request: str
+    said: str = ""
+    tools: list[str] = field(default_factory=list)
+    delegated: bool = False
+    interrupted_at: float = 0.0
+
+
+@dataclass(slots=True)
+class StopReport:
+    """What one spoken "stop" actually stopped in a Hermes session."""
+
+    answer: bool = False
+    approval: bool = False
+    background: bool = False
+
+    @property
+    def count(self) -> int:
+        return int(self.answer) + int(self.approval) + int(self.background)
+
+
+@dataclass(slots=True)
 class _SessionState:
     """What belongs to a Hermes session, not to one HermesBrain object.
 
     Voice and the typed chat build separate brain objects for the same
-    session; an approval asked in one is answered in the other, and one
-    background result is announced once.
+    session; an approval asked in one is answered in the other, one
+    background result is announced once, and a "stop" said in one stops the
+    run the other started.
     """
 
     pending_approval: _PendingApproval | None = None
     watcher: asyncio.Task[None] | None = None
+    #: The run a turn is reading right now (its ``progress`` is what it has done).
+    active: _OpenRun | None = None
+    #: The last turn the user cut off, until "continue" takes it or it expires.
+    checkpoint: Checkpoint | None = None
 
 
 _SESSIONS: dict[str, _SessionState] = {}
@@ -106,6 +136,50 @@ _SESSIONS: dict[str, _SessionState] = {}
 
 def _session_state(session_id: str) -> _SessionState:
     return _SESSIONS.setdefault(session_id, _SessionState())
+
+
+def take_checkpoint(session_id: str = "jarvis-main") -> Checkpoint | None:
+    """The stopped task "continue" should pick up, once; ``None`` when none is fresh."""
+    state = _session_state(session_id)
+    checkpoint, state.checkpoint = state.checkpoint, None
+    if checkpoint is None or time.monotonic() - checkpoint.interrupted_at > CHECKPOINT_TTL_S:
+        return None
+    return checkpoint
+
+
+def resume_input(checkpoint: Checkpoint) -> str:
+    """The run input that picks a stopped task back up where it was cut off."""
+    parts = [f"Continue the task I stopped a moment ago. My request was: {checkpoint.request!r}."]
+    said = checkpoint.said.strip()
+    if said:
+        parts.append(f"Before I stopped you, you had already said: {said[-600:]!r}.")
+    if checkpoint.tools:
+        parts.append("Tools you had already started: " + ", ".join(checkpoint.tools[-8:]) + ".")
+    parts.append(
+        "Pick up where you left off and finish it. Do not repeat steps that "
+        "already ran, and do not repeat what you already said."
+    )
+    return " ".join(parts)
+
+
+def publish_state(state: str, detail: str = "", session_id: str = "") -> None:
+    """Put the turn's state on Jarvis's event bus; no bus (tests, CLI) is a no-op."""
+    from jarvis.core.events import ConversationStateChanged
+    from jarvis.core.runtime_refs import get_brain_manager
+
+    bus = getattr(get_brain_manager(), "_bus", None)
+    if bus is None:
+        return
+    try:
+        result = bus.publish(
+            ConversationStateChanged(
+                source_layer="brain.hermes", state=state, detail=detail, session_id=session_id
+            )
+        )
+        if asyncio.iscoroutine(result):
+            asyncio.get_running_loop().create_task(result, name="hermes-state-event")
+    except RuntimeError as exc:  # no running loop: a sync caller; the state is advisory
+        log.debug("Hermes state %s not published: %s", state, exc)
 
 #: Hermes's delegation tool; its background result lands in the session.
 DELEGATE_TOOL = "delegate_task"
@@ -120,6 +194,18 @@ DELIVERY_PROMPT = (
     "now, in one to three short spoken sentences."
 )
 
+#: How long a stopped task can still be picked up with "continue".
+CHECKPOINT_TTL_S = 1800.0
+#: A turn cut off this recently was stopped by the "stop" that follows it
+#: (barge-in closes the stream first, then "stop" arrives as its own turn).
+RECENT_INTERRUPT_S = 20.0
+#: Asked in the session when a "stop" lands while delegated work still runs:
+#: only Hermes can stop its own subagents (``delegate_task`` action=stop).
+STOP_DELEGATIONS_PROMPT = (
+    "The user said stop. Stop every background subagent you started in this "
+    "conversation now (delegate_task with action list, then action stop for "
+    "each one). Do not start anything new. Reply with one short sentence."
+)
 #: Unclear answers to one approval question before Jarvis denies it.
 MAX_APPROVAL_REASKS = 2
 #: Wait for the rest of a Hermes run the user moved away from.
@@ -304,6 +390,24 @@ def approval_question(payload: dict[str, Any], language: str) -> str:
     )
 
 
+#: Per-turn context BrainManager puts before the user's words.
+_TURN_CONTEXT = re.compile(r"^\[Current date and time:[^\]]*\]\s*")
+
+
+def spoken_text(text: str) -> str:
+    """The user's own words, without the per-turn context Jarvis prepends."""
+    return _TURN_CONTEXT.sub("", text or "", count=1).strip()
+
+
+def is_resume_request(text: str) -> bool:
+    """Whether the user said nothing but "continue" (any locale)."""
+    from jarvis.speech.interrupt_intent import is_resume_intent
+
+    words = spoken_text(text)
+    # Further context blocks (memory, focus) end before the user's own words.
+    return is_resume_intent(words.rsplit("\n\n", 1)[-1]) if words else False
+
+
 def tool_name_of(payload: Any) -> str:
     """The tool name in a ``tool.started`` event (several spellings)."""
     if not isinstance(payload, dict):
@@ -335,6 +439,12 @@ class _OpenRun:
     queue: asyncio.Queue[Any]
     task: asyncio.Task[None] | None = None
     finished: bool = False
+    closed: bool = False
+    #: Stopped by a spoken "stop": nothing of it is watched for or announced.
+    cancelled: bool = False
+    #: What the turn reading this run has done so far; ``None`` for a run
+    #: Jarvis stopped itself (nothing to "continue").
+    progress: Checkpoint | None = None
 
 
 @dataclass
@@ -459,8 +569,22 @@ class HermesBrain:
                 return
         self.last_runtime = None
         self._delegated = False
-        self._observe_only = observation_only(latest_user_text(req))
-        run = await self._start(self.request_body(req))
+        text = latest_user_text(req)
+        self._observe_only = observation_only(text)
+        body = self.request_body(req)
+        resumed = take_checkpoint(self.session_id) if is_resume_request(text) else None
+        if resumed is not None:
+            body["input"] = resume_input(resumed)
+            progress = Checkpoint(
+                request=resumed.request, said=resumed.said, tools=list(resumed.tools)
+            )
+            publish_state("RESUMED", session_id=self.session_id)
+        else:
+            progress = Checkpoint(request=spoken_text(text))
+            publish_state("THINKING", session_id=self.session_id)
+        run = await self._start(body)
+        run.progress = progress
+        _session_state(self.session_id).active = run
         # Closed with this turn, so a turn the user cuts off stops the run.
         async with aclosing(self._relay(run)) as relay:
             async for delta in relay:
@@ -521,7 +645,7 @@ class HermesBrain:
             while True:
                 item = await run.queue.get()
                 if item is _END:
-                    if not run.finished:
+                    if not run.finished and not run.closed:
                         raise RuntimeError("Hermes Agent disconnected before completing this task.")
                     break
                 if isinstance(item, BaseException):
@@ -536,6 +660,8 @@ class HermesBrain:
                     tool = tool_name_of(item)
                     if tool in _ACTING_TOOLS:
                         log.warning("Hermes started %s in a look-only turn; stopping it", tool)
+                        # Jarvis stopped it, not the user: nothing to continue.
+                        run.progress = None
                         yield BrainDelta(content=observe_only_stop_message(tool))
                         yield BrainDelta(finish_reason="stop")
                         return
@@ -571,17 +697,34 @@ class HermesBrain:
                     output = item.get("output")
                     if not spoke and isinstance(output, str) and output.strip():
                         yield BrainDelta(content=output)
-                for delta in self._deltas_for(name, item):
+                for delta in self._deltas_for(name, item, run):
                     spoke = spoke or bool(delta.content)
                     yield delta
         finally:
             if not parked:
                 await self._close(run)
-        if self._delegated:
+        if self._delegated and not run.cancelled:
             self._watch_delivery()
 
     async def _close(self, run: _OpenRun) -> None:
-        """Stop a run the user cut off; dropping its event stream alone would not."""
+        """Stop a run the user cut off; dropping its event stream alone would not.
+
+        What the turn had done is kept, so "continue" can pick it up.
+        """
+        if run.closed:
+            return
+        run.closed = True
+        state = _session_state(self.session_id)
+        if state.active is run:
+            state.active = None
+        progress, run.progress = run.progress, None
+        if run.finished:
+            if progress is not None:
+                publish_state("COMPLETED", session_id=self.session_id)
+        elif progress is not None:
+            progress.interrupted_at = time.monotonic()
+            state.checkpoint = progress
+            publish_state("INTERRUPTED", session_id=self.session_id)
         if not run.finished:
             try:
                 async with self._client() as client:
@@ -594,6 +737,8 @@ class HermesBrain:
                 log.warning("Hermes run %s could not be stopped: %s", run.run_id, exc)
         if run.task is not None:
             run.task.cancel()
+        # A turn still reading this run (stopped from another turn) ends now.
+        run.queue.put_nowait(_END)
 
     async def _answer_pending(
         self, pending: _PendingApproval, text: str
@@ -653,6 +798,65 @@ class HermesBrain:
             log.info("Hermes run %s still busy after the user moved on", run.run_id)
         finally:
             await self._close(run)
+
+    # --- "stop" ----------------------------------------------------------
+
+    async def stop_everything(self) -> StopReport:
+        """Stop what this session is doing: the live run, a parked approval,
+        and delegated work still running in the background.
+
+        A turn the user had just cut off (barge-in closes the stream before
+        "stop" arrives as its own turn) counts as stopped too.
+        """
+        state = _session_state(self.session_id)
+        report = StopReport()
+        run = state.active
+        if run is not None and not run.finished:
+            run.cancelled = True
+            await self._close(run)
+            report.answer = True
+        elif (
+            state.checkpoint is not None
+            and time.monotonic() - state.checkpoint.interrupted_at <= RECENT_INTERRUPT_S
+        ):
+            report.answer = True
+        pending, state.pending_approval = state.pending_approval, None
+        if pending is not None:
+            await self._post_approval(pending.run, pending.request_id, "deny")
+            await self._close(pending.run)
+            report.approval = True
+        watcher = state.watcher
+        delegated = state.checkpoint is not None and state.checkpoint.delegated
+        if watcher is not None and not watcher.done():
+            watcher.cancel()
+            state.watcher = None
+            delegated = True
+        if delegated:
+            report.background = True
+            asyncio.get_running_loop().create_task(
+                self._stop_delegations(), name="hermes-stop-delegations"
+            )
+        if report.count:
+            publish_state("CANCELLED", session_id=self.session_id)
+        log.info(
+            "Stop: answer=%s approval=%s background=%s",
+            report.answer, report.approval, report.background,
+        )
+        return report
+
+    async def _stop_delegations(self) -> None:
+        """Ask Hermes to stop its own subagents; only it can (``delegate_task`` stop)."""
+        state = _session_state(self.session_id)
+        kept = state.checkpoint
+        req = BrainRequest(messages=(BrainMessage(role="user", content=STOP_DELEGATIONS_PROMPT),))
+        try:
+            async for _delta in self.complete(req):
+                pass
+        except Exception as exc:  # noqa: BLE001 — best effort; Hermes ends idle subagents on its own timeout
+            log.warning("Hermes could not be asked to stop its subagents: %s", exc)
+        finally:
+            # The user's stopped task stays the one "continue" picks up.
+            state.checkpoint = kept
 
     # --- background delegation results ---------------------------------
 
@@ -747,14 +951,21 @@ class HermesBrain:
             if isinstance(payload, dict):
                 yield payload
 
-    def _deltas_for(self, name: str, item: dict[str, Any]) -> list[BrainDelta]:
+    def _deltas_for(self, name: str, item: dict[str, Any], run: _OpenRun) -> list[BrainDelta]:
+        progress = run.progress
         if name == "message.delta":
             text = item.get("delta")
+            if progress is not None and isinstance(text, str):
+                progress.said += text
             return [BrainDelta(content=text if isinstance(text, str) and text else None)]
         if name == "tool.started":
             tool = tool_name_of(item)
             if tool == DELEGATE_TOOL:
                 self._delegated = True
+            if progress is not None:
+                progress.tools.append(tool or "tool")
+                progress.delegated = progress.delegated or tool == DELEGATE_TOOL
+            publish_state("ACTING", detail=tool or "tool", session_id=self.session_id)
             return [BrainDelta(agent_tools=(f"hermes:{tool or 'tool'}",))]
         if name == "run.completed":
             runtime = item.get("runtime")
