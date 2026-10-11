@@ -109,7 +109,12 @@ class FakeApp:
                 self.brightness = int(level.group(1))
                 return {"reply": f"Brightness is now {self.brightness}%.", "first_text_ms": 300,
                         "total_ms": 400}
-            reply, _tools = self._answer(text)
+            if text == "Stop.":
+                reply = "Stopped. Say \"continue\" and I'll pick it up where I left off."
+            elif text == "Continue.":
+                reply = "Lighthouses kept ships off the rocks for centuries."
+            else:
+                reply, _tools = self._answer(text)
             return {"reply": reply, "first_text_ms": 800, "total_ms": 1500}
         if method == "POST" and path == "/api/wiki/import":
             folder = Path(body["path"])
@@ -162,6 +167,8 @@ def test_a_healthy_app_is_ship_ready(tmp_path: Path) -> None:
         "web-search": "PASS",
         "no-click": "PASS",
         "interrupt": "PASS",
+        "stop": "PASS",
+        "continue": "PASS",
         "resume": "PASS",
         "notepad": "PASS",
         "screen": "PASS",

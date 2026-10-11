@@ -383,8 +383,11 @@ def check_web(card: Scorecard, chat: ChatDriver) -> None:
     )
 
 
-def check_interrupt(card: Scorecard, chat: ChatDriver, code: str) -> None:
-    """A long delegated task stops when told to, and the conversation carries on."""
+def check_interrupt(
+    card: Scorecard, chat: ChatDriver, code: str, client: Any | None = None
+) -> None:
+    """A long delegated task stops when told to, a spoken "stop" says so and
+    "continue" picks it back up, and the conversation carries on."""
     if not chat.session_id:
         return
     title = "A long delegated task stops when interrupted"
@@ -418,6 +421,8 @@ def check_interrupt(card: Scorecard, chat: ChatDriver, code: str) -> None:
             f"turn ended {turn.status} {stop_ms} ms after stop",
             total_ms=stop_ms,
         )
+        if client is not None:
+            check_stop_continue(card, client)
     resume = chat.send("What was the code word from earlier? Reply with only the word.")
     card.add(
         "resume",
@@ -426,6 +431,38 @@ def check_interrupt(card: Scorecard, chat: ChatDriver, code: str) -> None:
         _short(resume.reply) or resume.error or "no reply",
         first_text_ms=resume.first_text_ms,
         total_ms=resume.total_ms,
+    )
+
+
+def check_stop_continue(card: Scorecard, client: Any) -> None:
+    """Right after a cut-off: "stop" says what it stopped, "continue" resumes it."""
+    try:
+        stopped = spoken(client, "Stop.")
+    except ApiError as exc:  # recorded on the scorecard as this check's failure
+        card.add("stop", "A spoken stop says it stopped the task", FAIL, str(exc))
+        return
+    said = str(stopped.get("reply") or "")
+    card.add(
+        "stop",
+        "A spoken stop says it stopped the task",
+        PASS if "stop" in said.casefold() and "nothing" not in said.casefold() else FAIL,
+        _short(said) or "no reply",
+        first_text_ms=stopped.get("first_text_ms"),
+        total_ms=stopped.get("total_ms"),
+    )
+    try:
+        resumed = spoken(client, "Continue.")
+    except ApiError as exc:  # recorded on the scorecard as this check's failure
+        card.add("continue", "Continue picks the stopped task back up", FAIL, str(exc))
+        return
+    reply = str(resumed.get("reply") or "")
+    card.add(
+        "continue",
+        "Continue picks the stopped task back up",
+        PASS if "lighthouse" in reply.casefold() else FAIL,
+        _short(reply) or "no reply",
+        first_text_ms=resumed.get("first_text_ms"),
+        total_ms=resumed.get("total_ms"),
     )
 
 
@@ -609,7 +646,7 @@ def run_acceptance(
     turns = check_conversation(card, client, chat, code)
     check_memory(card, client, chat, probe_folder)
     check_web(card, chat)
-    check_interrupt(card, chat, code)
+    check_interrupt(card, chat, code, client)
     check_desktop(card, client, code, on_windows=on_windows, count_windows=count_windows)
     check_brightness(
         card, client, read=read_brightness, write=write_brightness, on_windows=on_windows
