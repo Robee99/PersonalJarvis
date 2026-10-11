@@ -432,9 +432,16 @@ def _subscription_brain() -> Any | None:
     """A connected subscription brain, or None — titles never bill an API key."""
     try:
         from jarvis.brain.resolver import resolve_subscription_brain
+        from jarvis.brain.route_policy import hermes_is_main_brain
         from jarvis.core.config import load_config
 
-        return resolve_subscription_brain(load_config(), cli_timeout_s=MODEL_TIMEOUT_S)
+        config = load_config()
+        if hermes_is_main_brain(config):
+            # Hermes is the one brain (ADR-0042): titles must not wake a second
+            # one, least of all a Claude/Codex subscription the owner keeps for
+            # other work. The rules titles stand.
+            return None
+        return resolve_subscription_brain(config, cli_timeout_s=MODEL_TIMEOUT_S)
     except Exception:  # noqa: BLE001 - no brain means rules titles, said here
         log.info("chat titles: no subscription brain reachable", exc_info=True)
         return None
