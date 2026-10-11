@@ -182,10 +182,12 @@ def test_with_hermes_as_the_brain_realtime_voice_stands_down() -> None:
     assert _realtime_is_the_configured_voice_mode(_config(primary="gemini")) is True
 
 
-def test_hermes_on_the_fast_route_counts_as_the_brain() -> None:
+def test_hermes_on_the_fast_route_alone_is_not_the_brain() -> None:
+    # brain.primary is the one source of truth; a switch moves the fast tier
+    # along with it (tests/unit/brain/test_one_brain_switch.py).
     cfg = _config(primary="gemini")
     cfg.brain.route_policy = SimpleNamespace(enabled=True, fast=SimpleNamespace(provider="hermes"))
-    assert hermes_is_main_brain(cfg)
+    assert hermes_is_main_brain(cfg) is False
 
 
 # --- through the manager: what the user actually hears ----------------------

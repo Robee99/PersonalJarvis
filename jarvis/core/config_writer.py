@@ -1061,7 +1061,7 @@ def route_policy_backup_path(path: Path = DEFAULT_CONFIG_FILE) -> Path:
 
 
 def set_route_policy(
-    values: dict[str, object], *, path: Path = DEFAULT_CONFIG_FILE
+    values: dict[str, object], *, path: Path = DEFAULT_CONFIG_FILE, backup: bool = True
 ) -> dict[str, object]:
     """Persist ``[brain.route_policy]`` from the in-app routing controls.
 
@@ -1071,8 +1071,9 @@ def set_route_policy(
     written (a bad value raises ``pydantic.ValidationError`` and the file is
     untouched). The table as it was before this save goes to
     :func:`route_policy_backup_path`, so :func:`restore_previous_route_policy`
-    can roll the change back. TOML-only: the table is not drift-pinned.
-    Returns the table now on disk.
+    can roll the change back. ``backup=False`` keeps that restore point (used
+    when a brain switch moves the tiers along, which is not a routing edit).
+    TOML-only: the table is not drift-pinned. Returns the table now on disk.
     """
     from .config import BrainRoutePolicyConfig
 
@@ -1093,7 +1094,8 @@ def set_route_policy(
         table: dict[str, object] = policy.model_dump(exclude_none=True)
         if "test_override_tier" not in previous:
             table.pop("test_override_tier", None)
-        _atomic_write_text(route_policy_backup_path(path), json.dumps(previous, indent=2))
+        if backup:
+            _atomic_write_text(route_policy_backup_path(path), json.dumps(previous, indent=2))
         brain["route_policy"] = table
         _write_doc(path, doc, had_bom)
     clear_config_cache()

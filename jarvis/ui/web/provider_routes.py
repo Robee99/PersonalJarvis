@@ -4393,6 +4393,8 @@ _SWITCH_ERROR_STATUS: dict[str, int] = {
     "not_installed": 409,
     "subagent_unavailable": 409,
     "airgapped_locked": 403,
+    # The enabled route policy deny-lists the target: it could never answer.
+    "route_policy_denied": 409,
     "persist_failed": 500,
     "switch_failed": 500,
     "switch_not_applied": 500,

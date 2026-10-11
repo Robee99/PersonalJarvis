@@ -187,15 +187,56 @@ def hermes_is_main_brain(config: Any) -> bool:
 
     Voice then has to reach Hermes too: a realtime voice model or the
     subscription voice profile would be a second brain beside it (ADR-0042).
+
+    ``brain.primary`` is the one source of truth: a brain switch changes only
+    it, so a route-policy tier naming Hermes must not keep Hermes "main" after
+    the user switched away. A switch moves the policy tiers along with it
+    (:func:`tiers_following_switch`), so the two never disagree.
     """
     brain = getattr(config, "brain", None)
-    if str(getattr(brain, "primary", "") or "").strip().lower() == "hermes":
-        return True
-    policy = getattr(brain, "route_policy", None)
-    fast = getattr(policy, "fast", None)
-    return bool(getattr(policy, "enabled", False)) and (
-        str(getattr(fast, "provider", "") or "").strip().lower() == "hermes"
-    )
+    return str(getattr(brain, "primary", "") or "").strip().lower() == "hermes"
+
+
+def tiers_following_switch(
+    policy: Any, old_primary: str | None, new_primary: str
+) -> dict[str, dict[str, Any]]:
+    """The ``[brain.route_policy]`` tier edits that follow a main-brain switch.
+
+    An enabled policy is consulted before the primary chain, so a switch that
+    left its tiers alone would keep the previous brain answering while the UI
+    shows the new one. Returns ``{tier: {"provider": new_primary}}`` for:
+
+    * ``fast``, whenever it does not already name ``new_primary``: fast turns
+      start there, so it is the main brain's slot and follows ``primary``;
+    * ``deep``, when it named the brain being replaced (the old primary or the
+      old fast target), so that brain does not keep answering deep turns.
+
+    A model pinned for the previous provider means nothing on the new one, so
+    it is dropped (the tier then follows the provider card's selection), and
+    the ``local`` declaration is reset to the safe "may leave the device".
+    Deny lists are left untouched. A disabled policy needs no edit.
+    """
+    if policy is None or not bool(getattr(policy, "enabled", False)):
+        return {}
+    new = str(new_primary or "").strip()
+    if not new:
+        return {}
+
+    def provider_of(tier: str) -> str:
+        raw = getattr(policy, tier, None)
+        return str(getattr(raw, "provider", "") or "").strip()
+
+    fast = provider_of(TIER_FAST)
+    deep = provider_of(TIER_DEEP)
+    replaced = {
+        name.lower() for name in (str(old_primary or "").strip(), fast) if name
+    } - {new.lower()}
+    edits: dict[str, dict[str, Any]] = {}
+    if fast.lower() != new.lower():
+        edits[TIER_FAST] = {"provider": new}
+    if deep and deep.lower() in replaced:
+        edits[TIER_DEEP] = {"provider": new}
+    return edits
 
 
 def hermes_is_live_brain() -> bool:

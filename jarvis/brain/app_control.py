@@ -602,6 +602,9 @@ async def _switch_brain(
 ) -> dict[str, Any]:
     if manager is None:
         manager = runtime_refs.get_brain_manager()
+    denied = _route_policy_denies(provider, cfg=cfg, manager=manager)
+    if denied:
+        return {"ok": False, "error_kind": "route_policy_denied", "error": denied}
     persisted = False
     applied_live = False
 
@@ -640,6 +643,7 @@ async def _switch_brain(
             persisted = _persist_brain_primary(provider)
 
     _set_in_memory(cfg, ["brain", "primary"], provider)
+    _follow_route_policy(old, provider, cfg=cfg, manager=manager, persist=persist)
     _sync_local_server(provider, cfg)
     return {
         "ok": True,
@@ -650,6 +654,75 @@ async def _switch_brain(
         "applied_live": applied_live,
         "requires_restart": not applied_live,
     }
+
+
+def _live_route_policy(cfg: Any, manager: Any | None) -> Any | None:
+    """The ``[brain.route_policy]`` the running Brain reads (manager first)."""
+    for source in (getattr(manager, "_config", None), cfg):
+        policy = getattr(getattr(source, "brain", None), "route_policy", None)
+        if policy is not None:
+            return policy
+    return None
+
+
+def _route_policy_denies(provider: str, *, cfg: Any, manager: Any | None) -> str | None:
+    """Why the enabled route policy would keep ``provider`` off every turn, or None.
+
+    The policy's deny lists apply to every chain, so a switch to a denied
+    provider would "succeed" and then never answer. The switch is refused
+    honestly instead; the deny list is never loosened here, so a switch can
+    never open a paid fallback the user blocked.
+    """
+    from jarvis.brain.route_policy import is_denied
+
+    policy = _live_route_policy(cfg, manager)
+    if policy is None or not bool(getattr(policy, "enabled", False)):
+        return None
+    providers = getattr(getattr(cfg, "brain", None), "providers", None) or {}
+    model = getattr(providers.get(provider), "model", None) if isinstance(providers, dict) else None
+    if not is_denied(policy, provider, model or None):
+        return None
+    return (
+        f"{provider!r} is blocked by the routing deny list (Brain > Routing), so it "
+        "could not answer. Remove it from the deny list first, then switch."
+    )
+
+
+def _follow_route_policy(
+    old: str | None, provider: str, *, cfg: Any, manager: Any | None, persist: bool
+) -> None:
+    """Keep ``[brain.route_policy]`` behind a main-brain switch.
+
+    An enabled policy is consulted before the primary chain, so its tiers move
+    with ``brain.primary`` (see ``tiers_following_switch``); otherwise the
+    previous brain keeps answering while the UI shows the new one. Persisted
+    through ``config_writer`` only, without replacing the routing controls'
+    restore point.
+    """
+    from jarvis.brain.route_policy import tiers_following_switch
+    from jarvis.core.config import BrainRoutePolicyConfig
+
+    policy = _live_route_policy(cfg, manager)
+    edits = tiers_following_switch(policy, old, provider)
+    if not edits:
+        return
+    if persist:
+        _persist(lambda: _import_writer().set_route_policy(edits, backup=False))
+    try:
+        current = policy.model_dump() if hasattr(policy, "model_dump") else dict(vars(policy))
+        updated = BrainRoutePolicyConfig.model_validate({**current, **edits})
+    except Exception as exc:  # noqa: BLE001 — logged; the primary switch already landed
+        log.warning("route policy could not follow the brain switch: %s", exc)
+        return
+    setter = getattr(manager, "set_route_policy", None)
+    if callable(setter):
+        setter(updated)
+    if getattr(manager, "_config", None) is not cfg:
+        _set_in_memory(cfg, ["brain", "route_policy"], updated)
+    log.info(
+        "Brain switch %r -> %r: route policy tiers %s now follow the main brain",
+        old, provider, sorted(edits),
+    )
 
 
 def _sync_local_server(provider: str, cfg: Any) -> None:
