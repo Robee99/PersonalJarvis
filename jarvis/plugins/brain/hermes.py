@@ -44,10 +44,12 @@ a remote Hermes is refused rather than sent a key it never asked for.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import re
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
@@ -162,24 +164,57 @@ def resume_input(checkpoint: Checkpoint) -> str:
     return " ".join(parts)
 
 
-def publish_state(state: str, detail: str = "", session_id: str = "") -> None:
-    """Put the turn's state on Jarvis's event bus; no bus (tests, CLI) is a no-op."""
-    from jarvis.core.events import ConversationStateChanged
+def _bus() -> Any:
+    """Jarvis's event bus, or ``None`` outside the running app (tests, CLI)."""
     from jarvis.core.runtime_refs import get_brain_manager
 
-    bus = getattr(get_brain_manager(), "_bus", None)
+    return getattr(get_brain_manager(), "_bus", None)
+
+
+#: Event publishes in flight, kept so the loop does not drop them.
+_PUBLISHING: set[asyncio.Task[Any]] = set()
+
+
+def publish_event(event: Any) -> None:
+    """Put ``event`` on Jarvis's bus without waiting for its subscribers."""
+    bus = _bus()
     if bus is None:
         return
     try:
-        result = bus.publish(
-            ConversationStateChanged(
-                source_layer="brain.hermes", state=state, detail=detail, session_id=session_id
-            )
-        )
+        result = bus.publish(event)
         if asyncio.iscoroutine(result):
-            asyncio.get_running_loop().create_task(result, name="hermes-state-event")
-    except RuntimeError as exc:  # no running loop: a sync caller; the state is advisory
-        log.debug("Hermes state %s not published: %s", state, exc)
+            task = asyncio.get_running_loop().create_task(result, name="hermes-event")
+            _PUBLISHING.add(task)
+            task.add_done_callback(_PUBLISHING.discard)
+    except RuntimeError as exc:  # no running loop: a sync caller; the event is advisory
+        log.debug("Hermes event %s not published: %s", type(event).__name__, exc)
+
+
+def publish_state(state: str, detail: str = "", session_id: str = "") -> None:
+    """Put the turn's state on Jarvis's event bus; no bus (tests, CLI) is a no-op."""
+    from jarvis.core.events import ConversationStateChanged
+
+    publish_event(
+        ConversationStateChanged(
+            source_layer="brain.hermes", state=state, detail=detail, session_id=session_id
+        )
+    )
+
+
+def turn_context() -> dict[str, Any]:
+    """The typed chat's tool context for this turn (``delivery``,
+    ``approval_surface``, ``approval_ref``); empty for a spoken turn."""
+    manager = sys.modules.get("jarvis.brain.manager")
+    var = getattr(manager, "_TURN_OVERRIDE", None)
+    override = var.get() if var is not None else None
+    context = getattr(override, "tool_context", None)
+    return dict(context) if isinstance(context, dict) else {}
+
+
+def _background(coro: Any, name: str) -> asyncio.Task[Any]:
+    """A task that outlives the turn, without the turn's chat context (a
+    background result is spoken, and its approvals are not that chat's)."""
+    return asyncio.get_running_loop().create_task(coro, name=name, context=contextvars.Context())
 
 #: Hermes's delegation tool; its background result lands in the session.
 DELEGATE_TOOL = "delegate_task"
@@ -194,6 +229,8 @@ DELIVERY_PROMPT = (
     "now, in one to three short spoken sentences."
 )
 
+#: How long a chat's approval card waits before the call is denied.
+CARD_TIMEOUT_S = 300.0
 #: How long a stopped task can still be picked up with "continue".
 CHECKPOINT_TTL_S = 1800.0
 #: A turn cut off this recently was stopped by the "stop" that follows it
@@ -219,6 +256,15 @@ FRONT_END_INSTRUCTIONS = (
     "sentences of plain text, no markdown, no lists, unless the user asks for "
     "detail. Use your own tools to act on the computer, the browser and files. "
     "Say you did something only after a tool actually did it."
+)
+
+#: The same contract for a typed turn: the reply is read, not heard.
+WRITTEN_FRONT_END_INSTRUCTIONS = (
+    "You are answering through JARVIS, the user's desktop front-end, in its "
+    "chat window. Your reply is read, not heard: lead with the answer; short "
+    "markdown (lists, code blocks, links) is fine when it helps. Use your own "
+    "tools to act on the computer, the browser and files. Say you did "
+    "something only after a tool actually did it."
 )
 
 #: Added when the user asked only to look ("don't click anything, just look").
@@ -308,14 +354,15 @@ def model_fields(model: str | None) -> dict[str, str]:
     return {"model": value}
 
 
-def build_instructions(req: BrainRequest) -> str:
+def build_instructions(req: BrainRequest, *, written: bool = False) -> str:
     """The front-end contract layered on Hermes's own system prompt.
 
     Jarvis's own router prompt (its tool rules and tool names) is not sent:
     Hermes has its own tools and would chase names it does not have. The
-    user's standing preferences and the turn's reply language are kept.
+    user's standing preferences and the turn's reply language are kept. A
+    typed turn (``written``) is told it is read, not spoken.
     """
-    parts = [FRONT_END_INSTRUCTIONS]
+    parts = [WRITTEN_FRONT_END_INSTRUCTIONS if written else FRONT_END_INSTRUCTIONS]
     prefs = render_cli_standing_instructions(req.system)
     if prefs:
         parts.append(prefs)
@@ -502,6 +549,9 @@ class HermesBrain:
         self.delivery_poll_s = DELIVERY_POLL_S
         self._delegated = False
         self._observe_only = False
+        #: The chat's approval card for this turn ("" = ask by voice).
+        self._card_ref = ""
+        self._card_timeout_s = CARD_TIMEOUT_S
 
     def join_conversation(self) -> None:
         """Put this brain on the person's conversation session (voice and chat)."""
@@ -551,7 +601,9 @@ class HermesBrain:
         body: dict[str, Any] = {
             **model_fields(self._model),
             "input": run_input(req),
-            "instructions": build_instructions(req),
+            "instructions": build_instructions(
+                req, written=turn_context().get("delivery") == "written"
+            ),
             "session_id": self.session_id,
         }
         if getattr(req, "reasoning_effort", None) == "none" or thinking_off_by_config():
@@ -569,6 +621,13 @@ class HermesBrain:
                 return
         self.last_runtime = None
         self._delegated = False
+        context = turn_context()
+        self._card_ref = (
+            str(context.get("approval_ref") or "")
+            if context.get("approval_surface") == "interactive"
+            else ""
+        )
+        self._card_timeout_s = float(context.get("approval_timeout_s") or CARD_TIMEOUT_S)
         text = latest_user_text(req)
         self._observe_only = observation_only(text)
         body = self.request_body(req)
@@ -665,6 +724,13 @@ class HermesBrain:
                         yield BrainDelta(content=observe_only_stop_message(tool))
                         yield BrainDelta(finish_reason="stop")
                         return
+                if name == "approval.request" and self._card_ref:
+                    # A typed turn: the chat's approval card answers, and the
+                    # same run carries on in the same turn.
+                    choice = await self._ask_card(item)
+                    request_id = str(item.get("request_id") or "")
+                    if await self._post_approval(run, request_id, choice):
+                        continue
                 if name == "approval.request":
                     parked = True
                     language = phrase_language()
@@ -799,6 +865,67 @@ class HermesBrain:
         finally:
             await self._close(run)
 
+    # --- the chat's approval card -----------------------------------------
+
+    async def _ask_card(self, payload: dict[str, Any]) -> str:
+        """Ask the typed chat's approval card about one Hermes approval:
+        ``"once"`` on allow, ``"deny"`` on deny, timeout or no card."""
+        from uuid import uuid4
+
+        from jarvis.core.events import (
+            ActionApprovalRequired,
+            ActionApproved,
+            ActionDenied,
+            ActionProposed,
+        )
+
+        bus = _bus()
+        if bus is None:
+            return "deny"
+        trace = uuid4()
+        what = str(payload.get("description") or payload.get("command") or "").strip()
+        tool = f"hermes:{payload.get('tool') or 'approval'}"
+        answer: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        async def on_approved(event: ActionApproved) -> None:
+            if event.trace_id == trace and not answer.done():
+                answer.set_result("once")
+
+        async def on_denied(event: ActionDenied) -> None:
+            if event.trace_id == trace and not answer.done():
+                answer.set_result("deny")
+
+        bus.subscribe(ActionApproved, on_approved)
+        bus.subscribe(ActionDenied, on_denied)
+        publish_state("ACTING", detail="waiting for your approval", session_id=self.session_id)
+        try:
+            await bus.publish(
+                ActionProposed(
+                    trace_id=trace,
+                    source_layer="brain.hermes",
+                    tool_name=tool,
+                    args={"command": str(payload.get("command") or ""), "description": what},
+                    risk_tier="ask",
+                )
+            )
+            await bus.publish(
+                ActionApprovalRequired(
+                    trace_id=trace,
+                    source_layer="brain.hermes",
+                    tool_name=tool,
+                    args_preview=what[:200],
+                    expires_at_ns=time.time_ns() + int(self._card_timeout_s * 1e9),
+                    approval_ref=self._card_ref,
+                )
+            )
+            return await asyncio.wait_for(answer, self._card_timeout_s)
+        except TimeoutError:
+            log.info("Hermes approval card timed out; denying")
+            return "deny"
+        finally:
+            bus.unsubscribe(ActionApproved, on_approved)
+            bus.unsubscribe(ActionDenied, on_denied)
+
     # --- "stop" ----------------------------------------------------------
 
     async def stop_everything(self) -> StopReport:
@@ -833,9 +960,7 @@ class HermesBrain:
             delegated = True
         if delegated:
             report.background = True
-            asyncio.get_running_loop().create_task(
-                self._stop_delegations(), name="hermes-stop-delegations"
-            )
+            _background(self._stop_delegations(), "hermes-stop-delegations")
         if report.count:
             publish_state("CANCELLED", session_id=self.session_id)
         log.info(
@@ -863,7 +988,7 @@ class HermesBrain:
     def _watch_delivery(self) -> None:
         if self._watcher is not None and not self._watcher.done():
             return
-        self._watcher = asyncio.create_task(self._deliver(), name="hermes-delegation-result")
+        self._watcher = _background(self._deliver(), "hermes-delegation-result")
 
     async def _delivery_ids(self) -> set[str] | None:
         base_url = configured_base_url()
@@ -966,7 +1091,11 @@ class HermesBrain:
                 progress.tools.append(tool or "tool")
                 progress.delegated = progress.delegated or tool == DELEGATE_TOOL
             publish_state("ACTING", detail=tool or "tool", session_id=self.session_id)
+            self._publish_tool(item, tool or "tool", started=True)
             return [BrainDelta(agent_tools=(f"hermes:{tool or 'tool'}",))]
+        if name == "tool.completed":
+            self._publish_tool(item, tool_name_of(item) or "tool", started=False)
+            return [BrainDelta()]
         if name == "run.completed":
             runtime = item.get("runtime")
             if isinstance(runtime, dict):
@@ -986,6 +1115,34 @@ class HermesBrain:
         # A keepalive, tool completion, subagent or reasoning event: an empty
         # delta tells the caller's no-progress watchdog that Hermes is working.
         return [BrainDelta()]
+
+    def _publish_tool(self, item: dict[str, Any], tool: str, *, started: bool) -> None:
+        """Hermes's tool calls on Jarvis's bus, so the run log and the
+        activity view show what Hermes did (previews only, capped)."""
+        from jarvis.core.events import ToolCallCompleted, ToolCallStarted
+
+        if started:
+            publish_event(
+                ToolCallStarted(
+                    source_layer="brain.hermes",
+                    tool_name=f"hermes:{tool}",
+                    args_preview=str(item.get("preview") or "")[:200],
+                )
+            )
+            return
+        try:
+            duration_ms = float(item.get("duration") or 0.0) * 1000.0
+        except (TypeError, ValueError):  # a malformed duration only loses the timing
+            duration_ms = 0.0
+        error = item.get("error")
+        publish_event(
+            ToolCallCompleted(
+                source_layer="brain.hermes",
+                success=not error,
+                duration_ms=duration_ms,
+                error=str(error)[:200] if isinstance(error, str) and error else None,
+            )
+        )
 
     def estimate_cost(self, req: BrainRequest) -> float:
         # Hermes bills (or not) on its own providers; Jarvis cannot see the

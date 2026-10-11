@@ -259,3 +259,53 @@ async def test_stop_the_music_is_an_order_for_hermes(hermes_manager: object) -> 
     reply = await hermes_manager.generate("stop the music", use_history=False)  # type: ignore[attr-defined]
     assert reply == "Paused Spotify."
     assert server.runs[0].body["input"].endswith("stop the music")
+
+
+# --- a typed turn: written prompt, approval card, tool events ----------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("click", "expected"), [("allow", "once"), ("deny", "deny")])
+async def test_a_typed_turn_asks_the_chat_card_and_the_same_run_carries_on(
+    monkeypatch: pytest.MonkeyPatch, click: str, expected: str
+) -> None:
+    from jarvis.agent_chat.approval_bridge import ChatApprovalBridge, ChatGrant
+    from jarvis.core.bus import EventBus
+    from jarvis.core.events import ToolCallCompleted, ToolCallStarted
+
+    bus = EventBus()
+    bridge = ChatApprovalBridge(bus)
+    asked: list[str] = []
+
+    async def ask(_call_id: str, tool: str, _args: dict, summary: str) -> str:
+        asked.append(f"{tool}: {summary}")
+        return click
+
+    bridge.arm("agent-chat:s1", ChatGrant(
+        session_id="s1", turn_id="t1", stance="ask", always_allowed=set(), ask=ask,
+    ))
+    tools: list[object] = []
+
+    async def record(event: object) -> None:
+        tools.append(event)
+
+    bus.subscribe(ToolCallStarted, record)
+    bus.subscribe(ToolCallCompleted, record)
+    monkeypatch.setattr(hermes, "_bus", lambda: bus)
+    monkeypatch.setattr(hermes, "turn_context", lambda: {
+        "delivery": "written", "approval_surface": "interactive",
+        "approval_ref": "agent-chat:s1", "approval_timeout_s": 5,
+    })
+    server = FakeHermesApi(asks_approval("Deleted notes.txt.", "Left it."))
+    brain = _brain(server)
+
+    answer = await _say(brain, "delete my notes file")
+
+    assert answer == ("Deleted notes.txt." if click == "allow" else "Left it.")
+    assert asked == ["hermes:approval: del C:\\notes.txt"]
+    assert server.approvals == [{"choice": expected, "request_id": "req-7"}]
+    assert brain.pending_approval is None
+    assert "read, not heard" in server.runs[0].body["instructions"]
+    await asyncio.sleep(0.05)
+    if click == "allow":
+        assert any(getattr(e, "tool_name", "") == "hermes:terminal" for e in tools)
