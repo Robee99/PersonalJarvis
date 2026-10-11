@@ -19,6 +19,18 @@ through the Mission Manager to capability-selected Jarvis-Agent workers. MCP
 servers and marketplace integrations contribute gated tools to that same path;
 they are not alternate worker harnesses. The voice layer is just the interface.
 
+**Hermes mode (ADR-0042).** When `brain.primary = "hermes"` (the free-voice
+setup), Hermes Agent is the only brain: every voice and typed turn is a run in
+one Hermes session (`jarvis-main`), Hermes picks the model and runs the tools,
+and Jarvis is the face, the ears and the knowledge layer Hermes queries over
+Jarvis's MCP server. `brain.primary` alone decides who answers; a brain switch
+moves the route policy with it. A spoken "stop" stops the live Hermes run, a
+parked approval and delegated subagents; "continue" resumes the stopped task
+from its checkpoint. Turn states go out as `ConversationStateChanged`, Hermes
+tool calls as `ToolCallStarted`/`ToolCallCompleted`. Code:
+`jarvis/plugins/brain/hermes.py`, `jarvis/brain/route_policy.py`,
+`jarvis/cli_ctl/free_voice.py`; scorecard: `jarvis system acceptance`.
+
 **Master plan:** `~/.claude/plans/also-er-muss-auch-lexical-pond.md` — binding for  <!-- i18n-allow -->
 all design decisions. On conflict between plan and code, the plan wins; code
 deviations must be documented back in the plan.
