@@ -84,6 +84,23 @@ def test_hermes_becomes_the_brain_for_everything_and_paid_providers_stay_blocked
     assert "gemini" not in PAID_BRAIN_PROVIDERS
 
 
+def test_free_voice_makes_hermes_the_primary_itself_before_the_route_policy() -> None:
+    """``brain.primary`` alone says who the main brain is, so the setup sets it
+    (persisted) and never relies on the route policy's fast tier for that."""
+    client = FakeClient()
+    _run(client)
+    assert client.body("POST", "/api/brain/switch") == {"provider": "hermes", "persist": True}
+    paths = client.paths()
+    assert paths.index("/api/brain/switch") < paths.index("/api/brain/route-policy")
+
+
+def test_a_failed_primary_switch_never_puts_hermes_on_the_fast_tier() -> None:
+    client = FakeClient(fail={"POST /api/brain/switch": "no hermes"})
+    report = _run(client)
+    assert "brain" in [s.name for s in report.failed]
+    assert "fast" not in client.body("PUT", "/api/brain/route-policy")
+
+
 def test_jarvis_does_not_start_its_own_mcp_servers_or_local_models() -> None:
     client = FakeClient()
     _run(client)
@@ -204,10 +221,14 @@ def test_missing_local_speech_never_enables_an_api_speech_provider() -> None:
     assert speech == ["nemotron-local", "faster-whisper", "piper-local"]
 
 
-def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_path) -> None:
+def test_hermes_gets_the_jarvis_tools_and_the_key_stays_in_its_env(tmp_path) -> None:
     import json
 
-    from jarvis.cli_ctl.free_voice import CONTROL_KEY_ENV, connect_hermes_memory
+    from jarvis.cli_ctl.free_voice import (
+        CONTROL_KEY_ENV,
+        HERMES_JARVIS_TOOLS,
+        connect_hermes_memory,
+    )
 
     env_file = tmp_path / ".env"
     env_file.write_text("API_SERVER_KEY=abc\nJARVIS_CONTROL_KEY=old\n", encoding="utf-8")
@@ -235,7 +256,18 @@ def test_hermes_gets_only_jarvis_wiki_recall_and_the_key_stays_in_its_env(tmp_pa
     entry = json.loads(argv[4])
     assert entry["url"] == "http://127.0.0.1:47821/api/control/mcp/"
     assert entry["headers"] == {"Authorization": "Bearer ${JARVIS_CONTROL_KEY}"}
-    assert entry["tools"]["include"] == ["wiki-recall", "wiki-list"]
+    include = entry["tools"]["include"]
+    assert include == list(HERMES_JARVIS_TOOLS)
+    # Jarvis's own reach that Hermes lacks: memory, mail, calendar, Drive,
+    # camera, contacts and the phone.
+    for name in (
+        "wiki-recall", "wiki-list", "wiki-ingest", "gmail", "google_calendar",
+        "google_drive", "camera", "contact-lookup", "call-contact",
+    ):
+        assert name in include
+    # What Hermes already has natively stays Hermes's own.
+    for native in ("search_web", "run_shell", "computer_use", "navigate", "screenshot"):
+        assert native not in include
     assert "ck-new" not in argv[4], "the key never goes on a command line or into config.yaml"
 
 

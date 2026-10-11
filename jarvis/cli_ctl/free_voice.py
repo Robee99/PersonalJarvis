@@ -175,9 +175,24 @@ def probe_hermes(
     return True, f"answered in {elapsed:.1f}s on {used}"
 
 
-#: The Jarvis tools Hermes may call over MCP: wiki recall only. Everything else
-#: (computer use, the browser, files) is Hermes's own.
-HERMES_MEMORY_TOOLS: tuple[str, ...] = ("wiki-recall", "wiki-list")
+#: The Jarvis tools Hermes may call over MCP: the ones Hermes has no native
+#: equivalent for. The browser, computer use, web search, local files and the
+#: terminal stay Hermes's own. Names are the registry's tool names. An
+#: ask-tier call among these (sending or permanently deleting mail, sharing or
+#: deleting a Drive file, the camera, a phone call) runs only after the user
+#: says yes in their own next turn; Jarvis checks that itself
+#: (``jarvis.mcp.jarvis_tools_server``, ``jarvis.safety.spoken_consent``).
+HERMES_JARVIS_TOOLS: tuple[str, ...] = (
+    "wiki-recall",
+    "wiki-list",
+    "wiki-ingest",
+    "gmail",
+    "google_calendar",
+    "google_drive",
+    "camera",
+    "contact-lookup",
+    "call-contact",
+)
 #: The name of the ``.env`` variable that carries Jarvis's control key.
 CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"
 
@@ -224,12 +239,12 @@ def write_env_value(env_file: Any, name: str, value: str) -> None:
     path.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
-def hermes_memory_entry(jarvis_url: str) -> dict[str, Any]:
-    """Hermes's ``mcp_servers.jarvis`` entry: Jarvis's wiki tools over MCP."""
+def hermes_jarvis_entry(jarvis_url: str) -> dict[str, Any]:
+    """Hermes's ``mcp_servers.jarvis`` entry: Jarvis's own tools over MCP."""
     return {
         "url": jarvis_url.rstrip("/") + "/api/control/mcp/",
         "headers": {"Authorization": "Bearer ${" + CONTROL_KEY_ENV + "}"},
-        "tools": {"include": list(HERMES_MEMORY_TOOLS), "resources": False, "prompts": False},
+        "tools": {"include": list(HERMES_JARVIS_TOOLS), "resources": False, "prompts": False},
     }
 
 
@@ -241,19 +256,19 @@ def connect_hermes_memory(
     hermes_argv: list[str] | None,
     run: Runner = _run,
 ) -> tuple[str, str]:
-    """Mount Jarvis's wiki recall in Hermes. Returns ``(status, detail)``."""
+    """Mount Jarvis's own tools in Hermes. Returns ``(status, detail)``."""
     if not control_key:
         return "failed", "Jarvis has no control key yet; start Jarvis once and run this again"
     if not hermes_argv:
         return "failed", "the hermes command is not on PATH"
     write_env_value(env_file, CONTROL_KEY_ENV, control_key)
-    entry = json.dumps(hermes_memory_entry(jarvis_url))
+    entry = json.dumps(hermes_jarvis_entry(jarvis_url))
     code, output = run([*hermes_argv, "config", "set", "mcp_servers.jarvis", entry])
     if code != 0:
         return "failed", f"hermes config set failed: {output[:300]}"
     return "changed", (
-        "Hermes can search Jarvis's memory (wiki-recall, wiki-list); "
-        "restart the Hermes gateway to load it"
+        "Hermes can use Jarvis's memory, mail, calendar, Drive, camera and phone "
+        f"tools ({', '.join(HERMES_JARVIS_TOOLS)}); restart the Hermes gateway to load them"
     )
 
 
