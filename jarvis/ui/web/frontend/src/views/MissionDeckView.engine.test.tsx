@@ -23,6 +23,13 @@ vi.mock("@/components/deck/DeckSignalCards", () => ({
   LiveCounter: () => <div>counter</div>,
   VitalsCard: () => <section>vitals</section>,
 }));
+vi.mock("@/components/deck/HudMemoryPanel", () => ({
+  HudMemoryPanel: ({ className }: { className?: string }) => (
+    <section className={className} data-testid="hud-memory">
+      memory
+    </section>
+  ),
+}));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
   const actual = await vi.importActual<typeof import("@/components/deck/DeckLogCard")>(
@@ -54,6 +61,8 @@ vi.mock("@/hooks/useWakeWord", () => ({
 vi.mock("@/lib/voiceApi", () => ({
   requestVoiceCall: async () => ({ armed: true }),
   requestVoiceHangup: async () => {},
+  fetchTtsVolume: async () => ({ volume: 1 }),
+  setTtsVolume: async () => {},
 }));
 vi.mock("@/components/MascotGigi", () => ({
   MascotGigi: () => <div data-testid="mascot-gigi" />,

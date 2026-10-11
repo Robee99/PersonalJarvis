@@ -6338,5 +6338,291 @@
     "state_running": "Running",
     "state_loading": "Loading model",
     "state_off": "Not running"
+  },
+  "hud2": {
+    "controls": {
+      "group": "Voice controls",
+      "state": "State",
+      "talk": "Talk",
+      "end": "End",
+      "connecting": "Linking",
+      "talk_hint": "Start a conversation, the same as saying “{wake}”",
+      "end_hint": "End the conversation",
+      "mic": "Mic",
+      "mic_mute": "Mute your microphone for {name}",
+      "mic_unmute": "Unmute your microphone",
+      "mic_muted": "Mic muted",
+      "voice": "Voice",
+      "voice_mute": "Silence {name}'s voice for this session",
+      "voice_unmute": "Restore {name}'s voice",
+      "voice_muted": "Voice silenced",
+      "wake_hint": "Say “{wake}” or press Talk",
+      "unavailable": "Voice is not running on this computer."
+    },
+    "transcript": {
+      "title": "Live transcript",
+      "you": "You",
+      "hearing": "Hearing",
+      "heard": "Heard",
+      "replying": "Replying",
+      "reply": "Reply",
+      "steps": "{n} steps",
+      "empty": "Nothing said yet. Press Talk or say “{wake}”.",
+      "empty_listening": "Listening. Start speaking.",
+      "jump_latest": "Jump to latest"
+    },
+    "memory": {
+      "title": "Memory",
+      "open_orb": "Open the memory orb",
+      "search_label": "Search memory",
+      "search_placeholder": "Search projects, items, notes…",
+      "clear": "Clear search",
+      "projects": "Projects",
+      "items": "Items",
+      "notes": "Notes",
+      "no_projects": "No projects in memory yet.",
+      "no_hits": "Nothing matches “{q}”.",
+      "loading": "Loading…",
+      "unavailable": "Memory is not reachable.",
+      "back": "Back",
+      "next_actions": "Next actions",
+      "blockers": "Blockers",
+      "tasks": "Open tasks",
+      "decisions": "Decisions",
+      "evidence": "Evidence",
+      "in_projects": "Projects",
+      "links": "Links",
+      "counts": "{tasks} tasks · {blockers} blockers",
+      "ask": "Ask {name}",
+      "ask_project": "Brief me on the project “{title}”: where it stands, what is blocked and what comes next.",
+      "ask_item": "Tell me about “{title}” ({kind}) from my project memory and what I should do about it.",
+      "ask_note": "Summarise my note “{title}” and how it connects to my current work.",
+      "ask_sent": "Sent to {name}. The reply streams into the live transcript.",
+      "ask_failed": "Not connected. The question was not sent.",
+      "open_wiki": "Open in Wiki",
+      "open_orb_short": "Memory orb",
+      "status": {
+        "red": "Blocked",
+        "blue": "Active",
+        "yellow": "Waiting",
+        "green": "Done"
+      },
+      "kind": {
+        "PROJECT": "Project",
+        "CONVERSATION": "Conversation",
+        "THREAD": "Thread",
+        "TASK": "Task",
+        "DECISION": "Decision",
+        "BLOCKER": "Blocker",
+        "MILESTONE": "Milestone",
+        "DOCUMENT": "Document",
+        "AGENT": "Agent",
+        "OUTPUT": "Output",
+        "NOTE": "Note"
+      }
+    }
+  },
+  "orb2": {
+    "title": "Memory orb",
+    "headline_projects": "Every project, coloured by its measured health",
+    "mode": {
+      "label": "Map",
+      "projects": "Projects",
+      "memory": "Memory"
+    },
+    "not_connected": "Not connected to {name}",
+    "brain": "Brain",
+    "brain_title": "The brain answering turns",
+    "voice_ready": "Voice ready",
+    "voice_unavailable": "Voice unavailable",
+    "thinking": "Thinking…",
+    "ask_placeholder": "Ask anything, e.g. “what do you know about me?”",
+    "ask_label": "Ask the assistant",
+    "send": "Send",
+    "health": {
+      "colour": {
+        "red": "Red",
+        "yellow": "Yellow",
+        "blue": "Blue",
+        "green": "Green"
+      },
+      "untracked": "no tracked work",
+      "rule": {
+        "blocked": "Blocked",
+        "failed": "Failed",
+        "verified": "Verified",
+        "stalled": "Stalled",
+        "partial": "In progress",
+        "review": "Under review",
+        "active": "Active",
+        "idle": "Idle"
+      }
+    },
+    "legend": {
+      "title": "How the colours are decided"
+    },
+    "sort": {
+      "priority": "Needs attention",
+      "recent": "Most recent",
+      "progress": "Progress",
+      "name": "Name"
+    },
+    "counts": {
+      "open_tasks": "Open tasks",
+      "open_blockers": "Open blockers",
+      "decisions": "Decisions",
+      "conversations": "Conversations"
+    },
+    "rail": {
+      "label": "Projects",
+      "count": "{shown} of {total} projects",
+      "reindex": "Rescan",
+      "reindex_title": "Read new conversations, missions and notes now (local rules only, no model)",
+      "search_placeholder": "Search projects",
+      "search_label": "Search projects",
+      "clear": "Clear search",
+      "filter_label": "Filter by health",
+      "sort": "Sort",
+      "loading": "Loading…",
+      "failed": "The project map could not be read. Try Rescan.",
+      "empty": "No projects yet. Projects appear once a conversation, mission or IDE project has a folder or a project page. Rescan to read what is new.",
+      "no_match": "No project matches this search or filter.",
+      "more": "Show {count} more"
+    },
+    "map": {
+      "hidden_projects": "{count} more projects match; narrow the search to see them on the map"
+    },
+    "panel": {
+      "label": "Project {title}",
+      "close": "Close project",
+      "status": "Status",
+      "failed": "This project could not be loaded.",
+      "tab_overview": "Overview",
+      "tab_thread": "Thread",
+      "tab_items": "Items",
+      "progress": "Progress",
+      "progress_value": "{done} of {total} done",
+      "next": "Next actions",
+      "sources": "Sources",
+      "no_sources": "No sources recorded",
+      "files": "Files",
+      "activity": "Recent activity"
+    },
+    "items": {
+      "filter": "Filter items",
+      "show_all": "Show all {count}",
+      "blockers": "Blockers",
+      "tasks": "Tasks",
+      "decisions": "Decisions",
+      "milestones": "Milestones",
+      "conversations": "Conversations",
+      "reports": "Artifacts"
+    },
+    "item": {
+      "suggested": "suggested link"
+    },
+    "branch": {
+      "topic": "Topic",
+      "decision": "Decision",
+      "experiment": "Experiment",
+      "subtask": "Subtask",
+      "blocker": "Blocker",
+      "milestone": "Milestone",
+      "artifact": "Artifact"
+    },
+    "thread": {
+      "trunk": "Trunk",
+      "empty": "No conversations are linked to this project yet.",
+      "filter_label": "Show branch kinds",
+      "fold": "Fold branch",
+      "unfold": "Unfold branch",
+      "untitled": "Untitled",
+      "older": "Show {count} older branches",
+      "hidden_children": "+{count} more in this branch",
+      "hidden_branches": "{count} older branches are not loaded"
+    },
+    "branch_panel": {
+      "breadcrumb": "Branch path",
+      "dates": "first {first} · last {last}",
+      "branches": "Branches",
+      "artifacts": "Linked artifacts",
+      "location": "Where it lives",
+      "messages": "Messages",
+      "evidence": "What was said",
+      "failed": "This branch could not be loaded.",
+      "no_messages": "No messages in this conversation.",
+      "no_evidence": "No quoted source for this item.",
+      "history": "Status history",
+      "role_user": "You",
+      "role_assistant": "Assistant"
+    },
+    "memory": {
+      "mapping": "Mapping…",
+      "shown_of": "{shown} of {total} shown",
+      "total": "{total} things the assistant remembers or can use",
+      "filter_label": "Filter the map",
+      "filter_title": "Skills, tools and servers from {from}. Lines are links between notes. A ring is something switched off.",
+      "legend": "From {from} · lines link notes · a ring is switched off",
+      "from_hermes": "Hermes Agent",
+      "from_jarvis": "{name}",
+      "unreadable": "Couldn't be read",
+      "unavailable": "unavailable",
+      "search_placeholder": "Find a note, skill, tool or app",
+      "search_label": "Search the memory orb",
+      "matches": "{count} matches",
+      "no_matches": "No matches on the map",
+      "fit": "Fit",
+      "open_note": "Open note",
+      "open_group": "Open {group}",
+      "group": {
+        "wiki": "Notes",
+        "concepts": "Concepts",
+        "skills": "Skills",
+        "tools": "Tools",
+        "apps": "Connected apps",
+        "mcp": "MCP servers"
+      }
+    },
+    "hands": {
+      "toggle": "Hands",
+      "toggle_title": "Control the orb with your hands through the camera. The mouse keeps working.",
+      "preview": "On-device",
+      "install": "Download tracking files (about 32 MB)",
+      "retry": "Try again",
+      "use_mouse": "Use the mouse",
+      "turn_off": "Turn hands off",
+      "fallback": "Mouse, keyboard and touch keep working.",
+      "privacy": "Camera frames are read in this window and never leave this device.",
+      "gesture_point": "Point: hover",
+      "gesture_pinch": "Pinch: select; pinch again: open",
+      "gesture_palm": "Open palm, moved: move the map",
+      "gesture_zoom": "Pinch with both hands, apart or together: zoom",
+      "status": {
+        "off": "Hands off",
+        "checking": "Checking tracking files…",
+        "files-missing": "Tracking files missing",
+        "installing": "Downloading tracking files…",
+        "install-failed": "Download failed",
+        "loading": "Loading hand tracking…",
+        "tracking-failed": "Hand tracking failed to load",
+        "camera": "Waiting for the camera…",
+        "camera-denied": "Camera blocked",
+        "no-camera": "No camera found",
+        "camera-busy": "Camera in use",
+        "camera-failed": "Camera unavailable",
+        "unsupported": "Camera not supported here",
+        "live": "Hands live · on-device"
+      },
+      "why": {
+        "files-missing": "The hand-tracking files (the same ones the Hands view uses) are not on this machine yet. Download them once to use hands here.",
+        "install-failed": "The tracking files could not be downloaded. Check the connection and try again.",
+        "tracking-failed": "The tracking files are present but did not start in this window.",
+        "camera-denied": "Camera access was refused. Allow the camera for this app, then try again.",
+        "no-camera": "No camera is connected to this machine.",
+        "camera-busy": "Another app is using the camera. Close it, then try again.",
+        "camera-failed": "The camera could not be started.",
+        "unsupported": "This window cannot use a camera."
+      }
+    }
   }
 }

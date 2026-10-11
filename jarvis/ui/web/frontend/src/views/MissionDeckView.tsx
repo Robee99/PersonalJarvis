@@ -22,23 +22,20 @@ import { DeckReveal } from "@/components/deck/DeckReveal";
 import { DeckFloor, useDeckParallax } from "@/components/deck/DeckStage3D";
 import { SLOT_DEPTH, slotDepthVars } from "@/lib/deckDepth";
 import { HudLamp } from "@/components/deck/HudFrame";
-import {
-  IdeGridCard,
-  OutputsCard,
-  RunsCard,
-  TerminalsCard,
-} from "@/components/deck/DeckActivityCards";
-import { ApiStatsCard, CaptureCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
+import { OutputsCard, RunsCard } from "@/components/deck/DeckActivityCards";
+import { ApiStatsCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
 import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
-import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
+import { HudControls } from "@/components/deck/HudControls";
+import { HudMemoryPanel } from "@/components/deck/HudMemoryPanel";
+import { HudTranscriptPanel } from "@/components/deck/HudTranscriptPanel";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { useAssistantStatus } from "@/hooks/useAssistantStatus";
 import { formatAssistantStatus } from "@/lib/assistantStatus";
 import { useWakeWord } from "@/hooks/useWakeWord";
 import { useVoiceCall } from "@/components/agentic/useVoiceCall";
 import { useElementSize } from "@/hooks/useElementSize";
-import { orbSizeFor, stageVignette, stageWashSize } from "@/lib/deckStage";
+import { stageVignette, stageWashSize } from "@/lib/deckStage";
 import { HANDOFF, autoLaunchAfterMs, resolvePhase, type BoardSlot } from "@/lib/deckStandby";
 import { writeDeckMode } from "@/lib/deckMode";
 import { useDeckAvatar, writeDeckAvatar } from "@/lib/deckAvatar";
@@ -49,7 +46,25 @@ import { useT } from "@/i18n";
  * The mission deck — the front page.
  *
  * One stage that shows everything the assistant is and does, without a
- * single navigation step. You talk to it by voice; the typed composer lives
+ * single navigation step.
+ *
+ * HUD v2 (2026-10-11, owner brief "HUD Redesign"): the orb and the voice
+ * controls are the stage's centre and get the room; the right column is the
+ * live transcript (partial → final → streaming reply); the left column is
+ * the project memory, searchable and actionable in place; the remaining
+ * instruments sit on one short row underneath:
+ *
+ *   ┌ gigi · voice bars · lamps · counter ── name · brain · switch · chrome ┐
+ *   │ dock │ [MEMORY —      (       ORB        )      [LIVE TRANSCRIPT —  ] │
+ *   │      │  search,        state · TALK · mic · voice  partial, heard,   ] │
+ *   │      │  projects ]                                 streaming reply   ] │
+ *   │      │ [log]          [turn][api][vitals]         [outputs][runs]    ] │
+ *   └──────┴───────────────────────────────────────────────────────────────┘
+ *
+ * Off the board since v2, each still one click away in the dock: the 3D wiki
+ * map (the memory panel searches and opens notes; its WebGL scene was the
+ * deck's heaviest part), the capture ledger, the terminals and the coding
+ * grid. The history below describes the board before v2. You talk to it by voice; the typed composer lives
  * on the classic chat surface, not here (maintainer decision 2026-08-18).
  * The layout follows the maintainer's sketch of 2026-08-17 (photographed
  * rotated; read upright):
@@ -121,7 +136,6 @@ export function MissionDeckView({
   const boardOpen = useDeckStore((s) => s.boardOpen);
   const openBoard = useDeckStore((s) => s.openBoard);
   const status = useAssistantStatus();
-  const warming = status.voice === "starting" || status.voice === "booting";
   const avatar = useDeckAvatar();
   // Header + orb name the engine that will answer the next spoken turn, not
   // the dormant sibling. Pipeline and realtime are independent picks; the
@@ -175,24 +189,6 @@ export function MissionDeckView({
   // The board is a display case: the pointer sways its planes (lib/deckDepth).
   const boardRef = useRef<HTMLDivElement>(null);
   useDeckParallax(boardRef, phase === "board");
-  // While the stage waits for the first word, the board's heaviest part gets
-  // ready in the idle time: the WebGL probe and the 3D map's chunk. Measured
-  // 2026-08-19: done in the click's own task they froze the launch for half
-  // a second, and every JS-driven beat of it — the orb's travel — jumped.
-  useEffect(() => {
-    if (phase === "board") return;
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-      cancelIdleCallback?: (id: number) => void;
-    };
-    if (w.requestIdleCallback && w.cancelIdleCallback) {
-      const id = w.requestIdleCallback(() => warmWikiScene(), { timeout: 4000 });
-      return () => w.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(() => warmWikiScene(), 1500);
-    return () => window.clearTimeout(id);
-  }, [phase]);
-
   const running = useMemo(
     () => thinkingSteps.filter((s) => s.status === "active"),
     [thinkingSteps],
@@ -216,15 +212,6 @@ export function MissionDeckView({
   const statusLabel =
     status.phase === "ready" && busy ? t("voice_state.thinking") : formatAssistantStatus(status, t);
 
-  const lastAssistant = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "assistant"),
-    [messages],
-  );
-  const headline = lastAssistant
-    ? lastAssistant.content
-    : warming
-      ? t("deck.warming")
-      : t("deck.idle_headline").replace("{0}", wakePhrase);
   const orbPressLabel = callActive
     ? t("deck.orb_hangup")
     : t("deck.orb_call").replace("{0}", wakePhrase);
@@ -339,33 +326,26 @@ export function MissionDeckView({
             <div
               ref={boardRef}
               data-testid="deck-board"
-              className="deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(200px,3fr)_minmax(0,6fr)_minmax(240px,4fr)] lg:grid-rows-[minmax(0,1fr)_minmax(0,0.6fr)] lg:overflow-hidden"
+              className="deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(240px,3fr)_minmax(0,5fr)_minmax(280px,3.6fr)] lg:grid-rows-[minmax(0,1fr)_minmax(0,0.42fr)] lg:overflow-hidden"
             >
               {/* The floor the case stands on — behind every plane, on the wall's side. */}
               <DeckFloor />
 
-              {/* LEFT top: the log — the terminal of the session */}
+              {/* LEFT top: project memory — search, inspect, act. On a narrow
+                  window the stacking order puts the orb and the transcript first. */}
               <DeckReveal
                 slot="left-top"
                 reveal={revealBoard}
-                {...depthSlot("left-top")}
+                className={cn("order-3 min-h-[22rem] lg:order-none lg:min-h-0", depthSlot("left-top").className)}
+                style={depthSlot("left-top").style}
                 bodyClassName="flex min-h-0 flex-col"
               >
-                <LogCard className="min-h-0 flex-1" />
+                <HudMemoryPanel className="min-h-0 flex-1" />
               </DeckReveal>
 
-              {/* CENTRE top: the response instrument + api on a strip, the orb underneath */}
-              <div className="flex min-h-0 flex-col gap-3">
-                <DeckReveal
-                  slot="centre-top"
-                  reveal={revealBoard}
-                  className={cn("shrink-0", depthSlot("centre-top").className)}
-                  bodyClassName="grid grid-cols-2 gap-3"
-                  style={{ height: "36%", ...depthSlot("centre-top").style }}
-                >
-                  <TurnCard className="min-h-0" />
-                  <ApiStatsCard className="min-h-0" />
-                </DeckReveal>
+              {/* CENTRE: the orb on its stage, the controls under it — the
+                  largest, emptiest region of the board on purpose. */}
+              <div className="order-1 flex min-h-[30rem] flex-col gap-2 lg:order-none lg:min-h-0">
                 <BoardCentre
                   steps={running}
                   busy={busy}
@@ -373,57 +353,73 @@ export function MissionDeckView({
                   onPress={pressOrb}
                   pressLabel={orbPressLabel}
                   pressDisabled={pressDisabled}
-                  headline={headline}
-                  headlineIsAnswer={Boolean(lastAssistant)}
                   reveal={revealBoard}
                 />
+                <DeckReveal
+                  slot="centre-top"
+                  reveal={revealBoard}
+                  className={cn("shrink-0", depthSlot("centre-top").className)}
+                  style={depthSlot("centre-top").style}
+                  bodyClassName="flex justify-center pb-1"
+                >
+                  <HudControls
+                    status={status}
+                    statusLabel={statusLabel}
+                    callActive={callActive}
+                    busy={callBusy}
+                    connecting={connecting}
+                    disabled={!connected}
+                    onTalk={pressOrb}
+                    wakePhrase={wakePhrase}
+                  />
+                </DeckReveal>
               </div>
 
-              {/* RIGHT top: the wiki, in space, tall */}
+              {/* RIGHT top: the live transcript — heard, settled, answered. */}
               <DeckReveal
                 slot="right-top"
                 reveal={revealBoard}
-                {...depthSlot("right-top")}
+                className={cn("order-2 min-h-[18rem] lg:order-none lg:min-h-0", depthSlot("right-top").className)}
+                style={depthSlot("right-top").style}
                 bodyClassName="flex min-h-0 flex-col"
               >
-                <WikiCard className="min-h-0 flex-1" />
+                <HudTranscriptPanel className="min-h-0 flex-1" wakePhrase={wakePhrase} />
               </DeckReveal>
 
-              {/* LEFT bottom: outputs and runs */}
+              {/* LEFT bottom: the log — the terminal of the session */}
               <DeckReveal
                 slot="left-bottom"
                 reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("left-bottom").className)}
+                className={cn("order-4 min-h-[8rem] lg:order-none", depthSlot("left-bottom").className)}
                 style={depthSlot("left-bottom").style}
+                bodyClassName="flex min-h-0 flex-col"
+              >
+                <LogCard className="min-h-0 flex-1" />
+              </DeckReveal>
+
+              {/* CENTRE bottom: the turn's timings, what it cost, the machine */}
+              <DeckReveal
+                slot="centre-bottom"
+                reveal={revealBoard}
+                className={cn("order-5 min-h-[8rem] lg:order-none", depthSlot("centre-bottom").className)}
+                style={depthSlot("centre-bottom").style}
+                bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-3"
+              >
+                <TurnCard className="min-h-0" />
+                <ApiStatsCard className="min-h-0" />
+                <VitalsCard className="min-h-0" />
+              </DeckReveal>
+
+              {/* RIGHT bottom: outputs and runs */}
+              <DeckReveal
+                slot="right-bottom"
+                reveal={revealBoard}
+                className={cn("order-6 min-h-[8rem] lg:order-none", depthSlot("right-bottom").className)}
+                style={depthSlot("right-bottom").style}
                 bodyClassName="grid grid-cols-2 gap-3"
               >
                 <OutputsCard className="min-h-0" />
                 <RunsCard className="min-h-0" />
-              </DeckReveal>
-
-              {/* CENTRE bottom: the last capture (briefly), then the ledger, beside
-                  the machine's vitals; each centred and not too wide */}
-              <DeckReveal
-                slot="centre-bottom"
-                reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("centre-bottom").className)}
-                style={depthSlot("centre-bottom").style}
-                bodyClassName="flex items-stretch justify-center gap-3"
-              >
-                <CaptureCard className="w-full min-w-0 max-w-[24rem]" />
-                <VitalsCard className="w-full min-w-0 max-w-[24rem]" />
-              </DeckReveal>
-
-              {/* RIGHT bottom: terminals and the coding workspace */}
-              <DeckReveal
-                slot="right-bottom"
-                reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("right-bottom").className)}
-                style={depthSlot("right-bottom").style}
-                bodyClassName="grid grid-cols-2 gap-3"
-              >
-                <TerminalsCard className="min-h-0" />
-                <IdeGridCard className="min-h-0" />
               </DeckReveal>
 
               {/* The launch's last beat: one scan down the whole board. */}
@@ -472,11 +468,24 @@ function depthSlot(slot: BoardSlot): { className: string; style: CSSProperties }
 }
 
 
+/** The HUD orb's bounds: below the minimum the readouts collide, above the
+ * maximum the reticle stops reading as an instrument and starts reading as
+ * wallpaper. */
+const HUD_ORB_MIN = 200;
+const HUD_ORB_MAX = 440;
+
+/** The reticle size for the centre stage — as large as the room allows. */
+function hudOrbSize(width: number, height: number): number {
+  if (!width || !height) return 320;
+  const fit = Math.min(width - 24, height - 16);
+  return Math.max(HUD_ORB_MIN, Math.min(HUD_ORB_MAX, Math.floor(fit)));
+}
+
 /**
- * The board's centre: the orb on its vignetted stage with the headline under
- * it. The centre grows with the room it has — as large as the stage allows,
- * never taller than the room left under the headline, and never past the
- * point where the reticle stops reading as an instrument. It measures ITSELF
+ * The board's centre: the orb on its vignetted stage. Since HUD v2 the
+ * headline under it is gone — the transcript panel carries the words and the
+ * controls under this stage carry the state — so the orb takes all of the
+ * room it is given, up to `HUD_ORB_MAX`. It measures ITSELF
  * because it mounts with the board, not with the view: a measurement taken
  * by the view while the standby is up would find no stage and never look
  * again.
@@ -488,8 +497,6 @@ function BoardCentre({
   onPress,
   pressLabel,
   pressDisabled,
-  headline,
-  headlineIsAnswer,
   reveal,
 }: {
   steps: ThinkingStep[];
@@ -498,14 +505,11 @@ function BoardCentre({
   onPress: () => void;
   pressLabel: string;
   pressDisabled: boolean;
-  headline: string;
-  /** The headline is the assistant's last answer, not the idle prompt. */
-  headlineIsAnswer: boolean;
   reveal: boolean;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
-  const orbSize = orbSizeFor(stage.width, stage.height);
+  const orbSize = hudOrbSize(stage.width, stage.height);
   const reduced = useReducedMotion() ?? false;
   // The landing ring fires once and leaves the DOM.
   const [landed, setLanded] = useState(false);
@@ -556,17 +560,6 @@ function BoardCentre({
           />
         )}
       </div>
-      <motion.p
-        initial={reveal ? { opacity: 0, y: 6 } : false}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: HANDOFF.headlineDelayS, duration: 0.4 }}
-        className={cn(
-          "max-w-[44ch] text-pretty text-sm leading-relaxed",
-          headlineIsAnswer ? "text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {headline}
-      </motion.p>
     </div>
   );
 }

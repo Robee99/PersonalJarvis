@@ -6338,5 +6338,291 @@
     "state_running": "Läuft",
     "state_loading": "Lädt Modell",
     "state_off": "Läuft nicht"
+  },
+  "hud2": {
+    "controls": {
+      "group": "Sprachsteuerung",
+      "state": "Status",
+      "talk": "Sprechen",
+      "end": "Beenden",
+      "connecting": "Verbinde",
+      "talk_hint": "Gespräch starten, genau wie „{wake}“ zu sagen",
+      "end_hint": "Gespräch beenden",
+      "mic": "Mikro",
+      "mic_mute": "Dein Mikrofon für {name} stummschalten",
+      "mic_unmute": "Mikrofon wieder einschalten",
+      "mic_muted": "Mikro stumm",
+      "voice": "Stimme",
+      "voice_mute": "{name}s Stimme für diese Sitzung stummschalten",
+      "voice_unmute": "{name}s Stimme wieder einschalten",
+      "voice_muted": "Stimme stumm",
+      "wake_hint": "Sag „{wake}“ oder drück auf Sprechen",
+      "unavailable": "Die Sprachfunktion läuft auf diesem Computer nicht."
+    },
+    "transcript": {
+      "title": "Live-Transkript",
+      "you": "Du",
+      "hearing": "Höre",
+      "heard": "Gehört",
+      "replying": "Antwortet",
+      "reply": "Antwort",
+      "steps": "{n} Schritte",
+      "empty": "Noch nichts gesagt. Drück auf Sprechen oder sag „{wake}“.",
+      "empty_listening": "Ich höre zu. Sprich einfach los.",
+      "jump_latest": "Zum Neuesten springen"
+    },
+    "memory": {
+      "title": "Gedächtnis",
+      "open_orb": "Gedächtnis-Orb öffnen",
+      "search_label": "Gedächtnis durchsuchen",
+      "search_placeholder": "Projekte, Einträge, Notizen suchen…",
+      "clear": "Suche leeren",
+      "projects": "Projekte",
+      "items": "Einträge",
+      "notes": "Notizen",
+      "no_projects": "Noch keine Projekte im Gedächtnis.",
+      "no_hits": "Nichts passt zu „{q}“.",
+      "loading": "Lädt…",
+      "unavailable": "Das Gedächtnis ist nicht erreichbar.",
+      "back": "Zurück",
+      "next_actions": "Nächste Schritte",
+      "blockers": "Blocker",
+      "tasks": "Offene Aufgaben",
+      "decisions": "Entscheidungen",
+      "evidence": "Belege",
+      "in_projects": "Projekte",
+      "links": "Verweise",
+      "counts": "{tasks} Aufgaben · {blockers} Blocker",
+      "ask": "{name} fragen",
+      "ask_project": "Gib mir einen Überblick über das Projekt „{title}“: Stand, Blocker und was als Nächstes kommt.",
+      "ask_item": "Erzähl mir aus meinem Projektgedächtnis von „{title}“ ({kind}) und was ich dazu tun sollte.",
+      "ask_note": "Fasse meine Notiz „{title}“ zusammen und wie sie mit meiner aktuellen Arbeit zusammenhängt.",
+      "ask_sent": "An {name} gesendet. Die Antwort erscheint im Live-Transkript.",
+      "ask_failed": "Keine Verbindung. Die Frage wurde nicht gesendet.",
+      "open_wiki": "Im Wiki öffnen",
+      "open_orb_short": "Gedächtnis-Orb",
+      "status": {
+        "red": "Blockiert",
+        "blue": "Aktiv",
+        "yellow": "Wartet",
+        "green": "Erledigt"
+      },
+      "kind": {
+        "PROJECT": "Projekt",
+        "CONVERSATION": "Gespräch",
+        "THREAD": "Thread",
+        "TASK": "Aufgabe",
+        "DECISION": "Entscheidung",
+        "BLOCKER": "Blocker",
+        "MILESTONE": "Meilenstein",
+        "DOCUMENT": "Dokument",
+        "AGENT": "Agent",
+        "OUTPUT": "Ergebnis",
+        "NOTE": "Notiz"
+      }
+    }
+  },
+  "orb2": {
+    "title": "Gedächtnis-Orb",
+    "headline_projects": "Alle Projekte, gefärbt nach ihrem gemessenen Zustand",
+    "mode": {
+      "label": "Karte",
+      "projects": "Projekte",
+      "memory": "Gedächtnis"
+    },
+    "not_connected": "Nicht mit {name} verbunden",
+    "brain": "Gehirn",
+    "brain_title": "Das Gehirn, das gerade antwortet",
+    "voice_ready": "Stimme bereit",
+    "voice_unavailable": "Stimme nicht verfügbar",
+    "thinking": "Denkt nach…",
+    "ask_placeholder": "Frag irgendetwas, z. B. „Was weißt du über mich?“",
+    "ask_label": "Den Assistenten fragen",
+    "send": "Senden",
+    "health": {
+      "colour": {
+        "red": "Rot",
+        "yellow": "Gelb",
+        "blue": "Blau",
+        "green": "Grün"
+      },
+      "untracked": "keine erfasste Arbeit",
+      "rule": {
+        "blocked": "Blockiert",
+        "failed": "Fehlgeschlagen",
+        "verified": "Bestätigt",
+        "stalled": "Stillstand",
+        "partial": "In Arbeit",
+        "review": "In Prüfung",
+        "active": "Aktiv",
+        "idle": "Ruhend"
+      }
+    },
+    "legend": {
+      "title": "So werden die Farben bestimmt"
+    },
+    "sort": {
+      "priority": "Braucht Aufmerksamkeit",
+      "recent": "Zuletzt aktiv",
+      "progress": "Fortschritt",
+      "name": "Name"
+    },
+    "counts": {
+      "open_tasks": "Offene Aufgaben",
+      "open_blockers": "Offene Blocker",
+      "decisions": "Entscheidungen",
+      "conversations": "Unterhaltungen"
+    },
+    "rail": {
+      "label": "Projekte",
+      "count": "{shown} von {total} Projekten",
+      "reindex": "Neu einlesen",
+      "reindex_title": "Neue Unterhaltungen, Missionen und Notizen jetzt einlesen (nur lokale Regeln, kein Modell)",
+      "search_placeholder": "Projekte suchen",
+      "search_label": "Projekte suchen",
+      "clear": "Suche leeren",
+      "filter_label": "Nach Zustand filtern",
+      "sort": "Sortieren",
+      "loading": "Lädt…",
+      "failed": "Die Projektkarte konnte nicht gelesen werden. Versuche „Neu einlesen“.",
+      "empty": "Noch keine Projekte. Projekte erscheinen, sobald eine Unterhaltung, Mission oder ein IDE-Projekt einen Ordner oder eine Projektseite hat. Lies neu ein, um Neues zu erfassen.",
+      "no_match": "Kein Projekt passt zu dieser Suche oder diesem Filter.",
+      "more": "{count} weitere anzeigen"
+    },
+    "map": {
+      "hidden_projects": "{count} weitere Projekte passen; grenze die Suche ein, um sie auf der Karte zu sehen"
+    },
+    "panel": {
+      "label": "Projekt {title}",
+      "close": "Projekt schließen",
+      "status": "Status",
+      "failed": "Dieses Projekt konnte nicht geladen werden.",
+      "tab_overview": "Überblick",
+      "tab_thread": "Verlauf",
+      "tab_items": "Einträge",
+      "progress": "Fortschritt",
+      "progress_value": "{done} von {total} erledigt",
+      "next": "Nächste Schritte",
+      "sources": "Quellen",
+      "no_sources": "Keine Quellen erfasst",
+      "files": "Dateien",
+      "activity": "Letzte Aktivität"
+    },
+    "items": {
+      "filter": "Einträge filtern",
+      "show_all": "Alle {count} anzeigen",
+      "blockers": "Blocker",
+      "tasks": "Aufgaben",
+      "decisions": "Entscheidungen",
+      "milestones": "Meilensteine",
+      "conversations": "Unterhaltungen",
+      "reports": "Artefakte"
+    },
+    "item": {
+      "suggested": "vorgeschlagene Zuordnung"
+    },
+    "branch": {
+      "topic": "Thema",
+      "decision": "Entscheidung",
+      "experiment": "Experiment",
+      "subtask": "Teilaufgabe",
+      "blocker": "Blocker",
+      "milestone": "Meilenstein",
+      "artifact": "Artefakt"
+    },
+    "thread": {
+      "trunk": "Stamm",
+      "empty": "Mit diesem Projekt sind noch keine Unterhaltungen verknüpft.",
+      "filter_label": "Zweigarten anzeigen",
+      "fold": "Zweig einklappen",
+      "unfold": "Zweig ausklappen",
+      "untitled": "Ohne Titel",
+      "older": "{count} ältere Zweige anzeigen",
+      "hidden_children": "+{count} weitere in diesem Zweig",
+      "hidden_branches": "{count} ältere Zweige sind nicht geladen"
+    },
+    "branch_panel": {
+      "breadcrumb": "Pfad des Zweigs",
+      "dates": "zuerst {first} · zuletzt {last}",
+      "branches": "Zweige",
+      "artifacts": "Verknüpfte Artefakte",
+      "location": "Wo es liegt",
+      "messages": "Nachrichten",
+      "evidence": "Was gesagt wurde",
+      "failed": "Dieser Zweig konnte nicht geladen werden.",
+      "no_messages": "Keine Nachrichten in dieser Unterhaltung.",
+      "no_evidence": "Kein zitierter Beleg für diesen Eintrag.",
+      "history": "Statusverlauf",
+      "role_user": "Du",
+      "role_assistant": "Assistent"
+    },
+    "memory": {
+      "mapping": "Wird kartiert…",
+      "shown_of": "{shown} von {total} angezeigt",
+      "total": "{total} Dinge, die der Assistent weiß oder nutzen kann",
+      "filter_label": "Karte filtern",
+      "filter_title": "Skills, Werkzeuge und Server aus {from}. Linien verbinden Notizen. Ein Ring ist etwas Ausgeschaltetes.",
+      "legend": "Aus {from} · Linien verbinden Notizen · ein Ring ist ausgeschaltet",
+      "from_hermes": "Hermes Agent",
+      "from_jarvis": "{name}",
+      "unreadable": "Konnte nicht gelesen werden",
+      "unavailable": "nicht verfügbar",
+      "search_placeholder": "Notiz, Skill, Werkzeug oder App finden",
+      "search_label": "Den Gedächtnis-Orb durchsuchen",
+      "matches": "{count} Treffer",
+      "no_matches": "Keine Treffer auf der Karte",
+      "fit": "Einpassen",
+      "open_note": "Notiz öffnen",
+      "open_group": "{group} öffnen",
+      "group": {
+        "wiki": "Notizen",
+        "concepts": "Begriffe",
+        "skills": "Skills",
+        "tools": "Werkzeuge",
+        "apps": "Verbundene Apps",
+        "mcp": "MCP-Server"
+      }
+    },
+    "hands": {
+      "toggle": "Hände",
+      "toggle_title": "Den Orb mit den Händen über die Kamera steuern. Die Maus funktioniert weiter.",
+      "preview": "Auf dem Gerät",
+      "install": "Tracking-Dateien laden (ca. 32 MB)",
+      "retry": "Erneut versuchen",
+      "use_mouse": "Maus verwenden",
+      "turn_off": "Hände ausschalten",
+      "fallback": "Maus, Tastatur und Touch funktionieren weiter.",
+      "privacy": "Kamerabilder werden in diesem Fenster gelesen und verlassen nie dieses Gerät.",
+      "gesture_point": "Zeigen: hervorheben",
+      "gesture_pinch": "Zusammendrücken: auswählen; erneut: öffnen",
+      "gesture_palm": "Offene Hand bewegen: Karte verschieben",
+      "gesture_zoom": "Mit beiden Händen zusammendrücken, auseinander oder zusammen: zoomen",
+      "status": {
+        "off": "Hände aus",
+        "checking": "Tracking-Dateien werden geprüft…",
+        "files-missing": "Tracking-Dateien fehlen",
+        "installing": "Tracking-Dateien werden geladen…",
+        "install-failed": "Download fehlgeschlagen",
+        "loading": "Handerkennung wird geladen…",
+        "tracking-failed": "Handerkennung konnte nicht starten",
+        "camera": "Warte auf die Kamera…",
+        "camera-denied": "Kamera blockiert",
+        "no-camera": "Keine Kamera gefunden",
+        "camera-busy": "Kamera wird verwendet",
+        "camera-failed": "Kamera nicht verfügbar",
+        "unsupported": "Kamera hier nicht unterstützt",
+        "live": "Hände aktiv · auf dem Gerät"
+      },
+      "why": {
+        "files-missing": "Die Dateien für die Handerkennung (dieselben wie in der Händeansicht) sind noch nicht auf diesem Rechner. Lade sie einmal herunter, um hier Hände zu nutzen.",
+        "install-failed": "Die Tracking-Dateien konnten nicht geladen werden. Prüfe die Verbindung und versuche es erneut.",
+        "tracking-failed": "Die Tracking-Dateien sind vorhanden, starten aber in diesem Fenster nicht.",
+        "camera-denied": "Der Kamerazugriff wurde verweigert. Erlaube die Kamera für diese App und versuche es erneut.",
+        "no-camera": "An diesem Rechner ist keine Kamera angeschlossen.",
+        "camera-busy": "Eine andere App verwendet die Kamera. Schließe sie und versuche es erneut.",
+        "camera-failed": "Die Kamera konnte nicht gestartet werden.",
+        "unsupported": "Dieses Fenster kann keine Kamera verwenden."
+      }
+    }
   }
 }

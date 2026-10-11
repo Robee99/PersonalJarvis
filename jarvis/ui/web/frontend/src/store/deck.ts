@@ -26,6 +26,13 @@ interface DeckStore extends DeckState {
    */
   boardOpen: boolean;
   openBoard: () => void;
+  /**
+   * The microphone is muted FOR the assistant (input-only; it still speaks).
+   * Mirrors the pipeline's `VoiceMuteChanged`, seeded once from
+   * GET /api/voice/mute; null until either has answered.
+   */
+  micMuted: boolean | null;
+  setMicMuted: (muted: boolean) => void;
   ingest: (name: string, payload: unknown, tsMs: number) => void;
   /** Tests and a fresh session — forget everything but the surface choice. */
   resetDeck: () => void;
@@ -35,6 +42,7 @@ export const useDeckStore = create<DeckStore>((set, get) => ({
   ...emptyDeckState(),
   mode: readDeckMode(),
   boardOpen: false,
+  micMuted: null,
 
   setMode: (mode) => {
     writeDeckMode(mode);
@@ -45,7 +53,16 @@ export const useDeckStore = create<DeckStore>((set, get) => ({
     if (!get().boardOpen) set({ boardOpen: true });
   },
 
+  setMicMuted: (muted) => {
+    if (get().micMuted !== muted) set({ micMuted: muted });
+  },
+
   ingest: (name, payload, tsMs) => {
+    if (name === "VoiceMuteChanged") {
+      const muted = (payload as { muted?: unknown } | null)?.muted;
+      if (typeof muted === "boolean") get().setMicMuted(muted);
+      return;
+    }
     const before = get();
     const after = reduceDeck(before, name, payload, tsMs);
     if (after !== before) set(after);
