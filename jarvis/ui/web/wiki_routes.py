@@ -644,6 +644,60 @@ async def get_graph(request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/orb-tree")
+async def get_orb_tree(request: Request) -> dict[str, Any]:
+    """The memory orb's hierarchy: work communities and note communities.
+
+    Read-only, computed per request from the vault and the project brain map
+    (``jarvis/memory/orb_tree.py`` says how); nothing is stored. A store that
+    cannot be read contributes nothing and is named in ``unavailable``.
+    """
+    from jarvis.memory.orb_tree import NoteRow, build_tree
+
+    unavailable: list[str] = []
+    notes: list[NoteRow] = []
+    vault_root = _resolve_vault_root(request)
+    if vault_root is not None and vault_root.is_dir():
+        try:
+            visible = await _scan_visible_pages(vault_root)
+        except Exception as exc:  # noqa: BLE001 — reported as unavailable, the orb still draws work
+            log.warning("wiki_route_failed route=/orb-tree error=%s", exc)
+            unavailable.append("notes")
+            visible = []
+        seen: set[str] = set()
+        for item in visible:
+            parts = item.relative_path.parts
+            if len(parts) > 1 and parts[0].casefold() in _TEMPLATE_DIRS:
+                continue
+            page = item.page
+            if page.slug in seen:
+                continue
+            seen.add(page.slug)
+            notes.append(
+                NoteRow(
+                    slug=page.slug,
+                    title=_display_title(page),
+                    kind=_kind_of(page),
+                    folder=tuple(parts[:-1]),
+                    links=tuple(s for s in (_link_slug(w) for w in page.wikilinks) if s),
+                )
+            )
+    entities: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    try:
+        from jarvis.memory.brain_map import query
+        from jarvis.memory.brain_map.service import shared_service
+
+        service = getattr(request.app.state, "brain_map", None) or shared_service()
+        graph = await asyncio.to_thread(query.graph, service.store, limit=5000)
+        entities, edges = graph["nodes"], graph["edges"]
+    except Exception as exc:  # noqa: BLE001 — reported as unavailable, the orb still draws notes
+        log.warning("wiki_route_failed route=/orb-tree brain_map error=%s", exc)
+        unavailable.append("work")
+    tree = await asyncio.to_thread(build_tree, notes=notes, entities=entities, edges=edges)
+    return {"ok": True, **tree, "unavailable": unavailable}
+
+
 @router.get("/backlinks/{slug}")
 async def get_backlinks(slug: str, request: Request) -> dict[str, Any]:
     """Return all pages whose body contains a wikilink to ``slug``."""

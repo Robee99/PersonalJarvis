@@ -93,10 +93,22 @@ _pending: dict[str, ConsentRequest] = {}
 _turns: deque[tuple[float, Answer]] = deque(maxlen=_MAX_TURNS)
 
 
+#: Free-text fields where the model explains itself. They change nothing the
+#: tool does, and a model rewords them on the retry ("taking a photo to see"
+#: becomes "to see what they hold"), which refused a call the user had just
+#: agreed to. Every other argument still has to match exactly, and the call
+#: that runs is always the deferred one, with the arguments the user heard.
+NARRATIVE_ARGS: Final[frozenset[str]] = frozenset({"reason", "rationale", "why", "explanation"})
+
+
 def args_digest(args: Mapping[str, Any]) -> str:
-    """A stable digest of the exact arguments (key order does not matter)."""
+    """A stable digest of what the call does (key order and narration ignored)."""
     canonical = json.dumps(
-        dict(args), sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str
+        {k: v for k, v in args.items() if k not in NARRATIVE_ARGS},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

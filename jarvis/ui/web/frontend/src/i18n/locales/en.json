@@ -6369,7 +6369,9 @@
       "steps": "{n} steps",
       "empty": "Nothing said yet. Press Talk or say “{wake}”.",
       "empty_listening": "Listening. Start speaking.",
-      "jump_latest": "Jump to latest"
+      "jump_latest": "Jump to latest",
+      "type_placeholder": "Type to {name}, same conversation as voice…",
+      "send": "Send"
     },
     "memory": {
       "title": "Memory",

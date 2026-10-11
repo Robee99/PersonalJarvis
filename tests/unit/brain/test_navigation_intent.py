@@ -107,3 +107,16 @@ def test_unbound_cue_and_section_do_not_navigate(text: str) -> None:
 def test_binding_tolerates_ordinary_filler(text: str, expected: str) -> None:
     """The proximity rule must not break how people actually phrase commands."""
     assert match_navigation_intent(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Open Windows Settings",  # live 2026-10-12: opened Jarvis's own page
+        "open chrome settings",
+        "open the settings in chrome",
+        "open settings on my pc",
+    ],
+)
+def test_settings_of_the_computer_or_another_app_is_not_app_navigation(text: str) -> None:
+    assert match_navigation_intent(text) is None

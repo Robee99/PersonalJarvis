@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -151,6 +151,25 @@ describe("HudTranscriptPanel — partial → final → streaming reply", () => {
     send("MessageSent", { role: "assistant", text: "Atlas is on track.", thread_id: "t1" });
     expect(screen.getAllByTestId("hud-transcript-reply")[0].textContent).toContain("Atlas is on track.");
     expect(screen.queryByTestId("hud-transcript-streaming")).toBeNull();
+  });
+
+  it("types into the same conversation the voice uses, from the HUD", async () => {
+    useEventStore.setState({ ensureActiveThread: async () => "t9" });
+    render(<Harness />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const input = screen.getByTestId("hud-composer-input") as HTMLInputElement;
+    expect(input.getAttribute("placeholder")).toContain("Nova");
+    fireEvent.change(input, { target: { value: "close chrome" } });
+    await act(async () => {
+      fireEvent.submit(screen.getByTestId("hud-composer"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const sent = MockWebSocket.last!.send.mock.calls.map((c) => JSON.parse(String(c[0])));
+    expect(sent).toContainEqual({ type: "message", kind: "text", content: "close chrome", metadata: { thread_id: "t9" } });
+    expect(input.value).toBe("");
   });
 });
 

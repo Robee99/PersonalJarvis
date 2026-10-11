@@ -1,9 +1,10 @@
-import { useLayoutEffect, useMemo } from "react";
-import { AudioLines } from "lucide-react";
+import { useLayoutEffect, useMemo, useState, type FormEvent } from "react";
+import { AudioLines, SendHorizontal } from "lucide-react";
 import { useEventStore } from "@/store/events";
 import { useHomeStore } from "@/store/home";
 import { DeckCard } from "@/components/deck/DeckCard";
 import { useStickToBottom } from "@/hooks/useStickToBottom";
+import { sendChatMessage } from "@/lib/chat";
 import type { TranscriptLine } from "@/lib/homeTranscript";
 import { cn } from "@/lib/utils";
 import { fill, useT } from "@/i18n";
@@ -66,6 +67,10 @@ export function hudTranscriptView(input: {
  * until its final line replaces the preview. Steps of a turn collapse to one
  * telemetry row — the Log card has the detail. The panel follows the newest
  * line unless the reader has scrolled up (`useStickToBottom`).
+ *
+ * The box at the bottom types into the same conversation the voice uses
+ * (`sendChatMessage`, the front page's own send path), so talking, typing and
+ * reading all happen here instead of on three pages.
  */
 export function HudTranscriptPanel({
   className,
@@ -172,7 +177,49 @@ export function HudTranscriptPanel({
           </button>
         )}
       </div>
+      <HudComposer placeholder={fill(t("hud2.transcript.type_placeholder"), { name: assistantName })} sendLabel={t("hud2.transcript.send")} />
     </DeckCard>
+  );
+}
+
+/** A one-line box that sends a typed turn into the voice conversation. */
+function HudComposer({ placeholder, sendLabel }: { placeholder: string; sendLabel: string }) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.trim() || sending) return;
+    setSending(true);
+    try {
+      if (await sendChatMessage(draft)) setDraft("");
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <form
+      data-testid="hud-composer"
+      onSubmit={submit}
+      className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-2"
+    >
+      <input
+        data-testid="hud-composer-input"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder={placeholder}
+        aria-label={placeholder}
+        className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+      />
+      <button
+        type="submit"
+        aria-label={sendLabel}
+        title={sendLabel}
+        disabled={!draft.trim() || sending}
+        className="text-accent transition-opacity disabled:opacity-30"
+      >
+        <SendHorizontal className="h-4 w-4" aria-hidden />
+      </button>
+    </form>
   );
 }
 

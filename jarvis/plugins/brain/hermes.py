@@ -270,6 +270,19 @@ FRONT_END_INSTRUCTIONS = (
     "Say you did something only after a tool actually did it."
 )
 
+#: How to drive the Windows PC so the person sees the result. Live 2026-10-12:
+#: a bare ``Start-Process chrome.exe`` from the background gateway opened
+#: Chrome behind the Jarvis window, the model said "I have opened Chrome",
+#: and the person, seeing nothing, rightly called it a lie.
+PC_CONTROL_INSTRUCTIONS = (
+    "On this Windows PC, open, switch to, resize or close apps with the "
+    "windows App tool, which brings the window to the front; use PowerShell "
+    "only for what App cannot do. Before saying something is open, closed, "
+    "playing, added or sent, check the result (a Snapshot, the window list, "
+    "the page) and say what you actually see. Never say a cart, order, "
+    "message or file changed unless a tool result in this turn shows it."
+)
+
 #: The same contract for a typed turn: the reply is read, not heard.
 WRITTEN_FRONT_END_INSTRUCTIONS = (
     "You are answering through JARVIS, the user's desktop front-end, in its "
@@ -375,6 +388,7 @@ def build_instructions(req: BrainRequest, *, written: bool = False) -> str:
     typed turn (``written``) is told it is read, not spoken.
     """
     parts = [WRITTEN_FRONT_END_INSTRUCTIONS if written else FRONT_END_INSTRUCTIONS]
+    parts.append(PC_CONTROL_INSTRUCTIONS)
     parts.append(PERSONA_INSTRUCTIONS)
     prefs = render_cli_standing_instructions(req.system)
     if prefs:

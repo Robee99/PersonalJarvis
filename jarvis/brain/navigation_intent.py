@@ -79,6 +79,27 @@ _BREAK_WORDS = frozenset(
 _SENTENCE_BREAK = re.compile(r"[.!?;]")
 
 
+# Words that say the target belongs to the computer or another app, not to
+# this app's sidebar. "Open Windows Settings" is the operating system's
+# Settings; live 2026-10-12 it opened Jarvis's own Settings page instead.
+# Matching *input vocabulary*, not prose.
+_FOREIGN_OWNERS = frozenset(
+    {
+        "windows", "system", "pc", "computer", "laptop", "chrome", "browser",
+        "edge", "firefox", "phone", "device", "bluetooth", "wifi", "display",
+        "sound", "network", "camera", "mic", "microphone", "steam", "discord",
+        "spotify", "whatsapp", "telegram", "youtube", "instagram", "google",
+        "sistema", "computadora",  # i18n-allow: input vocab
+    }
+)
+
+
+def _foreign_target(gap: str, tail: str) -> bool:
+    """True when the words around the section name put it on another app or the OS."""
+    near = gap.split() + tail.split()[:3]
+    return any(word.strip(",.!?").removesuffix("'s") in _FOREIGN_OWNERS for word in near)
+
+
 def _binds(gap: str) -> bool:
     """True when the text between a cue and a section word keeps them one command.
 
@@ -113,7 +134,9 @@ def match_navigation_intent(text: str) -> str | None:
         # Word boundaries so 'board' does not match inside 'keyboard'.
         for hit in re.finditer(r"\b" + re.escape(phrase) + r"\b", t):
             if any(
-                cue_end <= hit.start() and _binds(t[cue_end : hit.start()])
+                cue_end <= hit.start()
+                and _binds(t[cue_end : hit.start()])
+                and not _foreign_target(t[cue_end : hit.start()], t[hit.end() :])
                 for cue_end in cues
             ):
                 return section_id

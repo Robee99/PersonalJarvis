@@ -6369,7 +6369,9 @@
       "steps": "{n} pasos",
       "empty": "Aún no se ha dicho nada. Pulsa Hablar o di «{wake}».",
       "empty_listening": "Escuchando. Empieza a hablar.",
-      "jump_latest": "Ir a lo más reciente"
+      "jump_latest": "Ir a lo más reciente",
+      "type_placeholder": "Escribe a {name}, la misma conversación que por voz…",
+      "send": "Enviar"
     },
     "memory": {
       "title": "Memoria",

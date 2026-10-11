@@ -6369,7 +6369,9 @@
       "steps": "{n} Schritte",
       "empty": "Noch nichts gesagt. Drück auf Sprechen oder sag „{wake}“.",
       "empty_listening": "Ich höre zu. Sprich einfach los.",
-      "jump_latest": "Zum Neuesten springen"
+      "jump_latest": "Zum Neuesten springen",
+      "type_placeholder": "An {name} schreiben, gleiches Gespräch wie per Stimme…",
+      "send": "Senden"
     },
     "memory": {
       "title": "Gedächtnis",

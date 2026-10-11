@@ -263,6 +263,20 @@ async def test_changed_arguments_are_refused(rig: _Rig, clock: _Clock) -> None:
     assert any(event.reason == "consent_mismatch" for event in rig.denied)
 
 
+async def test_a_reworded_reason_still_runs_what_the_user_agreed_to(
+    rig: _Rig, clock: _Clock
+) -> None:
+    token = await _ask(rig, clock)
+    spoken_consent.note_user_turn("yes please")
+
+    body, is_error = await rig.call(
+        "gmail", {**SEND, "reason": "the user wants it sent now", "confirm_token": token}
+    )
+
+    assert not is_error
+    assert rig.mail.ran == [SEND], "the deferred call runs, with the arguments asked about"
+
+
 async def test_no_denies_and_never_runs(rig: _Rig, clock: _Clock) -> None:
     token = await _ask(rig, clock)
     spoken_consent.note_user_turn("no, don't send it")
