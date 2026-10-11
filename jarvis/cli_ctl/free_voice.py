@@ -186,12 +186,19 @@ HERMES_JARVIS_TOOLS: tuple[str, ...] = (
     "wiki-recall",
     "wiki-list",
     "wiki-ingest",
+    # Remembered chats by topic: the memory orb's groups, a topic's chats, one
+    # chat paged (read-only, sized for a small local model).
+    "memory_chats",
     "gmail",
     "google_calendar",
     "google_drive",
     "camera",
     "contact-lookup",
     "call-contact",
+    # The computer's own volume and window state, read back from Windows: the
+    # Windows MCP has no maximize/minimize, and a music app is not the volume.
+    "system_volume",
+    "window_control",
     # The project brain map, read-only: what is blocked, open, decided, next.
     "project_summary",
     "open_tasks",

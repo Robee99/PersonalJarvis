@@ -1552,3 +1552,32 @@ written.
 - `tests/unit/plugins/tool/test_laptop_power.py` checks the exact driver
   bytes, the slider GUIDs, the presence check, charge-limit bounds and the
   off-Windows refusals.
+
+## Amendment 2026-10-12 — Memory by topic
+
+`memory_chats` joins `ROUTER_TOOLS`. It answers "all my chats about X" over a
+large imported chat export, which `wiki-list` cannot print and `wiki-recall`
+caps at five hits. Three actions, each sized for a small local model:
+`topics` (the memory orb's note communities), `list` (the chats in one topic
+or matching a query, one line each) and `read` (one chat, 6,000 characters per
+call, paged with `offset`).
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`: it only reads the vault, through the same walk and parse
+  cache as the wiki routes (`jarvis/memory/wiki/visible_pages.py`).
+- Topics are the orb's own groups (`jarvis/memory/orb_tree.note_groups`), so
+  there is no second grouping to keep in sync. Link-poor areas are grouped by
+  TF-IDF similarity of each note's title and opening text, cached per area.
+- Returned text passes through `redact_secrets` and is labelled as a record of
+  a past chat, data rather than instructions.
+- Never a spawn and never in a worker set (AP-5/AP-14). Hermes reaches it over
+  Jarvis's MCP server (`HERMES_JARVIS_TOOLS`), as `mcp__jarvis__memory_chats`.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/memory/test_orb_tree.py` checks topic grouping, names,
+  determinism, loose notes and the time for a 2,400-chat area.
+- `tests/unit/plugins/tool/test_memory_chats.py` checks the three actions,
+  paging, secret masking and the Hermes include list.

@@ -32,10 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import threading
 import time
-from dataclasses import dataclass
 from datetime import UTC
 from pathlib import Path
 from typing import Any
@@ -53,39 +50,27 @@ from jarvis.memory.wiki.integration import (
     get_running_capture_runtime,
     get_running_curator,
 )
-from jarvis.memory.wiki.page import parse_markdown
 from jarvis.memory.wiki.prompt import resolve_user_entity_slug
 from jarvis.memory.wiki.protocols import WikiPage
 from jarvis.memory.wiki.search import VaultSearch
 from jarvis.memory.wiki.telemetry import telemetry as _telemetry
 from jarvis.memory.wiki.vault_root import resolve_vault_root
-from jarvis.memory.wiki.wikilink import (
-    _canonicalise as _canonicalise_link,  # type: ignore[attr-defined]
+from jarvis.memory.wiki.visible_pages import (
+    PAGE_DIRS,
+    TEMPLATE_DIRS,
+    VisiblePage,
+    display_title,
+    invalidate_visible_page_cache,  # noqa: F401 — re-exported for callers and tests
+    kind_of,
+    link_slug,
+    note_rows,
+    scan_visible_pages,
 )
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/wiki", tags=["wiki"])
 
-# Canonical directories remain first in the tree for response compatibility.
-_PAGE_DIRS: tuple[tuple[str, str], ...] = (
-    ("entities", "entity"),
-    ("concepts", "concept"),
-    ("projects", "project"),
-    ("sessions", "session"),
-)
-
-# Frozen history and binary-only storage are not live Wiki pages. Hidden
-# directories (for example .obsidian and .trash) are pruned separately.
-_EXCLUDED_PAGE_DIRS: frozenset[str] = frozenset(
-    {"_archive", "attachments", "90-attachments"}
-)
-# Template scaffolding stays browsable in the tree but never enters the
-# graph: its bodies are unrendered placeholders (``{{title}}``, ``[[…]]``),
-# so every "link" would materialise as a phantom node.
-_TEMPLATE_DIRS: frozenset[str] = frozenset(
-    {"templates", "_templates", "99-templates"}
-)
 _ROOT_FOLDER_NAME = "root"
 
 # Snippet window (chars) for backlink context extraction around the wikilink.
@@ -153,32 +138,8 @@ def _resolve_vault_root(request: Request) -> Path | None:
 
 
 # ----------------------------------------------------------------------
-# Title / kind helpers
+# Hub page
 # ----------------------------------------------------------------------
-
-
-def _title_of(page: WikiPage) -> str:
-    """Best-effort human title: H1 in the body, else slug humanised."""
-    for line in page.body.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("# "):
-            return stripped[2:].strip()
-    return page.slug.replace("-", " ").replace("_", " ").title()
-
-
-def _display_title(page: WikiPage) -> str:
-    """Frontmatter title, else H1, else humanised slug — never a placeholder.
-
-    Template pages carry unrendered Obsidian placeholders (``{{title}}``,
-    ``{{date:dddd, MMMM Do YYYY}}``) as their H1; showing those verbatim in
-    the tree or graph reads as junk, so any candidate containing ``{{``
-    falls through to the next source.
-    """
-    for candidate in (str(page.frontmatter.get("title") or ""), _title_of(page)):
-        candidate = candidate.strip()
-        if candidate and "{{" not in candidate:
-            return candidate
-    return _human_title_from_slug(page.slug)
 
 
 def _hub_slug(request: Request, known_slugs: set[str]) -> str | None:
@@ -201,202 +162,35 @@ def _hub_slug(request: Request, known_slugs: set[str]) -> str | None:
     return slug if slug in known_slugs else None
 
 
-def _kind_of(page: WikiPage) -> str:
-    """Schema kind (entity/concept/project/session/meta) of a page."""
-    return page.page_type or "meta"
-
-
-def _human_title_from_slug(slug: str) -> str:
-    return slug.replace("-", " ").replace("_", " ").title()
-
-
 # ----------------------------------------------------------------------
 # Visible-vault projection (off-loop)
 # ----------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _VisiblePage:
-    """One live Markdown page plus filesystem metadata for route responses."""
-
-    page: WikiPage
-    relative_path: Path
-    mtime: float
-    size: int
-
-
-def _visible_path_sort_key(relative_path: Path) -> tuple[int, str]:
-    """Keep canonical page directories first, then root and custom folders."""
-    parts = relative_path.parts
-    top = parts[0] if len(parts) > 1 else ""
-    standard_order = {name: index for index, (name, _) in enumerate(_PAGE_DIRS)}
-    if top in standard_order:
-        rank = standard_order[top]
-    elif not top:
-        rank = len(_PAGE_DIRS)
-    else:
-        rank = len(_PAGE_DIRS) + 1
-    return rank, relative_path.as_posix().casefold()
-
-
-# Parsed-page cache, keyed by vault root and then by vault-relative path.
 #
-# ``/tree``, ``/graph`` and ``/backlinks/{slug}`` all project the same vault
-# walk, and each one used to READ AND PARSE every Markdown file in the vault
-# on every single request. Opening the Wiki tab fires all three at once and
-# every page click fires two more, so a vault with a few hundred pages spent
-# whole seconds of disk + parse work per navigation — the user-visible "the
-# wiki feels laggy" symptom.
+# The walk, the parse cache and the title helpers live in
+# ``jarvis/memory/wiki/visible_pages.py``, shared with the memory tools.
 #
-# An entry is reused only when the file's ``(mtime_ns, size)`` is unchanged,
-# which the walk has to stat for the response payload anyway. So a warm scan
-# of an untouched vault costs one stat per file and zero reads/parses, while
-# any external edit (Obsidian, the curator, a git pull) invalidates exactly
-# the files it touched. Entries not seen in a scan are dropped, which bounds
-# the cache by the vault itself; only the few most recent roots are kept.
-_PARSE_CACHE_LOCK = threading.Lock()
-_PARSE_CACHE: dict[str, dict[str, tuple[int, int, _VisiblePage]]] = {}
-_PARSE_CACHE_MAX_ROOTS = 4
-
-
-def invalidate_visible_page_cache(vault_root: Path | None = None) -> None:
-    """Drop cached page parses for one vault root, or for all of them.
-
-    The ``(mtime_ns, size)`` check already covers every real edit; this exists
-    for tests and for callers that rewrite a vault in place fast enough to
-    land inside a filesystem's timestamp granularity.
-    """
-    with _PARSE_CACHE_LOCK:
-        if vault_root is None:
-            _PARSE_CACHE.clear()
-        else:
-            _PARSE_CACHE.pop(str(vault_root.resolve()), None)
-
-
-def _walk_page_files(root: Path) -> list[tuple[Path, Path, os.stat_result]]:
-    """Yield ``(path, vault-relative path, stat)`` for every visible page.
-
-    Built on ``os.scandir`` rather than ``os.walk``: the directory entry
-    already carries the file type and, on Windows, the full stat block, so the
-    type check and the ``(mtime, size)`` the cache validates against come for
-    free instead of costing a syscall each.
-
-    Hidden trees, frozen archive history, and attachment stores are pruned
-    before files are opened. Symlinked files that resolve outside the vault are
-    ignored so a crafted vault cannot expose unrelated host files — and only a
-    symlink can point outside, so the expensive ``resolve()`` is paid for links
-    alone instead of for every page.
-    """
-    out: list[tuple[Path, Path, os.stat_result]] = []
-    stack: list[str] = [str(root)]
-    while stack:
-        current = stack.pop()
-        try:
-            with os.scandir(current) as entries:
-                listing = list(entries)
-        except OSError as exc:
-            log.warning("wiki_route_walk_failed: %s - %s", current, exc)
-            continue
-        for entry in listing:
-            name = entry.name
-            if name.startswith("."):
-                continue
-            try:
-                # A symlinked directory reports False here, which is exactly
-                # the old ``os.walk(followlinks=False)`` behaviour: listed,
-                # never descended into.
-                if entry.is_dir(follow_symlinks=False):
-                    if name.casefold() not in _EXCLUDED_PAGE_DIRS:
-                        stack.append(entry.path)
-                    continue
-                if not name.casefold().endswith(".md"):
-                    continue
-                path = Path(entry.path)
-                if entry.is_symlink():
-                    resolved = path.resolve()
-                    resolved.relative_to(root)
-                    if not resolved.is_file():
-                        continue
-                elif not entry.is_file(follow_symlinks=False):
-                    continue
-                stat = entry.stat()
-            except (OSError, ValueError):
-                continue
-            out.append((path, path.relative_to(root), stat))
-    return out
-
-
-def _scan_visible_pages_sync(vault_root: Path) -> list[_VisiblePage]:
-    """Parse every user-visible Markdown page below ``vault_root``.
-
-    Unchanged files are served from the parse cache above; the walk itself is
-    described in :func:`_walk_page_files`.
-    """
-    root = vault_root.resolve()
-    cache_key = str(root)
-    found = _walk_page_files(root)
-    # One total-order sort at the end — the intermediate per-directory sorts
-    # the old walk did could not change this result.
-    found.sort(key=lambda item: _visible_path_sort_key(item[1]))
-
-    with _PARSE_CACHE_LOCK:
-        cached = _PARSE_CACHE.get(cache_key, {})
-
-    fresh: dict[str, tuple[int, int, _VisiblePage]] = {}
-    visible: list[_VisiblePage] = []
-    for path, relative, stat in found:
-        rel_key = relative.as_posix()
-        signature = (stat.st_mtime_ns, stat.st_size)
-        hit = cached.get(rel_key)
-        if hit is not None and (hit[0], hit[1]) == signature:
-            entry = hit[2]
-        else:
-            try:
-                raw = path.read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:
-                log.warning("wiki_route_walk_failed: %s - %s", path, exc)
-                continue
-            entry = _VisiblePage(
-                page=parse_markdown(raw, path),
-                relative_path=relative,
-                mtime=stat.st_mtime,
-                size=stat.st_size,
-            )
-        fresh[rel_key] = (*signature, entry)
-        visible.append(entry)
-
-    with _PARSE_CACHE_LOCK:
-        # Re-insert so this root counts as the most recently used one.
-        _PARSE_CACHE.pop(cache_key, None)
-        _PARSE_CACHE[cache_key] = fresh
-        while len(_PARSE_CACHE) > _PARSE_CACHE_MAX_ROOTS:
-            del _PARSE_CACHE[next(iter(_PARSE_CACHE))]
-
-    return visible
-
-
 # One shared scan per vault root while it is running. Mounting the Wiki tab
 # fires /tree, /graph and /backlinks simultaneously; without this they queued
 # three identical walks against the same thread pool, so the slowest response
 # waited for all three. Now the first request does the work and the others
 # await its result.
-_SCAN_INFLIGHT: dict[str, asyncio.Task[list[_VisiblePage]]] = {}
+_SCAN_INFLIGHT: dict[str, asyncio.Task[list[VisiblePage]]] = {}
 
 
-def _release_inflight(key: str, task: asyncio.Task[list[_VisiblePage]]) -> None:
+def _release_inflight(key: str, task: asyncio.Task[list[VisiblePage]]) -> None:
     """Drop a finished scan task unless a newer one already replaced it."""
     if _SCAN_INFLIGHT.get(key) is task:
         _SCAN_INFLIGHT.pop(key, None)
 
 
-async def _scan_visible_pages(vault_root: Path) -> list[_VisiblePage]:
+async def _scan_visible_pages(vault_root: Path) -> list[VisiblePage]:
     """Build a non-blocking projection of the active Obsidian vault."""
     key = str(vault_root)
     loop = asyncio.get_running_loop()
     task = _SCAN_INFLIGHT.get(key)
     if task is None or task.done() or task.get_loop() is not loop:
         task = loop.create_task(
-            asyncio.to_thread(_scan_visible_pages_sync, vault_root)
+            asyncio.to_thread(scan_visible_pages, vault_root)
         )
         _SCAN_INFLIGHT[key] = task
         task.add_done_callback(lambda done, k=key: _release_inflight(k, done))
@@ -410,8 +204,8 @@ def _folder_name(relative_path: Path) -> str:
     return _ROOT_FOLDER_NAME if parent == Path(".") else parent.as_posix()
 
 
-def _folder_kind(name: str, pages: list[_VisiblePage]) -> str:
-    standard_kinds = dict(_PAGE_DIRS)
+def _folder_kind(name: str, pages: list[VisiblePage]) -> str:
+    standard_kinds = dict(PAGE_DIRS)
     if name in standard_kinds:
         return standard_kinds[name]
     kinds = {item.page.page_type for item in pages if item.page.page_type}
@@ -419,10 +213,10 @@ def _folder_kind(name: str, pages: list[_VisiblePage]) -> str:
 
 
 def _tree_from_visible_pages(
-    visible: list[_VisiblePage],
+    visible: list[VisiblePage],
 ) -> tuple[list[dict[str, Any]], float | None]:
     """Return compatible flat folder buckets plus the root log timestamp."""
-    grouped: dict[str, list[_VisiblePage]] = {name: [] for name, _ in _PAGE_DIRS}
+    grouped: dict[str, list[VisiblePage]] = {name: [] for name, _ in PAGE_DIRS}
     log_mtime: float | None = None
     for item in visible:
         name = _folder_name(item.relative_path)
@@ -430,7 +224,7 @@ def _tree_from_visible_pages(
         if item.relative_path.as_posix() == "log.md":
             log_mtime = item.mtime
 
-    standard_names = [name for name, _ in _PAGE_DIRS]
+    standard_names = [name for name, _ in PAGE_DIRS]
     extra_names = sorted(
         (name for name in grouped if name not in standard_names),
         key=lambda name: (name != _ROOT_FOLDER_NAME, name.casefold()),
@@ -441,7 +235,7 @@ def _tree_from_visible_pages(
         files = [
             {
                 "slug": item.page.slug,
-                "title": _display_title(item.page),
+                "title": display_title(item.page),
                 "mtime": item.mtime,
                 "size": item.size,
             }
@@ -476,7 +270,7 @@ async def get_tree(request: Request) -> dict[str, Any]:
     if vault_root is None or not vault_root.is_dir():
         empty_folders = [
             {"name": dirname, "kind": kind, "count": 0, "files": []}
-            for dirname, kind in _PAGE_DIRS
+            for dirname, kind in PAGE_DIRS
         ]
         return {
             "ok": True,
@@ -545,20 +339,20 @@ async def get_page(slug: str, request: Request) -> dict[str, Any]:
         size_bytes = len(page.body.encode("utf-8"))
 
     rel_path = _relative_to_vault(page_path, vault_root)
-    title = _display_title(page)
+    title = display_title(page)
     body_md = page.body
     words = len(body_md.split())
 
     return {
         "ok": True,
         "slug": page.slug,
-        "kind": _kind_of(page),
+        "kind": kind_of(page),
         "title": title,
         "path": rel_path,
         "frontmatter": dict(page.frontmatter),
         "frontmatter_valid": bool(page.is_schema_valid),
         "body_md": body_md,
-        "wikilinks": [_link_slug(link) for link in page.wikilinks],
+        "wikilinks": [link_slug(link) for link in page.wikilinks],
         "stats": {
             "words": words,
             "bytes": size_bytes,
@@ -589,7 +383,7 @@ async def get_graph(request: Request) -> dict[str, Any]:
         for item in visible
         if not (
             len(item.relative_path.parts) > 1
-            and item.relative_path.parts[0].casefold() in _TEMPLATE_DIRS
+            and item.relative_path.parts[0].casefold() in TEMPLATE_DIRS
         )
     ]
 
@@ -603,8 +397,8 @@ async def get_graph(request: Request) -> dict[str, Any]:
         nodes.append(
             {
                 "id": slug,
-                "kind": _kind_of(page),
-                "title": _display_title(page),
+                "kind": kind_of(page),
+                "title": display_title(page),
             }
         )
 
@@ -613,7 +407,7 @@ async def get_graph(request: Request) -> dict[str, Any]:
     for page in pages:
         body = page.body
         for raw_link in page.wikilinks:
-            target_slug = _link_slug(raw_link)
+            target_slug = link_slug(raw_link)
             if not target_slug:
                 continue
             context = _link_context(body, raw_link, target_slug)
@@ -659,29 +453,10 @@ async def get_orb_tree(request: Request) -> dict[str, Any]:
     vault_root = _resolve_vault_root(request)
     if vault_root is not None and vault_root.is_dir():
         try:
-            visible = await _scan_visible_pages(vault_root)
+            notes = note_rows(await _scan_visible_pages(vault_root))
         except Exception as exc:  # noqa: BLE001 — reported as unavailable, the orb still draws work
             log.warning("wiki_route_failed route=/orb-tree error=%s", exc)
             unavailable.append("notes")
-            visible = []
-        seen: set[str] = set()
-        for item in visible:
-            parts = item.relative_path.parts
-            if len(parts) > 1 and parts[0].casefold() in _TEMPLATE_DIRS:
-                continue
-            page = item.page
-            if page.slug in seen:
-                continue
-            seen.add(page.slug)
-            notes.append(
-                NoteRow(
-                    slug=page.slug,
-                    title=_display_title(page),
-                    kind=_kind_of(page),
-                    folder=tuple(parts[:-1]),
-                    links=tuple(s for s in (_link_slug(w) for w in page.wikilinks) if s),
-                )
-            )
     entities: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     try:
@@ -714,7 +489,7 @@ async def get_backlinks(slug: str, request: Request) -> dict[str, Any]:
     sources = [
         item.page
         for item in visible
-        if any(_link_slug(link) == slug for link in item.page.wikilinks)
+        if any(link_slug(link) == slug for link in item.page.wikilinks)
     ]
     out: list[dict[str, Any]] = []
     for src in sources:
@@ -722,7 +497,7 @@ async def get_backlinks(slug: str, request: Request) -> dict[str, Any]:
         out.append(
             {
                 "slug": src.slug,
-                "title": _display_title(src),
+                "title": display_title(src),
                 "snippet": snippet,
             }
         )
@@ -1003,12 +778,6 @@ def _relative_to_vault(path: Path, vault_root: Path) -> str:
     except (ValueError, OSError):
         return path.name
     return rel.as_posix()
-
-
-def _link_slug(link: str) -> str:
-    """Reduce a path-qualified Obsidian link to its page slug."""
-    target = _canonicalise_link(link).replace("\\", "/").rsplit("/", 1)[-1]
-    return target[:-3] if target.casefold().endswith(".md") else target
 
 
 def _link_context(body: str, link_target: str, fallback_slug: str) -> str:

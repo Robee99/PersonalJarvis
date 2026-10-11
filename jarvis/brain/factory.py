@@ -175,6 +175,13 @@ ROUTER_TOOLS = frozenset({
     # Jarvis-Agents may call it only through the ADR-0025 supervisor broker,
     # never through a legacy worker tier (AP-5/AP-14). See ADR-0011.
     "wiki-list",
+    # Memory by topic (2026-10-12): the memory orb's note communities, the
+    # chats in one topic or matching a query, and one chat paged 6,000
+    # characters at a time. Lets the local brain (Gemma under Hermes) answer
+    # "all my chats about X" over a 2,000-chat import that wiki-list cannot
+    # print and wiki-recall caps at 5 hits. Read-only and safe; never a spawn
+    # and never in a worker tool set (AP-5/AP-14).
+    "memory_chats",
     # Phase B5 follow-up: deterministic ingest path. Lets the brain
     # explicitly store a fact ("merk dir: …") rather than relying on the
     # VoiceFactBridge acknowledgement heuristic.
@@ -584,6 +591,12 @@ def _load_tools_for_tier(
                 from jarvis.plugins.tool.wiki_list import _build_wiki_list_tool
 
                 inst = _build_wiki_list_tool()
+            elif ep.name == "memory_chats":
+                # Memory by topic: same vault-root resolution and FTS search
+                # as the other wiki tools; the topics are the orb's own.
+                from jarvis.plugins.tool.memory_chats import _build_memory_chats_tool
+
+                inst = _build_memory_chats_tool()
             elif ep.name == "wiki-ingest":
                 # Phase B5 follow-up: lazy curator resolver — the curator is
                 # constructed by ``bootstrap_wiki_integration`` after the brain

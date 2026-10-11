@@ -106,6 +106,7 @@ _CORE_TOOLS: Final[frozenset[str]] = frozenset(
         "wiki-ingest",
         "wiki-list",
         "wiki-page-read",
+        "memory_chats",
         "run-skill",
         "inspect-pointer",
         "open-app",

@@ -2018,6 +2018,9 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             "system-volume",
             # Window control (2026-10-12): window state by title (risk monitor).
             "window-control",
+            # Memory by topic (2026-10-12): orb topics, their chats, one chat
+            # paged (risk safe, read-only).
+            "memory_chats",
         }
     )
     assert ROUTER_TOOLS == expected, (
