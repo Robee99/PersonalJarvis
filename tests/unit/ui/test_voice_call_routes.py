@@ -132,3 +132,63 @@ def test_state_clamps_a_left_over_supervisor_state_to_idle(monkeypatch):
         "state": "idle",
         "voice_state": "idle",
     }
+
+
+# ----------------------------------------------------------------------
+# GET/POST /api/voice/mute — the HUD's microphone mute.
+# ----------------------------------------------------------------------
+
+
+class _MutePipeline:
+    """The two things the mute routes touch: the flag and the bus.
+
+    The flip itself is the REAL pipeline handler, subscribed the way
+    ``SpeechPipeline.__init__`` subscribes it, so the test proves the POST
+    reaches the one writer and that writer's broadcast comes back.
+    """
+
+    def __init__(self, bus) -> None:
+        from jarvis.core.events import VoiceMuteToggleRequested
+        from jarvis.speech.pipeline import SpeechPipeline
+
+        self._bus = bus
+        self._muted = False
+
+        async def _flip(event) -> None:
+            await SpeechPipeline._on_mute_toggle_requested(self, event)  # type: ignore[arg-type]
+
+        bus.subscribe(VoiceMuteToggleRequested, _flip)
+
+
+def test_mute_toggle_flips_through_the_pipeline_and_broadcasts(monkeypatch):
+    from jarvis.core.bus import EventBus
+    from jarvis.core.events import VoiceMuteChanged
+
+    bus = EventBus()
+    heard: list[VoiceMuteChanged] = []
+
+    async def _record(event: VoiceMuteChanged) -> None:
+        heard.append(event)
+
+    bus.subscribe(VoiceMuteChanged, _record)
+    pipeline = _MutePipeline(bus)
+    client = _client(monkeypatch, pipeline)
+
+    assert client.get("/api/voice/mute").json() == {"available": True, "muted": False}
+    answer = client.post("/api/voice/mute")
+    assert answer.status_code == 200
+    assert answer.json() == {"requested": True}
+    assert pipeline._muted is True
+    assert [(e.muted, e.source) for e in heard] == [(True, "web.hud")]
+    assert client.get("/api/voice/mute").json() == {"available": True, "muted": True}
+
+    # A toggle, not a set: the second press unmutes.
+    client.post("/api/voice/mute")
+    assert pipeline._muted is False
+    assert [e.muted for e in heard] == [True, False]
+
+
+def test_mute_is_honest_on_a_headless_install(monkeypatch):
+    client = _client(monkeypatch, None)
+    assert client.get("/api/voice/mute").json() == {"available": False, "muted": False}
+    assert client.post("/api/voice/mute").status_code == 503

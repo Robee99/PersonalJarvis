@@ -7,6 +7,9 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
                               wake word — same path as the call hotkey).
     POST /api/voice/hangup  → hard-stop the voice channel (same contract as the
                               hangup hotkey).
+    GET  /api/voice/mute    → whether the microphone is muted FOR the assistant.
+    POST /api/voice/mute    → toggle that mute (the mascot double-click's
+                              contract, ``VoiceMuteToggleRequested``).
 
 The click path is deliberately the SAME one the call hotkey and the chats
 "Speak in this conversation" button take — ``SpeechPipeline.request_voice_session``
@@ -109,3 +112,37 @@ async def voice_hangup() -> dict[str, Any]:
     if pipeline is None or not hasattr(pipeline, "request_voice_hangup"):
         raise HTTPException(status_code=503, detail="voice-pipeline-unavailable")
     return {"stopped": bool(pipeline.request_voice_hangup())}
+
+
+@router.get("/mute")
+async def voice_mute_state() -> dict[str, Any]:
+    """Whether the user's microphone is muted for the assistant right now.
+
+    The flag lives on the pipeline (``SpeechPipeline._muted``) and nowhere
+    else; every surface mirrors it from ``VoiceMuteChanged``. This is the REST
+    seed for a surface that mounts after the last flip and so never saw it.
+    """
+    pipeline = _pipeline()
+    if pipeline is None:
+        return {"available": False, "muted": False}
+    return {"available": True, "muted": bool(getattr(pipeline, "_muted", False))}
+
+
+@router.post("/mute")
+async def voice_mute_toggle() -> dict[str, Any]:
+    """Toggle the microphone mute — the same request the mascot double-click sends.
+
+    Mute is input-only: the assistant finishes what it is saying, and the
+    user's frames are dropped at the pipeline's boundary until unmuted. The
+    pipeline owns the flip (``_on_mute_toggle_requested``) and answers with
+    ``VoiceMuteChanged``, so the caller learns the new state from the bus,
+    never from here — one writer, one broadcast.
+    """
+    pipeline = _pipeline()
+    bus = getattr(pipeline, "_bus", None) if pipeline is not None else None
+    if bus is None:
+        raise HTTPException(status_code=503, detail="voice-pipeline-unavailable")
+    from jarvis.core.events import VoiceMuteToggleRequested
+
+    await bus.publish(VoiceMuteToggleRequested(source="web.hud", source_layer="ui.web.voice"))
+    return {"requested": True}
