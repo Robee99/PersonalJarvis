@@ -950,7 +950,7 @@ def match_local_action(
         believes (GT-16).  Empty means "caller knows of no tools" and leaves
         the historical registry-only behaviour untouched.
     """
-    original = text.strip()
+    original = _spoken_command(text.strip())
     if not original:
         return None
 
@@ -1222,6 +1222,21 @@ def _open_terminal_calls(count: int) -> tuple[LocalToolCall, ...]:
     return tuple(
         LocalToolCall(name="open_app", args={"app_name": "wt"}) for _ in range(count)
     )
+
+
+#: A conversational lead-in before the command ("Yeah, open youtube dot com").
+_LEAD_IN_RE = re.compile(r"^(?:(?:yeah|yes|yep|ok(?:ay)?|so|um+|uh+|alright|right)[,\s]+)+", re.I)
+#: A domain spoken aloud: "youtube dot com" is what STT writes for youtube.com.
+_SPOKEN_DOMAIN_RE = re.compile(
+    r"\b([a-z0-9][a-z0-9-]*)\s+dot\s+(com|org|net|io|in|co|dev|ai|app|gg|tv|me|de|es|uk)\b",
+    re.I,
+)
+
+
+def _spoken_command(text: str) -> str:
+    """The command as typed: lead-in dropped, spoken domains written as domains."""
+    text = _LEAD_IN_RE.sub("", text)
+    return _SPOKEN_DOMAIN_RE.sub(lambda m: f"{m.group(1)}.{m.group(2)}", text)
 
 
 def _normalize(text: str) -> str:

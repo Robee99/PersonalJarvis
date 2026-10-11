@@ -1316,3 +1316,22 @@ def test_positive_controls_survive_the_negation_guard(
     plan = match_local_action(utterance, _registry=None)
     assert plan is not None, f"{utterance!r} lost its local plan"
     assert plan.mode is mode, f"{utterance!r} -> {plan.mode}, want {mode}"
+
+
+@pytest.mark.parametrize(
+    ("spoken", "site"),
+    [
+        ("open youtube dot com", "https://youtube.com"),
+        ("Yeah, open youtube dot com", "https://youtube.com"),
+        ("okay go to github dot com", "https://github.com"),
+    ],
+)
+def test_spoken_domains_and_lead_ins_launch_like_typed_ones(spoken: str, site: str) -> None:
+    plan = match_local_action(spoken, live_tool_names=())
+    assert plan is not None and plan.mode == LocalActionMode.DIRECT
+    assert [dict(c.args) for c in plan.tool_calls] == [{"app_name": site}]
+
+
+@pytest.mark.parametrize("text", ["yeah", "okay", "so what is the weather"])
+def test_a_lead_in_alone_is_no_action(text: str) -> None:
+    assert match_local_action(text, live_tool_names=()) is None
