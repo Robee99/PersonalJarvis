@@ -331,7 +331,9 @@ export function MissionDeckView({
               {/* The floor the case stands on — behind every plane, on the wall's side. */}
               <DeckFloor />
 
-              {/* LEFT top: project memory — search, inspect, act. On a narrow
+              {/* LEFT top: project memory — search, inspect, act; as a list or
+                  as the 3D memory orb that follows the conversation
+                  (MemoryOrb3D, switched in the panel's title strip). On a narrow
                   window the stacking order puts the orb and the transcript first. */}
               <DeckReveal
                 slot="left-top"

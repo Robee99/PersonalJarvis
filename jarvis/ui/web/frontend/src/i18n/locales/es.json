@@ -6421,6 +6421,43 @@
         "AGENT": "Agente",
         "OUTPUT": "Resultado",
         "NOTE": "Nota"
+      },
+      "view_label": "Vista de la memoria",
+      "view_list": "Mostrar como lista",
+      "view_orb": "Mostrar como orbe 3D"
+    },
+    "orb": {
+      "label": "Orbe de memoria. Las flechas recorren notas y comunidades; Intro abre.",
+      "loading": "Trazando la memoria…",
+      "error": "El orbe de memoria no está disponible.",
+      "empty": "Todavía no hay nada en la memoria. Los proyectos y las notas aparecen aquí a medida que se añaden.",
+      "no_webgl": "El 3D no está disponible en este ordenador. Recorre la memoria con las flechas de abajo.",
+      "unavailable_work": "No se pudo leer la memoria de proyectos.",
+      "unavailable_notes": "No se pudieron leer las notas.",
+      "hint": "Arrastra para girar. Nombra un proyecto o una nota y el orbe gira hacia él.",
+      "prev": "Nota anterior",
+      "next": "Nota siguiente",
+      "prev_group": "Comunidad anterior",
+      "next_group": "Comunidad siguiente",
+      "open": "Abrir",
+      "from_voice": "mencionado en la conversación",
+      "capped": "{shown} de {total} mostrados",
+      "level_1": "Comunidad",
+      "level_2": "Subcomunidad",
+      "level_3": "Elemento",
+      "legend": {
+        "red": "Bloqueado",
+        "yellow": "A medias",
+        "blue": "Activo",
+        "green": "Hecho",
+        "reference": "Referencia"
+      },
+      "legend_hint": {
+        "red": "Bloqueado, fallido o apenas empezado",
+        "yellow": "Hecho en parte",
+        "blue": "Activo o en revisión",
+        "green": "Hecho y verificado",
+        "reference": "Una nota a la que no apunta ningún trabajo registrado"
       }
     }
   },

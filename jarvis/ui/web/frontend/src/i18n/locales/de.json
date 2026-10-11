@@ -6421,6 +6421,43 @@
         "AGENT": "Agent",
         "OUTPUT": "Ergebnis",
         "NOTE": "Notiz"
+      },
+      "view_label": "Gedächtnisansicht",
+      "view_list": "Als Liste zeigen",
+      "view_orb": "Als 3D-Orb zeigen"
+    },
+    "orb": {
+      "label": "Gedächtnis-Orb. Pfeiltasten wechseln zwischen Notizen und Gruppen, Enter öffnet.",
+      "loading": "Gedächtnis wird kartiert…",
+      "error": "Der Gedächtnis-Orb ist nicht erreichbar.",
+      "empty": "Noch nichts im Gedächtnis. Projekte und Notizen erscheinen hier, sobald sie hinzukommen.",
+      "no_webgl": "3D ist auf diesem Computer nicht verfügbar. Mit den Pfeilen unten durch das Gedächtnis blättern.",
+      "unavailable_work": "Das Projektgedächtnis konnte nicht gelesen werden.",
+      "unavailable_notes": "Die Notizen konnten nicht gelesen werden.",
+      "hint": "Ziehen zum Drehen. Nenne ein Projekt oder eine Notiz, und der Orb dreht sich dorthin.",
+      "prev": "Vorherige Notiz",
+      "next": "Nächste Notiz",
+      "prev_group": "Vorherige Gruppe",
+      "next_group": "Nächste Gruppe",
+      "open": "Öffnen",
+      "from_voice": "im Gespräch genannt",
+      "capped": "{shown} von {total} angezeigt",
+      "level_1": "Gruppe",
+      "level_2": "Untergruppe",
+      "level_3": "Eintrag",
+      "legend": {
+        "red": "Blockiert",
+        "yellow": "Teilweise erledigt",
+        "blue": "Aktiv",
+        "green": "Erledigt",
+        "reference": "Referenz"
+      },
+      "legend_hint": {
+        "red": "Blockiert, gescheitert oder kaum begonnen",
+        "yellow": "Teilweise erledigt",
+        "blue": "Aktiv oder in Prüfung",
+        "green": "Erledigt und geprüft",
+        "reference": "Eine Notiz, auf die keine verfolgte Arbeit verweist"
       }
     }
   },

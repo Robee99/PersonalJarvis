@@ -6421,6 +6421,43 @@
         "AGENT": "Agent",
         "OUTPUT": "Output",
         "NOTE": "Note"
+      },
+      "view_label": "Memory view",
+      "view_list": "Show as list",
+      "view_orb": "Show as 3D orb"
+    },
+    "orb": {
+      "label": "Memory orb. Arrow keys step through notes and communities, Enter opens.",
+      "loading": "Mapping memory…",
+      "error": "The memory orb is not reachable.",
+      "empty": "Nothing remembered yet. Projects and notes appear here as they are added.",
+      "no_webgl": "3D is not available on this computer. Step through memory with the arrows below.",
+      "unavailable_work": "Project memory could not be read.",
+      "unavailable_notes": "Notes could not be read.",
+      "hint": "Drag to turn. Name a project or note and the orb turns to it.",
+      "prev": "Previous note",
+      "next": "Next note",
+      "prev_group": "Previous community",
+      "next_group": "Next community",
+      "open": "Open",
+      "from_voice": "named in the conversation",
+      "capped": "{shown} of {total} shown",
+      "level_1": "Community",
+      "level_2": "Sub-community",
+      "level_3": "Item",
+      "legend": {
+        "red": "Blocked",
+        "yellow": "Partly done",
+        "blue": "Active",
+        "green": "Done",
+        "reference": "Reference"
+      },
+      "legend_hint": {
+        "red": "Blocked, failed or barely started",
+        "yellow": "Partly done",
+        "blue": "Active or under review",
+        "green": "Done and verified",
+        "reference": "A note no tracked work points at"
       }
     }
   },

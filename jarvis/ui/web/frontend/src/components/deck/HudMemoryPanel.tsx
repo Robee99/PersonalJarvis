@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, BookOpen, BrainCircuit, MessageSquareText, Orbit, Search, X } from "lucide-react";
-import { DeckCard } from "@/components/deck/DeckCard";
+import { ArrowLeft, BookOpen, BrainCircuit, List, MessageSquareText, Orbit, Search, X } from "lucide-react";
+import { DeckCard, DeckIconButton } from "@/components/deck/DeckCard";
+import { MemoryOrb3D } from "@/components/deck/MemoryOrb3D";
 import {
   fetchMemoryEntity,
   fetchMemoryNodes,
@@ -16,6 +17,8 @@ import {
   type MemoryStatus,
 } from "@/components/deck/hudMemoryApi";
 import { sendChatMessage } from "@/lib/chat";
+import { detectWebgl } from "@/lib/graphDimension";
+import type { OrbRef } from "@/lib/memoryOrbLayout";
 import { useEventStore } from "@/store/events";
 import { cn } from "@/lib/utils";
 import { fill, useT } from "@/i18n";
@@ -28,6 +31,31 @@ export type MemorySelection =
 
 const KEY = ["hud2", "memory"] as const;
 const SEARCH_DEBOUNCE_MS = 200;
+const VIEW_KEY = "hud2.memory.view";
+
+/** How the panel shows memory at rest: the project list or the 3D orb. */
+export type MemoryView = "list" | "orb";
+
+/**
+ * The view last chosen; the orb by default where it can be drawn, the list
+ * where it cannot (the orb would only be words there).
+ */
+function savedView(): MemoryView {
+  try {
+    const saved = window.localStorage.getItem(VIEW_KEY);
+    if (saved === "list" || saved === "orb") return saved;
+  } catch {
+    // Storage can be blocked (private window, previews); fall through to the default.
+  }
+  return detectWebgl() ? "orb" : "list";
+}
+
+/** The panel's selection for a node the orb opens; null when the node names nothing. */
+export function selectionFromOrb(ref: OrbRef): MemorySelection | null {
+  if (ref.type === "note") return ref.slug ? { type: "note", slug: ref.slug } : null;
+  if (!ref.id) return null;
+  return ref.type === "project" ? { type: "project", id: ref.id } : { type: "entity", id: ref.id };
+}
 
 const STATUS_DOT: Record<MemoryStatus, string> = {
   red: "bg-destructive",
@@ -55,6 +83,13 @@ const STATUS_DOT: Record<MemoryStatus, string> = {
  *
  * A route that fails says "not reachable", never an empty list that would
  * read as "nothing remembered".
+ *
+ * At rest the panel shows either the project list or the memory orb
+ * (`MemoryOrb3D`, the same memory in 3D, following the conversation); the
+ * two buttons in the title strip switch, and the choice is remembered.
+ * Typing always searches and shows the results as a list; a node opened on
+ * the orb opens here, in the same detail view and back stack, and "Back"
+ * returns to the orb.
  */
 export function HudMemoryPanel({ className }: { className?: string }) {
   const t = useT();
@@ -63,6 +98,15 @@ export function HudMemoryPanel({ className }: { className?: string }) {
   const [q, setQ] = useState("");
   const [stack, setStack] = useState<MemorySelection[]>([]);
   const selection = stack[stack.length - 1] ?? null;
+  const [view, setViewState] = useState<MemoryView>(savedView);
+  const setView = (next: MemoryView) => {
+    setViewState(next);
+    try {
+      window.localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // Remembering the view is a convenience; without storage it resets.
+    }
+  };
 
   useEffect(() => {
     const id = window.setTimeout(() => setQ(query.trim()), SEARCH_DEBOUNCE_MS);
@@ -119,6 +163,13 @@ export function HudMemoryPanel({ className }: { className?: string }) {
   };
 
   const searching = q.length > 0;
+  // The orb stays mounted (hidden) under a detail or a search, so going back
+  // finds it where it was instead of building a new WebGL context.
+  const orbAtRest = view === "orb" && !selection && !searching;
+  const openFromOrb = (ref: OrbRef) => {
+    const next = selectionFromOrb(ref);
+    if (next) setStack([next]);
+  };
   const nothing =
     searching &&
     projectRows.length === 0 &&
@@ -137,6 +188,22 @@ export function HudMemoryPanel({ className }: { className?: string }) {
       variant="bracket"
       onOpen={() => setActiveSection("orb")}
       openLabel={t("hud2.memory.open_orb")}
+      actions={
+        <div role="group" aria-label={t("hud2.memory.view_label")} className="flex items-center gap-1">
+          <DeckIconButton
+            icon={List}
+            label={t("hud2.memory.view_list")}
+            active={view === "list"}
+            onClick={() => setView("list")}
+          />
+          <DeckIconButton
+            icon={Orbit}
+            label={t("hud2.memory.view_orb")}
+            active={view === "orb"}
+            onClick={() => setView("orb")}
+          />
+        </div>
+      }
       className={className}
       bodyClassName="flex min-h-0 flex-col gap-2"
     >
@@ -169,7 +236,9 @@ export function HudMemoryPanel({ className }: { className?: string }) {
           )}
         </label>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        {view === "orb" && <MemoryOrb3D className={orbAtRest ? undefined : "hidden"} onOpen={openFromOrb} />}
+
+        <div className={cn("min-h-0 flex-1 overflow-y-auto pr-1", orbAtRest && "hidden")}>
           {selection ? (
             <div data-testid="hud-memory-detail" className="flex flex-col gap-2">
               <button

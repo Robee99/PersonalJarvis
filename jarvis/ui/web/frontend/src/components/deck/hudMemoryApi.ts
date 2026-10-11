@@ -9,6 +9,8 @@
  * empty list that would look like "no memory".
  */
 
+import type { OrbTree } from "@/lib/memoryOrbLayout";
+
 export type MemoryStatus = "red" | "blue" | "yellow" | "green";
 
 export type MemoryKind =
@@ -127,6 +129,24 @@ export async function fetchWikiPage(slug: string, signal?: AbortSignal): Promise
   );
   if (body.ok === false) throw new Error(body.error || "page not found");
   return body;
+}
+
+/**
+ * The memory orb's tree (`/api/wiki/orb-tree`): work and note communities
+ * and their leaves. Missing lists read as empty; a store the route could not
+ * read is named in `unavailable`, never shown as zero.
+ */
+export async function fetchOrbTree(signal?: AbortSignal): Promise<OrbTree> {
+  const body = await getJson<Partial<OrbTree> & { ok?: boolean; error?: string }>("/api/wiki/orb-tree", signal);
+  if (body.ok === false) throw new Error(body.error || "orb tree unavailable");
+  return {
+    communities: Array.isArray(body.communities) ? body.communities : [],
+    leaves: Array.isArray(body.leaves) ? body.leaves : [],
+    counts: { red: 0, yellow: 0, blue: 0, green: 0, reference: 0, ...body.counts },
+    totals: { notes: 0, projects: 0, ...body.totals },
+    legend: { red: "", yellow: "", blue: "", green: "", reference: "", ...body.legend },
+    unavailable: Array.isArray(body.unavailable) ? body.unavailable : [],
+  };
 }
 
 /**
