@@ -708,6 +708,8 @@ point-at = "jarvis.plugins.tool.point_at:PointAtTool"
 # is one sentence from undone); never a spawn and never in a worker or society
 # tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
 laptop-power = "jarvis.plugins.tool.laptop_power:LaptopPowerTool"
+system-volume = "jarvis.plugins.tool.system_volume:SystemVolumeTool"
+window-control = "jarvis.plugins.tool.window_control:WindowControlTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"
 switch-window = "jarvis.plugins.tool.switch_window:SwitchWindowTool"
 read-visible-ui-state = "jarvis.plugins.tool.read_visible_ui_state:ReadVisibleUIStateTool"

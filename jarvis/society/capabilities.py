@@ -67,6 +67,8 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
         "point-at",
         # Hardware power settings stay with Jarvis, like app control.
         "laptop-power",
+        "system-volume",
+        "window-control",
         "multi-spawn",
         "dispatch-to-harness",
         "dispatch-to-admin",

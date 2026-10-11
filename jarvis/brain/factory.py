@@ -88,6 +88,14 @@ ROUTER_TOOLS = frozenset({
     # mode and charge limit. Risk monitor, never a spawn and never in a worker
     # or society tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
     "laptop-power",
+    # System volume (2026-10-12): "volume to 30", "mute". The default speaker's
+    # master level via Windows Core Audio. Risk safe, never a spawn and never
+    # in a worker or society tool set (AP-5/AP-14).
+    "system-volume",
+    # Window control (2026-10-12): minimize / maximize / restore / focus /
+    # close a window by title or program, state read back. Risk monitor, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14).
+    "window-control",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —

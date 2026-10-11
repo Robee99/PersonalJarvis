@@ -2014,6 +2014,10 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # Laptop power (2026-10-02): power slider, ASUS operating mode,
             # charge limit (risk monitor). See ADR-0011 amendment "Laptop power".
             "laptop-power",
+            # System volume (2026-10-12): master level and mute (risk safe).
+            "system-volume",
+            # Window control (2026-10-12): window state by title (risk monitor).
+            "window-control",
         }
     )
     assert ROUTER_TOOLS == expected, (
