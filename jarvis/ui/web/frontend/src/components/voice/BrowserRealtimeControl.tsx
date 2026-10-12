@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Loader2, Mic, MicOff, RotateCcw } from "lucide-react";
 
 import { VoiceWaveform, type WaveformPhase } from "@/components/overlay/VoiceWaveform";
@@ -7,6 +7,10 @@ import { Card } from "@/components/ui/card";
 import { useCapabilities } from "@/hooks/useCapabilities";
 import { useVoiceMode } from "@/hooks/useVoiceMode";
 import { useT } from "@/i18n";
+import {
+  registerBrowserVoiceCallOwner,
+  setBrowserVoiceCallLive,
+} from "@/lib/browserVoiceCall";
 import { hasEmbeddedDesktopBridge, isEmbeddedMacWindow } from "@/lib/embeddedDesktop";
 import { MicrophoneSelectionError } from "@/lib/browserMicrophone";
 import {
@@ -16,6 +20,8 @@ import {
   type BrowserRealtimeSupportIssue,
 } from "@/lib/realtimeAudio";
 import { useEventStore, type VoiceState } from "@/store/events";
+import { setReloadHold } from "@/lib/reloadHold";
+import { registerRealtimeAudioPreparation } from "@/lib/realtimeAudioPreparation";
 import { cn } from "@/lib/utils";
 import {
   clearVoiceInputLevel,
@@ -77,12 +83,37 @@ async function reportHostMicrophoneDenied(): Promise<void> {
   }
 }
 
+function startupRequestId(payload: unknown): string | null {
+  const id = (payload as { request_id?: unknown } | null)?.request_id;
+  return typeof id === "string" && id.length > 0 && id.length <= 128 ? id : null;
+}
+
+async function reportNativeStartupFailure(requestId: string): Promise<void> {
+  try {
+    const response = await fetch("/api/voice/startup-failed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId }),
+    });
+    // An updated frontend can still be talking to the preceding backend.
+    if (!response.ok && response.status !== 404) {
+      console.warn(`Voice startup failure acknowledgement failed: HTTP ${response.status}`);
+    }
+  } catch (error) { console.warn("Voice startup failure acknowledgement failed", error); }
+}
+
 /** Browser-owned microphone control for remote/headless installations.
  *
  * The desktop shell already owns the physical microphone through
  * SpeechPipeline, so this control is rendered only when the capability route
  * says native desktop actions are unavailable. That prevents two concurrent
  * capture streams while still making a headless VPS usable entirely in-app.
+ *
+ * Two ways a call starts here. The desktop hands a realtime call to this
+ * document (`BrowserVoiceRequested`). Or, on a host with no speech pipeline
+ * at all, the person presses Start and useVoiceCall asks this control to hold
+ * the call itself (lib/browserVoiceCall) — in either voice mode, because the
+ * server picks a realtime session or the classic STT -> brain -> TTS chain.
  */
 export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: boolean } = {}) {
   const t = useT();
@@ -125,19 +156,34 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
   // A wake that lands while the tab is hidden must not be consumed: the
   // desktop is already waiting for this call, and dropping the request
   // leaves it waiting out the full handshake budget for nothing.
-  const pendingStart = useRef<{ id: string; ts: number } | null>(null);
+  const pendingStart = useRef<{ id: string; ts: number; requestId: string | null } | null>(null);
+  const nativeRequestRef = useRef<string | null>(null);
+  const initialNativeStartPending = useRef(false);
   const connectionGenerationRef = useRef(0);
   // A progress/preamble surface line is not the end of the turn. After the
   // browser finishes speaking it, tts_end must restore thinking — not
   // listening — or the pill looks ready while the Tool Model is still
   // working.
   const resumeThinkingAfterSpeechRef = useRef(false);
+  // A call the person started here because the host has no speech pipeline.
+  // State for rendering, a ref for the callbacks that outlive a render.
+  const [localCall, setLocalCall] = useState(false);
+  const localCallRef = useRef(false);
   const browserSurface = Boolean(
     capabilities.data &&
       (browserAudio || capabilities.data.native_file_actions === false || !hasEmbeddedDesktopBridge()),
   );
   const visible = browserSurface && mode === "realtime";
+  // A locally started call is live in either voice mode; leaving realtime
+  // mode must not hang it up.
+  const callSurface = visible || localCall;
   const supportIssue = visible ? browserRealtimeSupportIssue() : null;
+
+  useEffect(() => {
+    if (visible && realtimeAvailable && !supportIssue && (wakeOwner || !controlOnly)) {
+      return registerRealtimeAudioPreparation();
+    }
+  }, [visible, realtimeAvailable, supportIssue, wakeOwner, controlOnly]);
 
   const supportMessage = useCallback(
     (issue: BrowserRealtimeSupportIssue) =>
@@ -153,8 +199,16 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
 
   const stop = useCallback(async () => {
     connectionGenerationRef.current += 1;
+    nativeRequestRef.current = null;
+    initialNativeStartPending.current = false;
+    pendingStart.current = null;
     const client = clientRef.current;
     clientRef.current = null;
+    if (localCallRef.current) {
+      localCallRef.current = false;
+      setLocalCall(false);
+      setBrowserVoiceCallLive(false);
+    }
     setState("idle");
     setEffectiveProvider("");
     setError("");
@@ -169,26 +223,66 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
     await client?.disconnect();
   }, [setVoice]);
 
-  const start = useCallback(async (options?: { fromGesture?: boolean }) => {
-    if (!realtimeAvailable || clientRef.current || state === "connecting") return;
+  const start = useCallback(async (options?: { fromGesture?: boolean; local?: boolean; requestId?: string | null }) => {
+    // A local start does not wait for realtime: on a host with no speech
+    // pipeline the server answers with a realtime session or the classic
+    // chain, whichever it can build.
+    const local = options?.local === true;
+    if ((!local && !realtimeAvailable) || clientRef.current || state === "connecting") return;
     const generation = connectionGenerationRef.current + 1;
     connectionGenerationRef.current = generation;
+    const nativeRequestId = local ? null : options?.requestId ?? null;
+    nativeRequestRef.current = nativeRequestId;
+    initialNativeStartPending.current = nativeRequestId !== null;
+    pendingStart.current = null;
+    if (local) {
+      localCallRef.current = true;
+      setLocalCall(true);
+      setBrowserVoiceCallLive(true);
+      // Every Start/Stop surface reads this; it also keeps a second press
+      // from starting a second call while the microphone opens.
+      setVoice("connecting");
+    }
     setState("connecting");
     setError("");
     setEffectiveProvider("");
     levelRef.current = 0;
     clearVoiceInputLevel("browser");
     clearVoiceOutputLevel("browser");
+    // A local call in pipeline mode has no realtime transport, so none of its
+    // media options apply: the classic bridge streams plain PCM both ways. A
+    // call the desktop hands over keeps exactly the options it always had.
+    const realtimeTransport = !local || mode === "realtime";
+    const callBrowserAudio = realtimeTransport && browserAudio;
+    // A classic call has no realtime provider to test, so its fallback line
+    // points at the three providers that chain runs on instead.
+    const startFailed = t(
+      realtimeTransport ? "sidebar.realtime_error" : "sidebar.browser_voice_error",
+    );
+    // A call the person started here reports a failure as a toast and frees
+    // the controls again; there is no card on the page to hold an error line.
+    const endLocalCall = (message: string) => {
+      pushToast("error", message);
+      void stop();
+    };
     let client: RealtimeAudioClient;
+    let connected = false;
     const isCurrent = () =>
       connectionGenerationRef.current === generation && clientRef.current === client;
+    const acknowledgeStartupFailure = () => {
+      if (!connected && isCurrent() && nativeRequestId && nativeRequestRef.current === nativeRequestId) {
+        nativeRequestRef.current = null;
+        initialNativeStartPending.current = false;
+        void reportNativeStartupFailure(nativeRequestId);
+      }
+    };
     client = new RealtimeAudioClient(
       {
         onTranscript: (text, isFinal, role) => {
           if (!isCurrent()) return;
           // Live adapters project all speaker snapshots onto the shared bus.
           // Keeping a second local caption would overwrite the conversation.
-          if (browserAudio) return;
+          if (callBrowserAudio) return;
           if (role === "user") setTranscription(text, isFinal);
           if (role === "user" && isFinal) setVoice("thinking");
         },
@@ -221,6 +315,8 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
             (typeof payload.error === "string" ? payload.error.trim() : "") ||
             (typeof payload.reason === "string" ? payload.reason.trim() : "");
           if (status === "audio_ready") {
+            connected = true;
+            initialNativeStartPending.current = false;
             setState("connected");
             const provider =
               typeof payload.provider === "string" ? payload.provider : "";
@@ -299,10 +395,16 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
             status === "tts_browser_error"
           ) {
             setError(t("sidebar.realtime_browser_tts_unavailable"));
+            if (local) pushToast("warning", t("sidebar.realtime_browser_tts_unavailable"));
             setVoice("listening");
           } else if (status === "audio_closed") {
             void stop();
           } else if (status === "provider_error" || status === "disconnected") {
+            acknowledgeStartupFailure();
+            if (local) {
+              endLocalCall(backendDetail || startFailed);
+              return;
+            }
             clientRef.current = null;
             void client.disconnect();
             setState("error");
@@ -313,19 +415,26 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
           }
         },
       },
-      { requiresWebRtcOffer, webRtcStartEventRequired, startBudgetMs, browserAudio },
+      {
+        requiresWebRtcOffer: realtimeTransport && requiresWebRtcOffer,
+        webRtcStartEventRequired,
+        startBudgetMs,
+        browserAudio: callBrowserAudio,
+      },
     );
     clientRef.current = client;
     try {
       await client.connect();
       if (!isCurrent()) return;
+      connected = true;
+      initialNativeStartPending.current = false;
       setState("connected");
     } catch (cause) {
       if (!isCurrent()) return;
+      acknowledgeStartupFailure();
       clientRef.current = null;
       void client.disconnect();
       clearVoiceInputLevel("browser");
-      setState("error");
       const micDenied = cause instanceof DOMException && cause.name === "NotAllowedError";
       // In the embedded Mac window a refused microphone is macOS's decision, not a
       // browser site setting: there is no site settings page to point at. The
@@ -333,7 +442,7 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
       // ("Open System Settings") takes over; a wake-started call never does.
       const hostDenied = micDenied && isEmbeddedMacWindow();
       if (hostDenied && options?.fromGesture) void reportHostMicrophoneDenied();
-      setError(
+      const message =
         cause instanceof MicrophoneSelectionError
           ? cause.message
           : cause instanceof RealtimeAudioSupportError
@@ -342,11 +451,17 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
             ? t("sidebar.realtime_microphone_denied_desktop")
             : micDenied
               ? t("sidebar.realtime_microphone_denied")
-              : t("sidebar.realtime_error"),
-      );
+              : startFailed;
+      if (local) {
+        endLocalCall(message);
+        return;
+      }
+      setState("error");
+      setError(message);
       setVoice("error");
     }
   }, [
+    mode,
     pushToast,
     realtimeAvailable,
     requiresWebRtcOffer,
@@ -361,6 +476,22 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
     t,
   ]);
 
+  // This document's browser-held call: on a host with no speech pipeline,
+  // every Start/Stop surface reaches it through useVoiceCall. Only the
+  // app-root instance (`controlOnly`) owns it, and the latest start/stop are
+  // read through refs so the registration does not churn on every render.
+  const startRef = useRef(start);
+  startRef.current = start;
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  useEffect(() => {
+    if (!controlOnly) return undefined;
+    return registerBrowserVoiceCallOwner({
+      start: () => void startRef.current({ fromGesture: true, local: true }),
+      stop: () => void stopRef.current(),
+    });
+  }, [controlOnly]);
+
   useEffect(() => {
     if (!browserAudio || !wakeOwner) return;
     const onVisible = () => {
@@ -372,7 +503,7 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
       }
       pendingStart.current = null;
       handledRequest.current = pending.id;
-      void start();
+      void start({ requestId: pending.requestId });
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -385,42 +516,66 @@ export function BrowserRealtimeControl({ controlOnly = false }: { controlOnly?: 
     const event = events.find(e => e.name === "BrowserVoiceRequested");
     if (!event || event.id === handledRequest.current || Date.now() - event.ts > 45_000) return;
     const action = (event.payload as { action?: string })?.action;
+    const requestId = startupRequestId(event.payload);
     if (action === "start") {
       if (!realtimeAvailable) return;
+      if (requestId && nativeRequestRef.current && requestId !== nativeRequestRef.current &&
+          initialNativeStartPending.current && clientRef.current) {
+        // The native owner can replace its pending request without emitting an
+        // obsolete stop. Retire this unfinished generation, but leave the new
+        // event unhandled so the idle render starts its matching attempt.
+        // Established calls and browser-held calls are never replaced here.
+        void stop();
+        return;
+      }
       if (canStartInBackground || document.visibilityState === "visible") {
         handledRequest.current = event.id;
         pendingStart.current = null;
-        void start();
+        void start({ requestId });
       } else {
         // Parked, not handled: firing when the tab returns keeps a
         // background wake from dying silently on the desktop side.
-        pendingStart.current = { id: event.id, ts: event.ts };
+        pendingStart.current = { id: event.id, ts: event.ts, requestId };
       }
       return;
     }
     if (action === "stop") {
       handledRequest.current = event.id;
+      // A retired native wake must never end a newer wake or a browser-held
+      // call. Legacy backends retain their existing uncorrelated stop behavior.
+      if (requestId && requestId !== nativeRequestRef.current && requestId !== pendingStart.current?.requestId) return;
       pendingStart.current = null;
       void stop();
     }
-  }, [events, browserAudio, wakeOwner, canStartInBackground, realtimeAvailable, start, stop]);
+  }, [events, browserAudio, wakeOwner, canStartInBackground, realtimeAvailable, start, stop, state]);
 
   useEffect(() => {
     // This surface owns BOTH directions while it is live: it holds the
     // microphone and it plays the reply, so the backend's own levels for
     // either one would be a second, unsynchronised opinion.
-    const owns = visible && (state === "connecting" || state === "connected");
+    const owns = callSurface && (state === "connecting" || state === "connected");
     setBrowserVoiceInputOwnership(owns);
     setBrowserVoiceOutputOwnership(owns);
-  }, [state, visible]);
+  }, [state, callSurface]);
 
   useEffect(() => {
-    if (!visible) void stop();
-  }, [stop, visible]);
+    if (!callSurface) void stop();
+  }, [stop, callSurface]);
+
+  // This document owns the call: an automatic reload (a rebuilt bundle) would
+  // unmount this control and hang up mid-sentence. Hold reloads while it lives.
+  const reloadOwner = useId();
+  useEffect(() => {
+    setReloadHold(reloadOwner, state === "connecting" || state === "connected");
+  }, [reloadOwner, state]);
+  useEffect(() => () => setReloadHold(reloadOwner, false), [reloadOwner]);
 
   useEffect(
     () => () => {
       connectionGenerationRef.current += 1;
+      nativeRequestRef.current = null;
+      initialNativeStartPending.current = false;
+      pendingStart.current = null;
       const client = clientRef.current;
       clientRef.current = null;
       setBrowserVoiceInputOwnership(false);

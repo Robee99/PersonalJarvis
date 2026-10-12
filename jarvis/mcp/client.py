@@ -116,6 +116,15 @@ class MCPClient:
         self._tools_cache: list[dict[str, Any]] = []
         self._circuit_breaker_failures = 0
         self._disabled_until_ns: int = 0
+        self._http_auth: Any | None = None
+
+    def set_http_auth(self, auth: Any) -> None:
+        """Install caller-owned request authentication before opening transport."""
+        self._http_auth = auth
+
+    @property
+    def uses_dynamic_http_auth(self) -> bool:
+        return self._http_auth is not None
 
     # ---- Lifecycle ----------------------------------------------------
 
@@ -180,10 +189,19 @@ class MCPClient:
             elif self.spec.transport == "sse":
                 from mcp.client.sse import sse_client
 
-                command, args, _env = self._resolve_install_command()
-                # install_command for SSE transport = [url] (by convention)
-                url = args[0] if args else command
-                read, write = await stack.enter_async_context(sse_client(url))
+                headers: dict[str, str] = {}
+                if self.spec.url:
+                    # Marketplace connectors name the stream and its auth
+                    # header the same way an http server does.
+                    url = self.spec.url
+                    headers = self._resolve_headers()
+                else:
+                    command, args, _env = self._resolve_install_command()
+                    # install_command for SSE transport = [url] (by convention)
+                    url = args[0] if args else command
+                read, write = await stack.enter_async_context(
+                    sse_client(url, headers=headers or None)
+                )
             elif self.spec.transport == "http":
                 from mcp.client.streamable_http import streamablehttp_client
 
@@ -196,7 +214,11 @@ class MCPClient:
                 # (read, write, get_session_id) — unlike the 2-tuple stdio/sse
                 # transports. The session-id callback is unused here.
                 read, write, _ = await stack.enter_async_context(
-                    streamablehttp_client(self.spec.url, headers=headers or None)
+                    streamablehttp_client(
+                        self.spec.url,
+                        headers=headers or None,
+                        **({"auth": self._http_auth} if self._http_auth is not None else {}),
+                    )
                 )
             else:
                 raise NotImplementedError(

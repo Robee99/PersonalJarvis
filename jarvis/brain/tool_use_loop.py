@@ -1554,6 +1554,12 @@ class ToolUseLoop:
                         "output": result.output,
                         "error": result.error,
                     }
+                    # Appshots use the same in-memory image envelope as Live.
+                    # Never serialize pixels as tool-result text (or log them).
+                    if isinstance(result.output, dict) and "_image" in result.output:
+                        tool_result_payload["output"] = {
+                            k: v for k, v in result.output.items() if k != "_image"
+                        }
                     # Record a tool that ACTUALLY ran (success only) so consumers
                     # can tell a real side effect from a merely-requested or
                     # guard-blocked call. The guard branches above never reach
@@ -1638,6 +1644,13 @@ class ToolUseLoop:
                     _img_blocks = _images_from_artifacts(
                         getattr(result, "artifacts", ()) or ()
                     )
+                    if isinstance(result.output, dict) and isinstance(
+                        result.output.get("_image"), dict,
+                    ):
+                        picture = result.output["_image"]
+                        _img_blocks.append(ImageBlock(
+                            mime=picture["mime"], data_b64=picture["data"],
+                        ))
                     if _img_blocks and not self._tool_images:
                         current_messages.append(BrainMessage(
                             role="user",

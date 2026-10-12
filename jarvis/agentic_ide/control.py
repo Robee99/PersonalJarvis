@@ -15,6 +15,7 @@ from .session import (
     account_home,
     agent_argv,
     resolve_account,
+    sanitize_prompt,
 )
 
 
@@ -144,7 +145,27 @@ class CodingSessionControl:
                 raise SessionError("A nonempty assignment is required.")
             if term.status in ("dead", "error", "exited"):
                 raise SessionError(
-                    "The coding terminal has stopped. Inspect it before opening another."
+                    "The coding terminal has stopped; nothing was sent. Restart the same "
+                    "terminal (workspace-orchestrate restart, or its pane's Restart button; it "
+                    "continues its own conversation) instead of opening another."
+                )
+            from jarvis.core.image_references import ImageReferenceError, get_store
+
+            from .visual_handoff import prepare
+
+            image_location = (term.cwd(owner.folder), term.computer_id, term.remote_folder)
+            try:
+                images = get_store().resolve(
+                    str(args.get("_image_scope") or ""), args.get("image_refs", []),
+                )
+                image_brief, attachments, image_receipts = await prepare(owner, term, images)
+            except ImageReferenceError as exc:
+                raise SessionError(str(exc)) from exc
+            composed = str(args["prompt"]) + image_brief
+            sanitized = sanitize_prompt(composed, keep_newlines=True)
+            if any(row["path"] not in sanitized for row in image_receipts):
+                raise SessionError(
+                    "The task would truncate an image reference; shorten it and retry."
                 )
             if not term.pty_id:
                 await self._start(owner, term)
@@ -154,21 +175,31 @@ class CodingSessionControl:
 
             term = await self.registry.send_prompt(
                 identity,
-                str(args["prompt"]),
+                composed,
                 workspace_id=workspace,
                 typed=str(args["prompt"]),
+                attachments=attachments,
+                expected_location=image_location if images else None,
                 require_idle=action != "respond",
                 expected_input=str(args.get("input_token") or "") if action == "respond" else "",
                 allow_question=action == "respond" and args.get("response_mode") == "dialog",
                 followup=current_delegation_origin.get(),
+                when_busy=str(args.get("when_busy") or "refuse") if action == "send" else "refuse",
             )
             return {
                 **self._state(owner, term),
                 "submitted": term.submitted,
                 "delivery": "accepted"
                 if term.submitted is True
-                else ("not_accepted" if term.submitted is False else "uncertain"),
+                else "uncertain",
+                "input_written": True,
                 "completed": False,
+                **(
+                    {"mid_turn": True,
+                     "note": "Typed into the running turn; the agent takes it at its next step."}
+                    if term.last_send_mid_turn else {}
+                ),
+                "images": image_receipts,
                 "retry": "Do not resend automatically. Read context and inspect delivery first.",
             }
         if action not in ("context", "observe"):
@@ -179,7 +210,10 @@ class CodingSessionControl:
         readable = agent_transcript.can_read(term.agent)
         handle = term.resume
         result = None
-        if readable and handle is not None:
+        from . import task_state
+
+        identity = task_state._key(term)
+        if readable and handle is not None and not term.computer_id:
             result = await asyncio.to_thread(
                 agent_transcript.read_timeline,
                 term.agent,
@@ -187,6 +221,8 @@ class CodingSessionControl:
                 home=account_home(term.agent, term.account),
                 live=state["activity"] in ("working", "starting"),
             )
+        if task_state._key(term) != identity:
+            raise SessionError("Session changed while reading; request context again.")
         source = handle.id if handle else None
         cursor = args.get("cursor") or {}
         if cursor and cursor.get("source") != source:
@@ -195,7 +231,7 @@ class CodingSessionControl:
         limit = max(1, min(100, int(args.get("limit", 30))))
         events = result.events if result else []
         if action == "observe":
-            offset = max(0, len(events) - 30)
+            offset = max(0, len(events) - limit)
         if offset > len(events):
             raise SessionError("Transcript was truncated; request context without a cursor.")
 

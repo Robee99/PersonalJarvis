@@ -15,8 +15,9 @@
  *
  * - a hub nav click picks it explicitly (`open`);
  * - otherwise a tab someone asked for with `requestApiKeysTab` decides
- *   (`pageForApiKeysTab`): the brain tab is MODEL, the voice tiers are VOICE,
- *   everything else is the advanced page;
+ *   (`pageForApiKeysTab`): the brain tab is MODEL, the voice tiers (and the
+ *   dictation wording pass) are VOICE, everything else — the API Keys page's
+ *   own "agents" and live-call "voice" tabs — is the advanced page;
  * - with neither, the hub lands on MODEL — the same place the old page opened
  *   on (its first tab was the brain).
  */
@@ -35,6 +36,7 @@ export function pageForApiKeysTab(tab: string | null | undefined): ProviderPage 
     case "tts":
     case "stt":
     case "realtime":
+    case "dictation":
       return "voice";
     default:
       return "apikeys";

@@ -103,12 +103,10 @@ from jarvis.voice.action_phrases import (
 from jarvis.voice.contextual_readback import render_readback
 
 from .action_honesty import has_unbacked_action_claim, replace_unbacked_action_claim
-from .assistant_name import (
-    DEFAULT_ASSISTANT_NAME,
-    resolve_assistant_name,
-)
+from .assistant_name import resolve_assistant_name
 from .dispatcher import BrainDispatcher
 from .evidence_gate import live_surface_covers
+from .identity import identity_block
 from .intent_router import RoutingDecision, classify
 from .paperclip_delegation import DelegationRequest, delegate_from_config
 from .route_policy import (
@@ -2429,34 +2427,39 @@ _TOOL_LIST_RULE = (
 # dump, and the token cost is identical either way.
 _TOOL_LIST_WRAP_CHARS = 88
 
-# Professional style for typed (written) turns: the front-page chat, society
+# Conversational style for typed (written) turns: the front-page chat, society
 # chats and every other surface with {"delivery": "written"}. The shared
 # system prompt carries the VOICE persona ("never emit Markdown, never write
 # a digit, no emojis — your text is spoken"), which is correct for speech but
 # leaves a typed turn with no visual rules at all. Without an explicit
 # written block the model falls back to its pretraining default: emoji
-# headers, hype openers ("echter Volltreffer!"), status-dot tables and three
+# headers, hype openers, status-dot tables and three
 # redundant closers. This block overrides the spoken-output rules for written
-# turns only and pins the Frontier-lab default: calm, plain, zero emojis.
+# turns only. The shared policy below controls length and conversational tone.
 _WRITTEN_CHAT_STYLE = (
     "WRITTEN CHAT STYLE (this is a typed turn read on screen, NOT voice — "
     "this block overrides the voice persona's spoken-output rules for this turn):\n"
-    "This answer is read, not spoken: Markdown (headings, tables, lists, code) "
-    "and digits ARE allowed here.\n"
-    "Write in a professional, calm Frontier-lab style: direct, precise, no hype, "
+    "This answer is read, not spoken: digits and Markdown are allowed when useful; "
+    "plain chat prose is the default.\n"
+    "Write in a natural, calm style: direct, precise, no hype, "
     "no marketing superlatives, no filler openers, no pep-talk before the content.\n"
     "NEVER use emojis — not in headings, tables, lists, status columns or body "
     "text. Zero emojis unless the user explicitly asks for one in this turn. "
     "No emoji status icons (no colored dots, rockets, folders, pointers, check "
     "marks as emoji): use plain words such as No risk, Low, Medium, Check first.\n"
-    "Structure: lead with the result in one or two sentences, then the details. "
-    "Tables only for genuinely tabular data, with plain-text headers and no emoji "
-    "column. Keep it tight: one concrete next step at most, never a triple of "
-    "summary plus action plan plus emoji question."
+    "Use tables only when requested or when they clarify genuinely tabular data, "
+    "with plain-text headers and no emoji column."
 )
+
+# The written-only rules, for a prompt that already carries the shared policy
+# (a society agent's briefing has it under "How to reply to the person").
+_WRITTEN_CHAT_RULES = _WRITTEN_CHAT_STYLE
 
 # Keep the API chat and the main brain's written delivery equally conversational.
 _WRITTEN_CHAT_STYLE += "\n" + CONVERSATIONAL_RESPONSE_STYLE
+
+#: Upper bound for the legacy core-memory block in the system prompt.
+_CORE_MEMORY_MAX_CHARS = 20_000
 
 
 def _is_written_turn() -> bool:
@@ -2652,24 +2655,24 @@ _PROVIDER_DOWN_CAUSE_PHRASES: dict[str, dict[str, str]] = {
             "de nuevo en un momento."
         ),
     },
-    # A screenshot was attached but every reachable brain reported blind.
+    # A screen capture or attachment exists, but every reachable brain is blind.
     # This is NOT a missing/invalid API key — the key is often present and
     # the API-Keys card is green; the model simply cannot inspect images.
     # Spoken separately so a vision skip is not heard as "your key is broken".
     "vision_unsupported": {
         "de": (
-            "Entschuldige — ich habe den Bildschirm aufgenommen, aber keiner "  # i18n-allow
+            "Entschuldige — keiner "  # i18n-allow
             "der verbundenen Assistenten kann gerade Bilder auswerten. Der "  # i18n-allow
             "Schlüssel ist da, nur das Sehen fehlt. Nimm unter API-Keys "  # i18n-allow
             "einen Anbieter mit Bildverarbeitung."  # i18n-allow
         ),
         "en": (
-            "Sorry — I captured the screen, but none of the connected "
+            "Sorry — none of the connected "
             "assistants can inspect images right now. The key is there; "
             "vision is not. Pick a vision-capable provider under API keys."
         ),
         "es": (
-            "Lo siento: capturé la pantalla, pero ninguno de los asistentes "
+            "Lo siento: ninguno de los asistentes "
             "conectados puede analizar imágenes ahora. La clave está; falta "
             "la visión. Elige un proveedor con visión en Claves API."
         ),
@@ -4387,7 +4390,11 @@ class BrainManager:
                 _TOOL_ROUTING_RULES,
                 self._render_live_tool_block(),
                 getattr(self, "_evidence_directive", ""),
-                _WRITTEN_CHAT_STYLE,
+                # The briefing already carries the shared reply policy; sending
+                # it twice costs ~2.3k characters on every society API turn.
+                _WRITTEN_CHAT_RULES
+                if CONVERSATIONAL_RESPONSE_STYLE in (private.system_extra or "")
+                else _WRITTEN_CHAT_STYLE,
             ]
             identity = getattr(self, "_active_turn_identity", None)
             if identity:
@@ -4396,25 +4403,20 @@ class BrainManager:
             return "\n\n".join(part for part in parts if part)
         parts: list[str] = []
 
-        # Configurable assistant identity. Derived solely from the wake phrase
-        # (so a custom wake word "Micron" makes the assistant call itself
-        # Micron). The persona files are name-neutral as of 2026-06-29 (no baked-in
-        # "Jarvis" to override anymore), so this simply states the resolved name
-        # prominently and early. Skipped only for the neutral pre-onboarding
-        # fallback ("Assistant"), where the product imposes no name at all.
-        # Placed first so it frames everything.
+        # The assistant's identity, placed first so it frames everything: the
+        # wake-word name (Personal Jarvis is the app, never the assistant's
+        # name) plus its character from SOUL.md, read through an mtime cache
+        # so what the learning loop writes there reaches the next turn. The
+        # realtime and GPT-Live instructions build the same block
+        # (jarvis/brain/identity.py), so every surface answers "who are you"
+        # the same way.
         name = resolve_assistant_name(getattr(self, "_config", None))
-        if name != DEFAULT_ASSISTANT_NAME:
-            parts.append(
-                f"DEIN NAME IST {name.upper()}. Du heisst {name}. Stell dich, "
-                f"wenn ueberhaupt, als {name} vor und unterschreibe als {name}."
+        parts.append(
+            identity_block(
+                getattr(self, "_config", None),
+                path=getattr(getattr(self, "_soul", None), "path", None),
             )
-
-        if self._soul is not None:
-            try:
-                parts.append(self._soul.render_for_prompt())
-            except Exception:  # noqa: BLE001
-                pass
+        )
 
         # Mandate phase 2 (reactivated 2026-04-28): persona block from
         # JARVIS_PERSONA.md incl. ECHO-PARAPHRASE section and hangup contract.
@@ -4541,11 +4543,10 @@ class BrainManager:
             except Exception:  # noqa: BLE001
                 pass
             cm = self._core_memory.render_system_prompt_block()
-            # Cap substantially larger than the old 400 characters — otherwise
-            # even 5-10 facts get cut off mid-block and the LLM claims it knows
-            # nothing. 2500 corresponds to ~600 tokens, stays prompt-cache-friendly.
-            if len(cm) > 2500:
-                cm = cm[:20_000] + "…"
+            # A safety cap only (the 2500-character cost cap was retired): cut,
+            # and mark the cut, only when the block really is longer.
+            if len(cm) > _CORE_MEMORY_MAX_CHARS:
+                cm = cm[:_CORE_MEMORY_MAX_CHARS] + "…"
             parts.append(cm)
 
         # Skills-Brain-Integration (Track B): surface the installed, active
@@ -4937,13 +4938,14 @@ class BrainManager:
         self._dead_provider_models = {
             k for k in self._dead_provider_models if k[0] != provider
         }
-        keys_to_drop = [k for k in self._brain_cache if k[0] == provider]
+        keys_to_drop = [k for k in self._brain_cache
+                        if k[0] == provider or str(k[0]).startswith(provider + "@")]
         for k in keys_to_drop:
             self._brain_cache.pop(k, None)
         self._rate_tracker.clear(provider)
         if was_dead or keys_to_drop:
             log.info(
-                "Provider '%s' reaktiviert (dead=%s, brain_cache_dropped=%d)",
+                "Provider '%s' reactivated (dead=%s, brain_cache_dropped=%d)",
                 provider, was_dead, len(keys_to_drop),
             )
 
@@ -8295,9 +8297,7 @@ class BrainManager:
         try:
             from jarvis.agentic_ide import intent as ide_intent
             from jarvis.agentic_ide.session import (
-                MAX_TERMINALS,
                 SessionError,
-                WorkspaceFull,
                 get_registry,
                 terminals_added_event,
             )
@@ -8416,30 +8416,11 @@ class BrainManager:
                     # is attempted on its own and what could not be opened is
                     # named at the end, so a mixed fleet degrades pane by pane
                     # instead of all at once.
-                    # The registry refuses a batch that does not fit as a
-                    # whole, but a spoken "open five more" with room for three
-                    # opens three and says so (``ide_terminals_spawned_capped``):
-                    # the user hears the shortfall instead of a flat refusal.
-                    current = registry.session
-                    room = (
-                        MAX_TERMINALS - len(current.terminals)
-                        if current is not None
-                        else group.count
-                    )
-                    if room <= 0:
-                        if created:
-                            break
-                        raise WorkspaceFull(
-                            f"A workspace can contain at most {MAX_TERMINALS} terminals."
-                        )
-                    wanted = min(group.count, room)
                     try:
                         opened, _capped = await registry.add_terminals(
-                            wanted, agent=group.agent
+                            group.count, agent=group.agent
                         )
                     except SessionError as exc:
-                        if isinstance(exc, WorkspaceFull):
-                            raise
                         log.info(
                             "Agentic IDE spawn: %s group refused: %s",
                             group.agent or "inherited",
@@ -8448,32 +8429,27 @@ class BrainManager:
                         refused.append(str(exc))
                         continue
                     created.extend(opened)
-                    if _capped or wanted < group.count:
-                        # The workspace filled up mid-fleet. Stop rather than
-                        # asking for the next group and getting the same
-                        # refusal — the readback already reports the shortfall.
+                    if _capped:
+                        # A pane failed to open mid-fleet. Stop rather than
+                        # asking for the next group and hitting the same
+                        # failure — the readback already reports the shortfall.
                         break
         except SessionError as exc:
-            # A full workspace, a missing CLI, an unreadable folder: every one of
-            # these already carries a user-facing English sentence, and speaking
-            # it is more useful than a generic failure.
+            # A missing CLI, an unreadable folder: every one of these already
+            # carries a user-facing English sentence, and speaking it is more
+            # useful than a generic failure.
             log.info("Agentic IDE spawn fast-path refused: %s", exc)
-            if isinstance(exc, WorkspaceFull):
-                return action_phrase(
-                    "ide_terminals_full", out_lang, max=MAX_TERMINALS
-                )
             return str(exc)
         except Exception:  # noqa: BLE001 - never crash the turn over a pane
             log.warning("Agentic IDE spawn fast-path failed", exc_info=True)
             return None
 
         if not created:
-            # Nothing opened. If a group said WHY, that sentence is the answer —
-            # "the workspace is full" would be a different claim, and usually a
-            # false one (an uninstalled CLI is not a full workspace).
+            # Nothing opened. If a group said WHY, that sentence is the answer;
+            # otherwise the pane failed to start and the log says why.
             if refused:
                 return " ".join(refused)
-            return action_phrase("ide_terminals_full", out_lang, max=MAX_TERMINALS)
+            return action_phrase("ide_terminals_open_failed", out_lang)
 
         session = registry.session
         if session is not None and self._bus is not None:
@@ -10831,31 +10807,11 @@ class BrainManager:
         """The chain for a caller-picked turn: exactly the pick, no stand-in.
 
         A person who chose a model in the chat gets that model or an honest
-        error — never a silent cross-provider fallback (the "wrong model used,
-        shown right" defect, anti-drift mandate 2026-06-29). The one thing kept
-        from the normal chain is the intelligent-router lead: when the pick
-        cannot emit tool_calls at all, a tool-capable provider leads the turn
-        and falls through to the pick for the answer, exactly as for a
-        tool-incapable voice brain (``_router_lead_key``).
+        error — never a silent cross-provider fallback. A tool-incapable pick
+        does not authorize another provider to lead or bill this turn.
         """
         pick: tuple[str, str | None] = (override.provider, override.model)
-        chain: list[tuple[str, str | None]] = [pick]
-        intelligent = bool(getattr(self._config.brain.routing, "intelligent_router", True))
-        if (
-            intelligent
-            and getattr(self, "_turn_substantive", False)
-            and not self._brain_can_call_tools(override.provider, override.model)
-        ):
-            helper = self._first_tool_capable_provider(level, exclude=override.provider)
-            if helper is not None:
-                log.info(
-                    "Intelligent router: picked %s cannot call tools — %s leads this "
-                    "turn and picks the tool (falls through to %s if none).",
-                    override.provider, helper[0], override.provider,
-                )
-                self._router_lead_key = helper
-                chain.insert(0, helper)
-        return chain
+        return [pick]
 
     def set_route_policy(self, policy: Any) -> None:
         """Apply a new ``[brain.route_policy]`` table from the next turn on.
@@ -11220,6 +11176,12 @@ class BrainManager:
             tuple(history_override) if history_override is not None else None
         )
         override_token = _TURN_OVERRIDE.set(turn_override)
+        from jarvis.core.image_references import active_scope
+
+        image_scope_token = active_scope.set(
+            "conversation:" + conversation_id if conversation_id else
+            "brain:" + str(id(self)) if use_history else "turn:" + str(trace_id or uuid4())
+        )
         skill_state = _SkillTurnState(self)
         skill_token = _SKILL_TURN_STATE.set(skill_state)
         try:
@@ -11249,6 +11211,7 @@ class BrainManager:
             self._skill_injected_inline_fallback = skill_state.injected_inline
             _SKILL_TURN_STATE.reset(skill_token)
             _TURN_OVERRIDE.reset(override_token)
+            active_scope.reset(image_scope_token)
             _TURN_HISTORY_OVERRIDE.reset(history_token)
             _PUBLISH_RESPONSE_EVENT.reset(token)
 
@@ -11808,7 +11771,19 @@ class BrainManager:
         # capability gate. Placed AFTER navigation so a section command still
         # moves the UI even when a pane happens to share that word. Returns None
         # on every turn that does not address a terminal.
-        ide_reply = None if agent_owned else await self._run_agentic_ide_fast_path(
+        # Image-based assignments must reach workspace-orchestrate's scoped
+        # selection and materialization boundary, not the text-only fast paths.
+        from jarvis.core.image_references import get_store as image_reference_store
+        from jarvis.core.image_references import scope_for
+
+        visual_assignment = (
+            screen_context.has_image
+            or bool(getattr(self, "_pending_turn_images", {}).get(turn_trace_id))
+            or bool(getattr(self, "_pending_drop_images", ()))
+            or "Visual reference IDs" in user_text
+            or bool(image_reference_store().available(scope_for(trace_id=turn_trace_id)))
+        )
+        ide_reply = None if agent_owned or visual_assignment else await self._run_agentic_ide_fast_path(
             user_text,
             trace_id=turn_trace_id,
             consume_pending_voice_attachments=consume_pending_voice_attachments,
@@ -11830,8 +11805,10 @@ class BrainManager:
         # addressed-terminal path because ``detect_spawn`` stands down for an
         # addressed pane ("sag Mika, sie soll ein Terminal öffnen" is Mika's
         # work), which makes the two mutually exclusive by construction.
-        ide_spawn_reply = None if agent_owned else await self._run_agentic_ide_spawn_fast_path(
-            user_text, trace_id=turn_trace_id,
+        ide_spawn_reply = (
+            None if agent_owned or visual_assignment else await self._run_agentic_ide_spawn_fast_path(
+                user_text, trace_id=turn_trace_id,
+            )
         )
         if ide_spawn_reply is not None:
             await self._record_response_side_effects(

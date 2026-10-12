@@ -27,7 +27,7 @@ export interface OrbNode {
   live: boolean;
   detail: string;
   /** Where "Open" leads. */
-  section?: "memory" | "skills" | "plugins" | "mcps" | "jarvis-actions";
+  section?: "memory" | "skills" | "plugins" | "mcps" | "armory";
   /** The wiki slug, for notes: "Open" shows that page. */
   slug?: string;
 }
@@ -208,7 +208,9 @@ export function connectedApps(apps: MarketplaceApp[] | undefined): OrbItem[] | u
 
 const SECTION: Record<Exclude<OrbGroup, "wiki" | "concepts">, OrbNode["section"]> = {
   skills: "skills",
-  tools: "jarvis-actions",
+  // The Jarvis actions page was retired upstream; the tools live on the
+  // armory (AGENTS › Tools) now.
+  tools: "armory",
   apps: "plugins",
   mcp: "mcps",
 };

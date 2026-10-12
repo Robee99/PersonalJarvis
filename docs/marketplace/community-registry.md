@@ -3,9 +3,13 @@
 **Status:** live since 2026-08-12 ·
 **Decisions:** [public-marketplace-analysis.md](public-marketplace-analysis.md) ·
 **Packaging:** [agent-plugins-standard.md](agent-plugins-standard.md) ·
-**Skills for other agents:** [portable-skills.md](portable-skills.md)
+**Skills for other agents:** [portable-skills.md](portable-skills.md) ·
+**Agents:** [agent-templates.md](agent-templates.md)
 
-Anyone can publish plugins and skills for Personal Jarvis; every submission
+Anyone can publish plugins, skills and agent templates for Personal Jarvis.
+Besides a pull request, a submission can arrive as an issue — that is how
+the app publishes after GitHub sign-in (see agent-templates.md, "Publishing
+without a server"). Every submission
 that passes automated checks is listed automatically — an open registry in
 the ClawHub spirit, with **zero maintainer infrastructure**: GitHub pull
 requests are the upload API, Actions is the validation pipeline, and Pages
@@ -15,7 +19,7 @@ is the CDN.
 
 | Repo | Role |
 |---|---|
-| `PersonalJarvis/PersonalJarvis` (this repo) | In-app half only: fetch the index, browse, one-click install, connect. Never hosts marketplace website code. |
+| `Dodaios/Dodaios` (this repo) | In-app half only: fetch the index, browse, one-click install, connect. Never hosts marketplace website code. |
 | `PersonalJarvis/marketplace` | The registry: `submissions/`, CI validation, auto-merge gate, ownership ledger (`registry.json`), compiled `index.json` on GitHub Pages. |
 | personaljarvis.ai storefront repo (maintainer-owned, separate) | Storefront: `/marketplace` (browse, client-side index fetch) and `/marketplace/submit` (the upload form → pre-filled GitHub PR). |
 
@@ -88,7 +92,7 @@ the index redeploys in minutes. Installed copies are removed by the user
 
 ## Feed contract
 
-`https://personaljarvis.github.io/marketplace/index.json` — shape mirrored
+`https://dodaios.github.io/marketplace/index.json` — shape mirrored
 by `CommunityIndex` in `community_source.py` (tolerant models: unknown
 fields never break older apps). Plugins embed their Agent Plugins v1.0.0
 manifests verbatim; skills carry a `raw_url` the existing skill-catalog

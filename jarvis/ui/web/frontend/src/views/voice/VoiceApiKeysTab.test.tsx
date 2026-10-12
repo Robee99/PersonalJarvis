@@ -1,9 +1,9 @@
 /**
  * Component tests for the voice section's "API Keys" tab.
  *
- * The tab holds no provider picker of its own any more: speech-to-text is
- * picked in Settings › Voice and the optional wording pass under Settings ›
- * Advanced › API keys & routing — one control per config. These tests pin
+ * The tab holds no provider picker of its own any more: speech-to-text and
+ * the optional wording pass are picked in Settings › Voice — one control per
+ * config. These tests pin
  * that the tab links to both, renders no second picker, leaks no other tier,
  * and brings none of the API-Keys view's own category tabs along.
  */
@@ -82,7 +82,7 @@ afterEach(() => {
 
 describe("VoiceApiKeysTab", () => {
   // Since 2026-10-11 the tab holds no picker: speech-to-text has ONE place,
-  // Settings › Voice, and the wording pass lives under Settings › Advanced.
+  // Settings › Voice, and so does the wording pass.
   // A second picker here wrote the same config as its twin (UI audit P0-3).
   it("links to the one place speech-to-text is picked instead of rendering a second picker", () => {
     render(<VoiceApiKeysTab />);
@@ -93,7 +93,7 @@ describe("VoiceApiKeysTab", () => {
     expect(screen.queryByLabelText("Enter TEST_SPEECH_API_KEY")).toBeNull();
   });
 
-  it("links to the wording pass under Advanced instead of rendering it again", () => {
+  it("links to the wording pass on Settings › Voice instead of rendering it again", () => {
     render(<VoiceApiKeysTab />);
 
     expect(screen.getByTestId("voice-api-keys-wording-link")).toBeTruthy();
@@ -110,12 +110,12 @@ describe("VoiceApiKeysTab", () => {
     expect(requestedApiKeysTab()).toBe("stt");
   });
 
-  it("opens the advanced provider page on the wording tab", () => {
+  it("opens Settings › Voice on the wording tab", () => {
     render(<VoiceApiKeysTab />);
 
     fireEvent.click(within(screen.getByTestId("voice-api-keys-wording-link")).getByRole("button"));
 
-    expect(useSettingsPage.getState().page).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("voice");
     expect(requestedApiKeysTab()).toBe("dictation");
   });
 

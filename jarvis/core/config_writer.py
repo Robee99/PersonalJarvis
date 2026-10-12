@@ -999,11 +999,16 @@ def set_screen_context_settings(
 
 #: Keys ``[appshot]`` accepts — same allowlist reasoning as Screen Context.
 #: The master switch is ``[screen_context].enabled``, written by the setter above.
-APPSHOT_SETTING_KEYS: frozenset[str] = frozenset({"hotkey", "target", "sound", "effect"})
+APPSHOT_SETTING_KEYS: frozenset[str] = frozenset(
+    {"keep_newest",
+     "hotkey", "region_hotkey", "recording_hotkey", "target", "sound", "effect", "card_seconds",
+     "library", "copy_to_clipboard", "recording_resolution", "recording_fps", "recording_bitrate_mbps",
+     "recording_system_audio"}
+)
 
 
 def set_appshot_settings(
-    values: dict[str, str | bool],
+    values: dict[str, str | bool | int],
     *,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
@@ -1030,6 +1035,73 @@ def set_appshot_settings(
         if had_bom:
             out = _BOM + out
         _atomic_write(path, out)
+
+
+#: Keys ``[jarvisx]`` accepts (``jarvis.core.config.JarvisXConfig``). The
+#: route validates types and hotkeys first; this allowlist keeps a typo from
+#: ever landing in the file.
+JARVISX_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "enabled",
+        "hotkey_region",
+        "hotkey_window",
+        "hotkey_fullscreen",
+        "hotkey_record_region",
+        "hotkey_record_fullscreen",
+        "hotkey_stop_recording",
+        "thumbnail_persist",
+        "thumbnail_dismiss_s",
+        "save_dir",
+        "copy_to_clipboard",
+        "sound",
+        "effect",
+        "keep_newest",
+    }
+)
+
+
+def set_jarvisx_settings(
+    values: dict[str, str | bool | int],
+    *,
+    path: Path = DEFAULT_CONFIG_FILE,
+) -> None:
+    """Persist a validated ``[jarvisx]`` patch in one atomic replacement."""
+    unknown = set(values).difference(JARVISX_SETTING_KEYS)
+    if unknown:
+        raise ValueError(f"unknown jarvisx setting(s): {sorted(unknown)!r}")
+    if not values:
+        return
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        section = doc.get("jarvisx")
+        if section is None:
+            section = tomlkit.table()
+            doc["jarvisx"] = section
+        for key, value in values.items():
+            section[key] = value
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
+def set_missions_paid_api_fallback(enabled: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[missions] paid_api_fallback`` (the paid-API fallback switch).
+
+    The only writer of this key. Called from the Settings route
+    (``PUT /api/mission-billing``) — the self-mod / voice path refuses the key
+    (``jarvis/core/self_mod/forbidden.py``). Read fresh by
+    ``jarvis.missions.capacity.paid_api_fallback_enabled``, so the change
+    applies to the very next mission decision without a restart.
+    """
+    if not isinstance(enabled, bool):
+        raise TypeError("paid_api_fallback must be a bool")
+    _patch_table(path, "missions", "paid_api_fallback", enabled)
 
 
 def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
@@ -1140,8 +1212,8 @@ def restore_previous_route_policy(*, path: Path = DEFAULT_CONFIG_FILE) -> dict[s
 def set_ui_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the interface (display) language in ``[ui] language``.
 
-    ``name`` is one of ``en`` | ``de`` | ``es`` (validated by the caller). This
-    is the backend home for what used to be a frontend-only localStorage value,
+    ``name`` is one of ``en`` | ``de`` | ``es`` | ``zh`` (validated by the caller).
+    This is the backend home for what used to be a frontend-only localStorage value,
     so a voice command / the Control API can change the visible app language and
     the open UI switches live (the change is broadcast over /ws).
     """
@@ -1277,6 +1349,19 @@ def set_background_keep_running(enabled: bool, *, path: Path = DEFAULT_CONFIG_FI
     not track it. Read at quit time, so it applies without a restart.
     """
     _patch_table(path, "background", "keep_agents_running", bool(enabled))
+
+
+def set_agent_server(
+    *, persistent: bool, server_url: str = "", path: Path = DEFAULT_CONFIG_FILE,
+) -> None:
+    """Select independent server ownership for the next desktop launch."""
+    from jarvis.core.server_endpoint import server_endpoint
+
+    origin = server_endpoint(server_url) if server_url.strip() else ""
+    _patch_table(
+        path, "background", "persistent_server", bool(persistent),
+        extra={"server_url": origin},
+    )
 
 
 def set_wiki_vault_root(vault_root: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
@@ -2012,6 +2097,12 @@ _TTS_DEFAULTS: dict[str, dict[str, str]] = {
     "gemini-flash-tts": {
         # model from jarvis/plugins/tts/gemini_flash_tts.py (factory line:
         #   tts_cfg.model or "gemini-3.1-flash-tts-preview")
+        "model": "gemini-3.1-flash-tts-preview",
+        "voice_de": "Charon",
+        "voice_en": "Charon",
+        "language_code": "de-DE",
+    },
+    "vertex-tts": {
         "model": "gemini-3.1-flash-tts-preview",
         "voice_de": "Charon",
         "voice_en": "Charon",

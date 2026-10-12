@@ -71,6 +71,16 @@ async def drain(rt):
         await asyncio.sleep(0.01)
 
 
+async def drain_until(rt, predicate):
+    """Drain until ``predicate`` holds: a cancelled turn hands over on its own
+    schedule, which a slow CI runner stretches past a fixed number of drains."""
+    async with asyncio.timeout(10):
+        while True:
+            await drain(rt)
+            if await predicate():
+                return
+
+
 async def test_lead_message_is_an_internal_chat_receipt(world):
     rt, svc, seen = world
     tool = LeadMessageAgentTool(runtime_resolver=lambda: rt)
@@ -78,6 +88,9 @@ async def test_lead_message_is_an_internal_chat_receipt(world):
     await drain(rt)
     assert result.success and tool.risk_tier == "safe"
     target = await rt.roster.resolve("Gmail agent")
+    # Jarvis' message lands in the agent's one chat as a delegation receipt.
+    assert svc.store.get_session(target.session_id) is not None
+    assert svc.store.get_session(f"{target.session_id}:with:jarvis") is None
     events = svc.store.list_events(target.session_id)
     receipt = next(e["payload"] for e in events if e["kind"] == "agent_message")
     assert receipt["sender_name"] == "Jarvis" and receipt["sender_kind"] == "jarvis"
@@ -98,12 +111,20 @@ async def test_busy_recipient_keeps_fifo_receipts_then_resumes_once(world):
     receipt = svc.store.incoming_message("society:scout", second.event_id)
     assert receipt["status"] == "queued"
     await svc.cancel("society:scout")
-    await drain(rt)
-    assert await rt.store.delivery_status(second.event_id) == "delivered"
+
+    async def second_delivered():
+        return await rt.store.delivery_status(second.event_id) == "delivered"
+
+    await drain_until(rt, second_delivered)
     assert await rt.store.delivery_status(third.event_id) == "queued"
     await rt.scheduler.on_envelope(first)
     await svc.cancel("society:scout")
-    await drain(rt)
+
+    async def three_turns():
+        events = svc.store.list_events("society:scout")
+        return len([e for e in events if e["kind"] == "turn_started"]) >= 3
+
+    await drain_until(rt, three_turns)
     events = svc.store.list_events("society:scout")
     assert [e["payload"]["text"] for e in events if e["kind"] == "agent_message"] == [
         "first",
@@ -156,7 +177,8 @@ async def test_failure_updates_a_visible_queued_message(world):
     await rt.store.set_kill_switch(True)
     await drain(rt)
     assert await rt.store.delivery_status(env.event_id) == "failed"
-    assert svc.store.incoming_message("society:scout", env.event_id)["status"] == "failed"
+    receipt = svc.store.incoming_message("society:scout", env.event_id)
+    assert receipt["status"] == "failed"
 
 
 async def test_agent_reply_keeps_conversation_and_cannot_forge_sender(world):

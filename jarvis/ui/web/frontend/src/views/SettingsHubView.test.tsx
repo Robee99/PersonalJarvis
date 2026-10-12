@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { SectionHealth } from "@/hooks/useProviders";
@@ -9,6 +9,8 @@ import type { SectionHealth } from "@/hooks/useProviders";
 const { mockState } = vi.hoisted(() => ({
   mockState: {
     activeSection: "settings" as string,
+    solo: false,
+    detachedViews: [],
     setActiveSection: vi.fn(),
   },
 }));
@@ -69,19 +71,13 @@ vi.mock("@/views/SettingsView", () => ({
   ),
 }));
 vi.mock("@/views/ProfileView", () => ({ ProfileView: stub("TAB_PROFILE") }));
-vi.mock("@/views/AgentInstructionsView", () => ({
-  AgentInstructionsView: stub("TAB_INSTRUCTIONS"),
-}));
-vi.mock("@/views/contacts/ContactsView", () => ({
-  ContactsView: stub("TAB_CONTACTS"),
+vi.mock("@/views/AssistantProfileView", () => ({
+  AssistantProfileView: stub("TAB_INSTRUCTIONS"),
 }));
 vi.mock("@/views/socials/SocialsView", () => ({ SocialsView: stub("TAB_SOCIALS") }));
 vi.mock("@/views/ApiKeysView", () => ({ ApiKeysView: stub("TAB_APIKEYS") }));
 vi.mock("@/views/TelephonyView", () => ({
   TelephonySetupView: stub("TAB_TELEPHONY_SETUP"),
-}));
-vi.mock("@/views/LocalModelsView", () => ({
-  LocalModelsView: stub("TAB_LOCAL_MODELS"),
 }));
 vi.mock("@/views/PetsView", () => ({ PetsView: stub("TAB_PETS") }));
 vi.mock("@/views/CostsView", () => ({ CostsView: stub("TAB_COSTS") }));
@@ -92,26 +88,22 @@ vi.mock("@/views/feedback/FeedbackView", () => ({
 import { SettingsHubDialog, SettingsHubView as HubView } from "@/views/SettingsHubView";
 import { useSettingsPage } from "@/store/settingsPage";
 import { clearApiKeysTabRequest, requestApiKeysTab } from "@/lib/apiKeysTab";
-import { act } from "@testing-library/react";
 
-const noop = () => {};
-const SettingsHubView = () => <HubView onClose={noop} />;
+const SettingsHubView = () => <HubView />;
 
 const NAV_IDS = [
   "settings",
   "pets",
   "profile",
   "agent-instructions",
-  "contacts",
   "socials",
   "apikeys",
-  "local-models",
   "costs",
   "feedback",
 ] as const;
 
-/** Folded by default: API keys & routing, Local models, Pets, Socials… */
-const ADVANCED_IDS = ["apikeys", "local-models", "pets", "socials"] as const;
+/** Folded by default: API Keys, Computers, Appshots, Pets, Socials. */
+const ADVANCED_IDS = ["apikeys", "computers", "pets", "socials"] as const;
 
 function openAdvanced() {
   fireEvent.click(screen.getByTestId("settings-hub-advanced-toggle"));
@@ -131,15 +123,21 @@ afterEach(() => {
 });
 
 describe("SettingsHubView header and navigation", () => {
-  it("separates the navigation from the content and closes through its X", async () => {
-    const onClose = vi.fn();
-    render(<HubView onClose={onClose} />);
+  it("separates the navigation from the content and opens with the heading", async () => {
+    render(<HubView />);
     await screen.findByTestId("TAB_SETTINGS");
     expect(screen.getByTestId("settings-hub-sidebar").className).toContain("jarvis-nav-surface");
     expect(screen.getByTestId("settings-hub-content").parentElement?.className).toContain("jarvis-sheet");
-    fireEvent.click(screen.getByTestId("settings-hub-close"));
-    expect(onClose).toHaveBeenCalledOnce();
-    expect(mockState.setActiveSection).not.toHaveBeenCalled();
+    // The caption's back arrow leaves the page; the nav has no row for it.
+    expect(screen.queryByTestId("settings-hub-close")).toBeNull();
+    expect(screen.queryByText("settings_hub.back_to_app")).toBeNull();
+  });
+
+  it("starts below the window caption so its controls stay visible", async () => {
+    render(<SettingsHubDialog onClose={vi.fn()} />);
+    const dialog = await screen.findByTestId("settings-hub-dialog");
+    expect(dialog.className).toContain("top-8");
+    expect(dialog.className).not.toContain("inset-0");
   });
 
   it("opens as a named dialog that Escape closes", async () => {
@@ -203,10 +201,8 @@ describe("SettingsHubView tab resolution", () => {
     ["settings", "TAB_SETTINGS"],
     ["profile", "TAB_PROFILE"],
     ["agent-instructions", "TAB_INSTRUCTIONS"],
-    ["contacts", "TAB_CONTACTS"],
     ["socials", "TAB_SOCIALS"],
     ["apikeys", "TAB_APIKEYS"],
-    ["local-models", "TAB_LOCAL_MODELS"],
     ["pets", "TAB_PETS"],
     ["costs", "TAB_COSTS"],
     ["feedback", "TAB_FEEDBACK"],
@@ -230,6 +226,14 @@ describe("SettingsHubView tab resolution", () => {
     expect(
       screen.getByTestId("settings-hub-nav-apikeys").getAttribute("aria-current"),
     ).toBe("page");
+  });
+
+  it("lists neither Local models nor Contacts", async () => {
+    render(<SettingsHubView />);
+    await screen.findByTestId("TAB_SETTINGS");
+
+    expect(screen.queryByTestId("settings-hub-nav-local-models")).toBeNull();
+    expect(screen.queryByTestId("settings-hub-nav-contacts")).toBeNull();
   });
 
   it("falls back to Settings for an unexpected section id", async () => {
@@ -307,11 +311,11 @@ describe("SettingsHubView search", () => {
 
 describe("SettingsHubView health signals", () => {
   it("carries the API-Keys alert dot on a provider error", async () => {
-    mockHealth.brain = {
+    mockHealth.realtime = {
       status: "error",
       reason: "rate_limited",
-      detail: "OpenRouter: rate limited",
-      subject_id: "openrouter",
+      detail: "Gemini Live: rate limited",
+      subject_id: "gemini-live",
     };
     render(<SettingsHubView />);
     await screen.findByTestId("TAB_SETTINGS");
@@ -320,23 +324,6 @@ describe("SettingsHubView health signals", () => {
     expect(screen.getByTestId("settings-hub-advanced-alert")).toBeTruthy();
     openAdvanced();
     expect(screen.getByTestId("settings-hub-alert-apikeys")).toBeTruthy();
-    expect(screen.queryByTestId("settings-hub-warn-local-models")).toBeNull();
-  });
-
-  it("carries the Local-models warn dot while the setup needs care", async () => {
-    mockHealth.local_models = {
-      status: "needs_setup",
-      reason: "not_configured",
-      detail: "",
-      subject_id: "ollama",
-    };
-    render(<SettingsHubView />);
-    await screen.findByTestId("TAB_SETTINGS");
-
-    expect(screen.getByTestId("settings-hub-advanced-warn")).toBeTruthy();
-    openAdvanced();
-    expect(screen.getByTestId("settings-hub-warn-local-models")).toBeTruthy();
-    expect(screen.queryByTestId("settings-hub-alert-apikeys")).toBeNull();
   });
 
   it("stays calm when nothing is broken", async () => {
@@ -344,9 +331,7 @@ describe("SettingsHubView health signals", () => {
     await screen.findByTestId("TAB_SETTINGS");
 
     expect(screen.queryByTestId("settings-hub-alert-apikeys")).toBeNull();
-    expect(screen.queryByTestId("settings-hub-warn-local-models")).toBeNull();
     expect(screen.queryByTestId("settings-hub-advanced-alert")).toBeNull();
-    expect(screen.queryByTestId("settings-hub-advanced-warn")).toBeNull();
   });
 });
 
@@ -361,7 +346,7 @@ describe("SettingsHubView MODEL and VOICE first (P1-G)", () => {
     expect(buttons.slice(0, 2)).toEqual(["settings-hub-nav-model", "settings-hub-nav-voice"]);
   });
 
-  it("keeps the rest of the provider screen under a folded Advanced group", async () => {
+  it("keeps the API Keys page and the rarer pages under a folded Advanced group", async () => {
     render(<SettingsHubView />);
     await screen.findByTestId("TAB_SETTINGS");
 
@@ -396,7 +381,7 @@ describe("SettingsHubView MODEL and VOICE first (P1-G)", () => {
     expect(screen.getByTestId("settings-hub-nav-voice").getAttribute("aria-current")).toBe("page");
   });
 
-  it("follows a request for a voice tier onto VOICE and a wording request onto Advanced", async () => {
+  it("follows a voice-tier request onto VOICE and an agents request onto API Keys", async () => {
     mockState.activeSection = "apikeys";
     render(<SettingsHubView />);
     await screen.findByTestId("TAB_APIKEYS");
@@ -404,7 +389,7 @@ describe("SettingsHubView MODEL and VOICE first (P1-G)", () => {
     act(() => requestApiKeysTab("stt"));
     expect(screen.getByTestId("settings-hub-nav-voice").getAttribute("aria-current")).toBe("page");
 
-    act(() => requestApiKeysTab("dictation"));
+    act(() => requestApiKeysTab("agents"));
     expect(screen.getByTestId("settings-hub-nav-apikeys").getAttribute("aria-current")).toBe("page");
   });
 });

@@ -2002,6 +2002,9 @@ class SafetyBlacklistConfig(BaseModel):
 
 
 class SafetyConfig(BaseModel):
+    # App-owned executions run without permission prompts unless the person
+    # selects Ask. Chat sessions keep their own explicitly selected stance.
+    approval_mode: Literal["bypass", "ask"] = "bypass"
     default_tier: RiskTier = "safe"
     always_confirm_tiers: list[RiskTier] = Field(default_factory=lambda: ["ask"])
     always_block_tiers: list[RiskTier] = Field(default_factory=lambda: ["block"])
@@ -2211,7 +2214,7 @@ class UIConfig(BaseModel):
     # value, so a voice command or the Control API can change it and the open UI
     # switches live (a ConfigReloaded / UiLanguageChanged event reaches the
     # frontend over /ws). Distinct from brain.reply_language (what Jarvis SPEAKS).
-    language: Literal["en", "de", "es"] = "en"
+    language: Literal["en", "de", "es", "zh"] = "en"
     # Colour theme of the whole desktop app: "jarvis" (this build's default),
     # "dark" (matte black + signal yellow), "light" (warm paper + dark gold), or
     # "system" (follow the OS appearance, re-evaluated live when the OS flips),
@@ -2451,6 +2454,19 @@ class BackgroundConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     keep_agents_running: bool = True
+    # Independent server ownership is opt-in for existing integrated desktops.
+    # A client never stops this server or inherits its provider credentials.
+    persistent_server: bool = False
+    server_url: str = ""
+
+    @field_validator("server_url")
+    @classmethod
+    def validate_server_url(cls, value: str) -> str:
+        if not value.strip():
+            return ""
+        from jarvis.core.server_endpoint import server_endpoint
+
+        return server_endpoint(value)
 
 
 class TelemetryConfig(BaseModel):
@@ -2759,10 +2775,27 @@ class AppshotConfig(BaseModel):
 
     model_config = {"extra": "allow"}
 
-    #: Global shortcut. ``alt+alt`` means both Alt keys pressed together (read
-    #: by ``jarvis.appshot.gesture``); any other value is an ordinary combo in
-    #: the shared hotkey syntax; an empty string switches the shortcut off.
+    #: Global shortcut. ``alt+alt`` / ``shift+shift`` / ``ctrl+ctrl`` mean both
+    #: keys of that pair pressed together (read by ``jarvis.appshot.gesture``);
+    #: any other value is an ordinary combo in the shared hotkey syntax; an
+    #: empty string switches the shortcut off.
     hotkey: str = "alt+alt"
+
+    #: Global shortcut for an AREA appshot: the screens dim, the user drags a
+    #: rectangle, and exactly that part is captured (``jarvis.appshot.region``).
+    #: Same syntax as ``hotkey``; an empty string switches it off. Both Shift
+    #: keys pairs with both-Alt for the window, exists on every keyboard and
+    #: collides with no app or OS shortcut.
+    region_hotkey: str = "shift+shift"
+
+    #: One shortcut selects a recording area; pressing it again stops and saves.
+    recording_hotkey: str = "ctrl+shift+9"
+
+    #: Recording preferences are snapshotted when selection starts.
+    recording_resolution: Literal["720p", "1080p", "1440p", "2160p", "native"] = "1080p"
+    recording_fps: Literal[30, 60, 120] = 60
+    recording_bitrate_mbps: int = Field(default=12, ge=1, le=100, strict=True)
+    recording_system_audio: bool = False
 
     #: Where a shortcut appshot goes. ``auto``: into the running voice call,
     #: otherwise onto the next message. ``message``: always onto the next
@@ -2774,6 +2807,82 @@ class AppshotConfig(BaseModel):
 
     #: Flash and thumbnail animation on the captured window.
     effect: bool = True
+
+    #: Seconds the appshot card rests in the screen corner before it slides
+    #: away (read by ``jarvis.appshot.card_actions``); ``0`` keeps it there
+    #: until the user closes it.
+    card_seconds: int = Field(default=6, ge=0, le=600)
+
+    #: Keep every appshot (and its saved edit) in the gallery on the Appshots
+    #: page, under ``<data dir>/appshots/`` (read by ``jarvis.appshot.service``
+    #: and ``jarvis.appshot.library``). Off: nothing new is written there.
+    library: bool = True
+
+    #: Delete old captures automatically: only the newest N screenshots and
+    #: the newest N screen recordings stay in the gallery (read by
+    #: ``jarvis.appshot.retention``). ``0`` keeps everything.
+    keep_newest: int = Field(default=0, ge=0, le=500)
+
+    #: Put every appshot taken by shortcut or button on the system clipboard
+    #: too, so Ctrl/Cmd+V pastes it into any app right away (read by
+    #: ``jarvis.appshot.service``). Looks the assistant takes never copy.
+    copy_to_clipboard: bool = True
+
+
+class JarvisXConfig(BaseModel):
+    """Top-level ``[jarvisx]`` config — the built-in screenshot and screen recorder.
+
+    Jarvis X is a plain capture tool (``jarvis/jarvisx/``): region, window and
+    full-screen screenshots plus region / full-screen recordings, each on its
+    own global shortcut, saved to a folder and kept in a local library. It
+    never involves the assistant: no Screen Context privacy pipeline, no
+    delivery into a conversation. Every key below is read by
+    ``jarvis.jarvisx`` (AP-31).
+    """
+
+    model_config = {"extra": "allow"}
+
+    #: Master switch: off disarms every shortcut and refuses new captures.
+    #: The library of earlier captures stays browsable.
+    enabled: bool = True
+
+    #: Global shortcuts in the shared hotkey syntax; an empty string turns
+    #: that one shortcut off. The Ctrl+Shift+digit row stays clear of the OS
+    #: screenshot keys (Win+Shift+S, Cmd+Shift+3/4/5) and every other
+    #: Jarvis default.
+    hotkey_region: str = "ctrl+shift+2"
+    hotkey_window: str = "ctrl+shift+3"
+    hotkey_fullscreen: str = "ctrl+shift+1"
+    hotkey_record_region: str = "ctrl+shift+5"
+    hotkey_record_fullscreen: str = "ctrl+shift+6"
+    #: Stops a running recording (pressing its record shortcut again does too).
+    hotkey_stop_recording: str = "ctrl+shift+4"
+
+    #: ``true``: the corner thumbnail stays until it is dismissed. ``false``:
+    #: it fades after ``thumbnail_dismiss_s`` seconds.
+    thumbnail_persist: bool = False
+    #: Clamped to 1..3600 where it is read, so a hand-edited value can never
+    #: make the config unloadable.
+    thumbnail_dismiss_s: int = 30
+
+    #: Folder new captures are saved to. Empty = the user's Pictures folder
+    #: (``Pictures/Jarvis X``), or the Jarvis data folder where there is none.
+    save_dir: str = ""
+
+    #: Also put each new screenshot on the system clipboard.
+    copy_to_clipboard: bool = True
+
+    #: Shutter sound on every capture (also gated by ``[ui].sound_effects``).
+    sound: bool = True
+
+    #: Flash plus the corner thumbnail card after every capture.
+    effect: bool = True
+
+    #: Delete old captures automatically: only the newest N screenshots and
+    #: the newest N recordings stay, files included (read by
+    #: ``jarvis.jarvisx.service``). ``0`` keeps everything. Clamped to
+    #: 0..1000 where it is read.
+    keep_newest: int = 0
 
 
 class ComputerUseConfig(BaseModel):
@@ -3355,6 +3464,27 @@ class VoiceConfig(BaseModel):
     # fraction of the no-first-frame ceiling. Any set value is clamped to <= the
     # ceiling so it can never invert and re-introduce guaranteed silence.
     no_first_frame_phrase_floor_s: float | None = None
+
+
+class BrowserVoiceConfig(BaseModel):
+    """``[browser_voice]`` — the browser-microphone voice bridge (``/ws/audio``).
+
+    On a host without its own microphone (a VPS, ``jarvis serve``) the browser
+    that presses Start holds the call: it streams the microphone to
+    ``/ws/audio`` and plays the reply. ``extra="allow"`` so an unknown future
+    key never blocks boot (AP-16).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Serves the classic STT -> brain -> TTS bridge in PIPELINE mode. Realtime
+    # mode always serves the socket, because it carries the realtime call and
+    # that call's classic fallback, so this switch does not apply there. Read
+    # by ``jarvis.browser_voice.route.browser_voice_enabled`` at connect time.
+    # Default on: before 2026-07-08 a missing section meant enabled, the
+    # headless deployment guide documents it as on, and the socket is behind
+    # the same credential check as every other route (issue #399).
+    enabled: bool = True
 
 
 class CompletenessConfig(BaseModel):
@@ -4242,7 +4372,7 @@ class MarketplaceConfig(BaseModel):
     # registry's GitHub Pages deployment; forks and air-gapped mirrors point
     # this at their own compiled index. Empty string disables the community
     # section entirely (browse shows only the shipped seed catalog).
-    community_index_url: str = "https://personaljarvis.github.io/marketplace/index.json"
+    community_index_url: str = "https://dodaios.github.io/marketplace/index.json"
     # Where the in-app Publish flow submits packages. The endpoint verifies
     # the GitHub identity and opens the registry PR as the marketplace bot;
     # forks point this at their own deployment. Empty string hides Publish,
@@ -4250,6 +4380,12 @@ class MarketplaceConfig(BaseModel):
     # retired, so a stock install offers no Publish button instead of firing
     # a request at a host that answers nothing.
     publish_endpoint: str = ""
+    # The registry repository the in-app Publish flow files submissions to
+    # when no endpoint is configured: an issue opened as the signed-in user,
+    # which the registry's intake workflow validates and publishes
+    # (docs/marketplace/agent-templates.md). This is the default path — it
+    # needs no server. Empty string hides Publish.
+    publish_registry_repo: str = "Dodaios/marketplace"
     # Client id of the marketplace GitHub App (public by design — device flow
     # needs no secret, which is why a downloadable binary can use it).
     publish_github_client_id: str = "Iv23li1YcX62KJO67whO"
@@ -4356,6 +4492,24 @@ class Phase6Config(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     safety: Phase6SafetyConfig = Field(default_factory=Phase6SafetyConfig)
+
+
+class MissionsConfig(BaseModel):
+    """``[missions]`` — how missions may spend money.
+
+    ``paid_api_fallback``: when no connected subscription has capacity, a
+    mission on a subscription install continues on the user's own API key
+    (within the per-mission and daily caps of ``jarvis/missions/capacity.py``)
+    instead of waiting. Default OFF. Read fresh on every paid decision, written
+    only through ``config_writer.set_missions_paid_api_fallback`` from the
+    Settings route — never by voice, chat or an agent tool (the path is in
+    ``jarvis/core/self_mod/forbidden.py``). No effect on an API-key-only
+    install, whose keys are its primary provider anyway.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    paid_api_fallback: bool = False
 
 
 class GlmCodingPlanConfig(BaseModel):
@@ -4640,6 +4794,9 @@ class JarvisConfig(BaseModel):
     # Appshots: the front window as conversation context, on a shortcut or on
     # request (jarvis/appshot/). Captures through Screen Context above.
     appshot: AppshotConfig = Field(default_factory=AppshotConfig)
+    # Jarvis X: the built-in screenshot / screen-recording tool
+    # (jarvis/jarvisx/). Independent of Screen Context and the assistant.
+    jarvisx: JarvisXConfig = Field(default_factory=JarvisXConfig)
     # Phase 5/6 — Computer-Use-POAV-Harness (ADR-0008).
     computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
     # Low-latency local-action gate. Hidden tools only; never exposed in the
@@ -4649,6 +4806,8 @@ class JarvisConfig(BaseModel):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     # Phase 6 — mission subsystem ([phase6.safety] typed; rest raw, AP-16).
     phase6: Phase6Config = Field(default_factory=Phase6Config)
+    # [missions] — paid API fallback switch for missions (capacity policy).
+    missions: MissionsConfig = Field(default_factory=MissionsConfig)
     # Latency sprint 1 (2026-04-30) — master switches for performance levers.
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     # Wave 0 (omni-latency) — hot-path latency span instrumentation toggle.
@@ -4676,6 +4835,9 @@ class JarvisConfig(BaseModel):
     # Voice-flow knobs (incomplete-prompt completion buffer settings).
     # Spec: docs/superpowers/specs/2026-05-25-incomplete-prompt-completion-design.md
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    # [browser_voice] — the browser-microphone bridge for hosts without a
+    # microphone of their own (see BrowserVoiceConfig).
+    browser_voice: BrowserVoiceConfig = Field(default_factory=BrowserVoiceConfig)
     # AI Pointer — deictic-gated "what is under the mouse cursor" context.
     # Spec: docs/plans/ai-pointer/DESIGN.md
     pointer: PointerConfig = Field(default_factory=PointerConfig)

@@ -91,7 +91,13 @@ def _macos_privacy_strings():
 datas = []
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/live_runner.py"), "jarvis/society/browser"))
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/native_window.py"), "jarvis/society/browser"))
+datas.append((str(PROJECT_ROOT / "jarvis/society/browser/manual_chrome.py"), "jarvis/society/browser"))
+datas.append((str(PROJECT_ROOT / "jarvis/society/browser/window_actions.py"), "jarvis/society/browser"))
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/pointer.py"), "jarvis/society/browser"))
+# The Hermes / OpenClaw pins (agent_runtimes/versions.py). The package-data
+# sweep below also finds them; named here so a narrower sweep cannot drop them
+# and send a frozen app's setup to upstream latest.
+datas.append((str(PROJECT_ROOT / "jarvis/agent_runtimes/runtime-versions.json"), "jarvis/agent_runtimes"))
 
 # The local voice engine runs in its OWN Python environment, so a frozen build
 # must ship its sources as plain files: setup copies them into the engine home
@@ -179,6 +185,11 @@ for _folder in ("providers", "brands"):
     for entry in sorted((_BRAND_MARKS / _folder).glob("*")):
         if entry.is_file():
             datas.append((str(entry), str(entry.relative_to(PROJECT_ROOT).parent)))
+# The Conductor jobs engine reads its SQL schema and seed jobs beside its own
+# modules; analysis finds the modules, not these files.
+for entry in (PROJECT_ROOT / "conductor").rglob("*"):
+    if entry.is_file() and entry.suffix.lower() in {".sql", ".yaml"}:
+        datas.append((str(entry), str(entry.relative_to(PROJECT_ROOT).parent)))
 
 # Configuration profiles live beside the checkout root, and jarvis.core.config
 # resolves them relative to it.

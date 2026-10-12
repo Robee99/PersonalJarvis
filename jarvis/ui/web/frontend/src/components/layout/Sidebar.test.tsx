@@ -60,21 +60,20 @@ test("IDE rail keeps workspace options and Jarvis Live reachable", () => {
   expect(options.disabled).toBe(false);
   fireEvent.click(options);
   expect(useIdeProjectsStore.getState().action).toMatchObject({ kind: "workspace-options", workspaceId: "w1" });
-  fireEvent.click(screen.getByTestId("ide-back-to-jarvis"));
-  expect(useEventStore.getState().activeSection).toBe("chats");
   cleanup();
 });
 
-test("IDE sidebar puts Projects first and returns to the normal chat navigation", () => {
+test("IDE sidebar puts Projects first and returns to the normal chat navigation", async () => {
   act(() => useEventStore.setState({ activeSection: "agentic-ide" }));
   renderSidebar();
-  expect(screen.getByTestId("ide-project-tree")).toBeDefined();
+  expect(await screen.findByTestId("ide-project-tree")).toBeDefined();
   // The agents list lives in the IDE's right-hand side panel now.
   expect(screen.queryByTestId("ide-workspace-agents")).toBeNull();
   expect(screen.queryByTestId("sidebar-new-chat")).toBeNull();
   expect(screen.queryByTestId("nav-row-agentic-ide")).toBeNull();
-  fireEvent.click(screen.getByTestId("ide-back-to-jarvis"));
-  expect(useEventStore.getState().activeSection).toBe("chats");
+  // No "Back to Jarvis" row: the caption's back arrow leaves the IDE.
+  expect(screen.queryByTestId("ide-back-to-jarvis")).toBeNull();
+  act(() => useEventStore.setState({ activeSection: "chats" }));
   expect(screen.getByTestId("sidebar-new-chat")).toBeDefined();
   cleanup();
 });
@@ -263,10 +262,9 @@ describe("Sidebar header avatar", () => {
     overlayMock.style = "jarvis_bar";
   });
 
-  // The mark is a bundled import, so its URL carries a build hash and there is
-  // nothing stable to assert. What matters is that the avatar shows the mark
-  // and not a stale public/ path a browser would serve from cache.
-  test("renders the Gigi app mark from the bundle, not a public path", () => {
+  // The mark is the user's pet (Gigi by default), drawn by PetMark from the
+  // pets answer — never the old static Gigi image.
+  test("renders the pet mark, not the old Gigi image", () => {
     // The mark heads the identity row, which returns when the quick
     // switcher (and with it the search bar) is switched off.
     useQuickSwitchSettings.setState({ enabled: false });
@@ -275,10 +273,8 @@ describe("Sidebar header avatar", () => {
     const avatar = container.querySelector('[data-testid="sidebar-style-avatar"]');
     expect(avatar).not.toBeNull();
     expect(avatar?.getAttribute("data-variant")).toBe("logo");
-    const logo = avatar?.querySelector("img") as HTMLImageElement;
-    const src = logo.getAttribute("src") ?? "";
-    expect(src).toContain("jarvis-mark");
-    expect(src.startsWith("/jarvis-")).toBe(false);
+    expect(avatar?.querySelector('[data-testid="pet-mark"]')).toBeTruthy();
+    expect(avatar?.querySelector("img")).toBeNull();
   });
 });
 
@@ -311,7 +307,7 @@ describe("Sidebar settings-hub entry", () => {
     // SETTINGS is one of the five destinations now, so it carries "you are
     // here" for every hub section — including ones only reachable from inside
     // the hub. The profile button is lit only for its own page.
-    useEventStore.setState({ activeSection: "local-models" });
+    useEventStore.setState({ activeSection: "appshots" });
     renderSidebar();
 
     expect(screen.getByTestId("nav-primary-settings").className).toMatch(/jarvis-nav-active/);
@@ -717,7 +713,7 @@ describe("compact sidebar navigation", () => {
   test("WORK stays lit on every work view", () => {
     // The coding workspace (WORK › Projects) swaps this column for its own
     // project navigation, so it is covered by the IDE tests above instead.
-    for (const section of ["visualization", "deck", "board", "run_inspector"] as const) {
+    for (const section of ["visualization", "deck", "board"] as const) {
       useEventStore.setState({ activeSection: section });
       renderSidebar();
       expect(screen.getByTestId("nav-primary-work").className, section).toMatch(/jarvis-nav-active/);

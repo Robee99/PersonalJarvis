@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   type QueryClient,
   useMutation,
@@ -17,15 +17,19 @@ import {
   X,
   Loader2,
   AlertTriangle,
-  Upload,
   Store,
   MoreHorizontal,
   ArrowRight,
+  Link2,
+  FolderUp,
+  Trash2,
 } from "lucide-react";
 import { CommunityTab } from "@/views/PluginsCommunity";
 import { PluginUploadDialog } from "@/views/PluginUploadDialog";
 import { ArmoryStat, HermesArmoryGroup } from "@/views/ArmoryHermes";
-import { fill, translate } from "@/i18n";
+import { AddConnectorDialog, AddPluginTabs, type AddPluginMode } from "@/views/AddConnectorDialog";
+import { removeAddedPlugin, takePluginFocus } from "@/lib/customConnector";
+import { fill, translate, useLocaleChunk } from "@/i18n";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { BrandedSelect } from "@/components/ui/select";
 import {
@@ -57,6 +61,8 @@ import { robustCopy } from "@/lib/clipboard";
 import { PRODUCT_NAME } from "@/lib/branding";
 import { bundledPluginLogo as bundledLogo } from "@/lib/pluginLogos";
 
+const CustomApisView = lazy(() => import("@/views/CustomApisView").then((module) => ({ default: module.CustomApisView })));
+
 // ---------------------------------------------------------------------------
 // Wire types — mirror the JSON shape served by /api/marketplace/plugins.
 // ---------------------------------------------------------------------------
@@ -68,7 +74,8 @@ type AuthMode =
   | "oauth_pkce_loopback"
   | "instance_browser"
   | "local"
-  | "hosted_mcp_allowlist";
+  | "hosted_mcp_allowlist"
+  | "hosted_mcp_open";
 
 type PluginStatus = "not_connected" | "connected" | "needs_reauth" | "error";
 /** Deliberately a plain string, mirroring the backend. The catalog serves the
@@ -78,12 +85,16 @@ type PluginStatus = "not_connected" | "connected" | "needs_reauth" | "error";
  *  already know. */
 type Category = string;
 type Longevity = "permanent" | "self_renewing" | "provider_limited";
+/** Mirrors `Acceptance` in jarvis/marketplace/catalog.py: "verified" only
+ *  after a completed end-to-end browser journey, "preview" otherwise. */
+type Acceptance = "verified" | "preview";
 /** Mirrors the backend's REAUTH_* codes (jarvis/marketplace/token_store.py). */
 type ReauthReason =
   | "provider_rejected"
   | "client_rejected"
   | "client_missing"
-  | "rotation_lost";
+  | "rotation_lost"
+  | "refresh_missing";
 
 /** What actually happened, in the user's terms, and what it means for them.
  *
@@ -92,17 +103,18 @@ type ReauthReason =
  *  breaking for no reason" and "my own OAuth app is still in Testing mode".
  */
 const REAUTH_EXPLANATION: Record<ReauthReason, string> = {
-  provider_rejected: "The provider withdrew the authorization",
+  provider_rejected: "The provider no longer accepts this authorization",
   client_rejected: "The provider no longer accepts this app's OAuth client",
   client_missing: "Connected before Jarvis stored the OAuth client",
   rotation_lost: "A renewed token could not be saved, so it was retired",
+  refresh_missing: "The access token expired and cannot be renewed automatically",
 };
 
 /** Whether Jarvis will keep trying on its own, so the card never implies the
  *  user must act when a retry is already scheduled — or stays silent when one
  *  is not. `rotation_lost` is deliberately never retried. */
 function retriesItself(reason: ReauthReason | string | null | undefined): boolean {
-  return reason !== "rotation_lost";
+  return reason !== "rotation_lost" && reason !== "refresh_missing";
 }
 
 /** Coarse age of a flag: "today", "3 days ago". Deliberately not minute-exact —
@@ -129,6 +141,7 @@ interface CatalogPlugin {
   featured?: boolean;
   longevity?: Longevity;
   longevity_note?: string | null;
+  acceptance?: Acceptance;
   oauth_client_family?: string | null;
   oauth_client_configured?: boolean;
   auth: { mode: AuthMode; [key: string]: unknown };
@@ -145,6 +158,7 @@ interface CatalogPlugin {
    *  reasons. Never carries provider error text. */
   reauth_reason?: ReauthReason | string | null;
   reauth_at?: string | null;
+  refresh_expires_at?: string | null;
   /** "seed" for a plugin the app ships, "community" for one installed from
    *  the marketplace. Drives the Marketplace mark and keeps an installed
    *  community plugin in the Installed tab before it is ever connected. */
@@ -152,6 +166,8 @@ interface CatalogPlugin {
   publisher?: string | null;
   version?: string | null;
   source_url?: string | null;
+  /** Transport block; a custom connector's `url` is the server it reaches. */
+  mcp_server?: { transport?: string; url?: string; [key: string]: unknown } | null;
 }
 
 interface CatalogResponse {
@@ -189,6 +205,7 @@ function cachePluginStatus(
           status,
           reauth_reason: null,
           reauth_at: null,
+          refresh_expires_at: null,
           ...(status === "not_connected" ? { live_callable: false } : {}),
         };
       });
@@ -237,9 +254,12 @@ export interface Plugin {
   unavailableReason?: string;
   longevity: Longevity;
   longevityNote?: string;
+  /** Undefined only in hand-built fixtures; the catalog always states it. */
+  acceptance?: Acceptance;
   oauthClientFamily?: string;
   reauthReason?: ReauthReason | string;
   reauthAt?: string;
+  refreshExpiresAt?: string;
   oauthClientConfigured: boolean;
   /** Expert token fallback (browser-primary plugins only). */
   fallbackAuth?: PatPasteAuthDetail | null;
@@ -254,6 +274,8 @@ export interface Plugin {
   selfUploaded: boolean;
   publisher?: string;
   sourceUrl?: string;
+  /** Remote MCP address, shown for plugins the owner added by URL. */
+  mcpUrl?: string;
 }
 
 function adapt(p: CatalogPlugin): Plugin {
@@ -273,9 +295,11 @@ function adapt(p: CatalogPlugin): Plugin {
     unavailableReason: p.unavailable_reason ?? undefined,
     longevity: p.longevity ?? "self_renewing",
     longevityNote: p.longevity_note ?? undefined,
+    acceptance: p.acceptance ?? "preview",
     oauthClientFamily: p.oauth_client_family ?? undefined,
     reauthReason: p.reauth_reason ?? undefined,
     reauthAt: p.reauth_at ?? undefined,
+    refreshExpiresAt: p.refresh_expires_at ?? undefined,
     oauthClientConfigured: p.oauth_client_configured ?? false,
     fallbackAuth:
       p.fallback_auth != null && typeof p.fallback_auth === "object"
@@ -286,6 +310,7 @@ function adapt(p: CatalogPlugin): Plugin {
     selfUploaded: p.source === "local",
     publisher: p.publisher ?? undefined,
     sourceUrl: p.source_url ?? undefined,
+    mcpUrl: typeof p.mcp_server?.url === "string" ? p.mcp_server.url : undefined,
   };
 }
 
@@ -364,6 +389,7 @@ const AUTH_LABELS: Record<AuthMode, string> = {
   hosted_mcp_oauth_dcr: "One-Click",
   oauth_pkce_loopback: "Browser Login",
   hosted_mcp_allowlist: "Allowlist",
+  hosted_mcp_open: "No sign-in",
 };
 
 // Provider families supporting an optional expert OAuth client override: use their
@@ -571,10 +597,19 @@ export function PluginsView({
 }: { inDialog?: boolean; armory?: boolean } = {}) {
   const qc = useQueryClient();
   const setActiveSection = useEventStore((s) => s.setActiveSection);
-  const [view, setView] = useState<"list" | "community">("list");
+  const [view, setView] = useState<"list" | "community" | "custom-apis">("list");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listFilter, setListFilter] = useState<ListFilter>(inDialog ? "recommended" : "all");
-  const [uploadOpen, setUploadOpen] = useState(false);
+  // Which half of the "Add a plugin" dialog is open: a server URL or a folder.
+  const [addMode, setAddMode] = useState<AddPluginMode | null>(null);
+  const [removingPlugin, setRemovingPlugin] = useState<Plugin | null>(null);
+  const pushToast = useEventStore((s) => s.pushToast);
+  useLocaleChunk("marketplace");
+  // Another surface (the composer's Add menu) asked for one plugin's page.
+  useEffect(() => {
+    const focus = takePluginFocus();
+    if (focus) setSelectedId(focus);
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterId>("all");
@@ -828,6 +863,7 @@ export function PluginsView({
     }
     if (
       p.authMode === "hosted_mcp_oauth_dcr" ||
+      p.authMode === "hosted_mcp_open" ||
       p.authMode === "local" ||
       p.authMode === "oauth_device_flow" ||
       p.authMode === "oauth_pkce_loopback"
@@ -887,7 +923,8 @@ export function PluginsView({
           p.status === "connected" ||
           p.status === "needs_reauth" ||
           p.status === "error" ||
-          p.fromMarketplace,
+          p.fromMarketplace ||
+          p.selfUploaded,
       ),
     [allPlugins],
   );
@@ -958,14 +995,42 @@ export function PluginsView({
           </div>
         </div>
       )}
+      <AddConnectorDialog
+        open={addMode === "connector"}
+        onClose={() => setAddMode(null)}
+        tabs={<AddPluginTabs mode="connector" onChange={setAddMode} />}
+        onAdded={(result) => {
+          setAddMode(null);
+          pushToast(
+            "success",
+            fill(translate("custom_connector.added"), { name: result.plugin.display_name }),
+          );
+          void handleFreshInstall(result.plugin.id);
+        }}
+      />
       <PluginUploadDialog
-        open={uploadOpen}
-        onClose={() => setUploadOpen(false)}
+        open={addMode === "folder"}
+        onClose={() => setAddMode(null)}
+        tabs={<AddPluginTabs mode="folder" onChange={setAddMode} />}
         onInstalled={(id) => {
-          setUploadOpen(false);
+          setAddMode(null);
           void handleFreshInstall(id);
         }}
       />
+
+      {removingPlugin && (
+        <RemovePluginDialog
+          plugin={removingPlugin}
+          onCancel={() => setRemovingPlugin(null)}
+          onRemoved={() => {
+            const name = removingPlugin.name;
+            setRemovingPlugin(null);
+            setSelectedId(null);
+            pushToast("success", fill(translate("custom_connector.removed"), { name }));
+            void qc.refetchQueries({ queryKey: ["marketplace-plugins"] });
+          }}
+        />
+      )}
 
       {connectingPlugin && (
         <PatConnectDialog
@@ -1079,7 +1144,7 @@ export function PluginsView({
     <div className="flex h-full min-h-0 flex-col bg-transparent">
       {(inDialog || armory) && view === "list" && !selectedId ? content : (
         <ScrollArea className="flex-1">
-          <div className={cn("mx-auto w-full max-w-4xl px-8 py-6", inDialog && "pt-12")}>{content}</div>
+          <div className={cn("mx-auto w-full max-w-4xl px-8 py-6", inDialog && (view === "custom-apis" ? "px-6 pt-5" : "pt-12"))}>{content}</div>
         </ScrollArea>
       )}
       {dialogs}
@@ -1087,6 +1152,12 @@ export function PluginsView({
   );
 
   // ---- Community marketplace (the "Browse" page) --------------------------
+  if (view === "custom-apis") {
+    return shell(<Suspense fallback={<p>{translate("custom_apis.loading")}</p>}>
+      <CustomApisView onBack={() => setView("list")} />
+    </Suspense>);
+  }
+
   if (view === "community") {
     return shell(
       <>
@@ -1108,6 +1179,7 @@ export function PluginsView({
             plugin={selectedPlugin}
             onConnect={handleConnect}
             onDisconnect={handleDisconnect}
+            onRemove={setRemovingPlugin}
           />
         ) : (
           <p className="mt-6 text-sm text-muted-foreground">
@@ -1152,7 +1224,8 @@ export function PluginsView({
         onCategory={(value) => { setFilter(value); setListFilter("all"); }}
         loading={isLoading} error={error instanceof Error ? error.message : null}
         refreshing={isFetching} onRefresh={() => void refetch()}
-        onBrowse={() => setView("community")} onUpload={() => setUploadOpen(true)}
+        onBrowse={() => setView("community")} onAdd={setAddMode}
+        onCustomApis={() => setView("custom-apis")}
         onOpen={setSelectedId} onConnect={handleConnect} onDisconnect={handleDisconnect}
         onReset={() => { resetFilters(); setListFilter("all"); }}
         attention={attentionPlugins.length} subtitle={subtitle}
@@ -1184,19 +1257,27 @@ export function PluginsView({
             <SoftButton onClick={() => setView("community")} className="ml-1">
               {translate("plugins_view.browse")}
             </SoftButton>
+            <SoftButton onClick={() => setView("custom-apis")}>{translate("custom_apis.title")}</SoftButton>
             <ActionMenu
               label={translate("plugins_view.add")}
               actions={[
                 {
+                  id: "connector",
+                  label: translate("custom_connector.menu_connector"),
+                  icon: <Link2 className="h-3.5 w-3.5" />,
+                  onSelect: () => setAddMode("connector"),
+                },
+                {
                   id: "upload",
-                  label: translate("plugins_view.add_upload"),
-                  icon: <Upload className="h-3.5 w-3.5" />,
-                  onSelect: () => setUploadOpen(true),
+                  label: translate("custom_connector.menu_folder"),
+                  icon: <FolderUp className="h-3.5 w-3.5" />,
+                  onSelect: () => setAddMode("folder"),
                 },
                 {
                   id: "community",
                   label: translate("plugins_view.add_community"),
                   icon: <Store className="h-3.5 w-3.5" />,
+                  separatorAbove: true,
                   onSelect: () => setView("community"),
                 },
                 {
@@ -1316,13 +1397,14 @@ export function PluginsView({
 function PluginWindowCatalog({
   plugins, installed, total, listFilter, onListFilter, query, onQuery,
   category, categories, onCategory, loading, error, refreshing, onRefresh,
-  onBrowse, onUpload, onOpen, onConnect, onDisconnect, onReset, attention, subtitle,
+  onBrowse, onAdd, onCustomApis, onOpen, onConnect, onDisconnect, onReset, attention, subtitle,
 }: {
   plugins: Plugin[]; installed: Plugin[]; total: number; listFilter: ListFilter;
   onListFilter: (value: ListFilter) => void; query: string; onQuery: (value: string) => void;
   category: string; categories: string[]; onCategory: (value: string) => void;
   loading: boolean; error: string | null; refreshing: boolean; onRefresh: () => void;
-  onBrowse: () => void; onUpload: () => void; onOpen: (id: string) => void;
+  onBrowse: () => void; onAdd: (mode: AddPluginMode) => void; onOpen: (id: string) => void;
+  onCustomApis: () => void;
   onReset: () => void; attention: number; subtitle: string;
 } & ConnectHandlers) {
   const tabs: { id: ListFilter; label: string; count?: number }[] = [
@@ -1345,9 +1427,29 @@ function PluginWindowCatalog({
               <RefreshCw className="h-3.5 w-3.5" />
             </IconButton>
             <SoftButton onClick={onBrowse}>{translate("plugins_view.browse")}</SoftButton>
-            <IconButton label={translate("plugins_view.add_upload")} onClick={onUpload}>
-              <Plus className="h-4 w-4" />
-            </IconButton>
+            <SoftButton onClick={onCustomApis}>{translate("custom_apis.title")}</SoftButton>
+            <ActionMenu
+              label={translate("plugins_view.add")}
+              actions={[
+                {
+                  id: "connector",
+                  label: translate("custom_connector.menu_connector"),
+                  icon: <Link2 className="h-3.5 w-3.5" />,
+                  onSelect: () => onAdd("connector"),
+                },
+                {
+                  id: "upload",
+                  label: translate("custom_connector.menu_folder"),
+                  icon: <FolderUp className="h-3.5 w-3.5" />,
+                  onSelect: () => onAdd("folder"),
+                },
+              ]}
+              trigger={({ open, toggle }) => (
+                <IconButton label={translate("plugins_view.add")} onClick={toggle} active={open}>
+                  <Plus className="h-4 w-4" />
+                </IconButton>
+              )}
+            />
           </div>
         </div>
         <p className="sr-only">{subtitle}</p>
@@ -1401,6 +1503,7 @@ function PluginWindowCatalog({
                       <span className="block truncate text-[13px] leading-5 text-muted-foreground" title={plugin.description}>{plugin.description}</span>
                       {plugin.unavailableReason && <span className="block text-xs text-muted-foreground" title={plugin.unavailableReason}>Unsupported on this device</span>}
                       {plugin.status === "needs_reauth" && <span className="block text-xs text-warning"><ReauthExplanation plugin={plugin} inline /></span>}
+                      <GrantExpiry plugin={plugin} />
                     </span>
                   </button>
                   <WindowConnectButton plugin={plugin} onConnect={onConnect} onDisconnect={onDisconnect} />
@@ -1767,6 +1870,7 @@ function PluginTableRow({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="truncate text-title font-medium">{plugin.name}</span>
+              <PreviewBadge plugin={plugin} />
               {plugin.fromMarketplace && <MarketplaceBadge publisher={plugin.publisher} />}
               {plugin.selfUploaded && (
                 <span
@@ -1782,6 +1886,7 @@ function PluginTableRow({
                 <ReauthExplanation plugin={plugin} inline />
               </p>
             )}
+            <GrantExpiry plugin={plugin} />
           </div>
         </div>
       </Cell>
@@ -1815,7 +1920,12 @@ async function fetchPluginFiles(pluginId: string): Promise<{ files: CardFile[] }
   return res.json();
 }
 
-function PluginDetail({ plugin, onConnect, onDisconnect }: { plugin: Plugin } & ConnectHandlers) {
+function PluginDetail({
+  plugin,
+  onConnect,
+  onDisconnect,
+  onRemove,
+}: { plugin: Plugin; onRemove?: (plugin: Plugin) => void } & ConnectHandlers) {
   const { busy, run } = useConnectLock(() => onConnect(plugin));
   const filesQuery = useQuery({
     queryKey: ["marketplace-plugin-files", plugin.id],
@@ -1848,6 +1958,20 @@ function PluginDetail({ plugin, onConnect, onDisconnect }: { plugin: Plugin } & 
           },
         ]
       : []),
+    // A plugin the owner added (URL, folder or community install) can leave
+    // again; a built-in one can only be disconnected.
+    ...(onRemove && (plugin.selfUploaded || plugin.fromMarketplace)
+      ? [
+          {
+            id: "remove",
+            label: translate("custom_connector.remove"),
+            icon: <Trash2 className="h-3.5 w-3.5" />,
+            destructive: true,
+            separatorAbove: Boolean(plugin.sourceUrl) || connected || needsReconnect,
+            onSelect: () => onRemove(plugin),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -1857,6 +1981,7 @@ function PluginDetail({ plugin, onConnect, onDisconnect }: { plugin: Plugin } & 
         title={plugin.name}
         titleAccessory={
           <>
+            <PreviewBadge plugin={plugin} />
             {plugin.fromMarketplace && <MarketplaceBadge publisher={plugin.publisher} />}
             {plugin.selfUploaded && (
               <span
@@ -1935,6 +2060,8 @@ function PluginDetail({ plugin, onConnect, onDisconnect }: { plugin: Plugin } & 
         </div>
       ) : null}
 
+      <GrantExpiry plugin={plugin} />
+
       {plugin.description && (
         <ClampedText
           className="mt-4"
@@ -1968,6 +2095,13 @@ function PluginDetail({ plugin, onConnect, onDisconnect }: { plugin: Plugin } & 
                     ? fill(translate("plugins_view.oauth_client_own"), { family: family.label })
                     : "Browser sign-in is pending publisher setup. No developer setup is required from you."
                   : null,
+              },
+              {
+                label: translate("custom_connector.fact_server"),
+                value:
+                  plugin.selfUploaded && plugin.mcpUrl ? (
+                    <code className="break-all font-mono text-meta">{plugin.mcpUrl}</code>
+                  ) : null,
               },
               { label: translate("plugins_view.fact_publisher"), value: plugin.publisher ?? null },
               {
@@ -2111,6 +2245,25 @@ export function BrandTile({ plugin, size = "md" }: { plugin: Plugin; size?: "sm"
  *  dies weeks later. `provider_limited` carries a note explaining how often — a
  *  warning without an answer would be worse than none.
  */
+/** "Not yet proven end to end." Built-in plugins only: a marketplace or
+ *  self-uploaded plugin already carries its own not-reviewed badge. Theme
+ *  tokens only, so it reads in light and dark mode. */
+export function PreviewBadge({ plugin }: { plugin: Plugin }) {
+  if (plugin.acceptance !== "preview" || plugin.fromMarketplace || plugin.selfUploaded) {
+    return null;
+  }
+  const title = translate("plugins_view.preview_tooltip");
+  return (
+    <span
+      title={title}
+      aria-label={title}
+      className="shrink-0 rounded-full border border-border px-1.5 text-micro font-medium text-muted-foreground"
+    >
+      {translate("plugins_view.preview_badge")}
+    </span>
+  );
+}
+
 export function LongevityBadge({ plugin }: { plugin: Plugin }) {
   const limited = plugin.longevity === "provider_limited";
   return (
@@ -2138,6 +2291,19 @@ export function LongevityBadge({ plugin }: { plugin: Plugin }) {
  *  carries the actual fix (publish the OAuth app so Google stops expiring the
  *  grant every 7 days) — buried in a tooltip it never reached anyone.
  */
+export function GrantExpiry({ plugin }: { plugin: Plugin }) {
+  const stamp = plugin.refreshExpiresAt;
+  const end = stamp ? Date.parse(stamp) : NaN;
+  if (plugin.status !== "connected" || !Number.isFinite(end)) return null;
+  const expired = end <= Date.now();
+  const date = new Date(end).toLocaleString();
+  return (
+    <span className={cn("block text-xs", expired ? "text-warning" : "text-muted-foreground")}>
+      {fill(translate(expired ? "plugins_view.grant_expired" : "plugins_view.grant_ends"), { date })}
+    </span>
+  );
+}
+
 export function ReauthExplanation({ plugin, inline }: { plugin: Plugin; inline?: boolean }) {
   const reason = plugin.reauthReason;
   const explanation =
@@ -3102,6 +3268,90 @@ function DisconnectConfirmDialog({
   );
 }
 
+/** "Remove {name}?" for a plugin the owner added: drops the catalog entry,
+ *  its stored sign-in and its tools. Built-in plugins never reach here. */
+function RemovePluginDialog({
+  plugin,
+  onCancel,
+  onRemoved,
+}: {
+  plugin: Plugin;
+  onCancel: () => void;
+  onRemoved: () => void;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !pending) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel, pending]);
+
+  const remove = async () => {
+    setPending(true);
+    setError(null);
+    try {
+      await removeAddedPlugin(plugin.id);
+      onRemoved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setPending(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="remove-plugin-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim/70 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !pending) onCancel();
+      }}
+    >
+      <div className="relative w-full max-w-sm overflow-hidden rounded-lg bg-popover shadow-float">
+        <header className="flex items-center gap-3 border-b border-border px-5 py-4">
+          <BrandTile plugin={plugin} />
+          <h2 id="remove-plugin-title" className="font-display text-base font-semibold tracking-tight">
+            {fill(translate("custom_connector.remove_title"), { name: plugin.name })}
+          </h2>
+        </header>
+        <div className="px-5 py-5">
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {translate("custom_connector.remove_body")}
+          </p>
+          {error && (
+            <div role="alert" className="mt-3 rounded-md bg-secondary px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+        <footer className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+          >
+            {translate("common.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={() => void remove()}
+            disabled={pending}
+            className="inline-flex items-center gap-1.5 rounded-md bg-destructive px-3.5 py-1.5 text-xs font-semibold text-destructive-foreground transition-all hover:bg-destructive/90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {pending && <Loader2 className="h-3 w-3 animate-spin" />}
+            {translate("custom_connector.remove")}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Pat-Paste Connect Dialog — used by Vercel & Supabase. Opens the token-
 // creation page in a new tab, takes a paste, sends it to the backend.
@@ -3302,6 +3552,7 @@ export function PatConnectDialog({
               {notice}
             </p>
           )}
+          {auth.token_creation_url ? (
           <Step
             num={1}
             title={`Generate a token at ${plugin.name}`}
@@ -3327,6 +3578,11 @@ export function PatConnectDialog({
               />
             </div>
           </Step>
+          ) : (
+            // A custom connector: no page is known that issues its key, so
+            // the step only says which key and where it goes.
+            <Step num={1} title={`Get the key for ${plugin.name}`} body={auth.instruction_md} />
+          )}
 
           {instanceField && (
             <Step num={2} title={instanceField.label} body={instanceField.help_md ?? undefined}>
@@ -3475,7 +3731,7 @@ function Step({
   num: number;
   title: string;
   body?: string;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <div className="flex gap-3">

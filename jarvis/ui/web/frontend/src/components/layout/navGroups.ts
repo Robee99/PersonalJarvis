@@ -10,7 +10,6 @@
  * a section added here would silently never appear on the deck.
  */
 import { Briefcase, Gauge, KeyRound, Orbit, Swords, type LucideIcon } from "lucide-react";
-import { OllamaIcon } from "@/components/icons/OllamaIcon";
 import {
   AgentsIcon,
   ArtifactsIcon,
@@ -19,15 +18,12 @@ import {
   ChatIcon,
   CodeIcon,
   ComputersIcon,
-  ContactsIcon,
   DocsIcon,
   ExtensionsIcon,
   FeedbackIcon,
-  InspectorIcon,
-  InstructionsIcon,
+  AssistantIcon,
   MarketplaceIcon,
   MicrophoneIcon,
-  PermissionsIcon,
   PetsIcon,
   ProfileIcon,
   SettingsIcon,
@@ -168,7 +164,6 @@ export const NAV_GROUPS: NavItem[][] = [
   // so its row says "Beta" up front).
   [
     { id: "sessions", labelKey: "nav.sessions", icon: MicrophoneIcon },
-    { id: "run_inspector", labelKey: "nav.run_inspector", icon: InspectorIcon },
     // CLIs — the CLIs list + the CLI Test Hub behind one tab switch (CLIs first).
     { id: "clis", labelKey: "nav.clis_hub", icon: TerminalIcon, matchIds: ["clis", "cli-test-hub"] },
     {
@@ -190,10 +185,9 @@ export const NAV_GROUPS: NavItem[][] = [
     {
       id: "agent-instructions",
       labelKey: "nav.agent_instructions",
-      icon: InstructionsIcon,
-      fallbackLabel: "Instructions",
+      icon: AssistantIcon,
+      fallbackLabel: "Assistant",
     },
-    { id: "contacts", labelKey: "nav.contacts", icon: ContactsIcon },
     // Spend & Tokens — every token the app spent, priced per provider, model
     // and role. It reports, it does not configure.
     { id: "costs", labelKey: "nav.costs", icon: SpendIcon, fallbackLabel: "Spend" },
@@ -219,14 +213,6 @@ export const NAV_GROUPS: NavItem[][] = [
       labelKey: "nav.apikeys",
       icon: KeyRound,
       matchIds: ["apikeys", "telephony", "telephony-setup"],
-    },
-    // Local models sit directly under API Keys: the same "which brain" question,
-    // answered for the machine itself instead of a hosted account.
-    {
-      id: "local-models",
-      labelKey: "nav.local_models",
-      icon: OllamaIcon,
-      fallbackLabel: "Local models",
     },
     {
       id: "settings",
@@ -278,12 +264,6 @@ export const SETTINGS_HUB_ONLY_ITEMS: NavItem[] = [
   },
   { id: "appshots", labelKey: "nav.appshots", icon: CaptureIcon, fallbackLabel: "Appshots" },
   { id: "pets", labelKey: "nav.pets", icon: PetsIcon, fallbackLabel: "My Pets" },
-  {
-    id: "jarvis-actions",
-    labelKey: "nav.jarvis_actions",
-    icon: PermissionsIcon,
-    fallbackLabel: "Jarvis actions",
-  },
 ];
 
 /**
@@ -302,17 +282,14 @@ export const SETTINGS_HUB_IDS: readonly SectionId[] = [
   "languages",
   "profile",
   "agent-instructions",
-  "contacts",
   "socials",
   "apikeys",
   "telephony",
   "telephony-setup",
-  "local-models",
   "computers",
   "appshots",
   "shortcuts",
   "pets",
-  "jarvis-actions",
   "costs",
   "feedback",
 ];
@@ -365,15 +342,15 @@ const IDE_IDS: readonly SectionId[] = ["agentic-ide", "chat-workspace", "agentic
 
 /**
  * WORK: everything that is about work being done or done — what runs
- * produced (Outputs), the coding workspace (Projects), the live HUD, the
- * activity board and the run inspector. Routines live on each agent (AGENTS).
+ * produced (Outputs), the coding workspace (Projects), the live HUD and the
+ * activity board (the run inspector was retired upstream). Routines live on
+ * each agent (AGENTS).
  */
 export const WORK_TABS: readonly DestinationTab[] = [
   { id: "visualization", labelKey: "nav5.work_outputs", fallbackLabel: "Outputs" },
   { id: "agentic-ide", labelKey: "nav5.work_projects", fallbackLabel: "Projects", matchIds: IDE_IDS },
   { id: "deck", labelKey: "nav5.work_live", fallbackLabel: "Live" },
   { id: "board", labelKey: "nav5.work_activity", fallbackLabel: "Activity" },
-  { id: "run_inspector", labelKey: "nav5.work_runs", fallbackLabel: "Runs" },
 ];
 
 /** AGENTS: the agents, the tools they can reach, where more come from, the CLI seats. */
@@ -423,7 +400,7 @@ export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
     fallbackLabel: "Work",
     icon: Briefcase,
     target: "visualization",
-    sections: ["visualization", ...IDE_IDS, "deck", "board", "run_inspector"],
+    sections: ["visualization", ...IDE_IDS, "deck", "board"],
     tabs: WORK_TABS,
   },
   {

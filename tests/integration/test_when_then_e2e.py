@@ -84,10 +84,15 @@ async def test_mission_finished_opens_browser_and_speaks(store: TaskStore) -> No
             summary_en="Report written.",
         )
     )
-    # The scheduler dispatches the runner fire-and-forget; let it run to completion.
-    for _ in range(50):
-        await asyncio.sleep(0.01)
-        if announcements:
+    # The scheduler dispatches the runner fire-and-forget. Announce happens
+    # after the state write, and a busy Windows runner can take longer than
+    # a few hundred milliseconds to get there.
+    for _ in range(100):
+        await asyncio.sleep(0.05)
+        if not announcements:
+            continue
+        task_row = await store.get(str(rule.id))
+        if task_row and task_row["state"] == "scheduled":
             break
 
     # Computer-Use was dispatched with the interpolated goal.
@@ -102,10 +107,10 @@ async def test_mission_finished_opens_browser_and_speaks(store: TaskStore) -> No
     assert announcements[0].text == "Your mission is ready — I opened /outputs/report.md."
     assert announcements[0].kind == "subagent"
 
-    # The task itself completed.
+    # An unlimited standing event rule re-arms after delivering this result.
     task_row = await store.get(str(rule.id))
     assert task_row is not None
-    assert task_row["state"] == "completed"
+    assert task_row["state"] == "scheduled"
 
 
 async def test_failed_mission_does_not_fire_an_approved_rule(store: TaskStore) -> None:

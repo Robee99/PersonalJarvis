@@ -1334,6 +1334,18 @@ async def list_providers(request: Request) -> dict[str, Any]:
     return {"providers": await asyncio.to_thread(_build)}
 
 
+@router.get("/providers/families")
+async def list_provider_families() -> dict[str, Any]:
+    """The catalog folded into one entry per company (see ``provider_families``).
+
+    Presence only — never a key value. Built off the event loop: every family
+    reads its key slots from the OS keyring.
+    """
+    from .provider_families import build_families
+
+    return {"families": await asyncio.to_thread(build_families)}
+
+
 # Belt-and-suspenders ceiling for the whole /test call. run_provider_test's own
 # timeout_s (60 s, generous for NVIDIA NIM's 13-30 s cold-start TTFB) bounds the
 # individual probe; this outer bound guarantees the HTTP response itself. Local
@@ -2836,7 +2848,9 @@ class BaseUrlResponse(BaseModel):
 
 
 @router.put("/providers/{provider_id}/base-url")
-async def set_provider_base_url(provider_id: str, body: BaseUrlBody) -> BaseUrlResponse:
+async def set_provider_base_url(
+    provider_id: str, body: BaseUrlBody, request: Request,
+) -> BaseUrlResponse:
     """Set (or clear) the server URL of a local/self-hosted provider.
 
     Only cards with ``supports_base_url`` accept one (400 otherwise). The URL
@@ -2866,6 +2880,26 @@ async def set_provider_base_url(provider_id: str, body: BaseUrlBody) -> BaseUrlR
     from jarvis.core import config_writer
 
     config_writer.set_provider_base_url(provider_id, cleaned or None)
+    # Cached Society and voice instances must not keep the previous server.
+    from jarvis.core.config import BrainProviderConfig
+
+    live_brain = getattr(request.app.state, "brain", None)
+    for config in (_resolve_cfg(request), getattr(live_brain, "_config", None)):
+        if config is None:
+            continue
+        previous = config.brain.providers.get(provider_id) or BrainProviderConfig()
+        config.brain.providers[provider_id] = previous.model_copy(
+            update={"base_url": cleaned or None},
+        )
+    reactivate = getattr(live_brain, "reactivate_provider", None)
+    if callable(reactivate):
+        reactivate(provider_id)
+    await _get_model_catalog(request).invalidate(provider_id)
+    from jarvis.agent_runtimes.gateway import invalidate_provider_metadata
+
+    invalidate_provider_metadata(provider_id)
+    _health_ledger.forget_providers([provider_id], modality=_health_ledger.MODALITY_BRAIN)
+    _invalidate_section_health_state(request)
     return BaseUrlResponse(
         provider=provider_id,
         base_url=cleaned or None,
@@ -3379,7 +3413,10 @@ async def managed_server_setup(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception as exc:  # noqa: BLE001 - malformed JSON is a client error
         raise HTTPException(status_code=400, detail="a JSON request body is required") from exc
-    brain_model = str((body or {}).get("brain_model", "") or "").strip()
+    if not isinstance(body, dict):
+        # A JSON array or scalar used to reach ``.get`` and answer 500.
+        raise HTTPException(status_code=400, detail="the request body must be a JSON object")
+    brain_model = str(body.get("brain_model", "") or "").strip()
     voice_model = str((body or {}).get("voice_model", "") or "").strip()
     if not brain_model or not voice_model:
         raise HTTPException(

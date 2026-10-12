@@ -84,7 +84,7 @@ def test_remote_is_official_accepts_only_exact_repo() -> None:
         "https://github.com/Robee99/PersonalJarvisEvil.git"
     )
     # ...or one under a different owner with the right repo name.
-    assert not u._remote_is_official("https://github.com/evil/PersonalJarvis.git")
+    assert not u._remote_is_official("https://github.com/evil/Dodaios.git")
 
 
 def test_remote_override_still_rejects_lookalike_repos(
@@ -97,7 +97,7 @@ def test_remote_override_still_rejects_lookalike_repos(
     )
     assert not u._remote_is_official("https://github.com/evil/RenamedRepo.git")
     assert not u._remote_is_official(
-        "https://github.com/PersonalJarvis/PersonalJarvis.git"
+        "https://github.com/Dodaios/Dodaios.git"
     )
 
 

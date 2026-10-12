@@ -9,6 +9,7 @@ import { Diamond, ListTodo, MessagesSquare, OctagonAlert, RefreshCw, Search, X }
 
 import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { BrandedSelect } from "@/components/ui/select";
 
 import { HEALTH_COLOURS, HEALTH_HEX, type HealthRule, type Project, type StatusColour } from "./brainMap";
 import { HealthRing } from "./HealthRing";
@@ -137,20 +138,19 @@ export function ProjectRail(props: ProjectRailProps) {
             </button>
           ))}
         </div>
-        <label className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-slate-500">
-          {t("orb2.rail.sort")}
-          <select
+        <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.15em] text-slate-500">
+          <span>{t("orb2.rail.sort")}</span>
+          {/* The themed listbox, not a native <select>: an OS popup would drop
+              grey system chrome into the orb (components/ui/select). */}
+          <BrandedSelect
             value={filter.sort}
-            onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortMode })}
-            className="rounded border border-white/10 bg-black/60 px-1.5 py-0.5 text-[11px] normal-case tracking-normal text-slate-200"
-          >
-            {SORT_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {t(`orb2.sort.${mode}`)}
-              </option>
-            ))}
-          </select>
-        </label>
+            onValueChange={(value) => onFilter({ ...filter, sort: value as SortMode })}
+            ariaLabel={t("orb2.rail.sort")}
+            options={SORT_MODES.map((mode) => ({ value: mode, label: t(`orb2.sort.${mode}`) }))}
+            testId="orb2-sort"
+            className="h-7 min-w-0 flex-1 text-[11px] normal-case tracking-normal"
+          />
+        </div>
       </div>
 
       <ul ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5" onKeyDown={onKey}>

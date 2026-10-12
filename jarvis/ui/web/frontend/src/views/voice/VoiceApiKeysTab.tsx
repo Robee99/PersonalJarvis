@@ -20,17 +20,13 @@ export interface VoiceApiKeysTabProps {
  * "API Keys" tab of the merged voice section — where the providers that turn
  * speech into text are picked.
  *
- * Since 2026-10-11 it holds no picker of its own: speech-to-text is chosen in
- * Settings › Voice and the optional wording pass under Settings › Advanced ›
- * API keys & routing. The tab stays (its section id, `voice-api-keys`, is a
+ * Since 2026-10-11 it holds no picker of its own: speech-to-text and the
+ * optional wording pass are chosen in Settings › Voice. The tab stays (its section id, `voice-api-keys`, is a
  * voice-navigation target) and links to both.
  *
- * The Realtime|Pipeline engine switch deliberately does NOT ride along
- * (maintainer feedback 2026-07-29). This section is about turning speech into
- * text; picking the voice ENGINE is a different decision, and it already has
- * one home with the full explanatory context next to it — the API-Keys view's
- * `EngineModeSwitch` + `VoiceEngineContext`. A second switch here read as a
- * stray control in a section that never asked the question. Do not add it back.
+ * No voice-engine control rides along (maintainer feedback 2026-07-29): this
+ * section is about turning speech into text. Realtime is the only engine the
+ * settings offer, and the API Keys page's realtime tab is where it is set up.
  */
 export function VoiceApiKeysTab({ hideHeader = false }: VoiceApiKeysTabProps = {}) {
   const t = useT();
@@ -66,8 +62,8 @@ export function VoiceApiKeysTab({ hideHeader = false }: VoiceApiKeysTabProps = {
             icon={<Wand2 />}
             title={t("apikeys_view.tab_dictation")}
             description={t("settings_pages.wording_moved")}
-            actionLabel={t("settings_pages.open_apikeys")}
-            onOpen={() => openSettingsDestination("apikeys", "dictation")}
+            actionLabel={t("settings_pages.open_voice")}
+            onOpen={() => openSettingsDestination("voice", "dictation")}
           />
         </div>
       </div>

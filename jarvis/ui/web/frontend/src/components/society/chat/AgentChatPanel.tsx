@@ -1,6 +1,16 @@
 import { PairConversationBoundary } from "@/components/agentchat/PairConversation";
-import { AgentMessageActivity, ChatActivity, RoutineActivity, routineTask } from "./ChatActivity";
-import { MemoryUpdateNotice } from "./MemoryUpdateNotice";
+import {
+  AgentMessageActivity,
+  ChatActivity,
+  CodingThreadActivity,
+  DelegationActivity,
+  RoutineActivity,
+  assignmentOf,
+  routineTask,
+} from "./ChatActivity";
+import { MemoryNoticeViewer, MemoryUpdateNotice, memoryNoticePath, memoryNoticeTitle } from "./MemoryUpdateNotice";
+import { foldMemoryNotices } from "./memoryNotices";
+import { foldRepeatedThreadStatus } from "@/components/agentic/threads/openCodingThread";
 import { mergeOutgoingMessages, useOutgoingMessages } from "@/components/agentchat/useOutgoingMessages";
 /**
  * The model card's chat column, kept deliberately plain (maintainer,
@@ -27,6 +37,7 @@ import { useRoutineNavigation } from "./routineNavigation";
 import { notifyRoutineChanged } from "../cardData";
 import { routineTaskId } from "./routineExecution";
 import { RoutineChatHost } from "./RoutineChatHost";
+import { AgentConversationsBar } from "./AgentConversations";
 import { MessageSquare, Mic, Paperclip, Plus, RotateCcw, Send, Square } from "lucide-react";
 import { ChatMarkdown, MediaPreview, mediaKind } from "@/components/agentchat/ChatMarkdown";
 
@@ -34,15 +45,15 @@ import { AgentChatStoreProvider, useAgentChat, useAgentChatApi } from "@/compone
 import { ChatAttachmentStrip } from "@/components/agentchat/ChatAttachmentStrip";
 import { ScrollToEndButton } from "@/components/ui/scroll-to-end-button";
 import { useStickToBottom } from "@/hooks/useStickToBottom";
-import { ComposerChipField, type ComposerChipFieldHandle } from "@/components/agentchat/ComposerChipField";
+import { ComposerChipField, type ComposerChipFieldHandle, type ComposerDraft } from "@/components/agentchat/ComposerChipField";
+import { captureComposerDraftTarget, readComposerDraft, useComposerDraft, writeComposerDraft } from "@/components/agentchat/composerDrafts";
 import { MessageWithChips } from "@/components/agentchat/ToolChoiceChips";
 import { choiceToken } from "@/components/agentchat/composerChips";
-import { useChatAttachments } from "@/components/agentchat/useChatAttachments";
+import { releaseHeldFiles, restoreHeldFiles, useChatAttachments } from "@/components/agentchat/useChatAttachments";
 import { DictationButton } from "@/components/agentchat/DictationButton";
 import { useComposerDictation } from "@/components/agentchat/useComposerDictation";
 import { useEventStore } from "@/store/events";
 import { useHomeStore } from "@/store/home";
-import { startNewVoiceRun } from "@/lib/chatsApi";
 import {
   runningTurn,
   type NoticeItem,
@@ -50,7 +61,7 @@ import {
   type TurnItem,
   type UserItem,
 } from "@/components/agentchat/reduce";
-import { TurnTrace } from "@/components/agentchat/WorkTrace";
+import { AwaitingTurn, MessengerTurn, type MemoryLink } from "@/components/agentchat/MessengerTurn";
 import { VoiceStage } from "@/components/home/VoiceStage";
 import type { ChatPick } from "@/lib/voiceContinuity";
 import { VoiceContinuityNotice } from "./VoiceContinuityNotice";
@@ -60,9 +71,15 @@ import { cn } from "@/lib/utils";
 import { societyDisplayName } from "@/lib/societyDisplayName";
 import { createAgentChatStore, useAgentChatStore, type AgentChatStoreHook } from "@/store/agentChat";
 import type { AgentChatSurface, ApprovalDecision } from "@/lib/agentChatApi";
+import { offeredModels, useSavedHiddenModels } from "@/lib/agentProviderPrefs";
 
-import { AgentSwatch } from "../AgentSwatch";
-import { useResolveProposal, useSocietyCapabilities, type SocietyAgent } from "../data";
+import { AgentSwatch, agentColor } from "../AgentSwatch";
+import { bubbleTint, type BubbleTint } from "@/lib/bubbleTint";
+import {
+  useResolveProposal,
+  useSocietyCapabilities,
+  type SocietyAgent,
+} from "../data";
 import { fetchIdeAgents, type AgentStatus } from "@/lib/agenticIdeApi";
 import { CodingProjectChoice } from "./CodingProjectChoice";
 import { MentionPicker } from "./MentionPicker";
@@ -92,7 +109,7 @@ const STAMP_GAP_MS = 30 * 60_000;
  * pane, so a wide window keeps the words in one comfortable, centred column
  * while the scroll area (and its edge) reaches the window's side.
  */
-const CHAT_MEASURE = "mx-auto w-full min-w-0 max-w-[52rem]";
+export const CHAT_MEASURE = "mx-auto w-full min-w-0 max-w-[52rem]";
 
 /** The line appended to a message that names an agent; Jarvis delegates on it. */
 const DELEGATE_MARK = "[to jarvis]";
@@ -148,6 +165,15 @@ export function itemsForOpenSession(
   items: TimelineItem[],
 ): TimelineItem[] {
   return sessionId !== null && sessionId === activeSessionId ? items : [];
+}
+
+/** Roster id → the name a person sees (the lead follows the wake word). */
+function useRosterDisplayName(roster: SocietyAgent[]): (id: string, fallback: string) => string {
+  const assistantName = useEventStore((state) => state.assistantName);
+  return useCallback((id: string, fallback: string) => {
+    const member = roster.find((a) => a.agentId === id);
+    return member ? societyDisplayName(member, assistantName) : fallback;
+  }, [roster, assistantName]);
 }
 
 export function AgentChatPanel(props: AgentChatPanelProps) {
@@ -229,7 +255,7 @@ function SpecialistChat({ agent, roster }: AgentChatPanelProps) {
       }
     }
   }, [visibleItems, agent.agentId]);
-  const outgoing = useOutgoingMessages(sessionReady ? agent.agentId : null);
+  const outgoing = useOutgoingMessages(sessionReady ? agent.agentId : null, sessionId);
   const allItems = useMemo(() => mergeOutgoingMessages(
     visibleItems, outgoing, agent.agentId, agent.name,
     new Map(roster.map((member) => [member.agentId, member.name])),
@@ -266,6 +292,7 @@ function SpecialistChat({ agent, roster }: AgentChatPanelProps) {
     () => roster.filter((a) => a.agentId !== agent.agentId && a.tier !== "lead"),
     [roster, agent.agentId],
   );
+  const displayName = useRosterDisplayName(roster);
 
   return (
     <div
@@ -274,6 +301,7 @@ function SpecialistChat({ agent, roster }: AgentChatPanelProps) {
       data-session-id={sessionId ?? ""}
       data-session-ready={sessionReady ? "true" : "false"}
     >
+      <AgentConversationsBar agentId={agent.agentId} agentName={agent.name} displayName={displayName} />
       <Transcript key={`${sessionId ?? agent.agentId}:${view.boundaryId}`} items={view.items} agent={agent} roster={roster} onDecide={decide} />
       {sessionReady && socketState !== "open" && socketState !== "idle" ? (
         <p role="status" className="px-4 pb-1 text-xs text-muted-foreground">
@@ -345,23 +373,11 @@ function JarvisChat({ agent, roster }: AgentChatPanelProps) {
 
   const setActiveConversation = useEventStore((s) => s.setActiveConversation);
   const setMessages = useEventStore((s) => s.setMessages);
-  const voiceState = useEventStore((s) => s.voiceState);
-  const freshVoicePending = useHomeStore((s) => s.freshVoicePending);
-
-  useEffect(() => {
-    if (!freshVoicePending || voiceState !== "idle" || !useHomeStore.getState().freshVoicePending) return;
-    useHomeStore.setState({ freshVoicePending: false });
-    // Use the existing reset contract once after hangup, including re-entry
-    // after the card was closed. Never interrupt a call started elsewhere.
-    void startNewVoiceRun().catch(() => {
-      useEventStore.getState().pushToast("error", `${t("sidebar.new_voice_chat")}: ${t("voice_state.error")}`);
-    });
-  }, [freshVoicePending, voiceState, t]);
-
   // A null session is an intentional fresh chat. Only an explicit history
   // selection may open an older session; polling must not undo New chat.
 
   const mentionable = useMemo(() => roster.filter((a) => a.tier !== "lead"), [roster]);
+  const displayName = useRosterDisplayName(roster);
 
   // The typed chat's own provider pick, for the voice tab's continuity line.
   const providerById = useAgentChat((s) => s.providerById);
@@ -421,6 +437,7 @@ function JarvisChat({ agent, roster }: AgentChatPanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-background" data-testid="society-chat" data-mode="chat">
       {header}
+      <AgentConversationsBar agentId={agent.agentId} agentName={displayName(agent.agentId, agent.name)} displayName={displayName} />
       <Transcript key={`${activeSessionId ?? ""}:${view.boundaryId}`} items={view.items} agent={agent} roster={roster} onDecide={decide} />
       {activeSessionId && socketState !== "open" && socketState !== "idle" ? (
         <p role="status" className="px-4 pb-1 text-xs text-muted-foreground">
@@ -498,6 +515,7 @@ function ModelPicker() {
   const providerOptions = useAgentChat((s) => s.providerOptions);
   const providerById = useAgentChat((s) => s.providerById);
   const liveModels = useAgentChat((s) => s.liveModels);
+  const savedHidden = useSavedHiddenModels((s) => s.hidden);
   const loadModels = useAgentChat((s) => s.loadModels);
   const setDraft = useAgentChat((s) => s.setDraft);
   const locks = useAgentChat((s) => s.locks);
@@ -511,12 +529,14 @@ function ModelPicker() {
   const models = useMemo(() => {
     if (!chosen) return [];
     const seen = new Set<string>();
-    return [...(liveModels[chosen.id] ?? []), ...chosen.curated_models].filter((m) => {
+    const listed = [...(liveModels[chosen.id] ?? []), ...chosen.curated_models].filter((m) => {
       if (seen.has(m.id)) return false;
       seen.add(m.id);
       return true;
     });
-  }, [chosen, liveModels]);
+    // Models switched off on the API Keys page stay out; the current pick stays.
+    return offeredModels(chosen, listed, chosen.id === draft.provider ? draft.model : "", savedHidden);
+  }, [chosen, liveModels, draft.provider, draft.model, savedHidden]);
 
   useEffect(() => {
     if (open && chosen && chosen.models_source === "live") void loadModels(chosen.id);
@@ -659,7 +679,7 @@ function EffortPicker() {
 // ---------------------------------------------------------------------------
 
 export function Transcript({
-  items,
+  items: rawItems,
   agent,
   roster,
   onDecide,
@@ -671,6 +691,18 @@ export function Transcript({
 }) {
   const t = useT();
   const sessionId = useAgentChat((state) => state.activeSessionId);
+  // Memory receipts are drawn inside the turn they follow, above its reply.
+  // A coding thread's unchanged status is one row, however often it arrived.
+  // Applied identity changes stay in history without chat rows or timestamps.
+  const { items, memoryByTurn } = useMemo(
+    () => foldMemoryNotices(foldRepeatedThreadStatus(rawItems.filter((item) => !(
+      item.type === "notice" && item.data.proposal_kind === "identity" && (
+        item.kind === "proposal" && item.resolved === "applied"
+        || item.kind === "proposal_resolved" && (!item.status || item.status === "applied")
+      )
+    )))),
+    [rawItems],
+  );
   // Follow the newest while the view sits at the end — the rule every
   // conversation surface shares (hooks/useStickToBottom). This used to scroll
   // a bottom sentinel into view on `[items.length, busy]` only, so a
@@ -679,11 +711,16 @@ export function Transcript({
   // watches the content's own size too, so growth follows; scrolled up, the
   // reader keeps their place and gets a button back.
   const { rootRef, contentRef, atEnd, jumpToEnd, follow } = useStickToBottom();
+  // The person's bubbles wear the colour of the agent they talk to.
+  const tint = useMemo(() => bubbleTint(agentColor(agent)), [agent]);
   // `items` itself, not its length: a reasoning trace or tool row grows
   // the same turn in place, so the length does not change. Pin in this
   // layout pass — waiting for ResizeObserver is one frame too late, and
   // that frame is when overflow anchoring would unstick the view.
   useLayoutEffect(follow, [follow, items]);
+  // A message of the person's with no turn after it yet: the agent is reading it.
+  const lastItem = items[items.length - 1];
+  const awaiting = lastItem?.type === "user" && lastItem.origin !== "control" && !assignmentOf(lastItem.text) ? lastItem : null;
 
   if (items.length === 0) {
     return (
@@ -709,10 +746,12 @@ export function Transcript({
               {stamp ? <TimeStamp ms={stamp} /> : null}
               {item.type === "internal" ? (
                 <AgentMessageActivity item={item} roster={roster} />
+              ) : item.type === "user" && assignmentOf(item.text) ? (
+                <DelegationActivity {...assignmentOf(item.text)!} roster={roster} />
               ) : item.type === "user" ? (
-                <UserBubble item={item} agentId={agent.agentId} sessionId={sessionId ?? agent.chatSessionId ?? undefined} />
+                <UserBubble item={item} agentId={agent.agentId} sessionId={sessionId ?? agent.chatSessionId ?? undefined} tint={tint} />
               ) : item.type === "turn" ? (
-                <TurnBubble item={item} onDecide={onDecide} />
+                <TurnBubble item={item} agent={agent} memory={memoryByTurn.get(item.id)} onDecide={onDecide} />
               ) : item.type === "notice" ? (
                 item.kind === "proposal" ? (
                   <ProposalCard item={item} />
@@ -725,6 +764,8 @@ export function Transcript({
             </div>
           );
         })}
+        {awaiting ? <AwaitingTurn since={awaiting.tsMs} seed={awaiting.id}
+          avatar={<AgentSwatch agent={{ ...agent, state: undefined }} size={28} expressive />} color={agentColor(agent)} /> : null}
         </div>
       </div>
       {!atEnd && <ScrollToEndButton onClick={jumpToEnd} testId="society-scroll-end" className="top-auto bottom-3" />}
@@ -746,9 +787,54 @@ function TimeStamp({ ms }: { ms: number }) {
  * summary underneath, muted — it is the society reporting, not Jarvis
  * speaking, so it never wears an assistant bubble.
  */
-function NoticeLine({ item }: { item: NoticeItem }) {
+export function NoticeLine({ item }: { item: NoticeItem }) {
   const t = useT();
   if (item.kind === "memory_updated") return <MemoryUpdateNotice item={item} />;
+  if (item.kind === "message_queued") {
+    return <p className="self-end py-1 text-xs text-muted-foreground" data-testid="message-queued">
+      {t("society.chat.message_waiting")} · {item.text}
+    </p>;
+  }
+  if (item.kind === "message_dequeued") {
+    return <p role="alert" className="self-end py-1 text-xs text-destructive">
+      {t("society.chat.message_not_sent").replace("{0}", item.text)}
+    </p>;
+  }
+  if (item.kind === "context_rollover") {
+    return <p className="py-1 text-center text-[11px] text-muted-foreground">{t("society.chat.context_rollover")}</p>;
+  }
+  if (item.kind === "runtime_setup") {
+    const runtime = String(item.data.runtime ?? "");
+    return <p className="py-1 text-center text-[11px] text-muted-foreground" data-testid="runtime-setup-notice">
+      {runtime ? t("society.runtime.setting_up_chat").replace("{0}", t(`society.runtime.${runtime}`)) : item.text}
+    </p>;
+  }
+  if (item.kind === "stop_reason") {
+    // A runtime turn that ended early: the answer above stands, but is cut off.
+    const reason = String(item.data.stop_reason ?? "");
+    const known = ["max_tokens", "max_turn_requests", "cancelled"].includes(reason);
+    return <p role="note" className="py-1 text-xs italic text-muted-foreground" data-testid="stop-reason-notice">
+      {known ? t(`society.chat.stop_reason_${reason}`) : item.text}
+    </p>;
+  }
+  if (item.kind === "routine_runtime_fallback") {
+    const runtime = String(item.data.runtime ?? "");
+    return <p className="py-1 text-center text-[11px] text-muted-foreground" data-testid="routine-runtime-fallback">
+      {runtime ? t("society.runtime.routine_fallback").replace(/\{0\}/g, t(`society.runtime.${runtime}`)) : item.text}
+    </p>;
+  }
+  if (item.kind === "routine_run") {
+    const sessionId = String(item.data.session_id ?? "");
+    const agentId = item.agentId || String(item.data.agent_id ?? "");
+    return <RoutineActivity task={item.text} original={item.text}
+      onOpen={sessionId && agentId ? () => useRoutineNavigation.getState().open({
+        agentId, sessionId, title: item.text, timestamp: item.tsMs,
+      }) : undefined} />;
+  }
+  if (item.kind === "coding_thread") {
+    const label = t("society.chat.coding_thread_started").replace("{0}", String(item.data.agent ?? ""));
+    return <CodingThreadActivity label={`${label} · ${String(item.data.title ?? "")}`} threadId={String(item.data.thread_id ?? "")} />;
+  }
   if (item.kind === "native_goal_verdict") return <p className="py-1 text-xs text-muted-foreground">{t("slash.verifying")}</p>;
   const headline =
     item.kind === "society_result"
@@ -789,6 +875,11 @@ function proposalDetail(kind: string, payload: Record<string, unknown>): string 
       return list(payload.focus);
     case "team":
       return list(payload.names);
+    case "identity":
+      return [payload.name, payload.title, payload.description]
+        .filter((part) => typeof part === "string" && part)
+        .map(String)
+        .join(" — ");
     default:
       return "";
   }
@@ -939,7 +1030,12 @@ function visibleUserText(text: string): string {
     .trimEnd();
 }
 
-export function UserBubble({ item, agentId, sessionId }: { item: UserItem; agentId?: string; sessionId?: string }) {
+/**
+ * The person's message: a bubble on the right in the agent's colour, with ink
+ * chosen for that colour (`bubbleTint`). Without an agent colour (a meeting
+ * of several agents) it wears the app's accent.
+ */
+export function UserBubble({ item, agentId, sessionId, tint }: { item: UserItem; agentId?: string; sessionId?: string; tint?: BubbleTint | null }) {
   const t = useT();
   const choices = messageChoices(item);
   const text = visibleUserText(item.text);
@@ -952,7 +1048,11 @@ export function UserBubble({ item, agentId, sessionId }: { item: UserItem; agent
     }) : undefined} />;
   return (
     <div className="flex min-w-0 max-w-[min(85%,42rem)] flex-col items-end gap-1 self-end">
-      <div className="min-w-0 rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-sm leading-relaxed text-foreground [overflow-wrap:anywhere]">
+      <div
+        data-testid="user-bubble"
+        className={cn("jarvis-chat-tinted min-w-0 rounded-[20px] px-4 py-2.5 text-base leading-6 [overflow-wrap:anywhere]", !tint && "jarvis-chat-out")}
+        style={tint ? { background: tint.background, color: tint.color } : undefined}
+      >
         <MessageWithChips text={text} choices={choices} />
       </div>
       {item.attachments.length > 0 ? (
@@ -970,12 +1070,33 @@ export function UserBubble({ item, agentId, sessionId }: { item: UserItem; agent
 
 function TurnBubble({
   item,
+  agent,
+  memory,
   onDecide,
 }: {
   item: TurnItem;
+  agent: SocietyAgent;
+  memory?: NoticeItem[];
   onDecide: (approvalId: string, decision: ApprovalDecision) => Promise<void>;
 }) {
-  return <TurnTrace turn={item} conversation onDecide={onDecide} renderText={(text) => <Prose text={text} />} />;
+  const t = useT();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const memoryLinks = useMemo<MemoryLink[] | undefined>(
+    () => memory?.flatMap((notice) => {
+      const path = memoryNoticePath(notice);
+      return path ? [{ key: notice.id, title: memoryNoticeTitle(t, path), onOpen: () => setOpenId(notice.id) }] : [];
+    }),
+    [memory, t],
+  );
+  const opened = openId ? memory?.find((notice) => notice.id === openId) : undefined;
+  // An agent's turn reads like a messenger: its messages, what it changed,
+  // and while it works its face with a word for what it is doing.
+  // The face stays a face: the effect beside it says what it is doing, so
+  // the swatch's own "working" dots would only repeat it.
+  return <>
+    <MessengerTurn turn={item} avatar={<AgentSwatch agent={{ ...agent, state: undefined }} size={28} expressive />} color={agentColor(agent)} onDecide={onDecide} memoryLinks={memoryLinks} />
+    {opened && <MemoryNoticeViewer item={opened} onClose={() => setOpenId(null)} />}
+  </>;
 }
 
 /**
@@ -986,7 +1107,7 @@ function TurnBubble({
  * One scale serves both here: the answer inherits the bubble's ink, the
  * thought passes `muted`, and nothing else differs.
  */
-function Prose({ text, muted }: { text: string; muted?: boolean }) {
+export function Prose({ text, muted }: { text: string; muted?: boolean }) {
   return (
     <div
       className={cn(
@@ -1030,19 +1151,27 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
   const t = useT();
   const chatStore = useAgentChatApi();
   const [modelSaving, setModelSaving] = useState(false);
-  const [value, setValue] = useState("");
+  const messageDraft = useComposerDraft(chatStore, sessionId);
+  const value = messageDraft.text;
+  const setValue = (text: string) => writeComposerDraft(chatStore, sessionId, {
+    ...readComposerDraft(chatStore, sessionId), text,
+  });
   const [plusOpen, setPlusOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [selectedTools, setSelectedTools] = useState<MentionItem[]>([]);
-  useEffect(() => { setSelectedTools([]); }, [sessionId, agent.agentId]);
   const fieldRef = useRef<ComposerChipFieldHandle>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const attachments = useChatAttachments({ sessionId, cwd, provider, surface }, (message) => setProblem(message));
-  const attachmentsRef = useRef(attachments.attachments);
-  attachmentsRef.current = attachments.attachments;
+  const attachments = useChatAttachments({ sessionId, cwd, provider, surface }, (message) => setProblem(message),
+    { owner: chatStore, key: sessionId ?? "" });
+  useLayoutEffect(() => {
+    const field = fieldRef.current;
+    const current = field?.getDraft();
+    if (current && (current.text !== messageDraft.text || JSON.stringify(current.choices) !== JSON.stringify(messageDraft.choices))) {
+      field?.hydrate(messageDraft.text, messageDraft.choices);
+    }
+  }, [messageDraft, sessionId]);
   const commands = useChatCommands({ value, agentId: agent.agentId, onClear,
     attachments: attachments.attachments, attachmentsBusy: attachments.analyzing > 0, onAttachmentsSent: attachments.clear,
     setValue: (next) => { setValue(next); fieldRef.current?.setText(next); },
@@ -1055,9 +1184,12 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
   }, () => void submit());
   const timeline = useAgentChat((s) => s.timeline);
   const sending = useAgentChat((s) => s.busy);
-  // `busy` on this composer also covers "session not open yet". Stop is only
-  // for a live turn: the HTTP send, or the stream after it (reasoning, tools).
+  // Track HTTP admission and running work independently of composer readiness.
   const live = runningTurn(timeline) !== null || sending;
+  // Admission is serialized by the store; execution waits in the backend.
+  // A pending HTTP request or credential card does not lock this composer.
+  const canQueue = surface === "jarvis" || surface === "society";
+  const sessionReady = surface !== "society" || Boolean(sessionId && chatStore.getState().activeSessionId === sessionId);
 
   // "@" completes teammates AND the capability catalog — plugins, MCP
   // servers, CLIs, skills, Jarvis tools — on every agent card, including
@@ -1098,8 +1230,8 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
     if (activeIndex >= matches.length) setActiveIndex(Math.max(0, matches.length - 1));
   }, [matches.length, activeIndex]);
 
-  const onDraftChange = (draft: { text: string; caret: number }) => {
-    setValue(draft.text);
+  const onDraftChange = (draft: ComposerDraft) => {
+    writeComposerDraft(chatStore, sessionId, { text: draft.text, choices: draft.choices });
     setMention(mentionToken(draft.text, draft.caret));
   };
 
@@ -1118,21 +1250,18 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
       const row = mentionChoice(item);
       const next = `${before}${choiceToken(row)} ${after}`;
       field?.hydrate(next, [...(draft?.choices ?? []), row]);
-      setSelectedTools((items) => (items.some((row) => row.key === item.key) ? items : [...items, item]));
     }
     setMention(null);
   };
 
   const submit = async () => {
+    if (await commands.execute(fieldRef.current?.getDraft().text.trim() ?? value.trim())) return;
     const draft = fieldRef.current?.getDraft();
     const fullDraft = draft?.text ?? value;
     const draftText = fullDraft.trim();
     const submittedFolder = codingFolder;
-    const selected = selectedTools;
-    const sentAttachments = attachments.attachments;
     const text = draftText;
-    if (await commands.execute(text)) return;
-    if ((!text && attachments.attachments.length === 0) || (busy || live) && !commands.canSteer || modelSaving || attachments.analyzing > 0) return;
+    if ((!text && attachments.attachments.length === 0) || !sessionReady || (busy || live) && !commands.canSteer && !canQueue || modelSaving || attachments.analyzing > 0) return;
     const chosenIds = new Set((draft?.choices ?? []).map((row) => row.id));
     const chosen = [...chosenIds].map((id) => catalog.find((item) => item.key === id));
     if (chosen.some((item) => !item || !item.connected)) {
@@ -1165,25 +1294,34 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
     if (codingHint) lines.push(codingHint);
     const hint = lines.join("\n");
     setProblem(null);
+    const held = attachments.take();
+    if (!text && held.attachments.length === 0) return;
+    const draftTarget = captureComposerDraftTarget(chatStore, sessionId);
+    const sentDraft = { text: fullDraft, choices: draft?.choices ?? messageDraft.choices };
+    writeComposerDraft(chatStore, sessionId, { text: "", choices: [] });
+    fieldRef.current?.clear();
+    setMention(null);
+    setCodingFolder("");
     try {
-      const result = await onSend(hint ? `${text}\n\n${hint}` : text, sentAttachments);
-      if (result === "stale" || sessionId && chatStore.getState().activeSessionId !== sessionId) return;
+      const result = await onSend(hint ? `${text}\n\n${hint}` : text, held.attachments);
       const sendError = chatStore.getState().lastError;
       if (result === "failed" || result === undefined && sendError) throw new Error(sendError ?? t("common.error_generic"));
-      if ((fieldRef.current?.getDraft().text ?? value) === fullDraft) {
-        setValue("");
-        fieldRef.current?.clear();
-        setMention(null);
-        setSelectedTools([]);
-      }
-      if (attachmentsRef.current === sentAttachments) attachments.clear();
-      else sentAttachments.forEach((file) => attachments.remove(file.name));
+      releaseHeldFiles(held);
     } catch (err) {
-      // The input and files stay in place until the server accepts them.
-      if ((fieldRef.current?.getDraft().text ?? value) === fullDraft) {
-        setSelectedTools(selected);
-        setCodingFolder(submittedFolder);
+      if (draftTarget.superseded) {
+        releaseHeldFiles(held);
+        useEventStore.getState().pushToast("error", t("society.chat.message_not_sent").replace("{0}", sentDraft.text));
+        return;
       }
+      // Restore only this submission's draft, even after changing agents.
+      // Preserve anything typed while the HTTP request was pending.
+      const current = readComposerDraft(chatStore, draftTarget.sessionId);
+      writeComposerDraft(chatStore, draftTarget.sessionId, {
+        text: [sentDraft.text, current.text].filter(Boolean).join("\n"),
+        choices: [...sentDraft.choices, ...current.choices.filter((row) => !sentDraft.choices.some((sent) => sent.id === row.id))],
+      });
+      restoreHeldFiles(chatStore, draftTarget.sessionId ?? "", held);
+      setCodingFolder(submittedFolder);
       setProblem(err instanceof Error ? err.message : String(err));
     }
   };
@@ -1337,27 +1475,21 @@ export function Composer({ agent, mentionable, busy, sessionId, cwd, provider, s
           stopLabel={t("society.chat.stop_recording")}
           shape="round"
         />
-        {live && !commands.isCommand && !(commands.canSteer && value.trim()) ? (
-          <button
-            type="button"
-            onClick={() => void onCancel()}
-            aria-label={t("society.chat.stop")}
-            title={t("society.chat.stop")}
-            data-testid="composer-stop"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
-          >
-            <Square className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        ) : (
+        {(busy || live) && <button type="button" onClick={() => void onCancel()}
+          aria-label={t("society.chat.stop")} data-testid="composer-cancel"
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background hover:bg-foreground/90">
+          <Square className="h-3.5 w-3.5" aria-hidden />
+        </button>}
+        {(
           <button
             type="button"
             // While recording, Send ends the dictation and sends once the
             // words land, so it is live before the box holds any text.
             onClick={() => (dictation.dictating ? dictation.stopAndSend() : void submit())}
-            disabled={modelSaving || attachments.analyzing > 0 || (!value.trim() && selectedTools.length === 0 && attachments.attachments.length === 0 && !dictation.dictating)}
+            disabled={!sessionReady || modelSaving || attachments.analyzing > 0 || (!value.trim() && messageDraft.choices.length === 0 && attachments.attachments.length === 0 && !dictation.dictating)}
             aria-label={t("society.chat.send")}
             data-testid="composer-send"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[hsl(var(--chat-send-background))] text-[hsl(var(--chat-send-foreground))] disabled:[&_svg]:opacity-40"
           >
             <Send className="h-3.5 w-3.5" aria-hidden />
           </button>
