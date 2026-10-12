@@ -199,12 +199,14 @@ def _exec_spec(monkeypatch: pytest.MonkeyPatch, root: Path) -> dict:
 
 @pytest.fixture
 def spec_root(tmp_path: Path) -> Path:
-    """A minimal checkout: the real spec, the real table, a version file."""
+    """A minimal checkout: the real spec, the real table, a version file, pyproject."""
     root = tmp_path / "checkout"
     (root / "jarvis" / "core").mkdir(parents=True)
     (root / "jarvis" / "__init__.py").write_text('__version__ = "9.9.9"\n', encoding="utf-8")
     shutil.copy2(TABLE_PATH, root / "jarvis" / "core" / "macos_privacy_strings.py")
     shutil.copy2(SPEC_PATH, root / "jarvis.spec")
+    # The spec reads the entry points to bundle every module they name.
+    shutil.copy2(SPEC_PATH.parent / "pyproject.toml", root / "pyproject.toml")
     return root
 
 

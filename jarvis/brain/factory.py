@@ -656,6 +656,13 @@ def _load_tools_for_tier(
                     register_tool(tool, source=ep.name, virtual=True)
             else:
                 register_tool(inst, source=ep.name, virtual=False)
+        except ModuleNotFoundError as exc:
+            # A missing Jarvis module is a packaging fault, not an optional
+            # extra: the frozen build once dropped the MCP/CLI/plugin loaders
+            # and the brain lost every MCP tool without a word in the log.
+            missing = getattr(exc, "name", "") or ""
+            level = logging.WARNING if missing.startswith("jarvis") else logging.DEBUG
+            log.log(level, "Tool %s not loadable: %s", ep.name, exc)
         except Exception as exc:  # noqa: BLE001
             log.debug("Tool %s not loadable: %s", ep.name, exc)
 

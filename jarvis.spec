@@ -297,6 +297,31 @@ hiddenimports: list[str] = []
 hiddenimports += collect_submodules("jarvis.plugins")
 hiddenimports += collect_submodules("jarvis.channels")
 
+
+def _entry_point_modules(pyproject: Path) -> list[str]:
+    """Every module an entry point in ``pyproject.toml`` names.
+
+    Some targets live outside jarvis.plugins: the virtual loaders for MCP
+    servers, CLIs and Marketplace plugins (``jarvis.mcp.loader`` and friends).
+    Nothing imports them by name, so a frozen build without them loaded no MCP
+    tool at all: the Armory showed servers connected while the brain had 0 MCP
+    tools (2026-10-12).
+    """
+    import tomllib
+
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    groups = data.get("project", {}).get("entry-points", {})
+    return sorted(
+        {
+            target.split(":", 1)[0].strip()
+            for group in groups.values()
+            for target in group.values()
+        }
+    )
+
+
+hiddenimports += _entry_point_modules(PROJECT_ROOT / "pyproject.toml")
+
 # Uvicorn standard installs version-specific backends through dynamic imports.
 for pkg in (
     "uvicorn.lifespan.on",
