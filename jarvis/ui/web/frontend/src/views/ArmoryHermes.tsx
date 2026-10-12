@@ -37,14 +37,11 @@ export type HermesInventory = {
     truncated: boolean;
     items: { name: string; provenance: string; enabled?: boolean }[];
   };
-  mcp_servers: { name: string; transport: string; enabled: boolean }[];
-  mcp_status_checked: boolean;
   plugins: HermesPart & { items?: HermesPlugin[] };
   toolsets: HermesPart & { items?: HermesToolset[] };
   /** What Hermes ships and can add: its MCP catalog and optional skills. */
   catalog?: {
     available: boolean;
-    mcp_servers: number;
     optional_skills: number;
     bundled_skills: number;
     error: string | null;
@@ -54,7 +51,6 @@ export type HermesInventory = {
 export type HermesCatalog = {
   available: boolean;
   error: string | null;
-  mcp_servers: { name: string; description: string; auth: string; installed: boolean }[];
   skills: { id: string; name: string; category: string; description: string; installed: boolean }[];
 };
 
@@ -104,14 +100,12 @@ export function skillBreakdown(skills: HermesInventory["skills"]): string {
   return parts.map(([label, count]) => `${count} ${label}`).join(" · ");
 }
 
-type PanelId = "skills" | "mcp" | "plugins" | "toolsets" | "mcp_catalog" | "skill_catalog";
+type PanelId = "skills" | "plugins" | "toolsets" | "skill_catalog";
 
 const PANEL_TITLES: Record<PanelId, string> = {
   skills: "Hermes skills",
-  mcp: "Hermes MCP servers",
   plugins: "Hermes plugins",
   toolsets: "Hermes toolsets",
-  mcp_catalog: "MCP servers Hermes can add",
   skill_catalog: "Optional skills Hermes can add",
 };
 
@@ -183,15 +177,6 @@ export function panelRows(panel: PanelId, data: HermesInventory, catalog: Hermes
           label: on ? "Disable" : "Enable",
         };
       });
-    case "mcp":
-      return data.mcp_servers.map((server) => ({
-        key: server.name,
-        name: server.name,
-        detail: server.transport,
-        on: server.enabled,
-        action: toggle("mcp", server.name, server.enabled),
-        label: server.enabled ? "Disable" : "Enable",
-      }));
     case "plugins":
       return (data.plugins.items ?? []).map((plugin) => {
         const on = plugin.status === "enabled";
@@ -213,15 +198,6 @@ export function panelRows(panel: PanelId, data: HermesInventory, catalog: Hermes
         action: toggle("toolset", toolset.name, toolset.enabled),
         label: toolset.enabled ? "Disable" : "Enable",
       }));
-    case "mcp_catalog":
-      return (catalog?.mcp_servers ?? []).map((server) => ({
-        key: server.name,
-        name: server.name,
-        detail: [server.description, server.auth === "oauth" ? "signs in on first use" : ""].filter(Boolean).join(" · "),
-        on: server.installed ? true : null,
-        action: server.installed ? null : { kind: "mcp_catalog", op: "install", name: server.name },
-        label: server.installed ? "Installed" : "Install",
-      }));
     case "skill_catalog":
       return (catalog?.skills ?? []).map((skill) => ({
         key: skill.id,
@@ -241,7 +217,7 @@ function HermesPanel({ panel, data, onClose }: { panel: PanelId; data: HermesInv
   // `text` is the sentence for people; `raw` is Hermes's own CLI output, kept
   // behind a Details toggle instead of being the message (UI audit P1-8).
   const [result, setResult] = useState<{ ok: boolean; text: string; raw?: string } | null>(null);
-  const needsCatalog = panel === "mcp_catalog" || panel === "skill_catalog";
+  const needsCatalog = panel === "skill_catalog";
   const catalog = useQuery({
     queryKey: ["armory", "hermes-catalog"],
     queryFn: fetchCatalog,
@@ -412,10 +388,9 @@ export function HermesArmoryGroup() {
       </p>
     );
   } else {
-    const enabledMcp = data.mcp_servers.filter((server) => server.enabled).length;
     body = (
       <>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <ArmoryStat
             label="Skills"
             value={String(data.skills.total)}
@@ -423,37 +398,19 @@ export function HermesArmoryGroup() {
             active={panel === "skills"}
             onClick={open("skills")}
           />
-          <ArmoryStat
-            label="MCP servers"
-            value={`${enabledMcp} / ${data.mcp_servers.length}`}
-            hint={
-              data.mcp_status_checked ? "enabled / configured" : "enabled / configured · connection not checked"
-            }
-            active={panel === "mcp"}
-            onClick={open("mcp")}
-          />
           {partStat("Plugins", data.plugins, panel === "plugins", open("plugins"))}
           {partStat("Toolsets", data.toolsets, panel === "toolsets", open("toolsets"))}
         </div>
         {data.catalog && (
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             {data.catalog.available ? (
-              <>
-                <ArmoryStat
-                  label="MCP catalog"
-                  value={String(data.catalog.mcp_servers)}
-                  hint="servers Hermes can add (hermes mcp catalog)"
-                  active={panel === "mcp_catalog"}
-                  onClick={open("mcp_catalog")}
-                />
-                <ArmoryStat
-                  label="Skill catalog"
-                  value={String(data.catalog.bundled_skills + data.catalog.optional_skills)}
-                  hint={`${data.catalog.bundled_skills} built in · ${data.catalog.optional_skills} optional`}
-                  active={panel === "skill_catalog"}
-                  onClick={open("skill_catalog")}
-                />
-              </>
+              <ArmoryStat
+                label="Skill catalog"
+                value={String(data.catalog.bundled_skills + data.catalog.optional_skills)}
+                hint={`${data.catalog.bundled_skills} built in · ${data.catalog.optional_skills} optional`}
+                active={panel === "skill_catalog"}
+                onClick={open("skill_catalog")}
+              />
             ) : (
               <ArmoryStat label="Catalog" value="—" hint={data.catalog.error || "unavailable"} />
             )}

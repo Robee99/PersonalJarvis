@@ -22,11 +22,6 @@ const inventory: HermesInventory = {
       { name: "ascii-art", provenance: "hub", enabled: false },
     ],
   },
-  mcp_servers: [
-    { name: "github", transport: "stdio", enabled: true },
-    { name: "notion", transport: "http", enabled: false },
-  ],
-  mcp_status_checked: false,
   plugins: {
     available: true,
     enabled: 2,
@@ -35,7 +30,7 @@ const inventory: HermesInventory = {
     items: [{ name: "kanban", status: "not enabled", source: "bundled", description: "Boards" }],
   },
   toolsets: { available: false, enabled: 0, total: 0, error: "Hermes API server is not reachable" },
-  catalog: { available: true, mcp_servers: 65, optional_skills: 152, bundled_skills: 58, error: null },
+  catalog: { available: true, optional_skills: 152, bundled_skills: 58, error: null },
 };
 
 function json(body: unknown, status = 200): Response {
@@ -61,11 +56,8 @@ describe("Hermes Agent group in the tool armory", () => {
     await waitFor(() => expect(screen.getByText("52")).toBeTruthy());
     expect(fetchMock).toHaveBeenCalledWith("/api/hermes/inventory");
     expect(screen.getByText("41 bundled · 3 hub · 5 local · 2 external · 1 plugin")).toBeTruthy();
-    expect(screen.getByText("1 / 2")).toBeTruthy();
-    expect(screen.getByText(/connection not checked/)).toBeTruthy();
     expect(screen.getByText("2 / 6")).toBeTruthy();
     expect(screen.getByText("Hermes API server is not reachable")).toBeTruthy();
-    expect(screen.getByText("65")).toBeTruthy();
     expect(screen.getByText("210")).toBeTruthy();
     expect(screen.getByText("58 built in · 152 optional")).toBeTruthy();
   });
@@ -127,24 +119,4 @@ describe("Hermes Agent group in the tool armory", () => {
     expect(screen.queryByRole("button", { name: "Disable notes" })).toBeNull();
   });
 
-  it("loads the catalog and offers install only for what is missing", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-      String(input) === "/api/hermes/catalog"
-        ? json({
-            available: true,
-            error: null,
-            mcp_servers: [
-              { name: "deepwiki", description: "Docs", auth: "none", installed: false },
-              { name: "jarvis", description: "", auth: "none", installed: true },
-            ],
-            skills: [],
-          })
-        : json(inventory),
-    );
-    renderGroup();
-    await waitFor(() => expect(screen.getByText("65")).toBeTruthy());
-    fireEvent.click(screen.getByText("65"));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Install deepwiki" })).toBeTruthy());
-    expect((screen.getByRole("button", { name: "Installed jarvis" }) as HTMLButtonElement).disabled).toBe(true);
-  });
 });

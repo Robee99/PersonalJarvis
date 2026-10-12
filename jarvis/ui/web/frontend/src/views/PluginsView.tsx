@@ -27,6 +27,7 @@ import {
 import { CommunityTab } from "@/views/PluginsCommunity";
 import { PluginUploadDialog } from "@/views/PluginUploadDialog";
 import { ArmoryStat, HermesArmoryGroup } from "@/views/ArmoryHermes";
+import { ArmoryMcpCatalogue } from "@/views/ArmoryMcpCatalogue";
 import { AddConnectorDialog, AddPluginTabs, type AddPluginMode } from "@/views/AddConnectorDialog";
 import { removeAddedPlugin, takePluginFocus } from "@/lib/customConnector";
 import { fill, translate, useLocaleChunk } from "@/i18n";
@@ -1542,11 +1543,6 @@ function PluginArmory({
   onCategory: (value: string) => void; loading: boolean; error: string | null;
   onOpen: (id: string) => void; onSection: (id: "mcps" | "skills") => void;
 } & Pick<ConnectHandlers, "onConnect">) {
-  const { data: mcps } = useQuery({
-    queryKey: ["armory", "mcps"],
-    queryFn: async () => (await fetch("/api/mcps")).json() as Promise<{ total?: number; running?: number }>,
-    staleTime: 30_000,
-  });
   const { data: skills } = useQuery({
     queryKey: ["armory", "skills"],
     queryFn: async () => (await fetch("/api/skills")).json() as Promise<{ skills?: unknown[] }>,
@@ -1583,7 +1579,7 @@ function PluginArmory({
           <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">
             Jarvis <span className="normal-case tracking-normal text-slate-600">Jarvis&apos;s own tools</span>
           </p>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <ArmoryStat
               label="Apps"
               value={`${connected} / ${total}`}
@@ -1595,12 +1591,6 @@ function PluginArmory({
               }}
             />
             <ArmoryStat
-              label="MCP servers"
-              value={`${mcps?.running ?? 0} / ${mcps?.total ?? 0}`}
-              hint="running"
-              onClick={() => onSection("mcps")}
-            />
-            <ArmoryStat
               label="Skills"
               value={String(skills?.skills?.length ?? 0)}
               hint="ready to use"
@@ -1608,6 +1598,7 @@ function PluginArmory({
             />
           </div>
         </section>
+        <ArmoryMcpCatalogue />
         <HermesArmoryGroup />
 
         <label className="mt-6 flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-slate-400 focus-within:border-cyan-300/50">
