@@ -74,7 +74,10 @@ _LADDERS: Final[dict[str, tuple[tuple[str, ...], str]]] = {
     "kimi": (("",), ""),
     "glm": (("",), ""),
     "deepseek-harness": (("",), ""),
-    "hermes": (("",), ""),
+    # Hermes takes ``model_options.reasoning`` and folds it per provider; a
+    # local llama.cpp model (Qwen, Gemma) gets it through the model swapper
+    # as ``model@effort`` (jarvis.plugins.brain.hermes.local_thinking_model).
+    "hermes": (("", "none", "low", "medium", "high", "xhigh", "max"), ""),
     "cursor": (("",), ""),
     "nvidia": (("", "none", "low", "medium", "high"), ""),
     # Nous Portal documents no reasoning-effort parameter, so no knob is offered.

@@ -428,6 +428,22 @@ def model_fields(model: str | None) -> dict[str, str]:
     return {"model": value}
 
 
+#: Levels the composer's thinking picker sends (``agent_chat.effort`` "hermes").
+THINKING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
+#: Hermes providers that are llama.cpp servers on this machine (``local-qwen``,
+#: ``local-gemma-2``): Hermes sends them no reasoning setting at all.
+LOCAL_PROVIDER_PREFIX = "local-"
+#: ``qwen@high``: the model swapper in front of the local servers turns the
+#: suffix into llama.cpp's per-request ``enable_thinking`` and thinking budget.
+THINKING_SEPARATOR = "@"
+
+
+def local_thinking_model(model: str, effort: str) -> str:
+    """The model name that carries a thinking level to a local llama.cpp server."""
+    base = model.split(THINKING_SEPARATOR, 1)[0]
+    return f"{base}{THINKING_SEPARATOR}{effort}" if base else model
+
+
 def build_instructions(req: BrainRequest) -> str:
     """The front-end contract layered on Hermes's own system prompt.
 
@@ -746,8 +762,13 @@ class HermesBrain:
             "instructions": build_instructions(req),
             "session_id": self.session_id,
         }
-        if getattr(req, "reasoning_effort", None) == "none" or thinking_off_by_config():
+        effort = str(getattr(req, "reasoning_effort", None) or "").strip().lower()
+        if effort == "none" or (not effort and thinking_off_by_config()):
             body["model_options"] = {"reasoning": {"enabled": False}}
+        elif effort in THINKING_EFFORTS:
+            body["model_options"] = {"reasoning": {"enabled": True, "effort": effort}}
+            if str(body.get("provider") or "").startswith(LOCAL_PROVIDER_PREFIX):
+                body["model"] = local_thinking_model(str(body.get("model") or ""), effort)
         return body
 
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:

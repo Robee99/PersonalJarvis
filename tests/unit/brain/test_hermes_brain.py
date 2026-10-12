@@ -165,6 +165,19 @@ async def test_a_fast_turn_asks_hermes_to_skip_its_reasoning_pass() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_picked_thinking_level_reaches_hermes_and_a_local_model() -> None:
+    server = FakeHermesApi(say("ok"), say("ok"))
+    await _collect(_brain(server, model="local-qwen-2::qwen"), _req("refactor", reasoning_effort="high"))
+    await _collect(_brain(server), _req("hi", reasoning_effort="low"))
+    local, cloud = server.runs[0].body, server.runs[1].body
+    assert local["model_options"] == {"reasoning": {"enabled": True, "effort": "high"}}
+    # Hermes sends a llama.cpp provider no reasoning setting: the swapper reads it from the name.
+    assert (local["provider"], local["model"]) == ("local-qwen-2", "qwen@high")
+    assert cloud["model_options"] == {"reasoning": {"enabled": True, "effort": "low"}}
+    assert cloud["model"] == "hermes-agent"
+
+
+@pytest.mark.asyncio
 async def test_the_key_is_read_from_hermes_env_in_place(_isolated: Path) -> None:
     (_isolated / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=local-secret\n")
     server = FakeHermesApi(say("hi"))
