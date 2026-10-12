@@ -32,6 +32,11 @@ vi.mock("@/components/deck/HudMemoryPanel", () => ({
     </section>
   ),
 }));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
+}));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
   const actual = await vi.importActual<typeof import("@/components/deck/DeckLogCard")>(
@@ -201,11 +206,13 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     await waitFor(() => expect(screen.queryByTestId("deck-standby")).toBeNull(), { timeout: 4000 });
   }, 10_000);
 
-  test("pressing the orb reaches for the voice AND opens the board at once", () => {
+  test("pressing the orb reaches for the voice AND opens the board at once", async () => {
     render(<MissionDeckView />);
     fireEvent.click(screen.getByRole("button", { name: /saying “Hey Nova”/ }));
     expect(screen.getByTestId("deck-board")).toBeTruthy();
-    expect(requestVoiceCall).toHaveBeenCalledTimes(1);
+    // The call starts once the chat on screen is bound to it (the binding
+    // may fail; the call still starts).
+    await waitFor(() => expect(requestVoiceCall).toHaveBeenCalledTimes(1));
   });
 
   test("the header carries Gigi and leaves restart to the window caption", () => {

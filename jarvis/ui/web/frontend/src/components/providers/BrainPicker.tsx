@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Cloud, Cpu, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
+import { Bot, Check, Cloud, Cpu, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
 import {
   getBrainProviderModels,
   saveBrainProviderModel,
   switchBrainProvider,
   type BrainModel,
 } from "@/hooks/useProviders";
+import { isHermesBrain } from "@/hooks/useHermesBrain";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { useEventStore } from "@/store/events";
 
 /**
  * The Model page's one place to choose (2026-10-11).
@@ -28,8 +30,15 @@ import { cn } from "@/lib/utils";
  * Without Hermes as the brain the list shows the local servers only, and
  * "Use" makes Jarvis's own local-server card the brain.
  *
- * Backend: `GET/POST /api/local-servers` (`local_server_routes.py`) and the
- * Hermes card's model (`PUT /api/providers/hermes/model`).
+ * Above the list, one switch says who answers right now, Hermes Agent or
+ * Jarvis directly, and switches it (2026-10-12: a switch to Hermes made in
+ * the provider grid below left this list showing the old brain, so it read
+ * as if the switch had not happened). The live brain comes from the event
+ * store (`BrainProviderSwitched`), and every switch rescans the list.
+ *
+ * Backend: `GET/POST /api/local-servers` (`local_server_routes.py`), the
+ * Hermes card's model (`PUT /api/providers/hermes/model`) and
+ * `POST /api/brain/switch`.
  */
 
 interface LocalServer {
@@ -90,7 +99,20 @@ function localSelection(hermes: boolean, server: LocalServer, model: string): st
   return `${server.url}|${model}`;
 }
 
-export function BrainPicker({ onChanged }: { onChanged?: () => void }) {
+/** The model part of a Hermes selection, for the status line. */
+function modelName(selection: string): string {
+  const model = selection.includes("::") ? selection.split("::").slice(1).join("::") : selection;
+  return model.replace(/^https?:\/\/[^|]*\|/, "");
+}
+
+export function BrainPicker({
+  onChanged,
+  onPickOther,
+}: {
+  onChanged?: () => void;
+  /** "Jarvis directly" was picked: show the full provider list to choose from. */
+  onPickOther?: () => void;
+}) {
   const t = useT();
   const [data, setData] = useState<LocalServersResult | null>(null);
   const [cloud, setCloud] = useState<BrainModel[]>([]);
@@ -113,9 +135,16 @@ export function BrainPicker({ onChanged }: { onChanged?: () => void }) {
 
   useEffect(() => {
     void scan();
+    const onSwitched = () => void scan();
+    window.addEventListener("jarvis:brain-switched", onSwitched);
+    return () => window.removeEventListener("jarvis:brain-switched", onSwitched);
   }, [scan]);
 
-  const hermes = data?.hermes_brain ?? false;
+  // The live brain wins over the last scan, which a switch elsewhere outdates.
+  const liveBrain = useEventStore((s) => s.brainProvider);
+  const known = Boolean(liveBrain) && liveBrain !== "unknown";
+  const hermes = known ? isHermesBrain(liveBrain) : data?.hermes_brain ?? false;
+  const [switched, setSwitched] = useState(false);
   useEffect(() => {
     if (!hermes) return;
     getBrainProviderModels("hermes")
@@ -175,6 +204,20 @@ export function BrainPicker({ onChanged }: { onChanged?: () => void }) {
 
   const autoOn = hermes && HERMES_AUTO.has(selection);
 
+  const useHermes = () =>
+    void run("brain:hermes", async () => {
+      await switchBrainProvider("hermes");
+      useEventStore.getState().setBrainProvider("hermes");
+      window.dispatchEvent(new CustomEvent("jarvis:brain-switched"));
+      setSwitched(true);
+    });
+
+  const status = hermes
+    ? HERMES_AUTO.has(selection)
+      ? t("brain_picker.status_hermes_auto")
+      : t("brain_picker.status_hermes_model").replace("{model}", modelName(selection))
+    : t("brain_picker.status_direct").replace("{provider}", known ? liveBrain : "…");
+
   return (
     <section data-testid="brain-picker" className="mb-6 rounded-xl border border-border bg-card/40 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -195,7 +238,36 @@ export function BrainPicker({ onChanged }: { onChanged?: () => void }) {
         </button>
       </div>
 
-      <div role="radiogroup" aria-label={t("brain_picker.title")} className="mt-3 space-y-4">
+      <div
+        role="radiogroup"
+        aria-label={t("brain_picker.who_label")}
+        data-testid="brain-switch"
+        className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2"
+      >
+        <BrainChoice
+          icon={<Sparkles className="h-5 w-5" aria-hidden />}
+          title={t("brain_picker.hermes_title")}
+          meta={t("brain_picker.hermes_meta")}
+          on={hermes}
+          busy={busy === "brain:hermes"}
+          onPick={hermes ? undefined : useHermes}
+        />
+        <BrainChoice
+          icon={<Bot className="h-5 w-5" aria-hidden />}
+          title={t("brain_picker.direct_title")}
+          meta={t("brain_picker.direct_meta")}
+          on={!hermes}
+          busy={false}
+          onPick={onPickOther}
+        />
+      </div>
+      <p data-testid="brain-status" role="status" className="mt-2 text-meta text-foreground">
+        <span className={cn("mr-1.5 inline-block h-2 w-2 rounded-full", hermes ? "bg-emerald-500" : "bg-sky-400")} aria-hidden />
+        {status}
+        {switched && hermes && <span className="ml-1 text-muted-foreground">{t("brain_picker.switched_note")}</span>}
+      </p>
+
+      <div role="radiogroup" aria-label={t("brain_picker.title")} className="mt-4 space-y-4">
         {hermes && (
           <Row
             icon={<Sparkles className="h-4 w-4" aria-hidden />}
@@ -294,6 +366,53 @@ export function BrainPicker({ onChanged }: { onChanged?: () => void }) {
         </p>
       )}
     </section>
+  );
+}
+
+/** One of the two big "who answers" choices, with an "Active" badge when on. */
+function BrainChoice({
+  icon,
+  title,
+  meta,
+  on,
+  busy,
+  onPick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  meta: string;
+  on: boolean;
+  busy: boolean;
+  onPick?: () => void;
+}) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={on}
+      disabled={busy}
+      onClick={onPick}
+      className={cn(
+        "flex items-start gap-3 rounded-xl border-2 p-3 text-left transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        on ? "border-primary bg-primary/10" : "border-border hover:bg-muted",
+      )}
+    >
+      <span className={on ? "text-primary" : "text-muted-foreground"}>{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          {title}
+          {on && (
+            <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-foreground">
+              {t("brain_picker.active")}
+            </span>
+          )}
+        </span>
+        <span className="mt-0.5 block text-meta text-muted-foreground">{meta}</span>
+      </span>
+      {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />}
+    </button>
   );
 }
 

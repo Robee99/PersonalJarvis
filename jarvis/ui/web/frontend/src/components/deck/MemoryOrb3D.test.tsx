@@ -204,7 +204,7 @@ describe("HudMemoryPanel with the orb", () => {
     expect(selectionFromOrb({ type: "note" })).toBeNull();
   });
 
-  it("starts on the list without WebGL, switches to the orb and back to it from a detail", async () => {
+  it("starts on the orb — even without WebGL, where it says so in words — and back to it from a detail", async () => {
     stubFetch((url) => {
       if (url === "/api/wiki/orb-tree") return json(TREE);
       if (url === "/api/brain-map/projects") return json({ projects: [] });
@@ -230,11 +230,16 @@ describe("HudMemoryPanel with the orb", () => {
         <HudMemoryPanel />
       </QueryClientProvider>,
     );
-    expect(screen.queryByTestId("memory-orb")).toBeNull();
+    // The orb is the default: no toggle to find first (owner, 2026-10-12).
+    await waitFor(() => expect(screen.getByTestId("memory-orb").dataset.state).toBe("ready"));
 
+    // The list is one click away and remembered; the orb one click back.
+    fireEvent.click(screen.getByLabelText("Show as list"));
+    expect(screen.queryByTestId("memory-orb")).toBeNull();
+    expect(window.localStorage.getItem("hud3.memory.view")).toBe("list");
     fireEvent.click(screen.getByLabelText("Show as 3D orb"));
     await waitFor(() => expect(screen.getByTestId("memory-orb").dataset.state).toBe("ready"));
-    expect(window.localStorage.getItem("hud2.memory.view")).toBe("orb");
+    expect(window.localStorage.getItem("hud3.memory.view")).toBe("orb");
 
     fireEvent.click(screen.getByTestId("memory-orb-next"));
     fireEvent.click(screen.getByTestId("memory-orb-open"));
@@ -244,5 +249,21 @@ describe("HudMemoryPanel with the orb", () => {
     fireEvent.click(screen.getByText("Back"));
     expect(screen.getByTestId("memory-orb").className).not.toContain("hidden");
     expect(screen.getByTestId("memory-orb").dataset.focus).toBe("p-atlas");
+  });
+
+  it("ignores a list stored under the retired key — the orb shows first", async () => {
+    window.localStorage.setItem("hud2.memory.view", "list");
+    stubFetch((url) => {
+      if (url === "/api/wiki/orb-tree") return json(TREE);
+      if (url === "/api/brain-map/projects") return json({ projects: [] });
+      return json({}, 404);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <HudMemoryPanel />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId("memory-orb")).toBeTruthy();
   });
 });

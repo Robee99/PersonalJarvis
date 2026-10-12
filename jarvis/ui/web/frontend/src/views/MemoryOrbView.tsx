@@ -130,9 +130,19 @@ function useDebounced<T>(value: T, ms: number): T {
   return settled;
 }
 
-export function MemoryOrbView({ handDeps }: { handDeps?: HandDeps } = {}) {
+export function MemoryOrbView({
+  handDeps,
+  initialMode,
+  importOpen = false,
+}: {
+  handDeps?: HandDeps;
+  /** Open on this map instead of the one last shown (the HUD's buttons pick). */
+  initialMode?: OrbMode;
+  /** Open with the data import form up (the HUD memory panel's Import button). */
+  importOpen?: boolean;
+} = {}) {
   const t = useT();
-  const [mode, setModeState] = useState<OrbMode>(savedMode);
+  const [mode, setModeState] = useState<OrbMode>(() => initialMode ?? savedMode());
   const setMode = (next: OrbMode) => {
     setModeState(next);
     try {
@@ -537,7 +547,7 @@ export function MemoryOrbView({ handDeps }: { handDeps?: HandDeps } = {}) {
                 </div>
               )}
             </div>
-            <MemoryOrbImport />
+            <MemoryOrbImport defaultOpen={importOpen} />
             <button
               type="button"
               onClick={() => frame(searching)}

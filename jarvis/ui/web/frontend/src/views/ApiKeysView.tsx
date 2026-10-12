@@ -376,7 +376,7 @@ function ProviderFace({ scope }: { scope: ApiKeysScope }) {
         <div className="profile-rise mx-auto w-full max-w-[1440px] space-y-6">
           {scope === "model" && (
             <>
-              <BrainPicker onChanged={refetch} />
+              <BrainPicker onChanged={refetch} onPickOther={() => setShowAllBrains(true)} />
               <button
                 type="button"
                 data-testid="all-brain-providers-toggle"

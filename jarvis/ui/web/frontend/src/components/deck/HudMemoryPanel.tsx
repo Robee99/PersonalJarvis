@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, BookOpen, BrainCircuit, List, MessageSquareText, Orbit, Search, X } from "lucide-react";
+import {
+  ArrowLeft,
+  BookOpen,
+  BrainCircuit,
+  List,
+  Maximize2,
+  MessageSquareText,
+  Orbit,
+  Search,
+  Upload,
+  X,
+} from "lucide-react";
 import { DeckCard, DeckIconButton } from "@/components/deck/DeckCard";
 import { MemoryOrb3D } from "@/components/deck/MemoryOrb3D";
 import {
@@ -16,9 +27,8 @@ import {
   type MemoryEntity,
   type MemoryStatus,
 } from "@/components/deck/hudMemoryApi";
-import { sendChatMessage } from "@/lib/chat";
-import { detectWebgl } from "@/lib/graphDimension";
 import type { OrbRef } from "@/lib/memoryOrbLayout";
+import { useAgentChatStore } from "@/store/agentChat";
 import { useEventStore } from "@/store/events";
 import { cn } from "@/lib/utils";
 import { fill, useT } from "@/i18n";
@@ -31,23 +41,36 @@ export type MemorySelection =
 
 const KEY = ["hud2", "memory"] as const;
 const SEARCH_DEBOUNCE_MS = 200;
-const VIEW_KEY = "hud2.memory.view";
+/**
+ * Where the choice of view is remembered. A new key on 2026-10-12: the orb
+ * became the HUD's default, and a "list" stored under the old key
+ * (`hud2.memory.view`) — or written there by the old WebGL fallback — kept
+ * the orb out of sight for exactly the people who asked for it.
+ */
+export const MEMORY_VIEW_KEY = "hud3.memory.view";
 
-/** How the panel shows memory at rest: the project list or the 3D orb. */
+/** How the panel shows memory at rest: the 3D orb or the project list. */
 export type MemoryView = "list" | "orb";
 
 /**
- * The view last chosen; the orb by default where it can be drawn, the list
- * where it cannot (the orb would only be words there).
+ * The view last chosen; the orb by default. Where WebGL is missing the orb's
+ * frame says so in words and its legend, focus line and steppers still work
+ * (MemoryOrb3D), so the orb stays the default there too.
  */
-function savedView(): MemoryView {
+export function savedMemoryView(): MemoryView {
   try {
-    const saved = window.localStorage.getItem(VIEW_KEY);
+    const saved = window.localStorage.getItem(MEMORY_VIEW_KEY);
     if (saved === "list" || saved === "orb") return saved;
   } catch {
     // Storage can be blocked (private window, previews); fall through to the default.
   }
-  return detectWebgl() ? "orb" : "list";
+  return "orb";
+}
+
+/** Which page of the full memory map to open, and whether with the import form up. */
+export interface FullMapRequest {
+  mode: "projects" | "memory";
+  importOpen?: boolean;
 }
 
 /** The panel's selection for a node the orb opens; null when the node names nothing. */
@@ -76,10 +99,11 @@ const STATUS_DOT: Record<MemoryStatus, string> = {
  * note's opening lines (`/api/wiki/page/{slug}`) — with a back stack, so
  * following a next action into its item and back costs no navigation.
  *
- * Acting on a selection: "Ask" sends a normal chat turn about it
- * (`lib/chat.ts` — the reply streams into the transcript panel beside it),
- * and the open buttons jump to the full surface (the memory orb, the wiki)
- * for anything the HUD should not grow into.
+ * Acting on a selection: "Ask" sends a turn about it into the chat beside it
+ * (the HUD's real chat — the `jarvis` agent-chat store), and the open
+ * buttons open the full memory map over the HUD (`onOpenMap`: the 2D maps,
+ * hand control, the data import) or the wiki, for anything the panel should
+ * not grow into.
  *
  * A route that fails says "not reachable", never an empty list that would
  * read as "nothing remembered".
@@ -91,18 +115,24 @@ const STATUS_DOT: Record<MemoryStatus, string> = {
  * the orb opens here, in the same detail view and back stack, and "Back"
  * returns to the orb.
  */
-export function HudMemoryPanel({ className }: { className?: string }) {
+export function HudMemoryPanel({
+  className,
+  onOpenMap,
+}: {
+  className?: string;
+  /** Open the full memory map over the HUD; absent where there is none. */
+  onOpenMap?: (request: FullMapRequest) => void;
+}) {
   const t = useT();
-  const setActiveSection = useEventStore((s) => s.setActiveSection);
   const [query, setQuery] = useState("");
   const [q, setQ] = useState("");
   const [stack, setStack] = useState<MemorySelection[]>([]);
   const selection = stack[stack.length - 1] ?? null;
-  const [view, setViewState] = useState<MemoryView>(savedView);
+  const [view, setViewState] = useState<MemoryView>(savedMemoryView);
   const setView = (next: MemoryView) => {
     setViewState(next);
     try {
-      window.localStorage.setItem(VIEW_KEY, next);
+      window.localStorage.setItem(MEMORY_VIEW_KEY, next);
     } catch {
       // Remembering the view is a convenience; without storage it resets.
     }
@@ -186,22 +216,39 @@ export function HudMemoryPanel({ className }: { className?: string }) {
       meta={projects.data ? projects.data.length : undefined}
       live={selection !== null}
       variant="bracket"
-      onOpen={() => setActiveSection("orb")}
-      openLabel={t("hud2.memory.open_orb")}
+      onOpen={onOpenMap ? () => onOpenMap({ mode: "projects" }) : undefined}
+      openLabel={t("hud3.memory.open_map")}
       actions={
-        <div role="group" aria-label={t("hud2.memory.view_label")} className="flex items-center gap-1">
-          <DeckIconButton
-            icon={List}
-            label={t("hud2.memory.view_list")}
-            active={view === "list"}
-            onClick={() => setView("list")}
-          />
-          <DeckIconButton
-            icon={Orbit}
-            label={t("hud2.memory.view_orb")}
-            active={view === "orb"}
-            onClick={() => setView("orb")}
-          />
+        <div className="flex items-center gap-1">
+          <div role="group" aria-label={t("hud2.memory.view_label")} className="flex items-center gap-1">
+            <DeckIconButton
+              icon={Orbit}
+              label={t("hud2.memory.view_orb")}
+              active={view === "orb"}
+              onClick={() => setView("orb")}
+            />
+            <DeckIconButton
+              icon={List}
+              label={t("hud2.memory.view_list")}
+              active={view === "list"}
+              onClick={() => setView("list")}
+            />
+          </div>
+          {onOpenMap && (
+            <>
+              <span aria-hidden className="mx-0.5 h-3 w-px bg-border" />
+              <DeckIconButton
+                icon={Upload}
+                label={t("hud3.memory.import")}
+                onClick={() => onOpenMap({ mode: "memory", importOpen: true })}
+              />
+              <DeckIconButton
+                icon={Maximize2}
+                label={t("hud3.memory.open_map")}
+                onClick={() => onOpenMap({ mode: "projects" })}
+              />
+            </>
+          )}
         </div>
       }
       className={className}
@@ -249,7 +296,9 @@ export function HudMemoryPanel({ className }: { className?: string }) {
                 <ArrowLeft className="h-3 w-3" />
                 {t("hud2.memory.back")}
               </button>
-              {selection.type === "project" && <ProjectDetail id={selection.id} onOpen={open} />}
+              {selection.type === "project" && (
+                <ProjectDetail id={selection.id} onOpen={open} onOpenMap={onOpenMap} />
+              )}
               {selection.type === "entity" && <EntityDetail id={selection.id} onOpen={open} />}
               {selection.type === "note" && <NoteDetail slug={selection.slug} onOpen={open} />}
             </div>
@@ -318,9 +367,16 @@ export function HudMemoryPanel({ className }: { className?: string }) {
   );
 }
 
-function ProjectDetail({ id, onOpen }: { id: string; onOpen: (s: MemorySelection) => void }) {
+function ProjectDetail({
+  id,
+  onOpen,
+  onOpenMap,
+}: {
+  id: string;
+  onOpen: (s: MemorySelection) => void;
+  onOpenMap?: (request: FullMapRequest) => void;
+}) {
   const t = useT();
-  const setActiveSection = useEventStore((s) => s.setActiveSection);
   const q = useQuery({
     queryKey: [...KEY, "project", id],
     queryFn: ({ signal }) => fetchMemoryProject(id, signal),
@@ -338,7 +394,13 @@ function ProjectDetail({ id, onOpen }: { id: string; onOpen: (s: MemorySelection
       <Actions
         prompt={fill(t("hud2.memory.ask_project"), { title: p.title })}
         extra={
-          <ActionButton icon={Orbit} label={t("hud2.memory.open_orb_short")} onClick={() => setActiveSection("orb")} />
+          onOpenMap && (
+            <ActionButton
+              icon={Orbit}
+              label={t("hud2.memory.open_orb_short")}
+              onClick={() => onOpenMap({ mode: "projects" })}
+            />
+          )
         }
       />
       {(p.next_actions ?? []).length > 0 && (
@@ -466,7 +528,9 @@ function Actions({ prompt, extra }: { prompt: string; extra?: ReactNode }) {
     if (sending) return;
     setSending(true);
     try {
-      const sent = await sendChatMessage(prompt);
+      // Into the chat beside the panel — the HUD's one conversation.
+      const result = await useAgentChatStore.getState().send(prompt);
+      const sent = result !== "failed";
       pushToast(sent ? "info" : "error", sent ? t("hud2.memory.ask_sent") : t("hud2.memory.ask_failed"));
     } finally {
       setSending(false);

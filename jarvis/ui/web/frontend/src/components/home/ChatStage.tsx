@@ -1,6 +1,6 @@
 import { useTranscriptView } from "../society/chat/useTranscriptView";
 import { PairConversationBoundary } from "@/components/agentchat/PairConversation";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { useEventStore } from "@/store/events";
 import { useAgentChat } from "@/components/agentchat/AgentChatStoreContext";
@@ -53,14 +53,26 @@ import { FolderCode } from "lucide-react";
  * place while the answer goes on below, and a button over the composer takes
  * you back. Nothing yanks the page out from under someone mid-sentence.
  */
-export function ChatStage() {
+export interface ChatStageProps {
+  /**
+   * Lines rendered after the timeline, inside the same scrolling column —
+   * the HUD puts the voice turn that is still being spoken here (heard words,
+   * the answer streaming) until the backend files it into this chat, so a
+   * spoken and a typed turn read as one thread. Null when there is nothing.
+   */
+  tail?: ReactNode;
+  /** A narrow column (the HUD's chat panel): tighter gutters, a smaller opening. */
+  compact?: boolean;
+}
+
+export function ChatStage(props: ChatStageProps = {}) {
   const assistantName = useEventStore((s) => s.assistantName);
   const surface = useAgentChat((s) => s.surface);
   const sessionId = useAgentChat((s) => s.activeSessionId);
-  return surface === "jarvis" ? <PairConversationBoundary key={sessionId} recipient={{ id: "jarvis", name: assistantName }}><ChatStageContent /></PairConversationBoundary> : <ChatStageContent />;
+  return surface === "jarvis" ? <PairConversationBoundary key={sessionId} recipient={{ id: "jarvis", name: assistantName }}><ChatStageContent {...props} /></PairConversationBoundary> : <ChatStageContent {...props} />;
 }
 
-function ChatStageContent() {
+function ChatStageContent({ tail = null, compact = false }: ChatStageProps) {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
   const surface = useAgentChat((s) => s.surface);
@@ -75,7 +87,10 @@ function ChatStageContent() {
   const loadCatalog = useAgentChat((s) => s.loadCatalog);
   const loadSessions = useAgentChat((s) => s.loadSessions);
   const voiceThreadId = useEventStore((s) => (s.activeKind === "voice" ? s.activeThreadId : null));
-  const hasContent = items.length > 0;
+  const hasContent = items.length > 0 || tail != null;
+  // The gutters of the column and the composer: the page's roomy ones, or
+  // the HUD panel's tight ones.
+  const gutter = compact ? "px-3" : "px-6";
 
   // A copy from before paints the picks at once; the fresh read still runs.
   useEffect(() => {
@@ -210,11 +225,11 @@ function ChatStageContent() {
   if (!hasContent && isJarvis) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center" data-testid="chat-stage" data-empty="true">
-        <div className="flex w-full flex-1 flex-col items-center justify-center px-6 pb-8">
-          <Greeting />
+        <div className={`flex w-full flex-1 flex-col items-center justify-center ${gutter} pb-8`}>
+          <Greeting muted={compact} />
         </div>
-        <div className="relative w-full max-w-[720px] px-6 pb-5 pt-2">
-          <AgentComposer autoFocus />
+        <div className={`relative w-full max-w-[720px] ${gutter} ${compact ? "pb-3" : "pb-5"} pt-2`}>
+          <AgentComposer autoFocus={!compact} />
         </div>
       </div>
     );
@@ -236,7 +251,7 @@ function ChatStageContent() {
       <ScrollArea ref={setRoot} className="min-h-0 w-full flex-1">
         <div
           ref={columnRef}
-          className="relative mx-auto flex w-full max-w-[720px] flex-col gap-6 px-6 pb-6 pt-8"
+          className={`relative mx-auto flex w-full max-w-[720px] flex-col ${compact ? "gap-4 px-3 pb-4 pt-3" : "gap-6 px-6 pb-6 pt-8"}`}
         >
           <AgentTimeline
             items={items}
@@ -249,10 +264,11 @@ function ChatStageContent() {
             traceLook={isJarvis ? "rail" : "classic"}
             traceCompanion={isJarvis}
           />
+          {tail}
           <div ref={spacerRef} aria-hidden data-testid="chat-bottom-spacer" className="shrink-0" />
         </div>
       </ScrollArea>
-      <div className="relative w-full max-w-[720px] px-6 pb-5 pt-2">
+      <div className={`relative w-full max-w-[720px] ${gutter} ${compact ? "pb-3" : "pb-5"} pt-2`}>
         {!atEnd && <ScrollToEndButton onClick={jumpToEnd} testId="chat-scroll-end" />}
         <AgentComposer />
       </div>

@@ -13,15 +13,15 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ViewErrorBoundary } from "@/components/ViewErrorBoundary";
 import { DetachedViewPlaceholder } from "@/components/layout/DetachedViewPlaceholder";
-import { SETTINGS_HUB_IDS } from "@/components/layout/navGroups";
+import { SETTINGS_HUB_IDS, isHudSection } from "@/components/layout/navGroups";
 import { detachedWindowFor } from "@/lib/sectionWindows";
 // Type-only, so the section's chunk stays split out of the entry bundle.
 import type { AgenticIdeViewProps } from "@/views/AgenticIdeView";
 // The default section is the one view that must be on screen the moment React
 // mounts, so it stays statically linked into the entry chunk. Every other view
-// is code-split below. `ChatsSurface` picks the mission deck or the classic
-// chat view from the stored preference — both travel in the entry chunk because
-// either one can be the very first thing painted.
+// is code-split below. `ChatsSurface` is the HUD — the memory orb, the voice
+// orb and the chat on one screen — and it answers to "chats", "deck" and "orb"
+// alike (navGroups.HUD_SECTION_IDS).
 import { ChatsSurface } from "@/views/ChatsSurface";
 
 /**
@@ -106,12 +106,6 @@ const ClisHubView = lazyView(["clis", "cli-test-hub"], () =>
 );
 const DocsView = lazyView(["docs"], () =>
   import("@/views/DocsView").then((m) => ({ default: m.DocsView })),
-);
-const MissionDeckView = lazyPropView<{ dock?: boolean }>(["deck"], () =>
-  import("@/views/MissionDeckView").then((m) => ({ default: m.MissionDeckView })),
-);
-const MemoryOrbView = lazyView(["orb"], () =>
-  import("@/views/MemoryOrbView").then((m) => ({ default: m.MemoryOrbView })),
 );
 const ArmoryView = lazyPropView<{ armory?: boolean }>(["armory"], () =>
   import("@/views/PluginsView").then((m) => ({ default: m.PluginsView })),
@@ -271,6 +265,10 @@ export function MainView() {
   const displayed = isOverlaySection(active) && !activeDetached ? backgroundSection : active;
   const displayedDetached = !solo ? detachedWindowFor(displayed, detachedViews) : undefined;
   const soloOverlay = solo && isOverlaySection(active);
+  // The HUD answers to three ids. Switching between them ("open chat" while
+  // the HUD is up) must not remount it — the board, the orbs and the chat
+  // would all start over — so its boundary and Suspense are keyed on one name.
+  const viewKey = isHudSection(displayed) ? "chats" : displayed;
 
   /*
    * While a coding view lives in a detached solo window, THIS (non-solo)
@@ -327,13 +325,13 @@ export function MainView() {
       )}
       {!stickyActive && !soloOverlay && (
         <ViewErrorBoundary
-          viewName={displayed}
-          resetKey={displayed}
+          viewName={viewKey}
+          resetKey={viewKey}
           onRecover={() => setActive("chats")}
         >
           {/* Keyed on the active section so switching away from a still-loading
               view cannot leave the previous section's fallback on screen. */}
-          <Suspense key={displayed} fallback={<ViewLoadingFallback />}>
+          <Suspense key={viewKey} fallback={<ViewLoadingFallback />}>
             {displayedDetached
               ? <DetachedViewPlaceholder view={displayedDetached} />
               : <SwitchOnActiveSection active={displayed} />}
@@ -360,7 +358,12 @@ export function MainView() {
 
 function SwitchOnActiveSection({ active }: { active: string }) {
   switch (active) {
+    // The HUD — chat, voice orb and memory orb together. The old chat and
+    // memory-orb ids land on it as well, so deep links and voice navigation
+    // that name them still arrive somewhere real.
     case "chats":
+    case "deck":
+    case "orb":
       return <ChatsSurface />;
     case "agents":
       return <SocietyView />;
@@ -374,12 +377,6 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <SessionsView />;
     case "board":
       return <BoardView />;
-    // The HUD. The sidebar is the navigation here, so the deck's own dock
-    // stays out.
-    case "deck":
-      return <MissionDeckView dock={false} />;
-    case "orb":
-      return <MemoryOrbView />;
     // The same plugin catalog and connect flows as Plugins, laid out as cards.
     case "armory":
       return <ArmoryView armory />;

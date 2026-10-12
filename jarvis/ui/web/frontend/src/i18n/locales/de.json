@@ -347,7 +347,8 @@
     "pets": "Meine Pets",
     "deck": "HUD",
     "orb": "Gedächtnis-Orb",
-    "armory": "Werkzeug-Arsenal"
+    "armory": "Werkzeug-Arsenal",
+    "hud": "HUD"
   },
   "assistant_view": {
     "header_named": "Dein Assistent in {0}, geweckt mit „{1}“.",
@@ -7569,7 +7570,8 @@
     "agents_browse": "Mehr entdecken",
     "agents_clis": "CLIs",
     "orb_map": "Karte",
-    "orb_notes": "Notizen"
+    "orb_notes": "Notizen",
+    "hud": "HUD"
   },
   "assistant_status": {
     "acting": "Handelt",
@@ -7635,7 +7637,17 @@
     "selected": "Ausgewählt",
     "state_running": "Läuft",
     "state_loading": "Lädt Modell",
-    "state_off": "Läuft nicht"
+    "state_off": "Läuft nicht",
+    "who_label": "Wer dir antwortet",
+    "hermes_title": "Hermes Agent",
+    "hermes_meta": "Empfohlen. Hermes führt jeden Zug mit seinen Werkzeugen, seinem Gedächtnis und seinen Freigaben.",
+    "direct_title": "Jarvis direkt",
+    "direct_meta": "Jarvis ruft selbst einen Anbieter auf, ohne Hermes. Wähle ihn in der Liste unten.",
+    "active": "Aktiv",
+    "status_hermes_auto": "Hermes antwortet gerade und wählt das Modell für jeden Zug.",
+    "status_hermes_model": "Hermes antwortet gerade und denkt mit {model}.",
+    "status_direct": "Jarvis antwortet direkt mit {provider}. Hermes ist nicht in Gebrauch.",
+    "switched_note": "Umgeschaltet. Deine nächste Nachricht geht an Hermes."
   },
   "hud2": {
     "controls": {
@@ -7697,7 +7709,7 @@
       "ask_project": "Gib mir einen Überblick über das Projekt „{title}“: Stand, Blocker und was als Nächstes kommt.",
       "ask_item": "Erzähl mir aus meinem Projektgedächtnis von „{title}“ ({kind}) und was ich dazu tun sollte.",
       "ask_note": "Fasse meine Notiz „{title}“ zusammen und wie sie mit meiner aktuellen Arbeit zusammenhängt.",
-      "ask_sent": "An {name} gesendet. Die Antwort erscheint im Live-Transkript.",
+      "ask_sent": "An {name} gesendet. Die Antwort erscheint im Chat.",
       "ask_failed": "Keine Verbindung. Die Frage wurde nicht gesendet.",
       "open_wiki": "Im Wiki öffnen",
       "open_orb_short": "Gedächtnis-Orb",
@@ -8002,5 +8014,17 @@
     "logged_offer": "{provider} / {model}, geschätzt {cost}, Grenze {cap}.",
     "paid_usage": "Kostenpflichtiger Lauf auf {provider} / {model}: tatsächlich {cost} (geschätzt {estimate}, Grenze {cap}).",
     "paid_usage_automatic": "Automatischer kostenpflichtiger Lauf auf {provider} / {model}: tatsächlich {cost} (geschätzt {estimate}, Grenze {cap})."
+  },
+  "hud3": {
+    "chat": {
+      "title": "Chat",
+      "new": "Neuer Chat"
+    },
+    "memory": {
+      "open_map": "Ganze Gedächtniskarte öffnen",
+      "import": "Daten ins Gedächtnis importieren",
+      "map_title": "Gedächtniskarte",
+      "map_close": "Zurück zum HUD"
+    }
   }
 }

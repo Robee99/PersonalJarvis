@@ -347,7 +347,8 @@
     "pets": "Mis mascotas",
     "deck": "HUD",
     "orb": "Orbe de memoria",
-    "armory": "Arsenal de herramientas"
+    "armory": "Arsenal de herramientas",
+    "hud": "HUD"
   },
   "assistant_view": {
     "header_named": "Tu asistente en {0}, se despierta con «{1}».",
@@ -7569,7 +7570,8 @@
     "agents_browse": "Explorar más",
     "agents_clis": "CLIs",
     "orb_map": "Mapa",
-    "orb_notes": "Notas"
+    "orb_notes": "Notas",
+    "hud": "HUD"
   },
   "assistant_status": {
     "acting": "Actuando",
@@ -7635,7 +7637,17 @@
     "selected": "Seleccionado",
     "state_running": "En marcha",
     "state_loading": "Cargando modelo",
-    "state_off": "Apagado"
+    "state_off": "Apagado",
+    "who_label": "Quién te responde",
+    "hermes_title": "Hermes Agent",
+    "hermes_meta": "Recomendado. Hermes lleva cada turno con sus herramientas, su memoria y sus aprobaciones.",
+    "direct_title": "Jarvis directamente",
+    "direct_meta": "Jarvis llama él mismo a un proveedor, sin Hermes. Elígelo en la lista de abajo.",
+    "active": "Activo",
+    "status_hermes_auto": "Hermes está respondiendo y elige el modelo en cada turno.",
+    "status_hermes_model": "Hermes está respondiendo y piensa con {model}.",
+    "status_direct": "Jarvis responde directamente con {provider}. Hermes no se está usando.",
+    "switched_note": "Cambiado. Tu próximo mensaje va a Hermes."
   },
   "hud2": {
     "controls": {
@@ -7697,7 +7709,7 @@
       "ask_project": "Resúmeme el proyecto «{title}»: en qué punto está, qué está bloqueado y qué viene después.",
       "ask_item": "Háblame de «{title}» ({kind}) según la memoria de mis proyectos y qué debería hacer al respecto.",
       "ask_note": "Resume mi nota «{title}» y cómo se relaciona con mi trabajo actual.",
-      "ask_sent": "Enviado a {name}. La respuesta aparece en la transcripción en vivo.",
+      "ask_sent": "Enviado a {name}. La respuesta aparece en el chat.",
       "ask_failed": "Sin conexión. La pregunta no se envió.",
       "open_wiki": "Abrir en la wiki",
       "open_orb_short": "Orbe de memoria",
@@ -8002,5 +8014,17 @@
     "logged_offer": "{provider} / {model}, estimado {cost}, límite {cap}.",
     "paid_usage": "Ejecución de pago en {provider} / {model}: real {cost} (estimado {estimate}, límite {cap}).",
     "paid_usage_automatic": "Ejecución de pago automática en {provider} / {model}: real {cost} (estimado {estimate}, límite {cap})."
+  },
+  "hud3": {
+    "chat": {
+      "title": "Chat",
+      "new": "Nuevo chat"
+    },
+    "memory": {
+      "open_map": "Abrir el mapa de memoria completo",
+      "import": "Importar datos a la memoria",
+      "map_title": "Mapa de memoria",
+      "map_close": "Volver al HUD"
+    }
   }
 }

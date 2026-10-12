@@ -4,7 +4,9 @@
  * makes it Hermes's model.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import { useEventStore } from "@/store/events";
 
 import { BrainPicker } from "./BrainPicker";
 
@@ -39,6 +41,7 @@ function json(body: unknown, status = 200): Response {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  useEventStore.getState().setBrainProvider("unknown");
 });
 
 describe("BrainPicker", () => {
@@ -77,5 +80,41 @@ describe("BrainPicker", () => {
       expect(screen.getByRole("radio", { name: /qwen.*11437/i }).getAttribute("aria-checked")).toBe("true"),
     );
     expect(fetchMock).toHaveBeenCalledWith("/api/local-servers/use", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("says plainly who answers, and one click on Hermes Agent switches the brain", async () => {
+    useEventStore.getState().setBrainProvider("local-openai");
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === "/api/brain/switch") return json({ ok: true });
+      if (url.startsWith("/api/local-servers")) return json({ ...LIST, hermes_brain: false, selection: "" });
+      return json(MODELS);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BrainPicker />);
+
+    const hermes = await screen.findByRole("radio", { name: /^Hermes Agent/ });
+    expect(hermes.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByTestId("brain-status").textContent).toContain("local-openai");
+
+    fireEvent.click(hermes);
+
+    await waitFor(() => expect(hermes.getAttribute("aria-checked")).toBe("true"));
+    expect(fetchMock).toHaveBeenCalledWith("/api/brain/switch", expect.objectContaining({ method: "POST" }));
+    expect(screen.getByTestId("brain-status").textContent).toMatch(/Hermes is answering now/);
+    expect(hermes.textContent).toContain("Active");
+  });
+
+  it("follows a brain switch made elsewhere on the page", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (
+      url.startsWith("/api/local-servers") ? json({ ...LIST, hermes_brain: false, selection: "" }) : json(MODELS)
+    )));
+    useEventStore.getState().setBrainProvider("openrouter");
+    render(<BrainPicker />);
+    const hermes = await screen.findByRole("radio", { name: /^Hermes Agent/ });
+    expect(hermes.getAttribute("aria-checked")).toBe("false");
+
+    act(() => useEventStore.getState().setBrainProvider("hermes"));
+
+    await waitFor(() => expect(hermes.getAttribute("aria-checked")).toBe("true"));
   });
 });

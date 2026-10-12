@@ -347,7 +347,8 @@
     "pets": "My Pets",
     "deck": "HUD",
     "orb": "Memory orb",
-    "armory": "Tool armory"
+    "armory": "Tool armory",
+    "hud": "HUD"
   },
   "assistant_view": {
     "header_named": "Your assistant in {0}, woken by “{1}”.",
@@ -7569,7 +7570,8 @@
     "agents_browse": "Browse more",
     "agents_clis": "CLIs",
     "orb_map": "Map",
-    "orb_notes": "Notes"
+    "orb_notes": "Notes",
+    "hud": "HUD"
   },
   "assistant_status": {
     "acting": "Acting",
@@ -7635,7 +7637,17 @@
     "selected": "Selected",
     "state_running": "Running",
     "state_loading": "Loading model",
-    "state_off": "Not running"
+    "state_off": "Not running",
+    "who_label": "Who answers you",
+    "hermes_title": "Hermes Agent",
+    "hermes_meta": "Recommended. Hermes runs every turn with its tools, memory and approvals.",
+    "direct_title": "Jarvis directly",
+    "direct_meta": "Jarvis calls one provider itself, without Hermes. Pick it in the list below.",
+    "active": "Active",
+    "status_hermes_auto": "Hermes is answering now and picks the model for each turn.",
+    "status_hermes_model": "Hermes is answering now, thinking with {model}.",
+    "status_direct": "Jarvis is answering directly with {provider}. Hermes is not in use.",
+    "switched_note": "Switched. Your next message goes to Hermes."
   },
   "hud2": {
     "controls": {
@@ -7697,7 +7709,7 @@
       "ask_project": "Brief me on the project “{title}”: where it stands, what is blocked and what comes next.",
       "ask_item": "Tell me about “{title}” ({kind}) from my project memory and what I should do about it.",
       "ask_note": "Summarise my note “{title}” and how it connects to my current work.",
-      "ask_sent": "Sent to {name}. The reply streams into the live transcript.",
+      "ask_sent": "Sent to {name}. The reply appears in the chat.",
       "ask_failed": "Not connected. The question was not sent.",
       "open_wiki": "Open in Wiki",
       "open_orb_short": "Memory orb",
@@ -8002,5 +8014,17 @@
     "logged_offer": "{provider} / {model}, estimated {cost}, cap {cap}.",
     "paid_usage": "Paid run on {provider} / {model}: actual {cost} (estimated {estimate}, cap {cap}).",
     "paid_usage_automatic": "Automatic paid run on {provider} / {model}: actual {cost} (estimated {estimate}, cap {cap})."
+  },
+  "hud3": {
+    "chat": {
+      "title": "Chat",
+      "new": "New chat"
+    },
+    "memory": {
+      "open_map": "Open the full memory map",
+      "import": "Import data into memory",
+      "map_title": "Memory map",
+      "map_close": "Back to the HUD"
+    }
   }
 }

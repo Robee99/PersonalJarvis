@@ -1,20 +1,24 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * The HUD's live speech panel, driven through the REAL WebSocket path:
- * envelope → useWebSocket → event/home stores → panel. What is pinned is the
- * sequence a spoken turn produces on the bus — partial transcripts while the
- * person talks, the final transcript, the reply streaming, the spoken line —
- * and that each stage replaces the one before instead of stacking up.
+ * The voice turn in flight under the HUD's chat thread, driven through the
+ * REAL WebSocket path: envelope → useWebSocket → event/home stores → tail.
+ * What is pinned is the sequence a spoken turn produces on the bus — partial
+ * transcripts while the person talks, the final transcript, the reply
+ * streaming, the spoken line — that each stage replaces the one before
+ * instead of stacking up, and that a turn the backend filed into the chat
+ * leaves the tail (one list, never the same words twice).
  */
 
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useI18nStore } from "@/i18n";
 import { useEventStore } from "@/store/events";
 import { useHomeStore } from "@/store/home";
-import { HudTranscriptPanel, hudTranscriptView } from "@/components/deck/HudTranscriptPanel";
+import { useAgentChatStore } from "@/store/agentChat";
+import type { TimelineItem } from "@/components/agentchat/reduce";
+import { HudVoiceTail, hudTranscriptView, useHudVoiceTail } from "@/components/deck/HudTranscriptPanel";
 
 class MockWebSocket {
   static OPEN = 1;
@@ -58,20 +62,27 @@ function Socket() {
   return null;
 }
 
+function Tail() {
+  const view = useHudVoiceTail();
+  return <HudVoiceTail view={view} />;
+}
+
 function Harness() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return (
     <QueryClientProvider client={client}>
       <Socket />
-      <HudTranscriptPanel wakePhrase="Hey Nova" />
+      <Tail />
     </QueryClientProvider>
   );
 }
 
+const EMPTY_TIMELINE_ITEMS: TimelineItem[] = [];
+
 const send = (name: string, payload: Record<string, unknown>) =>
   act(() => MockWebSocket.last!.deliver(name, payload));
 
-describe("HudTranscriptPanel — partial → final → streaming reply", () => {
+describe("HudVoiceTail — partial → final → streaming reply", () => {
   const OriginalWS = globalThis.WebSocket;
 
   beforeEach(() => {
@@ -81,6 +92,7 @@ describe("HudTranscriptPanel — partial → final → streaming reply", () => {
     useEventStore.setState({ assistantName: "Nova", voiceState: "idle", liveReply: null });
     useEventStore.getState().setTranscription("", true);
     useHomeStore.getState().resetTranscript();
+    useAgentChatStore.setState((s) => ({ timeline: { ...s.timeline, items: EMPTY_TIMELINE_ITEMS } }));
   });
 
   afterEach(() => {
@@ -94,7 +106,8 @@ describe("HudTranscriptPanel — partial → final → streaming reply", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByTestId("hud-transcript-empty").textContent).toContain("Hey Nova");
+    // Nothing in flight: no tail at all (the chat above has its own empty state).
+    expect(screen.queryByTestId("hud-transcript")).toBeNull();
 
     // 1. The recogniser's partials — the speech pipeline's live probe.
     send("SystemStateChanged", { new_state: "LISTENING", previous: "IDLE" });
@@ -153,23 +166,36 @@ describe("HudTranscriptPanel — partial → final → streaming reply", () => {
     expect(screen.queryByTestId("hud-transcript-streaming")).toBeNull();
   });
 
-  it("types into the same conversation the voice uses, from the HUD", async () => {
-    useEventStore.setState({ ensureActiveThread: async () => "t9" });
+  it("leaves the tail once the backend filed the turn into the chat", async () => {
     render(<Harness />);
     await act(async () => {
       await Promise.resolve();
     });
-    const input = screen.getByTestId("hud-composer-input") as HTMLInputElement;
-    expect(input.getAttribute("placeholder")).toContain("Nova");
-    fireEvent.change(input, { target: { value: "close chrome" } });
-    await act(async () => {
-      fireEvent.submit(screen.getByTestId("hud-composer"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    const sent = MockWebSocket.last!.send.mock.calls.map((c) => JSON.parse(String(c[0])));
-    expect(sent).toContainEqual({ type: "message", kind: "text", content: "close chrome", metadata: { thread_id: "t9" } });
-    expect(input.value).toBe("");
+    send("TranscriptFinal", { transcript: { text: "Open the garage" } });
+    send("SpeechSpoken", { text: "The garage is open.", spoken_kind: "reply" });
+    expect(screen.getByTestId("hud-transcript-final").textContent).toContain("Open the garage");
+    expect(screen.getByTestId("hud-transcript-reply").textContent).toContain("The garage is open.");
+
+    // `VoiceTurnCompleted` → voice_mirror → the chat's own stream: the turn
+    // is in the thread now, so the tail must not show it a second time.
+    const at = Date.now() + 5;
+    act(() =>
+      useAgentChatStore.setState((s) => ({
+        timeline: {
+          ...s.timeline,
+          items: [
+            { type: "user", id: "u1", text: "Open the garage", tsMs: at } as TimelineItem,
+            {
+              type: "turn",
+              id: "t1",
+              startedMs: at,
+              blocks: [{ kind: "text", text: "The garage is open." }],
+            } as unknown as TimelineItem,
+          ],
+        },
+      })),
+    );
+    expect(screen.queryByTestId("hud-transcript")).toBeNull();
   });
 });
 
@@ -190,15 +216,45 @@ describe("hudTranscriptView", () => {
     expect(view.streaming).toBe("");
   });
 
-  it("keeps only the newest lines on screen", () => {
+  it("keeps only the newest lines on screen while a call is up", () => {
     const transcript = Array.from({ length: 60 }, (_, i) => ({
       id: String(i),
-      ts: i,
+      ts: i + 1,
       who: "user" as const,
       text: `line ${i}`,
     }));
-    const view = hudTranscriptView({ ...base, transcript });
+    const view = hudTranscriptView({ ...base, transcript, callLive: true });
     expect(view.lines).toHaveLength(40);
     expect(view.lines[0].text).toBe("line 20");
+  });
+
+  it("shows only what the chat does not hold yet", () => {
+    const chatItems = [
+      { type: "user", id: "u1", text: "yes", tsMs: 100 },
+      { type: "turn", id: "t1", startedMs: 110, blocks: [{ kind: "text", text: "Done." }] },
+    ] as unknown as TimelineItem[];
+    const view = hudTranscriptView({
+      ...base,
+      chatItems,
+      now: 70_000,
+      transcript: [
+        { id: "a", ts: 90, who: "user", text: "yes" },
+        // Stamped a moment after its filed copy: still the same line.
+        { id: "b", ts: 900, who: "assistant", text: "Done." },
+        // Said again a minute later: a new line, shown although the same
+        // word is in the chat.
+        { id: "c", ts: 60_000, who: "user", text: "yes" },
+      ],
+    });
+    expect(view.lines.map((l) => l.id)).toEqual(["c"]);
+  });
+
+  it("lets a line the chat never received go after a while once the call is over", () => {
+    const transcript = [{ id: "a", ts: 1_000, who: "user" as const, text: "hello" }];
+    expect(hudTranscriptView({ ...base, transcript, now: 2_000 }).lines).toHaveLength(1);
+    expect(hudTranscriptView({ ...base, transcript, now: 1_000 + 10 * 60_000 }).lines).toHaveLength(0);
+    expect(
+      hudTranscriptView({ ...base, transcript, now: 1_000 + 10 * 60_000, callLive: true }).lines,
+    ).toHaveLength(1);
   });
 });

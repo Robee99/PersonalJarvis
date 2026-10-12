@@ -9,13 +9,12 @@
  * A second hand-written list anywhere would be the classic drift trap (AP-4):
  * a section added here would silently never appear on the deck.
  */
-import { Briefcase, Gauge, KeyRound, Orbit, Swords, type LucideIcon } from "lucide-react";
+import { Briefcase, Gauge, KeyRound, Swords, type LucideIcon } from "lucide-react";
 import {
   AgentsIcon,
   ArtifactsIcon,
   BoardIcon,
   CaptureIcon,
-  ChatIcon,
   CodeIcon,
   ComputersIcon,
   DocsIcon,
@@ -46,17 +45,33 @@ export function resolveNavLabel(t: (key: string) => string, item: NavItem): stri
 }
 
 /**
- * The front page is ONE section ("chats"): a chat with a voice mode inside it
- * (2026-10-01; before that, a `Voice | Chat` switch picked between two faces
- * and this row was renamed after the face). The row is "Chat" whatever mode
- * the chat is in — voice mode is a state of the chat, not another place.
- * Every other row passes through unchanged. Pure, so the sidebar and the
- * rail present the row identically; the surface argument stays so callers
- * need not change.
+ * The ids that all open the HUD — the ONE front page (2026-10-12).
+ *
+ * The chat, the HUD (mission deck) and the memory orb used to be three
+ * sidebar rows and three separate pages; the owner wanted them in one place.
+ * The HUD now carries the memory orb, the live voice orb and the real chat
+ * thread side by side, and every id that used to name one of the three still
+ * resolves — deep links, voice navigation ("open chat", "open the memory
+ * orb"), the detached-window registry and the navigate parity tests keep
+ * working — but all of them land on the same view.
+ */
+export const HUD_SECTION_IDS: readonly SectionId[] = ["chats", "deck", "orb"];
+
+/** Is `section` one of the ids that open the HUD? */
+export function isHudSection(section: string): boolean {
+  return (HUD_SECTION_IDS as readonly string[]).includes(section);
+}
+
+/**
+ * The front page is ONE section: the HUD, with the chat and the memory orb
+ * inside it. The row is "HUD" whatever mode the chat is in — voice mode is a
+ * state of the chat, not another place. Every other row passes through
+ * unchanged. Pure, so the sidebar and the rail present the row identically;
+ * the surface argument stays so callers need not change.
  */
 export function presentNavItem(item: NavItem, _surface?: HomeSurface): NavItem {
   if (item.id !== "chats") return item;
-  return { ...item, labelKey: "sidebar.surface_chat", icon: ChatIcon, fallbackLabel: "Chat" };
+  return { ...item, labelKey: "nav.hud", icon: Gauge, fallbackLabel: "HUD" };
 }
 
 export interface NavItem {
@@ -117,13 +132,17 @@ export const NAV_GROUP_META: readonly NavGroupMeta[] = [
 // them. A second hand-written list there would be the classic drift trap
 // (AP-4): a section added here would silently never appear on the deck.
 export const NAV_GROUPS: NavItem[][] = [
-  // 0) The front page — Voice or Chat, named after the face the switch picked.
+  // 0) The front page — the HUD: memory orb, voice orb and the chat in one
+  // place. "deck" and "orb" are the same view under their old names, so the
+  // row stays lit for them.
   [
-    { id: "chats", labelKey: "nav.chats", icon: ChatIcon },
-    // The HUD: the mission deck, every instrument on one screen.
-    { id: "deck", labelKey: "nav.deck", icon: Gauge, fallbackLabel: "HUD" },
-    // Everything the assistant knows and can use, as one live map.
-    { id: "orb", labelKey: "nav.orb", icon: Orbit, fallbackLabel: "Memory orb" },
+    {
+      id: "chats",
+      labelKey: "nav.hud",
+      icon: Gauge,
+      fallbackLabel: "HUD",
+      matchIds: [...HUD_SECTION_IDS],
+    },
     // Every app the assistant can reach, as a wall of cards.
     { id: "armory", labelKey: "nav.armory", icon: Swords, fallbackLabel: "Tool armory" },
   ],
@@ -309,9 +328,15 @@ export const SETTINGS_HUB_IDS: readonly SectionId[] = [
  * one tab bar over them (`DestinationTabs`). Section ids, deep links, the
  * detached-window registry and voice navigation (`NavigateSidebar`, pinned by
  * the navigate tool's parity test against `SECTION_IDS`) are unchanged.
+ *
+ * 2026-10-12: CHAT and ORB (and WORK's "Live" tab, the HUD) became ONE
+ * destination — the HUD, which shows the memory orb, the voice orb and the
+ * chat together. The primary navigation is four rows now: HUD · AGENTS ·
+ * WORK · SETTINGS. The wiki notes ("memory") stay one click away under
+ * Advanced.
  */
 
-export type PrimaryNavKey = "chat" | "orb" | "agents" | "work" | "settings";
+export type PrimaryNavKey = "chat" | "agents" | "work" | "settings";
 
 export interface DestinationTab {
   /** The section the tab lands on. */
@@ -342,14 +367,13 @@ const IDE_IDS: readonly SectionId[] = ["agentic-ide", "chat-workspace", "agentic
 
 /**
  * WORK: everything that is about work being done or done — what runs
- * produced (Outputs), the coding workspace (Projects), the live HUD and the
- * activity board (the run inspector was retired upstream). Routines live on
- * each agent (AGENTS).
+ * produced (Outputs), the coding workspace (Projects) and the activity board
+ * (the run inspector was retired upstream; the live HUD is the front page
+ * now). Routines live on each agent (AGENTS).
  */
 export const WORK_TABS: readonly DestinationTab[] = [
   { id: "visualization", labelKey: "nav5.work_outputs", fallbackLabel: "Outputs" },
   { id: "agentic-ide", labelKey: "nav5.work_projects", fallbackLabel: "Projects", matchIds: IDE_IDS },
-  { id: "deck", labelKey: "nav5.work_live", fallbackLabel: "Live" },
   { id: "board", labelKey: "nav5.work_activity", fallbackLabel: "Activity" },
 ];
 
@@ -361,29 +385,19 @@ export const AGENTS_TABS: readonly DestinationTab[] = [
   { id: "clis", labelKey: "nav5.agents_clis", fallbackLabel: "CLIs", matchIds: ["clis", "cli-test-hub"] },
 ];
 
-/** ORB: the memory as a map, and the notes behind it read in-app. */
-export const ORB_TABS: readonly DestinationTab[] = [
-  { id: "orb", labelKey: "nav5.orb_map", fallbackLabel: "Map" },
-  { id: "memory", labelKey: "nav5.orb_notes", fallbackLabel: "Notes" },
-];
-
 export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
+  // The HUD: the chat, the live voice orb and the memory orb on one screen —
+  // the front page, first in the list. The old CHAT and ORB destinations and
+  // WORK's "Live" tab were three doors to pieces of it; their ids land here.
+  // The key stays "chat" so the new-chat "+" and the tour anchor keep their
+  // place on the row.
   {
     key: "chat",
-    labelKey: "nav5.chat",
-    fallbackLabel: "Chat",
-    icon: ChatIcon,
+    labelKey: "nav5.hud",
+    fallbackLabel: "HUD",
+    icon: Gauge,
     target: "chats",
-    sections: ["chats"],
-  },
-  {
-    key: "orb",
-    labelKey: "nav5.orb",
-    fallbackLabel: "Orb",
-    icon: Orbit,
-    target: "orb",
-    sections: ["orb", "memory"],
-    tabs: ORB_TABS,
+    sections: HUD_SECTION_IDS,
   },
   {
     key: "agents",
@@ -400,7 +414,7 @@ export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
     fallbackLabel: "Work",
     icon: Briefcase,
     target: "visualization",
-    sections: ["visualization", ...IDE_IDS, "deck", "board"],
+    sections: ["visualization", ...IDE_IDS, "board"],
     tabs: WORK_TABS,
   },
   {
@@ -430,7 +444,7 @@ export function tabFor(tabs: readonly DestinationTab[], section: SectionId): Des
  * again under Advanced would be a second row for the same door. (WORK lands on
  * Artifacts, but its row is named "Work", so Artifacts keeps its own entry.)
  */
-const PRIMARY_FRONT_DOORS: readonly SectionId[] = ["chats", "orb", "agents"];
+const PRIMARY_FRONT_DOORS: readonly SectionId[] = ["chats", "agents"];
 
 /**
  * The sidebar's collapsed "Advanced" group: every sidebar section that is not

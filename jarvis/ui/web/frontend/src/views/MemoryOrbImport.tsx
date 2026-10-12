@@ -61,9 +61,9 @@ export function importSummary(s: ImportState): string {
   }
 }
 
-export function MemoryOrbImport() {
+export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
   const queryClient = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [path, setPath] = useState("");
   const [state, setState] = useState<ImportState | null>(null);
   const [error, setError] = useState("");

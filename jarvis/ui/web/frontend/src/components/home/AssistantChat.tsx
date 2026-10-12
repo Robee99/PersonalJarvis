@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 
 import { VoiceStage } from "@/components/home/VoiceStage";
 import { transcriptFromTimeline, useVoiceModeSwitch } from "@/components/home/assistantStatus";
@@ -24,14 +24,27 @@ const HomeAgentChat = lazy(() => import("@/components/home/HomeAgentChat"));
  * composer under the spoken transcript (components/home/VoiceStage), whose
  * keyboard button brings the typing back.
  */
-export function AssistantChat() {
+export function AssistantChat({
+  embedded = false,
+  tail = null,
+}: {
+  /**
+   * Mounted inside the HUD's chat panel. The HUD carries the voice itself
+   * (the orb and its controls in the middle), so the chat stays the typed
+   * thread in voice mode too — the spoken turn shows as the thread's `tail`
+   * until it is filed into the chat — and the column runs compact.
+   */
+  embedded?: boolean;
+  /** Passed to `ChatStage`: the live voice turn under the thread. */
+  tail?: ReactNode;
+} = {}) {
   const t = useT();
   const surface = useHomeStore((s) => s.surface);
   const agentChatId = useHomeStore((s) => s.agentChatId);
   const voice = useVoiceModeSwitch();
   const chatItems = useAgentChatStore((s) => s.timeline.items);
   const seedTranscript = useHomeStore((s) => s.seedTranscript);
-  const inVoice = surface === "voice" && !agentChatId;
+  const inVoice = surface === "voice" && !agentChatId && !embedded;
   const freshVoicePending = useHomeStore((s) => s.freshVoicePending);
   // An explicitly selected archived voice chat owns the lane.
   const voiceThreadOpen = useEventStore((s) => s.activeKind === "voice" && Boolean(s.activeThreadId));
@@ -59,7 +72,7 @@ export function AssistantChat() {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-testid="assistant-chat">
-      {surface === "chat" ? (
+      {surface === "chat" || embedded ? (
         <Suspense
           fallback={
             <div role="status" className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -67,7 +80,7 @@ export function AssistantChat() {
             </div>
           }
         >
-          <ChatStage />
+          <ChatStage tail={tail} compact={embedded} />
         </Suspense>
       ) : (
         <VoiceStage onExit={voice.exit} />

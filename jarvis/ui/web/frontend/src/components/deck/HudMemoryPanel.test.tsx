@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  * and acting on a selection — asking the assistant, jumping to the wiki.
  */
 
-const sendChatMessage = vi.fn(async (_text: string) => true);
-vi.mock("@/lib/chat", () => ({ sendChatMessage: (text: string) => sendChatMessage(text) }));
+// "Ask" goes into the HUD's chat — the front page's agent-chat store.
+const send = vi.fn(async (_text: string) => "sent" as const);
 
 import { useI18nStore } from "@/i18n";
 import { useEventStore } from "@/store/events";
+import { useAgentChatStore } from "@/store/agentChat";
 import { HudMemoryPanel } from "@/components/deck/HudMemoryPanel";
 import { matchMemoryNodes, previewMarkdown } from "@/components/deck/hudMemoryApi";
 
@@ -121,7 +122,10 @@ describe("HudMemoryPanel", () => {
   beforeEach(() => {
     useI18nStore.getState().setUi("en", { push: false });
     useEventStore.setState({ assistantName: "Nova", activeSection: "deck", wikiPageRequest: null, toasts: [] });
-    sendChatMessage.mockClear();
+    send.mockClear();
+    useAgentChatStore.setState({ send });
+    // These cases read the project list; the orb (the panel's default) has its own tests.
+    window.localStorage.setItem("hud3.memory.view", "list");
   });
   afterEach(() => {
     cleanup();
@@ -191,8 +195,8 @@ describe("HudMemoryPanel", () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId("hud-memory-ask"));
     });
-    expect(sendChatMessage).toHaveBeenCalledTimes(1);
-    expect(sendChatMessage.mock.calls[0][0]).toContain("Atlas launch");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toContain("Atlas launch");
     expect(useEventStore.getState().toasts.at(-1)?.message).toContain("Nova");
   });
 

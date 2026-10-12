@@ -347,7 +347,8 @@
     "pets": "我的宠物",
     "deck": "HUD",
     "orb": "记忆球",
-    "armory": "工具库"
+    "armory": "工具库",
+    "hud": "HUD"
   },
   "assistant_view": {
     "header_named": "你在 {0} 中的助手，用“{1}”唤醒。",
@@ -7569,7 +7570,8 @@
     "agents_browse": "浏览更多",
     "agents_clis": "CLI",
     "orb_map": "地图",
-    "orb_notes": "笔记"
+    "orb_notes": "笔记",
+    "hud": "HUD"
   },
   "assistant_status": {
     "acting": "执行中",
@@ -7635,7 +7637,17 @@
     "selected": "已选择",
     "state_running": "运行中",
     "state_loading": "正在加载模型",
-    "state_off": "未运行"
+    "state_off": "未运行",
+    "who_label": "谁来回答你",
+    "hermes_title": "Hermes Agent",
+    "hermes_meta": "推荐。Hermes 用它的工具、记忆和审批处理每一轮。",
+    "direct_title": "Jarvis 直接回答",
+    "direct_meta": "Jarvis 不经过 Hermes，自己调用一个提供方。在下面的列表中选择。",
+    "active": "使用中",
+    "status_hermes_auto": "现在由 Hermes 回答，并为每一轮选择模型。",
+    "status_hermes_model": "现在由 Hermes 回答，使用 {model} 思考。",
+    "status_direct": "Jarvis 正在直接用 {provider} 回答，未使用 Hermes。",
+    "switched_note": "已切换。你的下一条消息将发给 Hermes。"
   },
   "hud2": {
     "controls": {
@@ -7697,7 +7709,7 @@
       "ask_project": "向我简要介绍项目“{title}”：目前进展、哪里受阻，以及下一步是什么。",
       "ask_item": "根据我的项目记忆，告诉我“{title}”（{kind}）的情况，以及我应该怎么处理。",
       "ask_note": "总结我的笔记“{title}”，以及它和我当前工作的关系。",
-      "ask_sent": "已发送给 {name}。回复会流入实时转录。",
+      "ask_sent": "已发送给 {name}。回复会显示在聊天中。",
       "ask_failed": "未连接。问题没有发送。",
       "open_wiki": "在 Wiki 中打开",
       "open_orb_short": "记忆球",
@@ -8002,5 +8014,17 @@
     "logged_offer": "{provider} / {model}，预估 {cost}，上限 {cap}。",
     "paid_usage": "在 {provider} / {model} 上的付费运行：实际 {cost}（预估 {estimate}，上限 {cap}）。",
     "paid_usage_automatic": "在 {provider} / {model} 上的自动付费运行：实际 {cost}（预估 {estimate}，上限 {cap}）。"
+  },
+  "hud3": {
+    "chat": {
+      "title": "聊天",
+      "new": "新聊天"
+    },
+    "memory": {
+      "open_map": "打开完整记忆地图",
+      "import": "将数据导入记忆",
+      "map_title": "记忆地图",
+      "map_close": "返回 HUD"
+    }
   }
 }

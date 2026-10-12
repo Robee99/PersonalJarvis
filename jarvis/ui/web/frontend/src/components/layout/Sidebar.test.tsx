@@ -675,18 +675,19 @@ describe("compact sidebar navigation", () => {
   });
   afterEach(() => cleanup());
 
-  test("shows exactly five destinations above the recent chats", () => {
+  test("shows exactly four destinations above the recent chats, the HUD first", () => {
     renderSidebar();
     const primary = screen.getByTestId("sidebar-primary-nav");
     const rows = Array.from(primary.querySelectorAll("[data-testid^='nav-primary-']"));
+    // Chat, HUD and memory orb are ONE place (the HUD), so one row.
     expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
       "nav-primary-chat",
-      "nav-primary-orb",
       "nav-primary-agents",
       "nav-primary-work",
       "nav-primary-settings",
     ]);
-    // A new chat is the CHAT row's own "+", not a sixth row.
+    expect(screen.getByTestId("nav-primary-chat").textContent).toContain("HUD");
+    // A new chat is the HUD row's own "+", not another row.
     expect(primary.querySelector("[data-testid='sidebar-new-chat']")).toBeTruthy();
     expect(screen.getByTestId("recent-chats")).toBeTruthy();
     // Advanced is folded by default.
@@ -699,7 +700,6 @@ describe("compact sidebar navigation", () => {
     renderSidebar();
     const lands: Record<string, string> = {
       chat: "chats",
-      orb: "orb",
       agents: "agents",
       work: "visualization",
       settings: "apikeys",
@@ -713,10 +713,20 @@ describe("compact sidebar navigation", () => {
   test("WORK stays lit on every work view", () => {
     // The coding workspace (WORK › Projects) swaps this column for its own
     // project navigation, so it is covered by the IDE tests above instead.
-    for (const section of ["visualization", "deck", "board"] as const) {
+    for (const section of ["visualization", "board"] as const) {
       useEventStore.setState({ activeSection: section });
       renderSidebar();
       expect(screen.getByTestId("nav-primary-work").className, section).toMatch(/jarvis-nav-active/);
+      cleanup();
+    }
+  });
+
+  test("the HUD row stays lit for the old chat, HUD and memory-orb ids", () => {
+    for (const section of ["chats", "deck", "orb"] as const) {
+      useEventStore.setState({ activeSection: section });
+      renderSidebar();
+      expect(screen.getByTestId("nav-primary-chat").className, section).toMatch(/jarvis-nav-active/);
+      expect(screen.getByTestId("nav-primary-work").className, section).not.toMatch(/jarvis-nav-active/);
       cleanup();
     }
   });
@@ -726,9 +736,11 @@ describe("compact sidebar navigation", () => {
     fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     expect(screen.getByTestId("nav-row-memory")).toBeTruthy();
     expect(screen.getAllByTestId("nav-row-dictation")).toHaveLength(1);
-    fireEvent.click(screen.getByTestId("nav-row-memory"));
-    // Wiki is ORB › Notes, so Advanced may fold again.
-    expect(useEventStore.getState().activeSection).toBe("memory");
+    fireEvent.click(screen.getByTestId("nav-row-dictation"));
+    expect(useEventStore.getState().activeSection).toBe("dictation");
+    // The wiki notes are listed under Advanced only (the ORB destination is
+    // part of the HUD now); away from them, Advanced folds again.
+    fireEvent.click(screen.getByTestId("nav-primary-chat"));
     fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
     expect(screen.queryByTestId("nav-row-memory")).toBeNull();
     expect(screen.getByTestId("recent-chats")).toBeTruthy();
@@ -754,7 +766,7 @@ describe("compact sidebar navigation", () => {
   test("every registered destination remains reachable", () => {
     renderSidebar();
     fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
-    const primaryRow: Record<string, string> = { chats: "chat", orb: "orb", agents: "agents" };
+    const primaryRow: Record<string, string> = { chats: "chat", agents: "agents" };
     for (const item of [...NAV_GROUPS.flat(), ...NAV_FOOTER_ITEMS]) {
       // Hub entries are one SETTINGS click away (covered above); the hub
       // selects their tab itself (see SettingsHubView.test).

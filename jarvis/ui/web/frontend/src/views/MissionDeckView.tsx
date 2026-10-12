@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -27,8 +29,10 @@ import { ApiStatsCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSig
 import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
 import { HudControls } from "@/components/deck/HudControls";
-import { HudMemoryPanel } from "@/components/deck/HudMemoryPanel";
-import { HudTranscriptPanel } from "@/components/deck/HudTranscriptPanel";
+import { HudMemoryPanel, type FullMapRequest } from "@/components/deck/HudMemoryPanel";
+import { HudChatPanel } from "@/components/deck/HudChatPanel";
+import { bindVoiceChat } from "@/lib/agentChatApi";
+import { useAgentChatStore } from "@/store/agentChat";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { useAssistantStatus } from "@/hooks/useAssistantStatus";
 import { formatAssistantStatus } from "@/lib/assistantStatus";
@@ -41,12 +45,40 @@ import { writeDeckMode } from "@/lib/deckMode";
 import { useDeckAvatar, writeDeckAvatar } from "@/lib/deckAvatar";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
+import { X } from "lucide-react";
+
+/**
+ * The full memory map (the 2D maps, hand control, the data import) — opened
+ * over the HUD from the memory panel. Its own chunk: force-graph and the
+ * hand tracker stay off the front page until someone asks for them.
+ */
+const MemoryOrbView = lazy(() =>
+  import("@/views/MemoryOrbView").then((m) => ({ default: m.MemoryOrbView })),
+);
 
 /**
  * The mission deck — the front page.
  *
  * One stage that shows everything the assistant is and does, without a
  * single navigation step.
+ *
+ * HUD v3 (2026-10-12, owner: "the HUD and the chat are still different …
+ * they are not all together in one section"): ONE front page. The memory
+ * orb is on the board by default, the chat on the right is the REAL chat
+ * (the front page's agent-chat store — history, sessions, composer; spoken
+ * turns are filed into it and show as its tail while they are spoken), and
+ * the old "chats", "deck" and "orb" sections all render this view:
+ *
+ *   ┌ gigi · voice bars · lamps · counter ── name · brain · switch · chrome ┐
+ *   │ [MEMORY ORB —     (       ORB        )     [CHAT — the thread,       ] │
+ *   │  3D, list,         state · TALK · mic · voice  typed and spoken,    ] │
+ *   │  search, map ]                                 history, composer   ] │
+ *   │ [log][turn][api][vitals]([outputs][runs] ≥1536 px)                 ] │
+ *   └──────────────────────────────────────────────────────────────────────┘
+ *
+ * Narrower than 1280 px the board is two columns (orb over memory | chat),
+ * and narrower than 1024 px one column — orb, chat, memory, instruments —
+ * and it scrolls.
  *
  * HUD v2 (2026-10-11, owner brief "HUD Redesign"): the orb and the voice
  * controls are the stage's centre and get the room; the right column is the
@@ -224,10 +256,26 @@ export function MissionDeckView({
   // Pressing the orb reaches for the voice — the board opens on the press
   // itself, so the hand-off plays the moment the person acts, not a second
   // later when the transport reports back.
+  //
+  // A call that starts here continues the chat on the HUD: the backend is
+  // told which chat is on screen first (`bindVoiceChat`, the same binding
+  // the chat's own voice button makes), so the spoken turns are filed into
+  // the thread beside the orb and the call starts with its history.
   const pressOrb = () => {
     openBoard();
-    void toggleCall();
+    if (callActive || callBusy || connecting || !connected) {
+      void toggleCall();
+      return;
+    }
+    void bindVoiceChat(useAgentChatStore.getState().activeSessionId)
+      .catch((err: unknown) => {
+        // The call still starts; it just falls back to the newest chat.
+        console.info("Voice chat binding failed.", err);
+      })
+      .finally(() => void toggleCall());
   };
+  // The full memory map, opened over the stage from the memory panel.
+  const [fullMap, setFullMap] = useState<FullMapRequest | null>(null);
   const pressDisabled = callBusy || connecting || !connected;
 
   return (
@@ -326,28 +374,43 @@ export function MissionDeckView({
             <div
               ref={boardRef}
               data-testid="deck-board"
-              className="deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(240px,3fr)_minmax(0,5fr)_minmax(280px,3.6fr)] lg:grid-rows-[minmax(0,1fr)_minmax(0,0.42fr)] lg:overflow-hidden"
+              className={cn(
+                // overflow-x stays hidden: the planes' depth transforms reach a few
+                // pixels past the board's edge, and must not buy it a sideways scrollbar.
+                "deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden p-3",
+                // Two columns from a laptop-narrow stage up: the orb over the
+                // memory on the left, the chat down the right; the page scrolls.
+                "lg:grid-cols-2",
+                // Three from 1280 px: memory | orb | chat, on one screen with
+                // nothing to scroll. The chat runs the full height — it is the
+                // one panel that is read line by line.
+                "xl:grid-cols-[minmax(240px,3fr)_minmax(0,4.4fr)_minmax(320px,4fr)] xl:grid-rows-[minmax(0,1fr)_minmax(0,0.34fr)] xl:overflow-hidden",
+              )}
             >
               {/* The floor the case stands on — behind every plane, on the wall's side. */}
               <DeckFloor />
 
-              {/* LEFT top: project memory — search, inspect, act; as a list or
-                  as the 3D memory orb that follows the conversation
-                  (MemoryOrb3D, switched in the panel's title strip). On a narrow
-                  window the stacking order puts the orb and the transcript first. */}
+              {/* LEFT top: the memory orb — everything remembered in 3D,
+                  following the conversation (MemoryOrb3D); the list, the
+                  search, the full map and the data import are in its title
+                  strip. On a narrow window the orb, the voice and the chat
+                  come first. */}
               <DeckReveal
                 slot="left-top"
                 reveal={revealBoard}
-                className={cn("order-3 min-h-[22rem] lg:order-none lg:min-h-0", depthSlot("left-top").className)}
+                className={cn(
+                  "order-3 min-h-[24rem] xl:order-none xl:col-start-1 xl:row-start-1 xl:min-h-0",
+                  depthSlot("left-top").className,
+                )}
                 style={depthSlot("left-top").style}
                 bodyClassName="flex min-h-0 flex-col"
               >
-                <HudMemoryPanel className="min-h-0 flex-1" />
+                <HudMemoryPanel className="min-h-0 flex-1" onOpenMap={setFullMap} />
               </DeckReveal>
 
               {/* CENTRE: the orb on its stage, the controls under it — the
                   largest, emptiest region of the board on purpose. */}
-              <div className="order-1 flex min-h-[30rem] flex-col gap-2 lg:order-none lg:min-h-0">
+              <div className="order-1 flex min-h-[28rem] flex-col gap-2 xl:order-none xl:col-start-2 xl:row-start-1 xl:min-h-0">
                 <BoardCentre
                   steps={running}
                   busy={busy}
@@ -377,57 +440,69 @@ export function MissionDeckView({
                 </DeckReveal>
               </div>
 
-              {/* RIGHT top: the live transcript — heard, settled, answered. */}
+              {/* RIGHT, full height: the chat — the real one, its history and
+                  its composer, with the spoken turn in flight as its tail. */}
               <DeckReveal
                 slot="right-top"
                 reveal={revealBoard}
-                className={cn("order-2 min-h-[18rem] lg:order-none lg:min-h-0", depthSlot("right-top").className)}
-                style={depthSlot("right-top").style}
+                className={cn(
+                  "order-2 min-h-[30rem] lg:row-span-2 xl:order-none xl:col-start-3 xl:row-span-2 xl:row-start-1 xl:min-h-0",
+                  flatSlot("right-top").className,
+                )}
+                style={flatSlot("right-top").style}
                 bodyClassName="flex min-h-0 flex-col"
               >
-                <HudTranscriptPanel className="min-h-0 flex-1" wakePhrase={wakePhrase} />
+                <HudChatPanel className="min-h-0 flex-1" />
               </DeckReveal>
 
-              {/* LEFT bottom: the log — the terminal of the session */}
-              <DeckReveal
-                slot="left-bottom"
-                reveal={revealBoard}
-                className={cn("order-4 min-h-[8rem] lg:order-none", depthSlot("left-bottom").className)}
-                style={depthSlot("left-bottom").style}
-                bodyClassName="flex min-h-0 flex-col"
-              >
-                <LogCard className="min-h-0 flex-1" />
-              </DeckReveal>
+              {/* BOTTOM, under the memory and the orb: the instruments. Below
+                  1280 px the row dissolves (`contents`) and each instrument
+                  takes its own place in the stack. */}
+              <div className="contents xl:col-span-2 xl:col-start-1 xl:row-start-2 xl:flex xl:min-h-0 xl:gap-3">
+                {/* The log — the terminal of the session */}
+                <DeckReveal
+                  slot="left-bottom"
+                  reveal={revealBoard}
+                  className={cn("order-4 min-h-[8rem] xl:order-none xl:min-h-0 xl:min-w-0 xl:flex-[2]", flatSlot("left-bottom").className)}
+                  style={flatSlot("left-bottom").style}
+                  bodyClassName="flex min-h-0 flex-col"
+                >
+                  <LogCard className="min-h-0 flex-1" />
+                </DeckReveal>
 
-              {/* CENTRE bottom: the turn's timings, what it cost, the machine */}
-              <DeckReveal
-                slot="centre-bottom"
-                reveal={revealBoard}
-                className={cn("order-5 min-h-[8rem] lg:order-none", depthSlot("centre-bottom").className)}
-                style={depthSlot("centre-bottom").style}
-                bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-3"
-              >
-                <TurnCard className="min-h-0" />
-                <ApiStatsCard className="min-h-0" />
-                <VitalsCard className="min-h-0" />
-              </DeckReveal>
+                {/* The turn's timings, what it cost, the machine */}
+                <DeckReveal
+                  slot="centre-bottom"
+                  reveal={revealBoard}
+                  className={cn("order-5 min-h-[8rem] xl:order-none xl:min-h-0 xl:min-w-0 xl:flex-[3.2]", flatSlot("centre-bottom").className)}
+                  style={flatSlot("centre-bottom").style}
+                  bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-3"
+                >
+                  <TurnCard className="min-h-0" />
+                  <ApiStatsCard className="min-h-0" />
+                  <VitalsCard className="min-h-0" />
+                </DeckReveal>
 
-              {/* RIGHT bottom: outputs and runs */}
-              <DeckReveal
-                slot="right-bottom"
-                reveal={revealBoard}
-                className={cn("order-6 min-h-[8rem] lg:order-none", depthSlot("right-bottom").className)}
-                style={depthSlot("right-bottom").style}
-                bodyClassName="grid grid-cols-2 gap-3"
-              >
-                <OutputsCard className="min-h-0" />
-                <RunsCard className="min-h-0" />
-              </DeckReveal>
+                {/* Outputs and runs. Between 1280 and 1536 px the row has no
+                    room left for them; Work (Artifacts, Runs) has both. */}
+                <DeckReveal
+                  slot="right-bottom"
+                  reveal={revealBoard}
+                  className={cn("order-6 min-h-[8rem] xl:hidden 2xl:flex xl:order-none 2xl:min-h-0 2xl:min-w-0 2xl:flex-[2]", flatSlot("right-bottom").className)}
+                  style={flatSlot("right-bottom").style}
+                  bodyClassName="grid grid-cols-2 gap-3"
+                >
+                  <OutputsCard className="min-h-0" />
+                  <RunsCard className="min-h-0" />
+                </DeckReveal>
+              </div>
 
               {/* The launch's last beat: one scan down the whole board. */}
               {revealBoard && <BoardSweep />}
             </div>
           )}
+
+          {fullMap && <FullMemoryMap request={fullMap} onClose={() => setFullMap(null)} />}
 
           {/* Before the board: the start sequence. Absolute over the stage
               so its exit plays over the board powering on underneath. */}
@@ -457,6 +532,53 @@ export function MissionDeckView({
 
 
 /**
+ * The full memory map over the HUD's stage: everything the memory-orb page
+ * had — the projects and memory maps, hand control, the data import — one
+ * button away from the memory panel, closed with the X or Escape. The HUD
+ * stays mounted underneath, so closing it lands exactly where you were.
+ */
+function FullMemoryMap({ request, onClose }: { request: FullMapRequest; onClose: () => void }) {
+  const t = useT();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("hud3.memory.map_title")}
+      data-testid="hud-full-map"
+      className="absolute inset-0 z-30 flex flex-col bg-background"
+    >
+      <Suspense
+        fallback={
+          <div role="status" className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            {t("common.loading")}
+          </div>
+        }
+      >
+        <MemoryOrbView initialMode={request.mode} importOpen={request.importOpen} />
+      </Suspense>
+      <button
+        type="button"
+        onClick={onClose}
+        data-testid="hud-full-map-close"
+        aria-label={t("hud3.memory.map_close")}
+        title={t("hud3.memory.map_close")}
+        className="absolute bottom-4 right-4 z-40 flex items-center gap-1.5 border border-primary/50 bg-background/80 px-2.5 py-1.5 font-mono text-micro uppercase tracking-[0.16em] text-primary backdrop-blur transition-colors hover:bg-primary/10"
+      >
+        <X className="h-3.5 w-3.5" aria-hidden />
+        {t("hud3.memory.map_close")}
+      </button>
+    </div>
+  );
+}
+
+/**
  * A slot's place in the display case (lib/deckDepth.ts) as the props its
  * DeckReveal wrapper takes: the transform rule's class, the depth as custom
  * properties, and `deck-slot-far` for planes behind the wall so their cards
@@ -466,6 +588,27 @@ function depthSlot(slot: BoardSlot): { className: string; style: CSSProperties }
   return {
     className: cn("deck-slot-3d", SLOT_DEPTH[slot].z < 0 && "deck-slot-far"),
     style: slotDepthVars(slot) as CSSProperties,
+  };
+}
+
+/**
+ * A plane on the wall itself — flat, unturned — keeping only its parallax
+ * (HUD v3). The instrument strip (log, turn/api/vitals, outputs/runs) shares
+ * ONE row under the memory and the orb now, so it stands together instead
+ * of each card on its own depth, where the near log grew into the memory
+ * panel above it. The chat stands here too: it is read line by line, and
+ * text on a plane turned away from the eye, behind the wall's softer glass,
+ * reads worse than text facing it.
+ */
+function flatSlot(slot: BoardSlot): { className: string; style: CSSProperties } {
+  return {
+    className: "deck-slot-3d",
+    style: {
+      ...slotDepthVars(slot),
+      "--slot-z": "0px",
+      "--slot-ry": "0deg",
+      "--slot-scale": "1",
+    } as CSSProperties,
   };
 }
 

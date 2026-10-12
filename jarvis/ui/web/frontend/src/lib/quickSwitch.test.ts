@@ -41,9 +41,16 @@ describe("destinations", () => {
     for (const e of QUICK_SWITCH_ENTRIES) expect(SECTION_IDS).toContain(e.section);
   });
 
-  it("offers both faces of the front page", () => {
-    const faces = QUICK_SWITCH_ENTRIES.filter((e) => e.section === "chats").map((e) => e.surface);
-    expect(faces).toEqual(["voice", "chat"]);
+  it("offers the HUD by name, then both faces of its chat", () => {
+    const front = QUICK_SWITCH_ENTRIES.filter((e) => e.section === "chats");
+    expect(front.map((e) => e.key)).toEqual(["hud", "voice", "chat"]);
+    expect(front.map((e) => e.surface)).toEqual([undefined, "voice", "chat"]);
+  });
+
+  it("still finds the memory orb by name, landing on its id (the HUD)", () => {
+    const orb = QUICK_SWITCH_ENTRIES.find((e) => e.key === "orb");
+    expect(orb?.section).toBe("orb");
+    expect(orb?.parentLabelKey).toBe("nav.hud");
   });
 });
 

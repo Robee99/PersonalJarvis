@@ -30,6 +30,11 @@ vi.mock("@/components/deck/HudMemoryPanel", () => ({
     </section>
   ),
 }));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
+}));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
   const actual = await vi.importActual<typeof import("@/components/deck/DeckLogCard")>(
