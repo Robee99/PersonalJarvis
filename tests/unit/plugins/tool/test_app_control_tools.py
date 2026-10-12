@@ -501,29 +501,29 @@ def test_app_control_tools_have_correct_risk_tiers():
     from jarvis.plugins.tool.switch_provider import SwitchProviderTool
 
     assert DescribeAppSettingsTool.risk_tier == "safe"
-    # Forensic 2026-06-26: a voice "switch the subagent brain to antigravity"
-    # asked "really do that? say yes or no" and then hung up. A provider switch
-    # is REVERSIBLE and the tool already speaks an honest post-change readback
-    # (old -> new), which catches an STT mishear after the fact — so it must not
-    # block on an up-front confirmation (anti-confirmation-fatigue mandate).
-    # "monitor" runs without confirmation but is still audited (state change).
-    assert SwitchProviderTool.risk_tier == "monitor"
+    # 2026-10-04: a live voice model switched on its own initiative. A
+    # provider switch can move the user onto a paid provider, so it waits for
+    # the user's explicit confirmation (ask) like every other consequential
+    # action. Read-only status stays safe.
+    assert SwitchProviderTool.risk_tier == "ask"
     assert ManageMcpServerTool.risk_tier == "ask"
     assert RevealKeyPreviewTool.risk_tier == "monitor"
 
 
-def test_switch_provider_does_not_trigger_voice_confirmation():
-    """A reversible provider switch must not force an up-front yes/no.
+def test_switch_provider_requires_confirmation_except_refused_brain_tier():
+    """A real switch is in ``always_confirm_tiers``; the refused brain tier is not.
 
-    Root cause of the 2026-06-26 voice incident: ``risk_tier="ask"`` is the one
-    tier in ``always_confirm_tiers``, so the executor returned the
-    VOICE_CONFIRM_SENTINEL and the brain asked before switching. "monitor" is
-    not a confirm tier, so the switch runs immediately.
+    The brain tier is refused before anything is touched, so asking the user to
+    confirm it would only lead to a refusal.
     """
     from jarvis.core.config import SafetyConfig
     from jarvis.plugins.tool.switch_provider import SwitchProviderTool
 
-    assert SwitchProviderTool.risk_tier not in SafetyConfig().always_confirm_tiers
+    confirm = SafetyConfig().always_confirm_tiers
+    tool = SwitchProviderTool()
+    for tier in ("tts", "stt", "subagent"):
+        assert tool.risk_tier_for_args({"tier": tier, "provider": "x"}) in confirm
+    assert tool.risk_tier_for_args({"tier": "brain", "provider": "x"}) not in confirm
 
 
 def test_provider_routes_uses_shared_credential_check(monkeypatch):

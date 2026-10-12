@@ -1,7 +1,8 @@
 """Fetch and cache the community marketplace index.
 
-The registry repo (PersonalJarvis/marketplace) compiles every published
-plugin and skill into one static ``index.json`` served from GitHub Pages.
+The registry repo (Dodaios/marketplace) compiles every published
+plugin, skill and agent template into one static ``index.json`` served from
+GitHub Pages.
 This module is the app's only reader of that feed: fetch with short
 timeouts, validate into typed models, and persist the result under
 ``data/marketplace_index.json`` so browsing keeps working offline and on a
@@ -159,11 +160,46 @@ class CommunitySkillEntry(_Tolerant):
         return self.flavor == "portable"
 
 
+class CommunityAgentEntry(_Tolerant):
+    """A published agent template (``kind: "agent"`` in the registry).
+
+    ``agent`` is the template verbatim. It is validated at INSTALL time by
+    ``jarvis.society.agent_template`` — the same rule the publisher's app
+    applied — so one malformed entry degrades to one uninstallable card.
+    """
+
+    name: str
+    title: str | None = None
+    description: str = ""
+    publisher: str | None = None
+    publisher_id: int | None = None
+    version: str | None = None
+    published_at: str | None = None
+    categories: list[str] = Field(default_factory=list)
+    source_url: str | None = None
+    agent: dict[str, Any] = Field(default_factory=dict)
+
+
 class CommunityIndex(_Tolerant):
     revision: int = 0
     generated_at: str | None = None
     plugins: list[CommunityPluginEntry] = Field(default_factory=list)
     skills: list[CommunitySkillEntry] = Field(default_factory=list)
+    #: Absent on an index from a registry older than agent templates.
+    agents: list[CommunityAgentEntry] = Field(default_factory=list)
+
+    @field_validator("agents", mode="after")
+    @classmethod
+    def _drop_unsafe_agent_names(
+        cls, value: list[CommunityAgentEntry]
+    ) -> list[CommunityAgentEntry]:
+        kept: list[CommunityAgentEntry] = []
+        for entry in value:
+            if _SKILL_NAME_RE.fullmatch(entry.name) and ".." not in entry.name:
+                kept.append(entry)
+            else:
+                logger.warning("community index: dropping agent with unsafe name %r", entry.name)
+        return kept
 
     @field_validator("skills", mode="after")
     @classmethod
@@ -181,12 +217,19 @@ class CommunityIndex(_Tolerant):
         return kept
 
 
+#: Former GitHub Pages addresses of the public registry. Pages does not follow
+#: a repository or organization rename, so a config that saved one of these
+#: reads the current deployment instead of a dead host.
+_RETIRED_INDEX_URLS = frozenset({"https://personaljarvis.github.io/marketplace/index.json"})
+
+
 def index_url() -> str:
     """The configured index URL (empty string = community section disabled)."""
-    from jarvis.core.config import load_config
+    from jarvis.core.config import MarketplaceConfig, load_config
 
     try:
-        return str(load_config().marketplace.community_index_url).strip()
+        url = str(load_config().marketplace.community_index_url).strip()
+        return MarketplaceConfig().community_index_url if url in _RETIRED_INDEX_URLS else url
     except Exception:  # noqa: BLE001 - config trouble must not kill browsing
         logger.warning("community index: could not read config, using default")
         from jarvis.core.config import MarketplaceConfig
@@ -305,6 +348,7 @@ async def get_index(
 
 __all__ = [
     "SKILL_FLAVORS",
+    "CommunityAgentEntry",
     "CommunityIndex",
     "CommunityPluginEntry",
     "CommunitySkillEntry",

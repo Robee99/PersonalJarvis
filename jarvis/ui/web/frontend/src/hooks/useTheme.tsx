@@ -8,8 +8,11 @@ import {
   type ReactNode,
 } from "react";
 
-/** What the user picks. `system` is an intent that follows the OS live. */
-export type ThemePreference = "dark" | "light" | "system";
+/**
+ * What the user picks. `system` is an intent that follows the OS live;
+ * `jarvis` is the dark theme with the cyan arc-reactor palette on top.
+ */
+export type ThemePreference = "dark" | "light" | "system" | "jarvis";
 /** What actually gets painted. */
 export type Theme = "dark" | "light";
 
@@ -33,21 +36,22 @@ const Ctx = createContext<ThemeCtx | undefined>(undefined);
  */
 const STORAGE_KEY = "jarvis.theme";
 const ENDPOINT = "/api/settings/appearance";
-const DEFAULT_PREFERENCE: ThemePreference = "dark";
+const DEFAULT_PREFERENCE: ThemePreference = "jarvis";
 
 function isPreference(v: unknown): v is ThemePreference {
-  return v === "dark" || v === "light" || v === "system";
+  return v === "dark" || v === "light" || v === "system" || v === "jarvis";
 }
 
 /** The OS preference, or the product default where it cannot be read. */
 function systemTheme(): Theme {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return DEFAULT_PREFERENCE === "dark" ? "dark" : "light";
+    return DEFAULT_PREFERENCE === "light" ? "light" : "dark";
   }
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
 export function resolveTheme(preference: ThemePreference): Theme {
+  if (preference === "jarvis") return "dark";
   return preference === "system" ? systemTheme() : preference;
 }
 
@@ -70,9 +74,10 @@ function readCachedPreference(): ThemePreference {
   return DEFAULT_PREFERENCE;
 }
 
-function applyToDocument(theme: Theme) {
+function applyToDocument(theme: Theme, jarvisLook = false) {
   const root = document.documentElement;
   root.classList.toggle("dark", theme === "dark");
+  root.classList.toggle("jarvis", jarvisLook);
   // Native widgets — dropdowns, the caret, scrollbar internals CSS cannot
   // reach — follow this rather than the class.
   root.style.colorScheme = theme;
@@ -105,7 +110,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(readCachedPreference);
   const [systemValue, setSystemValue] = useState<Theme>(systemTheme);
 
-  const theme: Theme = preference === "system" ? systemValue : preference;
+  const theme: Theme =
+    preference === "jarvis" ? "dark" : preference === "system" ? systemValue : preference;
 
   // Follow the OS while the preference is `system`. Registered unconditionally
   // so switching TO `system` picks up the current OS value without a reload.
@@ -120,7 +126,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Paint, and mirror the choice into the cache the boot script reads.
   useEffect(() => {
-    applyToDocument(theme);
+    applyToDocument(theme, preference === "jarvis");
     try {
       window.localStorage.setItem(STORAGE_KEY, preference);
     } catch {

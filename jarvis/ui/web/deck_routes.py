@@ -6,6 +6,8 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
     GET  /api/deck/frame/meta       → whether one is held, and its shape.
     GET  /api/deck/cu-frame/{sha}   → one Computer-Use frame from the flight
                                       recorder, addressed by content hash.
+    GET  /api/deck/vitals           → CPU, RAM, battery and GPU load now, plus
+                                      the Windows power mode where it exists.
 
 Two producers, two shapes, one reason: the deck shows the user what Jarvis
 just looked at.
@@ -118,6 +120,31 @@ def cu_frame(sha: str) -> Response:
                 headers=_NO_STORE,
             )
     raise HTTPException(status_code=404, detail="no_frame")
+
+
+@router.get("/vitals", summary="CPU, RAM, battery and GPU load right now")
+def vitals() -> dict[str, Any]:
+    """One live reading for the deck's vitals card; sync, so it runs in the
+    threadpool while the CPU sample and ``nvidia-smi`` take their time."""
+    from jarvis.hardware.detection import live_vitals  # noqa: PLC0415 - lazy (AP-26)
+
+    reading: dict[str, Any] = dict(live_vitals())
+    reading["power_mode"] = _power_mode()
+    return reading
+
+
+def _power_mode() -> str | None:
+    """The Windows power mode slider, or ``None`` where there is none."""
+    from jarvis.platform.laptop_power import (  # noqa: PLC0415 - lazy (AP-26)
+        LaptopPowerUnavailable,
+        WindowsPowerMode,
+    )
+
+    try:
+        return WindowsPowerMode().current()
+    except (LaptopPowerUnavailable, OSError):
+        log.debug("deck: no power mode reading", exc_info=True)
+        return None
 
 
 __all__ = ["router", "CU_BLOB_DIR"]

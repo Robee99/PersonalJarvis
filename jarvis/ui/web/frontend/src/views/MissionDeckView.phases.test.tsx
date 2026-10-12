@@ -23,6 +23,19 @@ vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
   LiveCounter: () => <div>counter</div>,
+  VitalsCard: () => <section>vitals</section>,
+}));
+vi.mock("@/components/deck/HudMemoryPanel", () => ({
+  HudMemoryPanel: ({ className }: { className?: string }) => (
+    <section className={className} data-testid="hud-memory">
+      memory
+    </section>
+  ),
+}));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
 }));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
@@ -56,6 +69,8 @@ const requestVoiceCall = vi.fn(async () => ({ armed: true }));
 vi.mock("@/lib/voiceApi", () => ({
   requestVoiceCall: () => requestVoiceCall(),
   requestVoiceHangup: async () => {},
+  fetchTtsVolume: async () => ({ volume: 1 }),
+  setTtsVolume: async () => {},
 }));
 vi.mock("@/components/MascotGigi", () => ({
   MascotGigi: () => <div data-testid="mascot-gigi" />,
@@ -191,11 +206,13 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     await waitFor(() => expect(screen.queryByTestId("deck-standby")).toBeNull(), { timeout: 4000 });
   }, 10_000);
 
-  test("pressing the orb reaches for the voice AND opens the board at once", () => {
+  test("pressing the orb reaches for the voice AND opens the board at once", async () => {
     render(<MissionDeckView />);
     fireEvent.click(screen.getByRole("button", { name: /saying “Hey Nova”/ }));
     expect(screen.getByTestId("deck-board")).toBeTruthy();
-    expect(requestVoiceCall).toHaveBeenCalledTimes(1);
+    // The call starts once the chat on screen is bound to it (the binding
+    // may fail; the call still starts).
+    await waitFor(() => expect(requestVoiceCall).toHaveBeenCalledTimes(1));
   });
 
   test("the header carries Gigi and leaves restart to the window caption", () => {

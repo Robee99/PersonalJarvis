@@ -58,6 +58,11 @@ class PatPasteAuth(_BaseAuth):
     token_prefixes: list[str] = Field(default_factory=list)
     validation_endpoint: str
     instruction_md: str
+    # How the pasted token is proven to work. ``http_get`` expects a 200 from
+    # ``validation_endpoint``; ``mcp_initialize`` sends an MCP handshake to it
+    # with the plugin's own auth header, for custom connectors whose server
+    # has no REST "who am I" endpoint to ask.
+    validation_method: Literal["http_get", "mcp_initialize"] = "http_get"
     # Set for self-hosted services: the user supplies the address, so
     # `validation_endpoint` above is ignored in favour of
     # `instance_url.validation_path` appended to what they entered.
@@ -103,6 +108,8 @@ class OAuthPkceLoopbackAuth(_BaseAuth):
     mode: Literal["oauth_pkce_loopback"]
     authorization_url: str
     token_url: str
+    # Figma refreshes at its own endpoint (/v1/oauth/refresh), not token_url.
+    refresh_url: str | None = None
     revocation_url: str | None = None
     client_id: str
     client_secret: str | None = Field(default=None, exclude=True)
@@ -133,6 +140,18 @@ class LocalAuth(_BaseAuth):
     mode: Literal["local"]
 
 
+class HostedMcpOpenAuth(_BaseAuth):
+    """A remote MCP server that answers without any sign-in.
+
+    Connecting is still an explicit step: the server is probed once, and only
+    an answered handshake marks it connected, so the on/off state stays the
+    user's choice like every other plugin's.
+    """
+
+    mode: Literal["hosted_mcp_open"]
+    mcp_url: str
+
+
 AuthConfig = Annotated[
     PatPasteAuth
     | InstanceBrowserAuth
@@ -140,7 +159,8 @@ AuthConfig = Annotated[
     | HostedMcpOAuthDcrAuth
     | OAuthPkceLoopbackAuth
     | HostedMcpAllowlistAuth
-    | LocalAuth,
+    | LocalAuth
+    | HostedMcpOpenAuth,
     Field(discriminator="mode"),
 ]
 
@@ -175,6 +195,15 @@ CATEGORY_ORDER: tuple[str, ...] = (
 #                      cannot extend; `longevity_note` must say how often
 Longevity = Literal["permanent", "self_renewing", "provider_limited"]
 
+# Whether the full browser journey of a plugin was observed end to end
+# (docs/marketplace/plugin-e2e-audit.json). Rendered as a badge on the card.
+#   verified - a completed PASS row exists for the current auth/execution
+#              configuration; scripts/ci/check_plugin_auth_contract.py
+#              rejects this label on any other row
+#   preview  - shipped, but not yet proven end to end; sign-in may still need
+#              publisher setup. The default, so nothing is verified by omission.
+Acceptance = Literal["verified", "preview"]
+
 
 class PluginSpec(_BaseAuth):
     id: str
@@ -208,6 +237,10 @@ class PluginSpec(_BaseAuth):
     # `provider_limited` ("Google requires re-approval every 7 days while the
     # OAuth app is in Testing mode"), optional otherwise.
     longevity_note: str | None = None
+    # End-to-end acceptance label (see `Acceptance`). Only the seed catalog
+    # sets "verified"; community and uploaded entries carry their own
+    # not-reviewed badges instead.
+    acceptance: Acceptance = "preview"
     # Which `<family>_oauth_client_id` secret pair overrides this plugin's
     # catalog client, for providers where the downloader must register their
     # own OAuth app. Lives here so a new plugin stays a catalog-only change:

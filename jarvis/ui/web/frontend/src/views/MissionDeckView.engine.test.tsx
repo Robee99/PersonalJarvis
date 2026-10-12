@@ -21,6 +21,19 @@ vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
   LiveCounter: () => <div>counter</div>,
+  VitalsCard: () => <section>vitals</section>,
+}));
+vi.mock("@/components/deck/HudMemoryPanel", () => ({
+  HudMemoryPanel: ({ className }: { className?: string }) => (
+    <section className={className} data-testid="hud-memory">
+      memory
+    </section>
+  ),
+}));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
 }));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
@@ -53,6 +66,8 @@ vi.mock("@/hooks/useWakeWord", () => ({
 vi.mock("@/lib/voiceApi", () => ({
   requestVoiceCall: async () => ({ armed: true }),
   requestVoiceHangup: async () => {},
+  fetchTtsVolume: async () => ({ volume: 1 }),
+  setTtsVolume: async () => {},
 }));
 vi.mock("@/components/MascotGigi", () => ({
   MascotGigi: () => <div data-testid="mascot-gigi" />,

@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
 from jarvis.agent_chat.effort import default_effort, effort_levels
-from jarvis.brain.model_catalog import CURATED_MODELS, GROK_BUILD_MODELS
+from jarvis.brain.model_catalog import CURATED_MODELS, GROK_BUILD_MODELS, catalog_spec
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,12 @@ Runner = Literal[
     "kimi-cli",
     "glm-cli",
     "dsh-cli",
+    "hermes-cli",
     "cursor-cli",
+    # Society agent runtimes (``service.EXTERNAL_RUNTIME_RUNNERS``): picked by
+    # the agent's runtime, never by a provider row.
+    "hermes-cli",
+    "openclaw-cli",
 ]
 
 
@@ -177,6 +182,19 @@ CLAUDE_CODE_MODELS: Final[tuple[CuratedModel, ...]] = (
 )
 
 
+def claude_model_efforts(model: str) -> tuple[str, ...] | None:
+    """The effort levels Claude Code's ``model`` takes; ``None`` = the full ladder.
+
+    A model newer than :data:`CLAUDE_CODE_MODELS` (the discovery feed's) or an
+    alias gets ``None``: the provider ladder applies and Claude Code folds.
+    """
+    picked = (model or "").strip()
+    for row in CLAUDE_CODE_MODELS:
+        if row.id == picked:
+            return row.efforts
+    return None
+
+
 def claude_code_models() -> tuple[CuratedModel, ...]:
     """What the Claude Code picker offers: :data:`CLAUDE_CODE_MODELS` with any
     newer Anthropic release placed first.
@@ -210,6 +228,20 @@ CODEX_FALLBACK_MODELS: Final[tuple[CuratedModel, ...]] = (
     CuratedModel("gpt-5.6-luna", "GPT-5.6 Luna", ("low", "medium", "high", "xhigh", "max")),
     CuratedModel("gpt-5.5", "GPT-5.5", ("low", "medium", "high", "xhigh")),
     CuratedModel("gpt-5.2", "GPT-5.2", ("low", "medium", "high", "xhigh")),
+)
+
+
+#: The free models Hermes Agent's own picker curates on Nous Portal (its
+#: ``hermes model`` list, all priced free). Hermes reaches them with its own
+#: Nous login; the ids are Nous Portal's. Keep the CLI list aligned with the
+#: brain catalog's explicitly free cloud choices; the brain card also offers
+#: local providers and qualifies its ids with the Hermes provider slug.
+HERMES_FREE_MODELS: Final[tuple[CuratedModel, ...]] = (
+    *(
+        CuratedModel(m.id.removeprefix("nous::"), m.label, note="free")
+        for m in catalog_spec("hermes").curated
+        if m.id.startswith("nous::") and m.id.endswith(":free")
+    ),
 )
 
 
@@ -329,6 +361,18 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
         default_model="",
         agent="deepseek-harness",
     ),
+    ProviderRow(
+        id="hermes",
+        label="Hermes Agent",
+        family="hermes",
+        runner="hermes-cli",
+        models_source="curated",
+        # One-shot mode answers with its final message only. A picked model
+        # goes to ``-m``; "" keeps the model configured in Hermes itself.
+        curated_models=HERMES_FREE_MODELS,
+        default_model="",
+        agent="hermes",
+    ),
     ProviderRow(id="openai", label="OpenAI", family="openai", runner="api", models_source="live"),
     ProviderRow(
         id="gemini", label="Google Gemini", family="gemini", runner="api", models_source="live"
@@ -344,6 +388,8 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
     ProviderRow(
         id="nvidia", label="NVIDIA NIM", family="nvidia", runner="api", models_source="live"
     ),
+    # Nous Portal (cloud model host) — not the "hermes" CLI row above.
+    ProviderRow(id="nous", label="Nous Portal", family="nous", runner="api", models_source="live"),
     ProviderRow(
         id="vertex",
         label="Google Vertex AI",
@@ -395,6 +441,14 @@ def rows_for(surface: str) -> tuple[ProviderRow, ...]:
     """
     from jarvis.agent_chat.surface_kits import kit_for
 
+    if surface == "jarvis":
+        from jarvis.brain.route_policy import HERMES_SEAT, hermes_is_live_brain
+
+        if hermes_is_live_brain():
+            # One brain (ADR-0042): while Hermes answers voice, the front page's
+            # chat is Hermes too, in the same session. Another seat here would
+            # be a second assistant with its own memory of the conversation.
+            return tuple(row for row in PROVIDER_ROWS if row.id == HERMES_SEAT)
     if kit_for(surface).cli_seats:
         return tuple(row for row in PROVIDER_ROWS if not row.agent or _ide_has(row.agent))
     from jarvis.agent_chat.runner_api import supports_api_runner
@@ -426,6 +480,19 @@ def offers(surface: str, provider_id: str) -> bool:
     """Whether ``provider_id`` is one of ``surface``'s rows."""
     pid = (provider_id or "").strip().lower()
     return any(row.id == pid for row in rows_for(surface))
+
+
+#: Reserved ``account_id`` values on a dual row (``claude-api``: one id for a
+#: subscription login AND an API key). They pin one agent's seat to one way of
+#: paying, chosen in the "New agent" dialog; ``""`` keeps the automatic choice
+#: (the API Keys page's setting, then whichever credential is there).
+#: ``API_KEY_ACCOUNT`` runs on the provider's saved API key.
+API_KEY_ACCOUNT: Final[str] = "api-key"
+#: ``SUBSCRIPTION_ACCOUNT`` runs on the subscription login even when an API key
+#: is saved too (Hermes / OpenClaw: Claude Code's login, billed as extra usage).
+SUBSCRIPTION_ACCOUNT: Final[str] = "subscription"
+#: Both reserved values: never the id of a real login.
+ACCESS_ACCOUNTS: Final[frozenset[str]] = frozenset({API_KEY_ACCOUNT, SUBSCRIPTION_ACCOUNT})
 
 
 #: A CLI-only row and the API row of the same brand. A chat that was seated

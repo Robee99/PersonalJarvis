@@ -5,6 +5,9 @@ Endpoints:
     POST   /api/secrets/{key}                → set an allowlisted wizard secret
     DELETE /api/secrets/{key}                → delete a secret
     POST   /api/brain/switch                 → switch the active Brain provider
+    GET    /api/brain/route-policy           → fast/deep/escalation routing table
+    PUT    /api/brain/route-policy           → save it (applies from the next turn)
+    POST   /api/brain/route-policy/restore   → roll back the last in-app save
     POST   /api/tts/switch                   → switch the active TTS provider
     POST   /api/stt/switch                   → switch the active STT provider
     POST   /api/realtime/switch              → switch the active Realtime provider
@@ -51,6 +54,9 @@ from jarvis.missions.worker_runtime.provider_map import (
 )
 from jarvis.missions.worker_runtime.provider_map import (
     GROK_BUILD_SUBAGENT_SLUGS as _GROK_BUILD_SUBAGENT_SLUGS,
+)
+from jarvis.missions.worker_runtime.provider_map import (
+    HERMES_SUBAGENT_SLUGS as _HERMES_SUBAGENT_SLUGS,
 )
 from jarvis.setup.wizard import SECRETS as WIZARD_SECRETS
 
@@ -1328,6 +1334,18 @@ async def list_providers(request: Request) -> dict[str, Any]:
     return {"providers": await asyncio.to_thread(_build)}
 
 
+@router.get("/providers/families")
+async def list_provider_families() -> dict[str, Any]:
+    """The catalog folded into one entry per company (see ``provider_families``).
+
+    Presence only — never a key value. Built off the event loop: every family
+    reads its key slots from the OS keyring.
+    """
+    from .provider_families import build_families
+
+    return {"families": await asyncio.to_thread(build_families)}
+
+
 # Belt-and-suspenders ceiling for the whole /test call. run_provider_test's own
 # timeout_s (60 s, generous for NVIDIA NIM's 13-30 s cold-start TTFB) bounds the
 # individual probe; this outer bound guarantees the HTTP response itself. Local
@@ -1797,12 +1815,22 @@ def _worker_usable(provider: str) -> bool:
             from jarvis.grok_build_auth import GrokBuildAuthService, grok_build_provider_ready
 
             return grok_build_provider_ready(GrokBuildAuthService().status())
+        if p in _HERMES_SUBAGENT_SLUGS:
+            # Hermes keeps its own providers and keys; an installed launcher is
+            # all Jarvis can vouch for.
+            from jarvis.missions.workers.hermes_direct_worker import resolve_hermes_binary
+
+            return resolve_hermes_binary() is not None
         if p in {"claude-api", "claude"}:
             from jarvis.claude_auth import ClaudeAuthService
 
             st = ClaudeAuthService().status()
             return bool(getattr(st, "connected", False) or get_jarvis_agent_secret("claude-api"))
-        return bool(get_jarvis_agent_secret(p))
+        if get_jarvis_agent_secret(p):
+            return True
+        from jarvis.brain.app_control import loopback_keyless_ready
+
+        return loopback_keyless_ready(p)
     except Exception:  # noqa: BLE001
         return False
 
@@ -2820,7 +2848,9 @@ class BaseUrlResponse(BaseModel):
 
 
 @router.put("/providers/{provider_id}/base-url")
-async def set_provider_base_url(provider_id: str, body: BaseUrlBody) -> BaseUrlResponse:
+async def set_provider_base_url(
+    provider_id: str, body: BaseUrlBody, request: Request,
+) -> BaseUrlResponse:
     """Set (or clear) the server URL of a local/self-hosted provider.
 
     Only cards with ``supports_base_url`` accept one (400 otherwise). The URL
@@ -2850,11 +2880,68 @@ async def set_provider_base_url(provider_id: str, body: BaseUrlBody) -> BaseUrlR
     from jarvis.core import config_writer
 
     config_writer.set_provider_base_url(provider_id, cleaned or None)
+    # Cached Society and voice instances must not keep the previous server.
+    from jarvis.core.config import BrainProviderConfig
+
+    live_brain = getattr(request.app.state, "brain", None)
+    for config in (_resolve_cfg(request), getattr(live_brain, "_config", None)):
+        if config is None:
+            continue
+        previous = config.brain.providers.get(provider_id) or BrainProviderConfig()
+        config.brain.providers[provider_id] = previous.model_copy(
+            update={"base_url": cleaned or None},
+        )
+    reactivate = getattr(live_brain, "reactivate_provider", None)
+    if callable(reactivate):
+        reactivate(provider_id)
+    await _get_model_catalog(request).invalidate(provider_id)
+    from jarvis.agent_runtimes.gateway import invalidate_provider_metadata
+
+    invalidate_provider_metadata(provider_id)
+    _health_ledger.forget_providers([provider_id], modality=_health_ledger.MODALITY_BRAIN)
+    _invalidate_section_health_state(request)
     return BaseUrlResponse(
         provider=provider_id,
         base_url=cleaned or None,
         default_base_url=spec.default_base_url,
     )
+
+
+#: Brain providers whose plugin reads ``thinking_budget`` per call (``0`` =
+#: never think; Hermes passes it on as its reasoning opt-out). Gemini reads it
+#: only when its brain is built, so a live change would not apply; others would
+#: store a dead key.
+THINKING_BUDGET_PROVIDERS: tuple[str, ...] = ("nous", "hermes")
+
+
+class ThinkingBudgetBody(BaseModel):
+    # None clears the key -> the model's own default thinking.
+    budget: int | None = Field(default=None, ge=-1, le=1_000_000)
+
+
+@router.put("/providers/{provider_id}/thinking-budget")
+async def set_provider_thinking_budget(
+    provider_id: str, body: ThinkingBudgetBody
+) -> dict[str, Any]:
+    """Set (or clear) a brain provider's thinking budget; ``0`` turns thinking off.
+
+    Voice needs the first word in about a second, and a reasoning model that
+    thinks before answering costs many seconds per turn. The brains read the
+    value per call, so it applies from the next turn.
+    """
+    if get_spec(provider_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_id}")
+    if provider_id not in THINKING_BUDGET_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{provider_id}' has no thinking setting.",
+        )
+    from jarvis.core import config_writer
+
+    await asyncio.to_thread(
+        config_writer.set_provider_thinking_budget, provider_id, body.budget
+    )
+    return {"ok": True, "provider": provider_id, "budget": body.budget}
 
 
 @router.post("/providers/{provider_id}/local-install")
@@ -3326,7 +3413,10 @@ async def managed_server_setup(request: Request) -> dict[str, Any]:
         body = await request.json()
     except Exception as exc:  # noqa: BLE001 - malformed JSON is a client error
         raise HTTPException(status_code=400, detail="a JSON request body is required") from exc
-    brain_model = str((body or {}).get("brain_model", "") or "").strip()
+    if not isinstance(body, dict):
+        # A JSON array or scalar used to reach ``.get`` and answer 500.
+        raise HTTPException(status_code=400, detail="the request body must be a JSON object")
+    brain_model = str(body.get("brain_model", "") or "").strip()
     voice_model = str((body or {}).get("voice_model", "") or "").strip()
     if not brain_model or not voice_model:
         raise HTTPException(
@@ -4340,6 +4430,8 @@ _SWITCH_ERROR_STATUS: dict[str, int] = {
     "not_installed": 409,
     "subagent_unavailable": 409,
     "airgapped_locked": 403,
+    # The enabled route policy deny-lists the target: it could never answer.
+    "route_policy_denied": 409,
     "persist_failed": 500,
     "switch_failed": 500,
     "switch_not_applied": 500,
@@ -4451,6 +4543,118 @@ async def brain_switch(body: SwitchBody, request: Request) -> dict[str, Any]:
         "old_provider": result.get("old_provider"),
         "requires_restart": bool(result.get("requires_restart")),
     }
+
+
+class RoutePolicyBody(BaseModel):
+    """The in-app routing controls' save: any subset of the UI-owned keys."""
+
+    enabled: bool | None = None
+    fast: dict[str, Any] | None = None
+    deep: dict[str, Any] | None = None
+    escalation: dict[str, Any] | None = None
+    deny_providers: list[str] | None = None
+    deny_model_prefixes: list[str] | None = None
+    allow_cloud_vision: bool | None = None
+
+
+def _route_policy_view(request: Request) -> dict[str, Any]:
+    from jarvis.core.config_writer import route_policy_backup_path
+
+    cfg = _resolve_cfg(request)
+    policy = getattr(getattr(cfg, "brain", None), "route_policy", None)
+    table = (
+        policy.model_dump(exclude={"test_override_tier"})
+        if policy is not None and hasattr(policy, "model_dump")
+        else {}
+    )
+    try:
+        has_backup = route_policy_backup_path().exists()
+    except OSError as exc:
+        log.debug("Route-policy backup probe failed: %s", exc)
+        has_backup = False
+    return {"policy": table, "can_restore": has_backup}
+
+
+def _apply_route_policy_in_memory(request: Request, table: dict[str, Any]) -> None:
+    """Hand the saved table to the running config and Brain (next turn on)."""
+    from jarvis.core.config import BrainRoutePolicyConfig
+
+    policy = BrainRoutePolicyConfig.model_validate(table)
+    cfg = _resolve_cfg(request)
+    brain_cfg = getattr(cfg, "brain", None)
+    if brain_cfg is not None:
+        brain_cfg.route_policy = policy
+    manager = getattr(request.app.state, "brain", None)
+    setter = getattr(manager, "set_route_policy", None)
+    if callable(setter):
+        setter(policy)
+
+
+@router.get("/brain/route-policy")
+def route_policy_get(request: Request) -> dict[str, Any]:
+    """``[brain.route_policy]`` as the running app has it, for the Brain tab."""
+    return _route_policy_view(request)
+
+
+@router.put("/brain/route-policy")
+async def route_policy_put(body: RoutePolicyBody, request: Request) -> dict[str, Any]:
+    """Save the fast/deep/escalation routing and apply it from the next turn.
+
+    Escalation stays explicit: it can only be on with at least one trigger
+    phrase, and the delegate is never an automatic fallback (the policy
+    module enforces that per turn). A target must name a Brain provider this
+    install has; an empty provider leaves that tier unset.
+    """
+    from pydantic import ValidationError
+
+    from jarvis.core.config_writer import set_route_policy
+
+    values = body.model_dump(exclude_unset=True, exclude_none=True)
+    escalation = values.get("escalation") or {}
+    if escalation.get("enabled") and not [
+        p for p in escalation.get("trigger_phrases") or [] if str(p).strip()
+    ]:
+        raise HTTPException(
+            status_code=422,
+            detail="Escalation needs at least one phrase you say to ask for it.",
+        )
+    brain = getattr(request.app.state, "brain", None)
+    available: list[str] = []
+    if brain is not None and hasattr(brain, "available_providers"):
+        try:
+            available = list(brain.available_providers())
+        except Exception as exc:  # noqa: BLE001 - validation degrades to the schema only
+            log.debug("Route-policy provider list unavailable: %s", exc)
+    for tier in ("fast", "deep"):
+        provider = str((values.get(tier) or {}).get("provider") or "").strip()
+        if provider and available and provider not in available:
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{provider}' is not a Brain provider on this install.",
+            )
+    try:
+        table = await asyncio.to_thread(set_route_policy, values)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc.errors()[0].get("msg"))) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _apply_route_policy_in_memory(request, table)
+    return {"ok": True, **_route_policy_view(request)}
+
+
+@router.post("/brain/route-policy/restore")
+async def route_policy_restore(request: Request) -> dict[str, Any]:
+    """Roll the routing back to the table before the last in-app save."""
+    from jarvis.core.config_writer import restore_previous_route_policy
+
+    try:
+        table = await asyncio.to_thread(restore_previous_route_policy)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=404, detail="There is no earlier routing setup to restore."
+        ) from exc
+    _apply_route_policy_in_memory(request, table)
+    return {"ok": True, **_route_policy_view(request)}
 
 
 @router.post("/tts/switch")

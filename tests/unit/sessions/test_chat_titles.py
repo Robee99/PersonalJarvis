@@ -244,3 +244,22 @@ def test_an_app_without_a_data_folder_never_queues_work() -> None:
         assert titler._queue == {} and titler._thread is None
     finally:
         chat_titles.reset_for_tests()
+
+
+def test_hermes_as_the_brain_never_wakes_a_subscription_for_titles(monkeypatch) -> None:
+    """Hermes is the one brain: titles must not call Claude or Codex beside it."""
+    from types import SimpleNamespace
+
+    from jarvis.brain import resolver
+    from jarvis.core import config as config_mod
+    from jarvis.sessions import chat_titles
+
+    monkeypatch.setattr(
+        config_mod, "load_config", lambda: SimpleNamespace(brain=SimpleNamespace(primary="hermes"))
+    )
+    called: list[object] = []
+    monkeypatch.setattr(
+        resolver, "resolve_subscription_brain", lambda *a, **k: called.append(a) or object()
+    )
+    assert chat_titles._subscription_brain() is None
+    assert called == []

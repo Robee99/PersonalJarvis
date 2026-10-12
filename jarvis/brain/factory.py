@@ -61,6 +61,12 @@ BrainCallback = Callable[[str], Awaitable[str]]
 ROUTER_TOOLS = frozenset({
     "run-shell",
     "screen-snapshot",
+    # Camera still (2026-10-02): one webcam photo for vision when the user asks
+    # Jarvis to look at them or at something they hold up. Risk "ask" (the
+    # frame shows the person), hidden from blind brains like screenshot, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14). See
+    # ADR-0011 amendment "Camera still".
+    "camera-snapshot",
     # NB: ``dispatch-to-harness`` deliberately absent (removed 2026-06-28) —
     # see the header comment above. Heavy work → spawn-worker; desktop →
     # computer-use. The tool remains for the internal local-action fast path.
@@ -71,6 +77,25 @@ ROUTER_TOOLS = frozenset({
     # never a spawn — never in a worker set (AP-5/AP-14). See
     # docs/plans/ai-pointer/DESIGN.md.
     "inspect-pointer",
+    # Point at (2026-10-02): the push direction of the AI Pointer. A glowing
+    # arrow lands on the named element of the foreground window ("where do I
+    # click to export?"), drawn by the CU indicator sidecar; it never clicks.
+    # Read-only on the app, risk safe, never a spawn and never in a worker or
+    # society tool set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+    "point-at",
+    # Laptop power (2026-10-02): "turbo mode", "silent mode", "cap the battery
+    # at 80" - the Windows power slider plus ASUS Armoury Crate's operating
+    # mode and charge limit. Risk monitor, never a spawn and never in a worker
+    # or society tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
+    "laptop-power",
+    # System volume (2026-10-12): "volume to 30", "mute". The default speaker's
+    # master level via Windows Core Audio. Risk safe, never a spawn and never
+    # in a worker or society tool set (AP-5/AP-14).
+    "system-volume",
+    # Window control (2026-10-12): minimize / maximize / restore / focus /
+    # close a window by title or program, state read back. Risk monitor, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14).
+    "window-control",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —
@@ -150,6 +175,13 @@ ROUTER_TOOLS = frozenset({
     # Jarvis-Agents may call it only through the ADR-0025 supervisor broker,
     # never through a legacy worker tier (AP-5/AP-14). See ADR-0011.
     "wiki-list",
+    # Memory by topic (2026-10-12): the memory orb's note communities, the
+    # chats in one topic or matching a query, and one chat paged 6,000
+    # characters at a time. Lets the local brain (Gemma under Hermes) answer
+    # "all my chats about X" over a 2,000-chat import that wiki-list cannot
+    # print and wiki-recall caps at 5 hits. Read-only and safe; never a spawn
+    # and never in a worker tool set (AP-5/AP-14).
+    "memory_chats",
     # Phase B5 follow-up: deterministic ingest path. Lets the brain
     # explicitly store a fact ("merk dir: …") rather than relying on the
     # VoiceFactBridge acknowledgement heuristic.
@@ -216,6 +248,12 @@ ROUTER_TOOLS = frozenset({
     # directly; otherwise a connected YouTube Music is not callable by voice.
     # risk_tier "monitor": audible and instantly undone. Never a spawn (AP-5/AP-14).
     "youtube_music",
+    # Slack Marketplace plugin (2026-10-05): native REST tool over the Slack Web
+    # API. Slack's hosted MCP server admits only Marketplace-listed or internal
+    # apps, so the plugin carries no MCP server block and must be router-visible
+    # directly. Reads are "safe"; post_message keeps "ask" (echo-confirm).
+    # Never a spawn (AP-5/AP-14).
+    "slack",
     # Computer-Use (Wave 1, 2026-05-29): first-class, clearly-described tool to
     # drive the user's LIVE desktop (open apps, click, type, scroll, operate
     # any GUI). The router previously had no honest desktop path — spawn-worker
@@ -559,6 +597,12 @@ def _load_tools_for_tier(
                 from jarvis.plugins.tool.wiki_list import _build_wiki_list_tool
 
                 inst = _build_wiki_list_tool()
+            elif ep.name == "memory_chats":
+                # Memory by topic: same vault-root resolution and FTS search
+                # as the other wiki tools; the topics are the orb's own.
+                from jarvis.plugins.tool.memory_chats import _build_memory_chats_tool
+
+                inst = _build_memory_chats_tool()
             elif ep.name == "wiki-ingest":
                 # Phase B5 follow-up: lazy curator resolver — the curator is
                 # constructed by ``bootstrap_wiki_integration`` after the brain
@@ -612,6 +656,13 @@ def _load_tools_for_tier(
                     register_tool(tool, source=ep.name, virtual=True)
             else:
                 register_tool(inst, source=ep.name, virtual=False)
+        except ModuleNotFoundError as exc:
+            # A missing Jarvis module is a packaging fault, not an optional
+            # extra: the frozen build once dropped the MCP/CLI/plugin loaders
+            # and the brain lost every MCP tool without a word in the log.
+            missing = getattr(exc, "name", "") or ""
+            level = logging.WARNING if missing.startswith("jarvis") else logging.DEBUG
+            log.log(level, "Tool %s not loadable: %s", ep.name, exc)
         except Exception as exc:  # noqa: BLE001
             log.debug("Tool %s not loadable: %s", ep.name, exc)
 
@@ -1808,6 +1859,13 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
     telemetry labels show the concrete provider.
     """
     from jarvis.brain.ack_brain.providers import REGISTRY
+    from jarvis.brain.route_policy import hermes_is_main_brain
+
+    if hermes_is_main_brain(jcfg):
+        # One brain (ADR-0042): no second model writes what Jarvis says while
+        # Hermes answers. Every flash consumer then uses its canned pool.
+        log.info("Flash-Brain: Hermes is the brain — canned acknowledgements only.")
+        return None
 
     provider_name = ack_cfg.provider
     if provider_name == "follow_brain":

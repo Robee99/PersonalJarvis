@@ -194,7 +194,11 @@ def wrap_recognizer(rec: Any) -> Any:
 
 def build_recognizer(model: Any, sample_rate: int, grammar: str | None = None) -> Any:
     """Construct a ``KaldiRecognizer``, ``SetWords(True)``, wrap if native."""
-    from vosk import KaldiRecognizer
+    # Through the runtime: a failed vosk import is never re-executed (each
+    # re-execution prepends vosk's folder to PATH again on Windows).
+    from jarvis.plugins.wake.vosk_runtime import load_vosk
+
+    KaldiRecognizer = load_vosk().KaldiRecognizer  # noqa: N806 — vosk API name
 
     with _LOCK:
         rec = (

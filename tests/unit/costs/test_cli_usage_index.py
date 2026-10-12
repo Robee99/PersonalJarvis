@@ -1374,6 +1374,73 @@ def test_opencode_reads_only_what_arrived_since_the_last_run(tmp_path: Path) -> 
     assert len(_all(data)) == 2
 
 
+# ---------------------------------------------------------------------------
+# Hermes Agent
+# ---------------------------------------------------------------------------
+
+
+def _hermes_store(home: Path) -> Path:
+    folder = home / ".hermes"
+    folder.mkdir(parents=True, exist_ok=True)
+    db = folder / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT, "
+        "started_at REAL NOT NULL, ended_at REAL, last_activity_at REAL, cwd TEXT, "
+        "input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0, "
+        "cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0, "
+        "reasoning_tokens INTEGER DEFAULT 0, estimated_cost_usd REAL, actual_cost_usd REAL)"
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _hermes_session(
+    db: Path, sid: str, last: float, *, tokens_in: int, cost: float | None
+) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT OR REPLACE INTO sessions (id, source, model, started_at, last_activity_at, cwd, "
+        "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, "
+        "estimated_cost_usd) VALUES (?, 'cli', 'qwen3.6-35b-a3b', ?, ?, 'C:/work/app', "
+        "?, 40, 300, 10, ?)",
+        (sid, last - 60, last, tokens_in, cost),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_hermes_sessions_are_indexed_with_their_running_totals(tmp_path: Path) -> None:
+    from jarvis.costs.cli_usage_index import AGENT_HERMES
+
+    data = tmp_path / "data"
+    db = _hermes_store(tmp_path)
+    _hermes_session(db, "s1", 1_787_422_998.5, tokens_in=1_000, cost=0.02)
+    _hermes_session(db, "s2", 1_787_422_999.0, tokens_in=500, cost=None)
+
+    refresh(data_dir=data, home=tmp_path)
+
+    first, second = sorted(_all(data), key=lambda t: t.ts_ms)
+    assert first.agent == AGENT_HERMES and first.ts_ms == 1_787_422_998_500
+    assert (first.tokens_in, first.tokens_out, first.tokens_cached) == (1_010, 40, 300)
+    assert first.cost_usd == 0.02 and first.label == "app"
+    assert second.model == "qwen3.6-35b-a3b"
+
+
+def test_a_hermes_session_that_kept_going_is_updated_not_added(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    db = _hermes_store(tmp_path)
+    _hermes_session(db, "s1", 1_787_422_998.0, tokens_in=1_000, cost=0.02)
+    refresh(data_dir=data, home=tmp_path)
+
+    _hermes_session(db, "s1", 1_787_423_100.0, tokens_in=3_000, cost=0.05)
+    refresh(data_dir=data, home=tmp_path)
+
+    [turn] = _all(data)
+    assert turn.tokens_in == 3_010 and turn.cost_usd == 0.05
+
+
 def test_an_index_from_version_two_keeps_its_rows_and_gains_the_column(tmp_path: Path) -> None:
     import sqlite3
 

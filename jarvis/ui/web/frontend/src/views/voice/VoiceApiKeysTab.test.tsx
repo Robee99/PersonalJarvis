@@ -1,17 +1,14 @@
 /**
  * Component tests for the voice section's "API Keys" tab.
  *
- * The tab is deliberately NOT a second implementation: it renders the same
- * extracted provider block the API-Keys view uses, scoped to the tiers that
- * turn speech into finished text — `stt`, and the optional `dictation` wording
- * pass that cleans up what `stt` produced. These tests pin the things that
- * would silently break that contract: that both tier cards actually render
- * here, that the optional one says so, that no OTHER tier leaks in, and that
- * none of the API-Keys view's own category tabs come along for the ride (this
- * screen shows no tab strip of its own, so one would be a rendering fault).
+ * The tab holds no provider picker of its own any more: speech-to-text and
+ * the optional wording pass are picked in Settings › Voice — one control per
+ * config. These tests pin
+ * that the tab links to both, renders no second picker, leaks no other tier,
+ * and brings none of the API-Keys view's own category tabs along.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 
 import type { ProviderDescriptor } from "@/hooks/useProviders";
 
@@ -74,6 +71,9 @@ vi.mock("@/hooks/useProviders", () => ({
 }));
 
 import { VoiceApiKeysTab } from "@/views/voice/VoiceApiKeysTab";
+import { useEventStore } from "@/store/events";
+import { useSettingsPage } from "@/store/settingsPage";
+import { requestedApiKeysTab } from "@/lib/apiKeysTab";
 
 afterEach(() => {
   cleanup();
@@ -81,27 +81,42 @@ afterEach(() => {
 });
 
 describe("VoiceApiKeysTab", () => {
-  it("renders the speech-to-text provider card", () => {
+  // Since 2026-10-11 the tab holds no picker: speech-to-text has ONE place,
+  // Settings › Voice, and so does the wording pass.
+  // A second picker here wrote the same config as its twin (UI audit P0-3).
+  it("links to the one place speech-to-text is picked instead of rendering a second picker", () => {
     render(<VoiceApiKeysTab />);
 
     expect(screen.getByTestId("voice-api-keys-tab")).toBeTruthy();
-    expect(screen.getByText("Test Speech Service")).toBeTruthy();
-    expect(screen.getByLabelText("Enter TEST_SPEECH_API_KEY")).toBeTruthy();
+    expect(screen.getByTestId("voice-api-keys-stt-link")).toBeTruthy();
+    expect(screen.queryByText("Test Speech Service")).toBeNull();
+    expect(screen.queryByLabelText("Enter TEST_SPEECH_API_KEY")).toBeNull();
   });
 
-  it("renders the optional wording provider alongside it", () => {
+  it("links to the wording pass on Settings › Voice instead of rendering it again", () => {
     render(<VoiceApiKeysTab />);
 
-    expect(screen.getByText("Test Wording Service")).toBeTruthy();
-    expect(screen.getByLabelText("Enter TEST_WORDING_API_KEY")).toBeTruthy();
+    expect(screen.getByTestId("voice-api-keys-wording-link")).toBeTruthy();
+    expect(screen.queryByText("Test Wording Service")).toBeNull();
   });
 
-  it("marks the wording provider Optional so a missing key reads as a choice", () => {
+  it("opens Settings › Voice on the speech-to-text tab", () => {
     render(<VoiceApiKeysTab />);
 
-    expect(screen.getByTestId("provider-optional-test-wording")).toBeTruthy();
-    // The required tier must NOT pick the chip up.
-    expect(screen.queryByTestId("provider-optional-test-speech")).toBeNull();
+    fireEvent.click(within(screen.getByTestId("voice-api-keys-stt-link")).getByRole("button"));
+
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("voice");
+    expect(requestedApiKeysTab()).toBe("stt");
+  });
+
+  it("opens Settings › Voice on the wording tab", () => {
+    render(<VoiceApiKeysTab />);
+
+    fireEvent.click(within(screen.getByTestId("voice-api-keys-wording-link")).getByRole("button"));
+
+    expect(useSettingsPage.getState().page).toBe("voice");
+    expect(requestedApiKeysTab()).toBe("dictation");
   });
 
   it("shows only the speech tiers, never other tiers' providers", () => {

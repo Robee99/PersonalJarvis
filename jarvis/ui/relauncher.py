@@ -190,6 +190,30 @@ def relauncher_command(
     return [active_executable, "-m", "jarvis.ui.relauncher", str(pid), cwd, *launcher_args]
 
 
+def self_launch_command(
+    launcher_args: tuple[str, ...] | list[str] = (),
+    *,
+    executable: str | None = None,
+    frozen: bool | None = None,
+    platform_name: str | None = None,
+    environ: dict[str, str] | None = None,
+) -> list[str]:
+    """Argv that starts this launcher again right now, keeping its arguments.
+
+    A source install re-enters ``python -m jarvis.ui.web.launcher``. A frozen
+    build has no ``-m``: its parser rejects it and the GUI executable exits
+    without a word, so it starts its bare self through
+    :func:`frozen_self_command` (which takes no desktop overrides).
+    """
+    active_executable = sys.executable if executable is None else executable
+    is_frozen_build = _frozen() if frozen is None else frozen
+    if is_frozen_build:
+        return frozen_self_command(
+            active_executable, platform_name=platform_name, environ=environ
+        )
+    return [active_executable, "-m", LAUNCHER_MODULE, *launcher_args]
+
+
 def build_launch_command(
     executable: str,
     *,
@@ -447,6 +471,30 @@ def _apply_branded_launch_env(env: dict[str, str], argv: list[str]) -> dict[str,
         if venv_pythonw.is_file():
             env["__PYVENV_LAUNCHER__"] = str(venv_pythonw)
     return env
+
+
+def launch_desktop_detached(*, _popen: object | None = None) -> object:
+    """Start the desktop app so it outlives the terminal that asked for it.
+
+    What ``jarvis`` typed into a terminal does: the same OS identity a restart
+    uses (macOS LaunchServices bundle, Windows branded exe, Linux launcher
+    module), detached, so the prompt returns at once and closing the terminal
+    does not take the app with it. Unlike a restart, the terminal's own
+    environment is kept verbatim — a ``JARVIS__*`` override set in that shell
+    is exactly what the user meant — minus the one-process branding guard.
+    """
+    import jarvis
+
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() != WINDOWS_BRANDED_LAUNCH_ENV_VAR.upper()
+    }
+    cmd = build_launch_command(sys.executable)
+    cwd = str(Path(jarvis.__file__).resolve().parent.parent)
+    return spawn_detached(
+        cmd, cwd=cwd, env=_apply_branded_launch_env(env, cmd), _popen=_popen
+    )
 
 
 def _restart_admin_port(cwd: str | Path | None = None) -> int:

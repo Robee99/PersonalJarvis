@@ -142,6 +142,14 @@ SECRETS: list[SecretSpec] = [
         section="brain",
     ),
     SecretSpec(
+        key="nous_api_key",
+        env_fallback="NOUS_API_KEY",
+        label="Nous Portal API Key (portal.nousresearch.com, sk-nous-)",
+        help_url="https://portal.nousresearch.com",
+        required_for="Brain (Nous Portal: Hermes models and free :free routes)",
+        section="brain",
+    ),
+    SecretSpec(
         key="openai_api_key",
         env_fallback="OPENAI_API_KEY",
         label="OpenAI API Key",
@@ -310,6 +318,14 @@ SECRETS: list[SecretSpec] = [
         label="NVIDIA API Key for Jarvis-Agents",
         help_url="https://build.nvidia.com/settings/api-keys",
         required_for="Jarvis-Agents (NVIDIA NIM)",
+        prompt=False,
+    ),
+    SecretSpec(
+        key="jarvis_agent_nous_api_key",
+        env_fallback="JARVIS_AGENT_NOUS_API_KEY",
+        label="Nous Portal API Key for Jarvis-Agents",
+        help_url="https://portal.nousresearch.com",
+        required_for="Jarvis-Agents (Nous Portal)",
         prompt=False,
     ),
     SecretSpec(
@@ -1144,7 +1160,7 @@ def step_jarvis_agent_harness_check() -> None:
         _println(f"✓ Worker-harness binary found: {binary}")
     else:
         _println("–  'openclaw' harness binary not on PATH (optional).")
-        _println("   Install: npm i -g openclaw   (pin: 2026.5.7, see AD-21)")
+        _println("   Install it from an agent's Brain settings (OpenClaw 2026.9.8 or newer).")
         _println("   The harness stays inactive until the binary is available — no crash.")
 
     # 2. Show the provider mapping (lazy import — the wizard should also run

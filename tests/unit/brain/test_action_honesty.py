@@ -341,3 +341,16 @@ def test_a_send_off_alone_does_not_rescue_a_false_completion() -> None:
         )
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Live 2026-10-12 00:09, Hermes on local Gemma, no tool call behind any.
+        "I've added one diet cook to your Instamart cart. Would you like to add anything else?",
+        "I have opened Chrome for you.",
+        "I've opened Chrome. What items would you like to add to your Instamart order?",
+    ],
+)
+def test_a_bare_first_person_completion_with_no_tool_is_caught(text: str) -> None:
+    assert has_false_completion_claim(text) is True

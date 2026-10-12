@@ -92,6 +92,17 @@ class LocalModelsTool:
             return ToolResult(success=False, output=str(exc), error=f"{type(exc).__name__}: {exc}")
         return ToolResult(success=True, output=output)
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float | None:
+        """The ToolExecutor's deadline: a download is followed for up to
+        ``max_wait_s`` (default 30 min); every other tool keeps the default."""
+        if self._spec.handler is not _pull:
+            return None
+        try:
+            follow_s = float(args.get("max_wait_s") or PULL_FOLLOW_MAX_S)
+        except (TypeError, ValueError):  # the handler fails on the same value
+            return None
+        return max(follow_s, 0.0) + 60.0
+
     def describe_args(self, args: dict[str, Any]) -> dict[str, str]:
         """The one-line summary the approval card shows."""
         if self._spec.summary is None:

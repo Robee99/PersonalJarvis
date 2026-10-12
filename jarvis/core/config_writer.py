@@ -999,11 +999,16 @@ def set_screen_context_settings(
 
 #: Keys ``[appshot]`` accepts — same allowlist reasoning as Screen Context.
 #: The master switch is ``[screen_context].enabled``, written by the setter above.
-APPSHOT_SETTING_KEYS: frozenset[str] = frozenset({"hotkey", "target", "sound", "effect"})
+APPSHOT_SETTING_KEYS: frozenset[str] = frozenset(
+    {"keep_newest",
+     "hotkey", "region_hotkey", "recording_hotkey", "target", "sound", "effect", "card_seconds",
+     "library", "copy_to_clipboard", "recording_resolution", "recording_fps", "recording_bitrate_mbps",
+     "recording_system_audio"}
+)
 
 
 def set_appshot_settings(
-    values: dict[str, str | bool],
+    values: dict[str, str | bool | int],
     *,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
@@ -1032,6 +1037,73 @@ def set_appshot_settings(
         _atomic_write(path, out)
 
 
+#: Keys ``[jarvisx]`` accepts (``jarvis.core.config.JarvisXConfig``). The
+#: route validates types and hotkeys first; this allowlist keeps a typo from
+#: ever landing in the file.
+JARVISX_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "enabled",
+        "hotkey_region",
+        "hotkey_window",
+        "hotkey_fullscreen",
+        "hotkey_record_region",
+        "hotkey_record_fullscreen",
+        "hotkey_stop_recording",
+        "thumbnail_persist",
+        "thumbnail_dismiss_s",
+        "save_dir",
+        "copy_to_clipboard",
+        "sound",
+        "effect",
+        "keep_newest",
+    }
+)
+
+
+def set_jarvisx_settings(
+    values: dict[str, str | bool | int],
+    *,
+    path: Path = DEFAULT_CONFIG_FILE,
+) -> None:
+    """Persist a validated ``[jarvisx]`` patch in one atomic replacement."""
+    unknown = set(values).difference(JARVISX_SETTING_KEYS)
+    if unknown:
+        raise ValueError(f"unknown jarvisx setting(s): {sorted(unknown)!r}")
+    if not values:
+        return
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        raw = path.read_text(encoding="utf-8")
+        had_bom = raw.startswith(_BOM)
+        if had_bom:
+            raw = raw[len(_BOM) :]
+        doc: TOMLDocument = tomlkit.parse(raw)
+        section = doc.get("jarvisx")
+        if section is None:
+            section = tomlkit.table()
+            doc["jarvisx"] = section
+        for key, value in values.items():
+            section[key] = value
+        out = tomlkit.dumps(doc)
+        if had_bom:
+            out = _BOM + out
+        _atomic_write(path, out)
+
+
+def set_missions_paid_api_fallback(enabled: bool, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
+    """Persist ``[missions] paid_api_fallback`` (the paid-API fallback switch).
+
+    The only writer of this key. Called from the Settings route
+    (``PUT /api/mission-billing``) — the self-mod / voice path refuses the key
+    (``jarvis/core/self_mod/forbidden.py``). Read fresh by
+    ``jarvis.missions.capacity.paid_api_fallback_enabled``, so the change
+    applies to the very next mission decision without a restart.
+    """
+    if not isinstance(enabled, bool):
+        raise TypeError("paid_api_fallback must be a bool")
+    _patch_table(path, "missions", "paid_api_fallback", enabled)
+
+
 def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the user-facing reply-language pin in ``[brain] reply_language``.
 
@@ -1042,11 +1114,106 @@ def set_reply_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     _patch_table(path, "brain", "reply_language", name)
 
 
+#: ``[brain.route_policy]`` keys the in-app routing controls own. The
+#: test-only tier pin is deliberately absent: the UI never writes it.
+ROUTE_POLICY_UI_FIELDS: tuple[str, ...] = (
+    "enabled",
+    "fast",
+    "deep",
+    "escalation",
+    "deny_providers",
+    "deny_model_prefixes",
+    "allow_cloud_vision",
+)
+
+
+def route_policy_backup_path(path: Path = DEFAULT_CONFIG_FILE) -> Path:
+    """Where the table as it was before the last in-app save is kept."""
+    return path.with_name(path.name + ".route-policy.prev.json")
+
+
+def set_route_policy(
+    values: dict[str, object], *, path: Path = DEFAULT_CONFIG_FILE, backup: bool = True
+) -> dict[str, object]:
+    """Persist ``[brain.route_policy]`` from the in-app routing controls.
+
+    ``values`` may carry any of :data:`ROUTE_POLICY_UI_FIELDS`; keys it omits
+    keep their current value, and keys outside that list are ignored. The
+    merged table is validated by ``BrainRoutePolicyConfig`` before anything is
+    written (a bad value raises ``pydantic.ValidationError`` and the file is
+    untouched). The table as it was before this save goes to
+    :func:`route_policy_backup_path`, so :func:`restore_previous_route_policy`
+    can roll the change back. ``backup=False`` keeps that restore point (used
+    when a brain switch moves the tiers along, which is not a routing edit).
+    TOML-only: the table is not drift-pinned. Returns the table now on disk.
+    """
+    from .config import BrainRoutePolicyConfig
+
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        doc, had_bom = _read_doc(path)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        existing = brain.get("route_policy")
+        previous: dict[str, object] = dict(existing.unwrap()) if existing is not None else {}
+        merged = dict(previous)
+        for key in ROUTE_POLICY_UI_FIELDS:
+            if key in values:
+                merged[key] = values[key]
+        policy = BrainRoutePolicyConfig.model_validate(merged)
+        table: dict[str, object] = policy.model_dump(exclude_none=True)
+        if "test_override_tier" not in previous:
+            table.pop("test_override_tier", None)
+        if backup:
+            _atomic_write_text(route_policy_backup_path(path), json.dumps(previous, indent=2))
+        brain["route_policy"] = table
+        _write_doc(path, doc, had_bom)
+    clear_config_cache()
+    return table
+
+
+def restore_previous_route_policy(*, path: Path = DEFAULT_CONFIG_FILE) -> dict[str, object]:
+    """Put back ``[brain.route_policy]`` as it was before the last in-app save.
+
+    The current table becomes the new backup, so a second restore undoes the
+    first. An empty backup means there was no table: it is removed again,
+    which is the normal chain. Raises ``FileNotFoundError`` when no in-app save
+    ever happened. Returns the table now on disk (``{}`` when removed).
+    """
+    from .config import BrainRoutePolicyConfig
+
+    path = _ensure_writable_config_path(path)
+    backup = route_policy_backup_path(path)
+    with _WRITE_LOCK:
+        restored = json.loads(backup.read_text(encoding="utf-8"))
+        if not isinstance(restored, dict):
+            raise ValueError("The saved routing backup is not a table.")
+        if restored:
+            BrainRoutePolicyConfig.model_validate(restored)
+        doc, had_bom = _read_doc(path)
+        brain = doc.get("brain")
+        if brain is None:
+            brain = tomlkit.table()
+            doc["brain"] = brain
+        existing = brain.get("route_policy")
+        current: dict[str, object] = dict(existing.unwrap()) if existing is not None else {}
+        if restored:
+            brain["route_policy"] = restored
+        elif existing is not None:
+            del brain["route_policy"]
+        _write_doc(path, doc, had_bom)
+        _atomic_write_text(backup, json.dumps(current, indent=2))
+    clear_config_cache()
+    return restored
+
+
 def set_ui_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the interface (display) language in ``[ui] language``.
 
-    ``name`` is one of ``en`` | ``de`` | ``es`` (validated by the caller). This
-    is the backend home for what used to be a frontend-only localStorage value,
+    ``name`` is one of ``en`` | ``de`` | ``es`` | ``zh`` (validated by the caller).
+    This is the backend home for what used to be a frontend-only localStorage value,
     so a voice command / the Control API can change the visible app language and
     the open UI switches live (the change is broadcast over /ws).
     """
@@ -1056,7 +1223,7 @@ def set_ui_language(name: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
 def set_ui_theme(theme: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
     """Persist the app's colour theme in ``[ui] theme``.
 
-    ``theme`` is one of ``dark`` | ``light`` | ``system`` (validated by the
+    ``theme`` is one of ``dark`` | ``light`` | ``system`` | ``jarvis`` (validated by the
     caller). Read at boot by the native window so the frame is painted in the
     matching colour before the web view loads, and by the frontend so the
     choice survives a cleared browser store.
@@ -1182,6 +1349,19 @@ def set_background_keep_running(enabled: bool, *, path: Path = DEFAULT_CONFIG_FI
     not track it. Read at quit time, so it applies without a restart.
     """
     _patch_table(path, "background", "keep_agents_running", bool(enabled))
+
+
+def set_agent_server(
+    *, persistent: bool, server_url: str = "", path: Path = DEFAULT_CONFIG_FILE,
+) -> None:
+    """Select independent server ownership for the next desktop launch."""
+    from jarvis.core.server_endpoint import server_endpoint
+
+    origin = server_endpoint(server_url) if server_url.strip() else ""
+    _patch_table(
+        path, "background", "persistent_server", bool(persistent),
+        extra={"server_url": origin},
+    )
 
 
 def set_wiki_vault_root(vault_root: str, *, path: Path = DEFAULT_CONFIG_FILE) -> None:
@@ -1391,12 +1571,16 @@ def set_voice_engine_settings(
     *,
     tts: str | None = None,
     llm_model: str | None = None,
+    llm_api: str | None = None,
+    llm_base_url: str | None = None,
     path: Path = DEFAULT_CONFIG_FILE,
 ) -> None:
     """Persist the Local voice card's choices to ``[voice_engine]``.
 
     ``tts`` must be one of ``config.VOICE_ENGINE_VOICES``; ``llm_model`` is an
-    Ollama tag, and an empty string means "automatic". Both land in ONE atomic
+    Ollama tag (or the served model's id), and an empty string means
+    "automatic". ``llm_api`` is ``ollama`` or ``openai``; ``llm_base_url`` is
+    an ``http://`` server root, empty for automatic. All land in ONE atomic
     write. Read by ``jarvis/plugins/realtime/local_voice.py``; the running
     engine picks them up on its next start.
     """
@@ -1411,6 +1595,16 @@ def set_voice_engine_settings(
         if any(ch.isspace() for ch in model) or len(model) > 200:
             raise ValueError(f"not an Ollama model tag: {llm_model!r}")
         values["llm_model"] = model
+    if llm_api is not None:
+        api = llm_api.strip().lower()
+        if api not in ("ollama", "openai"):
+            raise ValueError(f"unknown model API {llm_api!r}; expected ollama or openai")
+        values["llm_api"] = api
+    if llm_base_url is not None:
+        url = llm_base_url.strip()
+        if url and not url.startswith("http://"):
+            raise ValueError(f"not an http:// server root: {llm_base_url!r}")
+        values["llm_base_url"] = url
     if not values:
         return
     first_key, *rest = values
@@ -1908,6 +2102,12 @@ _TTS_DEFAULTS: dict[str, dict[str, str]] = {
         "voice_en": "Charon",
         "language_code": "de-DE",
     },
+    "vertex-tts": {
+        "model": "gemini-3.1-flash-tts-preview",
+        "voice_de": "Charon",
+        "voice_en": "Charon",
+        "language_code": "de-DE",
+    },
     "grok-voice": {
         # model is ignored by the Grok plugin (no model param in GrokVoiceTTS).
         # voice from jarvis/plugins/tts/grok_voice_tts.py: GROK_VOICE_LEO = "leo"
@@ -2327,6 +2527,28 @@ def set_provider_base_url(
             provider,
             exc,
         )
+
+
+def set_provider_thinking_budget(
+    provider: str, budget: int | None, *, path: Path = DEFAULT_CONFIG_FILE
+) -> None:
+    """Persist (or clear) ``[brain.providers.<provider>].thinking_budget``.
+
+    ``0`` switches the provider's thinking off on every turn (read by the
+    Gemini and Nous brains); ``None`` removes the key so the model's own
+    default applies again. Atomic discipline as every setter here (AP-7).
+    """
+    path = _ensure_writable_config_path(path)
+    with _WRITE_LOCK:
+        doc, had_bom = _read_doc(path)
+        block = _provider_block(doc, provider)
+        if budget is None:
+            if "thinking_budget" in block:
+                del block["thinking_budget"]
+        else:
+            block["thinking_budget"] = int(budget)
+        _write_doc(path, doc, had_bom)
+    clear_config_cache()
 
 
 #: Closed list of per-provider boolean flags :func:`set_provider_flag` may
@@ -2776,6 +2998,8 @@ def worker_provider_changed(previous: str | None, selected: str | None) -> bool:
     from jarvis.missions.worker_runtime.provider_map import (
         CODEX_SUBAGENT_SLUGS,
         GROK_BUILD_SUBAGENT_SLUGS,
+        HERMES_SUBAGENT_CANONICAL,
+        HERMES_SUBAGENT_SLUGS,
         canonical_worker_provider,
     )
 
@@ -2785,6 +3009,8 @@ def worker_provider_changed(previous: str | None, selected: str | None) -> bool:
             return "openai-codex"
         if canonical in GROK_BUILD_SUBAGENT_SLUGS:
             return "grok-build"
+        if canonical in HERMES_SUBAGENT_SLUGS:
+            return HERMES_SUBAGENT_CANONICAL
         return canonical
 
     return identity(previous) != identity(selected)

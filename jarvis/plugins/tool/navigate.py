@@ -30,7 +30,6 @@ KNOWN: frozenset[str] = frozenset(
         "docs",
         "mcps",
         "sessions",
-        "run_inspector",
         # Spend & Tokens.
         "costs",
         "clis",
@@ -40,8 +39,6 @@ KNOWN: frozenset[str] = frozenset(
         "profile",
         "memory",
         "apikeys",
-        # Local models: the Ollama server, installed models and the catalogue.
-        "local-models",
         # Computers: the user's servers and local VMs, reached over SSH.
         "computers",
         "settings",
@@ -49,13 +46,10 @@ KNOWN: frozenset[str] = frozenset(
         "telephony-setup",
         "socials",
         "taskbar",
-        "contacts",
         "feedback",
         "agent-instructions",
         # Appshots: the shortcut and destination for showing the front window.
         "appshots",
-        # Jarvis actions: which app actions Jarvis may run, ask for or never run.
-        "jarvis-actions",
         "dictionary",
         "dictation",
         "voice-shortcuts",
@@ -76,12 +70,20 @@ KNOWN: frozenset[str] = frozenset(
         "pets",
         # Keyboard shortcuts: every shortcut in one place, with a key tester.
         "shortcuts",
+        # The HUD: the mission deck as a section of its own.
+        "deck",
+        # The memory orb: notes, skills, tools and apps as one live map.
+        "orb",
+        # The tool armory: every app the assistant can reach, as cards.
+        "armory",
     }
 )
 
 # Natural-language aliases (DE + EN) → canonical id. The router usually passes an
 # id from the schema enum; this is the safety net for spoken labels/synonyms.
 _ALIASES: dict[str, str] = {
+    # Retired inspection links open the saved conversation archive.
+    "run_inspector": "sessions",
     # Agentic IDE — the spoken forms people reach for. "agentic" is a mouthful
     # in every supported language, so the plain-words variants matter more here
     # than for sections whose label is already a common noun.
@@ -171,8 +173,6 @@ _ALIASES: dict[str, str] = {
     "notizen": "memory",
     "notiz": "memory",
     "wiki": "memory",
-    "local models": "local-models",
-    "local-models": "local-models",
     "computers": "computers",
     "servers": "computers",
     "vps": "computers",
@@ -182,11 +182,6 @@ _ALIASES: dict[str, str] = {
     "virtuelle maschinen": "computers",  # i18n-allow: input vocab
     "ordenadores": "computers",  # i18n-allow: input vocab
     "servidores": "computers",  # i18n-allow: input vocab
-    "local model": "local-models",
-    "ollama": "local-models",
-    "lokale modelle": "local-models",  # i18n-allow: input vocab
-    "lokale models": "local-models",  # i18n-allow: input vocab
-    "modelos locales": "local-models",  # i18n-allow: input vocab
     "api keys": "apikeys",
     "api-keys": "apikeys",
     "api key": "apikeys",
@@ -207,8 +202,6 @@ _ALIASES: dict[str, str] = {
     "ergebnisse": "visualization",  # i18n-allow: input vocab
     "resultados": "visualization",  # i18n-allow: input vocab
     "appshot": "appshots",
-    "jarvis actions": "jarvis-actions",
-    "jarvis aktionen": "jarvis-actions",  # i18n-allow: speech-input vocabulary
     "app shots": "appshots",
     "app shot": "appshots",
     "task bar": "taskbar",
@@ -232,11 +225,6 @@ _ALIASES: dict[str, str] = {
     "visualización": "visualization",  # i18n-allow: input vocab
     "visualizaciones": "visualization",  # i18n-allow: input vocab
     "gráficos": "visualization",  # i18n-allow: input vocab
-    "contact": "contacts",
-    "kontakt": "contacts",
-    "kontakte": "contacts",
-    "address book": "contacts",
-    "adressbuch": "contacts",
     # "Extensions" is the merged sidebar entry fronting skills + plugins + clis
     # + mcps. The bare name lands on the Skills tab; "tools" lands on the Tools
     # tab (which defaults to Plugins). The underlying section ids are unchanged.
@@ -273,6 +261,15 @@ _ALIASES: dict[str, str] = {
     "claves de entrada de voz": "voice-api-keys",  # i18n-allow: input vocab
     # The marketplace. "store"/"shop" are the words people actually reach for,
     # and none of these names anything else in the app.
+    "hud": "deck",
+    "mission deck": "deck",
+    "deck": "deck",
+    "memory orb": "orb",
+    "orb": "orb",
+    "brain map": "orb",
+    "tool armory": "armory",
+    "armory": "armory",
+    "armoury": "armory",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",

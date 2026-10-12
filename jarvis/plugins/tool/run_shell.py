@@ -35,7 +35,7 @@ from typing import Any
 from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.protocols import ExecutionContext, ToolResult
 from jarvis.safety.command_impact import DESTRUCTIVE, classify_command
-from jarvis.safety.explicit_intent import utterance_confirms_destruction
+from jarvis.safety.explicit_intent import command_confirms_destruction
 
 if sys.platform == "win32":
     _SHELL_LABEL = "Windows PowerShell 5.1"
@@ -123,6 +123,7 @@ def _powershell_argv(command: str) -> list[str]:
 
 class RunShellTool:
     name: str = "run_shell"
+    read_only: bool = False
     risk_tier: str = "monitor"
     description: str = (
         f"Runs a shell command via {_SHELL_LABEL} on this machine. "
@@ -149,6 +150,16 @@ class RunShellTool:
         "required": ["command"],
     }
 
+    def execution_timeout_for_args(self, args: dict[str, Any]) -> float | None:
+        """The ToolExecutor's deadline for this call: the command's own
+        ``timeout_s`` plus room to kill the child and collect its output, so
+        the tool's own, clearer "Timeout after" result always arrives first."""
+        try:
+            timeout_s = float(args.get("timeout_s", 30))
+        except (TypeError, ValueError):  # execute() fails on the same value
+            return None
+        return max(timeout_s, 0.0) + 15.0
+
     def risk_tier_for_args(self, args: dict[str, Any]) -> str | None:
         """Escalate destructive commands to the ``ask`` tier.
 
@@ -170,17 +181,14 @@ class RunShellTool:
     def intent_confirms_args(self, args: dict[str, Any], utterance: str) -> bool:
         """True when the user's own words already authorize this command.
 
-        Claude-Code permission model: a destructive command the USER asked
-        for by name ("delete the folder Urlaub") needs no second question —
-        the ToolExecutor consults this hook before arming a confirmation.
-        Only the destruction verb-class is matched (deterministic vocabulary,
-        no entity matching — STT garbles names); a brain-initiated deletion
-        whose utterance never mentioned deleting still confirms.
+        Only an unambiguous single deletion of the exact absolute path named
+        by the user can waive approval. Inferred targets and general shell
+        programs keep the ordinary confirmation workflow.
         """
         command = (args.get("command") or "").strip()
         if not command or classify_command(command).level != DESTRUCTIVE:
             return False
-        return utterance_confirms_destruction(utterance)
+        return command_confirms_destruction(command, utterance)
 
     def describe_args(self, args: dict[str, Any]) -> dict[str, str] | None:
         """Plain-language impact summary for the confirmation question.
@@ -232,6 +240,14 @@ class RunShellTool:
                 proc.kill()
                 await proc.wait()
                 return ToolResult(success=False, output=None, error=f"Timeout after {timeout_s}s")
+            except asyncio.CancelledError:
+                # Stopped by the ToolExecutor (deadline, kill switch) or the
+                # caller: the child must not outlive the call. Only the direct
+                # child is killed; a grandchild the shell forked survives.
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                raise
         except FileNotFoundError as exc:
             return ToolResult(success=False, output=None, error=f"Not found: {exc}")
         except Exception as exc:  # noqa: BLE001

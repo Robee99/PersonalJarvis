@@ -1359,13 +1359,15 @@ Router membership and the prohibition on recursive worker spawning are
 unchanged. Stable workspace/pane IDs and durable request receipts preserve
 project and delivery identity across asynchronous work and retries.
 
-Supervision extends that authorized assignment without introducing a worker
-spawn tool. A durable owner-bound record consumes IDE activity notifications
-and starts an internal turn in the same chat via its existing message receipt
-path. All terminal actions still pass ToolExecutor. Normal owned text follow-ups
-may inherit monitor-tier; approval dialogs retain ask-tier and stale replies are
-refused under the pane lock. Budget, kill-switch, grant and no-progress gates
-apply before automatic turns. No terminal output is treated as user authorization.
+Since 2026-10-06 the capability opens coding threads (agent-chat sessions on
+the IDE's `agent` surface) instead of driving terminal panes; the per-pane
+supervisor was removed. A coordinator observes the stored events of threads an
+agent started and wakes that agent's own chat through the internal message
+receipt path when a turn it started finishes, asks, presents a plan or waits
+for an approval. It is not a worker spawn tool: the thread runs the vendor CLI
+under the person's subscription, every action still passes ToolExecutor, wake-
+ups are capped per thread and held by the kill switch, and thread output is
+never treated as user authorization.
 
 Receiving turns inherit conversation provenance through task-local context;
 new conversations receive fresh traces. Replies retain the trace and parent
@@ -1392,7 +1394,8 @@ ASGI transport as `app-command`.
 ### Pure-Dispatcher spirit is preserved
 
 - Each call's tier comes from `risk_tier_for_args`: the person's per-action
-  mode from Settings > Jarvis actions (`allow` → monitor, `ask`, `block`),
+  mode from the stored action policy (`allow` → monitor, `ask`, `block`;
+  set through `/api/app-actions` since the settings page was retired),
   else the action default (read → safe, change → monitor, dangerous route →
   ask). `ToolExecutor.execute()` still evaluates and confirms (AP-3); a
   blocked action is refused by the evaluator. The same policy applies to the
@@ -1428,3 +1431,178 @@ Mission workers lose the `awareness-recall` grant (ADR-0030).
 - `tests/unit/brain/test_routing.py` (exact router set)
 - `tests/unit/brain/test_evidence_gate.py`, `tests/unit/brain/test_evidence_gate_wiring.py` (honest refusal for the `activity` domain)
 - `tests/missions/test_worker_capability_parity.py` (the worker grant)
+
+## Amendment 2026-10-02 — Camera still
+
+`camera-snapshot` joins `ROUTER_TOOLS`. It registers the `camera` tool, which
+takes one still from the webcam and returns it as an image artifact in the same
+shape as `screenshot`. Before this, a voice turn like "look at what I'm holding"
+had no route at all. The router either refused or spawned a worker that could
+not see either.
+
+The capture backend is chosen per platform when the tool runs:
+
+- Windows uses WinRT `MediaCapture` in video-only mode, from the MIT PyWinRT
+  family that the media session already uses. Its three namespace packages are
+  not in `[desktop]` yet. Until a `uv lock` adds them, the tool names them in
+  its error.
+- Linux uses OpenCV only when the user installed it. OpenCV is not a dependency
+  because its wheels bundle FFmpeg under the LGPL.
+- macOS refuses honestly. The bundle still ships without
+  `NSCameraUsageDescription`.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `ask`, because a camera frame shows the person. `ToolExecutor`
+  confirms every call unless the user whitelists the tool (AP-3).
+- Nothing opens the camera at boot (AP-26). The tool opens the device inside
+  `execute` and releases it on every path.
+- A black frame (covered lens or closed privacy shutter) is an error, never a
+  success.
+- A blind brain is never offered the tool. `_hide_screenshot_for_blind_brain`
+  drops `camera` together with `screenshot`. This gate is on capability, not
+  on the provider (AP-21).
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_camera_snapshot.py` covers both backends,
+  device release, black frames, the Windows privacy block and the macOS
+  refusal.
+- `tests/unit/brain/test_screen_narration_guard.py` checks that blind brains
+  never see the tool.
+
+## Amendment 2026-10-02 — Point at
+
+`point-at` joins `ROUTER_TOOLS`. It registers the `point_at` tool, which answers
+"where do I click to ...?" with a glowing arrow on the named element of the
+foreground window. Until now the router could only describe the place in words,
+or hand the task to `computer-use`, which also clicks.
+
+The tool is the push direction of the AI Pointer. `inspect-pointer` reads the
+element under the mouse; `point_at` shows the user an element. It reads the UI
+tree through `make_ui_tree_source()` and matches with the rules
+`click_element` uses (`matching_nodes`), so the arrow lands on exactly the
+element a click would press. An exact label wins over a substring match. The
+arrow is drawn by the Computer-Use indicator sidecar through a new `point`
+protocol command. That window is click-through, excluded from capture on
+Windows and blanked before every grab elsewhere, and it fades out after about
+five seconds.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`. The tool reads the same tree `inspect-pointer` reads and
+  draws a transient overlay. Nothing in any app changes, and nothing is
+  clicked.
+- Nothing starts at boot (AP-26). The sidecar is spawned on the first arrow and
+  quits on its own when no effect or mission holds it.
+- Headless, Wayland or missing-PySide6 hosts get the indicator's own reason
+  back as the tool error.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_point_at.py` covers matching parity with
+  `click_element`, monitor placement, the no-overlay case and the honest
+  errors.
+- `tests/unit/cu/indicator/` covers the protocol command, the controller, the
+  arrow geometry and a real offscreen sidecar round trip.
+
+## Amendment 2026-10-02 — Laptop power
+
+`laptop-power` joins `ROUTER_TOOLS`. It registers the `laptop_power` tool,
+which handles requests like "turbo mode", "silent mode" or "cap the battery at
+80". It controls three settings:
+
+- the Windows 11 power mode slider, through the `powrprof` overlay calls
+- the ASUS operating mode (Armoury Crate's balanced, turbo or silent)
+- the ASUS battery charge limit
+
+Armoury Crate has no public API. `jarvis/platform/laptop_power.py` sends one
+DeviceIoControl to the ASUS System Control Interface driver (`\\.\ATKACPI`) for
+each request. The buffer layout and device IDs are hardware facts. atrofac
+(MIT/Apache-2.0), G-Helper and Linux `asus-wmi` all document them, and no code
+was copied from the GPL sources. Before every write, the tool checks the
+device's presence bit, so a setting the laptop does not report is never
+written.
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `monitor`. Every change is audited, and one more sentence
+  undoes it.
+- These settings are deliberately left out: fan curves (overheating), GPU Eco
+  (kills apps holding the dGPU) and the MUX switch (needs a reboot).
+- Charge limits below 60 % are refused before the driver is touched.
+- When Armoury Crate's own service is running, the reply says that it may
+  switch the setting back.
+- Off Windows, and on laptops without the ASUS driver, the tool says what is
+  unavailable instead of failing silently.
+- Nothing is opened at boot (AP-26). Win32 prototypes are bound on private
+  `WinDLL` instances.
+- The tool is never a spawn and is never in a worker set (AP-5/AP-14). Its
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/plugins/tool/test_laptop_power.py` checks the exact driver
+  bytes, the slider GUIDs, the presence check, charge-limit bounds and the
+  off-Windows refusals.
+
+## Amendment 2026-10-12 — Memory by topic
+
+`memory_chats` joins `ROUTER_TOOLS`. It answers "all my chats about X" over a
+large imported chat export, which `wiki-list` cannot print and `wiki-recall`
+caps at five hits. Three actions, each sized for a small local model:
+`topics` (the memory orb's note communities), `list` (the chats in one topic
+or matching a query, one line each) and `read` (one chat, 6,000 characters per
+call, paged with `offset`).
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`: it only reads the vault, through the same walk and parse
+  cache as the wiki routes (`jarvis/memory/wiki/visible_pages.py`).
+- Topics are the orb's own groups (`jarvis/memory/orb_tree.note_groups`), so
+  there is no second grouping to keep in sync. Link-poor areas are grouped by
+  TF-IDF similarity of each note's title and opening text, cached per area.
+- Returned text passes through `redact_secrets` and is labelled as a record of
+  a past chat, data rather than instructions.
+- Never a spawn and never in a worker set (AP-5/AP-14). Hermes reaches it over
+  Jarvis's MCP server (`HERMES_JARVIS_TOOLS`), as `mcp__jarvis__memory_chats`.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/memory/test_orb_tree.py` checks topic grouping, names,
+  determinism, loose notes and the time for a 2,400-chat area.
+- `tests/unit/plugins/tool/test_memory_chats.py` checks the three actions,
+  paging, secret masking and the Hermes include list.
+## Amendment 2026-10-05 — Marketplace native tool `slack`
+
+The Slack plugin used to execute through Slack's hosted MCP server. Slack
+admits only Marketplace-listed or internal apps to that server; the shared
+publisher app is publicly distributed but unlisted, so every end user would
+be refused. The catalog entry therefore drops its MCP server block and binds
+`"native_tool": "slack"`, a REST tool over the Slack Web API that uses the
+same marketplace user token. With no MCP server block, the virtual
+`mcp-tools`/`plugin-tools` loaders expand to nothing for Slack, so `slack`
+joins `ROUTER_TOOLS` directly, for the same reason as the other marketplace
+native tools.
+
+| Tool | Added | Backing | Risk | Recursion guard? |
+|---|---|---|---|---|
+| `slack` | 2026-10-05 | Slack Web API (`search.messages`, `conversations.*`, `users.*`, `chat.postMessage`) via the marketplace user token with rotation refresh | `ask` statically; every read downgrades to `safe` via `risk_tier_for_args`; `post_message` stays `ask` (echo-confirm) | n/a — a direct REST call, never a spawn; router-tier only (AP-5/AP-14) |
+
+### Regression guards
+
+- `tests/unit/plugins/tool/test_slack_rest.py` — `ok: false` mapping without
+  echoing provider text, `token_expired` → one refresh + retry, `Retry-After`
+  handling, cursor pagination, channel/DM resolution, per-action risk tiers.
+- `tests/unit/brain/test_routing.py` (exact router set includes `slack`).

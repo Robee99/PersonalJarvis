@@ -9,25 +9,20 @@
  * A second hand-written list anywhere would be the classic drift trap (AP-4):
  * a section added here would silently never appear on the deck.
  */
-import { KeyRound, type LucideIcon } from "lucide-react";
-import { OllamaIcon } from "@/components/icons/OllamaIcon";
+import { Briefcase, Gauge, KeyRound, Swords, type LucideIcon } from "lucide-react";
 import {
   AgentsIcon,
   ArtifactsIcon,
   BoardIcon,
   CaptureIcon,
-  ChatIcon,
   CodeIcon,
   ComputersIcon,
-  ContactsIcon,
   DocsIcon,
   ExtensionsIcon,
   FeedbackIcon,
-  InspectorIcon,
-  InstructionsIcon,
+  AssistantIcon,
   MarketplaceIcon,
   MicrophoneIcon,
-  PermissionsIcon,
   PetsIcon,
   ProfileIcon,
   SettingsIcon,
@@ -50,17 +45,33 @@ export function resolveNavLabel(t: (key: string) => string, item: NavItem): stri
 }
 
 /**
- * The front page is ONE section ("chats"): a chat with a voice mode inside it
- * (2026-10-01; before that, a `Voice | Chat` switch picked between two faces
- * and this row was renamed after the face). The row is "Chat" whatever mode
- * the chat is in — voice mode is a state of the chat, not another place.
- * Every other row passes through unchanged. Pure, so the sidebar and the
- * rail present the row identically; the surface argument stays so callers
- * need not change.
+ * The ids that all open the HUD — the ONE front page (2026-10-12).
+ *
+ * The chat, the HUD (mission deck) and the memory orb used to be three
+ * sidebar rows and three separate pages; the owner wanted them in one place.
+ * The HUD now carries the memory orb, the live voice orb and the real chat
+ * thread side by side, and every id that used to name one of the three still
+ * resolves — deep links, voice navigation ("open chat", "open the memory
+ * orb"), the detached-window registry and the navigate parity tests keep
+ * working — but all of them land on the same view.
+ */
+export const HUD_SECTION_IDS: readonly SectionId[] = ["chats", "deck", "orb"];
+
+/** Is `section` one of the ids that open the HUD? */
+export function isHudSection(section: string): boolean {
+  return (HUD_SECTION_IDS as readonly string[]).includes(section);
+}
+
+/**
+ * The front page is ONE section: the HUD, with the chat and the memory orb
+ * inside it. The row is "HUD" whatever mode the chat is in — voice mode is a
+ * state of the chat, not another place. Every other row passes through
+ * unchanged. Pure, so the sidebar and the rail present the row identically;
+ * the surface argument stays so callers need not change.
  */
 export function presentNavItem(item: NavItem, _surface?: HomeSurface): NavItem {
   if (item.id !== "chats") return item;
-  return { ...item, labelKey: "sidebar.surface_chat", icon: ChatIcon, fallbackLabel: "Chat" };
+  return { ...item, labelKey: "nav.hud", icon: Gauge, fallbackLabel: "HUD" };
 }
 
 export interface NavItem {
@@ -121,8 +132,20 @@ export const NAV_GROUP_META: readonly NavGroupMeta[] = [
 // them. A second hand-written list there would be the classic drift trap
 // (AP-4): a section added here would silently never appear on the deck.
 export const NAV_GROUPS: NavItem[][] = [
-  // 0) The front page — Voice or Chat, named after the face the switch picked.
-  [{ id: "chats", labelKey: "nav.chats", icon: ChatIcon }],
+  // 0) The front page — the HUD: memory orb, voice orb and the chat in one
+  // place. "deck" and "orb" are the same view under their old names, so the
+  // row stays lit for them.
+  [
+    {
+      id: "chats",
+      labelKey: "nav.hud",
+      icon: Gauge,
+      fallbackLabel: "HUD",
+      matchIds: [...HUD_SECTION_IDS],
+    },
+    // Every app the assistant can reach, as a wall of cards.
+    { id: "armory", labelKey: "nav.armory", icon: Swords, fallbackLabel: "Tool armory" },
+  ],
   // 1) Workspace — what the user builds with and reads back.
   [
     { id: "agents", labelKey: "nav.agents", icon: AgentsIcon },
@@ -160,7 +183,6 @@ export const NAV_GROUPS: NavItem[][] = [
   // so its row says "Beta" up front).
   [
     { id: "sessions", labelKey: "nav.sessions", icon: MicrophoneIcon },
-    { id: "run_inspector", labelKey: "nav.run_inspector", icon: InspectorIcon },
     // CLIs — the CLIs list + the CLI Test Hub behind one tab switch (CLIs first).
     { id: "clis", labelKey: "nav.clis_hub", icon: TerminalIcon, matchIds: ["clis", "cli-test-hub"] },
     {
@@ -182,10 +204,9 @@ export const NAV_GROUPS: NavItem[][] = [
     {
       id: "agent-instructions",
       labelKey: "nav.agent_instructions",
-      icon: InstructionsIcon,
-      fallbackLabel: "Instructions",
+      icon: AssistantIcon,
+      fallbackLabel: "Assistant",
     },
-    { id: "contacts", labelKey: "nav.contacts", icon: ContactsIcon },
     // Spend & Tokens — every token the app spent, priced per provider, model
     // and role. It reports, it does not configure.
     { id: "costs", labelKey: "nav.costs", icon: SpendIcon, fallbackLabel: "Spend" },
@@ -211,14 +232,6 @@ export const NAV_GROUPS: NavItem[][] = [
       labelKey: "nav.apikeys",
       icon: KeyRound,
       matchIds: ["apikeys", "telephony", "telephony-setup"],
-    },
-    // Local models sit directly under API Keys: the same "which brain" question,
-    // answered for the machine itself instead of a hosted account.
-    {
-      id: "local-models",
-      labelKey: "nav.local_models",
-      icon: OllamaIcon,
-      fallbackLabel: "Local models",
     },
     {
       id: "settings",
@@ -270,12 +283,6 @@ export const SETTINGS_HUB_ONLY_ITEMS: NavItem[] = [
   },
   { id: "appshots", labelKey: "nav.appshots", icon: CaptureIcon, fallbackLabel: "Appshots" },
   { id: "pets", labelKey: "nav.pets", icon: PetsIcon, fallbackLabel: "My Pets" },
-  {
-    id: "jarvis-actions",
-    labelKey: "nav.jarvis_actions",
-    icon: PermissionsIcon,
-    fallbackLabel: "Jarvis actions",
-  },
 ];
 
 /**
@@ -294,17 +301,162 @@ export const SETTINGS_HUB_IDS: readonly SectionId[] = [
   "languages",
   "profile",
   "agent-instructions",
-  "contacts",
   "socials",
   "apikeys",
   "telephony",
   "telephony-setup",
-  "local-models",
   "computers",
   "appshots",
   "shortcuts",
   "pets",
-  "jarvis-actions",
   "costs",
   "feedback",
 ];
+
+/*
+ * ── The five destinations (P1-G, 2026-10-11) ───────────────────────────────
+ *
+ * The sidebar used to show nine rows, six more under "More", footer icons and
+ * fourteen hub pages: thirty doors, several of them to the same room (forensic
+ * UI audit 2026-10-07, §2). The primary navigation is now exactly five
+ * destinations — CHAT · ORB · AGENTS · WORK · SETTINGS — and every other
+ * section is still one click away under a collapsed "Advanced" group.
+ *
+ * Nothing was renamed or removed: a destination is a VIEW over existing
+ * section ids. Its row lands on `target`, lights up while any of `sections`
+ * is on screen, and — where a destination spans several views — `tabs` draws
+ * one tab bar over them (`DestinationTabs`). Section ids, deep links, the
+ * detached-window registry and voice navigation (`NavigateSidebar`, pinned by
+ * the navigate tool's parity test against `SECTION_IDS`) are unchanged.
+ *
+ * 2026-10-12: CHAT and ORB (and WORK's "Live" tab, the HUD) became ONE
+ * destination — the HUD, which shows the memory orb, the voice orb and the
+ * chat together. The primary navigation is four rows now: HUD · AGENTS ·
+ * WORK · SETTINGS. The wiki notes ("memory") stay one click away under
+ * Advanced.
+ */
+
+export type PrimaryNavKey = "chat" | "agents" | "work" | "settings";
+
+export interface DestinationTab {
+  /** The section the tab lands on. */
+  id: SectionId;
+  labelKey: string;
+  fallbackLabel: string;
+  /** Further ids that count as this tab (renamed ids still in circulation). */
+  matchIds?: readonly SectionId[];
+}
+
+export interface PrimaryDestination {
+  key: PrimaryNavKey;
+  labelKey: string;
+  fallbackLabel: string;
+  icon: LucideIcon;
+  /** Where a click on the row lands. */
+  target: SectionId;
+  /** Every section that belongs to this destination. */
+  sections: readonly SectionId[];
+  /** One tab bar over the destination's views; absent for a single view. */
+  tabs?: readonly DestinationTab[];
+  /** The onboarding tour's anchor on this row (defaults to `nav-<key>`). */
+  tourAnchor?: string;
+}
+
+/** The Agentic IDE answers to three ids (it was renamed twice). */
+const IDE_IDS: readonly SectionId[] = ["agentic-ide", "chat-workspace", "agentic-ide-classic"];
+
+/**
+ * WORK: everything that is about work being done or done — what runs
+ * produced (Outputs), the coding workspace (Projects) and the activity board
+ * (the run inspector was retired upstream; the live HUD is the front page
+ * now). Routines live on each agent (AGENTS).
+ */
+export const WORK_TABS: readonly DestinationTab[] = [
+  { id: "visualization", labelKey: "nav5.work_outputs", fallbackLabel: "Outputs" },
+  { id: "agentic-ide", labelKey: "nav5.work_projects", fallbackLabel: "Projects", matchIds: IDE_IDS },
+  { id: "board", labelKey: "nav5.work_activity", fallbackLabel: "Activity" },
+];
+
+/** AGENTS: the agents, the tools they can reach, where more come from, the CLI seats. */
+export const AGENTS_TABS: readonly DestinationTab[] = [
+  { id: "agents", labelKey: "nav5.agents_agents", fallbackLabel: "Agents" },
+  { id: "armory", labelKey: "nav5.agents_tools", fallbackLabel: "Tools" },
+  { id: "marketplace", labelKey: "nav5.agents_browse", fallbackLabel: "Browse more" },
+  { id: "clis", labelKey: "nav5.agents_clis", fallbackLabel: "CLIs", matchIds: ["clis", "cli-test-hub"] },
+];
+
+export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
+  // The HUD: the chat, the live voice orb and the memory orb on one screen —
+  // the front page, first in the list. The old CHAT and ORB destinations and
+  // WORK's "Live" tab were three doors to pieces of it; their ids land here.
+  // The key stays "chat" so the new-chat "+" and the tour anchor keep their
+  // place on the row.
+  {
+    key: "chat",
+    labelKey: "nav5.hud",
+    fallbackLabel: "HUD",
+    icon: Gauge,
+    target: "chats",
+    sections: HUD_SECTION_IDS,
+  },
+  {
+    key: "agents",
+    labelKey: "nav5.agents",
+    fallbackLabel: "Agents",
+    icon: AgentsIcon,
+    target: "agents",
+    sections: ["agents", "armory", "marketplace", "clis", "cli-test-hub"],
+    tabs: AGENTS_TABS,
+  },
+  {
+    key: "work",
+    labelKey: "nav5.work",
+    fallbackLabel: "Work",
+    icon: Briefcase,
+    target: "visualization",
+    sections: ["visualization", ...IDE_IDS, "board"],
+    tabs: WORK_TABS,
+  },
+  {
+    key: "settings",
+    labelKey: "nav5.settings",
+    fallbackLabel: "Settings",
+    icon: SettingsIcon,
+    // The hub opens on its MODEL page for this id (see store/settingsPage).
+    target: "apikeys",
+    sections: SETTINGS_HUB_IDS,
+    tourAnchor: "settings",
+  },
+];
+
+/** The destination a section belongs to, or null for an Advanced-only section. */
+export function destinationFor(section: SectionId): PrimaryDestination | null {
+  return PRIMARY_DESTINATIONS.find((d) => d.sections.includes(section)) ?? null;
+}
+
+/** The tab of `tabs` that `section` counts as, or null. */
+export function tabFor(tabs: readonly DestinationTab[], section: SectionId): DestinationTab | null {
+  return tabs.find((tab) => tab.id === section || tab.matchIds?.includes(section)) ?? null;
+}
+
+/**
+ * Sections whose primary row IS the section under the same name: listing them
+ * again under Advanced would be a second row for the same door. (WORK lands on
+ * Artifacts, but its row is named "Work", so Artifacts keeps its own entry.)
+ */
+const PRIMARY_FRONT_DOORS: readonly SectionId[] = ["chats", "agents"];
+
+/**
+ * The sidebar's collapsed "Advanced" group: every sidebar section that is not
+ * the front door of a primary destination and not a Settings-hub page.
+ *
+ * Sections that are ALSO a destination tab (the HUD, Artifacts, Tool armory…)
+ * are listed here as well, on purpose: Advanced is the complete index, so a
+ * person who learned the old names still finds every one of them by name, and
+ * nothing that existed before became unreachable from the sidebar.
+ */
+export const ADVANCED_NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flat().filter(
+  (item) =>
+    !(SETTINGS_HUB_IDS as readonly string[]).includes(item.id) &&
+    !PRIMARY_FRONT_DOORS.includes(item.id),
+);

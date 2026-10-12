@@ -8,8 +8,10 @@ const call = { active: false, busy: false, connecting: false, toggleCall: vi.fn(
 vi.mock("@/components/agentic/useVoiceCall", () => ({ useVoiceCall: () => call }));
 vi.mock("@/hooks/useVoiceReadiness", () => ({ useVoiceReadiness: () => ({ connected: true }) }));
 vi.mock("@/hooks/useVoiceEngineDisplay", () => ({
-  useVoiceEngineDisplay: () => ({ providerLabel: "OpenAI Realtime", model: "gpt-realtime" }),
+  useVoiceEngineDisplay: () => ({ tier: "realtime", providerId: "openai-live", providerLabel: "OpenAI Realtime", model: "gpt-realtime" }),
 }));
+const requestApiKeysTab = vi.fn();
+vi.mock("@/lib/apiKeysTab", () => ({ requestApiKeysTab: (tab: string) => requestApiKeysTab(tab) }));
 vi.mock("@/hooks/usePromptMode", () => ({
   usePromptMode: () => ({ enabled: null, busy: false, toggle: async () => {} }),
 }));
@@ -50,5 +52,14 @@ describe("VoiceComposer", () => {
   it("names the voice engine under the card", () => {
     render(<VoiceComposer hint="" />);
     expect(screen.getByTestId("voice-engine").textContent).toContain("OpenAI Realtime");
+  });
+
+  it("names the voice mode and opens the tab that changes this engine", () => {
+    render(<VoiceComposer hint="" />);
+    const label = screen.getByTestId("voice-engine");
+    expect(screen.getByTestId("voice-engine-mode").textContent).toBe("Realtime");
+    expect(label.getAttribute("title")).toMatch(/OpenAI Realtime listens and speaks by itself/);
+    fireEvent.click(label);
+    expect(requestApiKeysTab).toHaveBeenCalledWith("realtime");
   });
 });

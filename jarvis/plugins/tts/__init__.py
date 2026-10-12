@@ -103,6 +103,10 @@ _TTS_CROSS_FAMILY_ORDER: tuple[str, ...] = (
 )
 
 
+# [tts].fallback values that mean "no fallback voice".
+_NO_FALLBACK = frozenset({"none", "off", "false", "no", "disabled"})
+
+
 def _canonical_tts_name(name: str) -> str:
     """Map any accepted TTS provider spelling to its canonical family name."""
     n = (name or "").strip().lower()
@@ -585,6 +589,11 @@ def build_tts_from_config(tts_cfg: Any) -> Any:
     primary = _build_provider(primary_cfg, primary_name)
 
     fallback_name = (getattr(tts_cfg, "fallback", "") or "").strip().lower()
+    # "none"/"off" is the settings page's own way to say "no backup voice".
+    # Read as a provider name it fell through to the cloud Gemini default, so a
+    # local Piper install silently carried a cloud fallback (2026-10-12).
+    if fallback_name in _NO_FALLBACK:
+        fallback_name = ""
     # Compare CANONICAL families, not raw strings: a provider="gemini" +
     # fallback="gemini-flash-tts" pair (or any alias pair) resolves to the SAME
     # family and must NOT build a FallbackTTS(gemini, gemini) single-family brick

@@ -53,6 +53,15 @@ _FALSE_COMPLETION_RE = re.compile(
     r"(?:you\s+)?(?:a|the|your)\b|"
     r"\bi(?:'ve|\s+have)\s+(?:just\s+)?(?:played|opened|started|sent|saved)\s+"
     r"(?:you\s+)?(?:a|the|your|it)\b|"
+    # Any first-person "I've <done> it" names a finished action outright, with
+    # or without an article. Live 2026-10-12 00:09 (Hermes on local Gemma):
+    # "I've added one diet cook to your Instamart cart" and "I have opened
+    # Chrome for you", both with no tool call behind them.
+    r"\bi(?:['\u2019]ve|\s+have)\s+(?:just\s+|now\s+|already\s+|successfully\s+)?"
+    r"(?:added|opened|closed|launched|started|sent|saved|played|ordered|booked|"
+    r"created|deleted|removed|placed|scheduled|turned|switched|muted|paused|"
+    r"stopped|bought|purchased|typed|clicked|installed|uninstalled|moved|"
+    r"renamed|copied|downloaded|uploaded|posted|submitted|cancelled|canceled)\b|"
     r"\bplaying\s+you\s+(?:a|the)\b|"
     r"\bte\s+(?:pongo|reproduzco)\s+(?:una?\s+)?"  # i18n-allow: ES output
     r"(?:playlist|cancion|musica)\b|"  # i18n-allow: ES output
@@ -403,6 +412,10 @@ def has_false_completion_claim(text: str) -> bool:
             continue
         normalized = _normalize(clause.body).strip()
         if _COURTESY_RE.search(normalized):
+            continue
+        if "?" in clause.separator or clause.body.rstrip().endswith("?"):
+            # A question is never a delivered result. "I've added it to your
+            # cart. Would you like anything else?" is the claim plus an offer.
             continue
         if previous_was_claim and _DEPENDENT_CONTINUATION_RE.match(normalized):
             # It elaborates the claim in front of it and dies with it.

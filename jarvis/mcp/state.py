@@ -91,7 +91,7 @@ def _read_mcp_json() -> dict[str, Any]:
     if not path.exists():
         return _empty_config()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError) as exc:
         log.warning("mcp.json not readable (%s) — using default", exc)
         return _empty_config()
@@ -138,7 +138,7 @@ def _migrate_legacy_if_needed() -> None:
     if _active_mcp_json_path().exists() or not LEGACY_STATE_PATH.exists():
         return
     try:
-        raw = json.loads(LEGACY_STATE_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(LEGACY_STATE_PATH.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return
 
@@ -270,7 +270,7 @@ def import_claude_desktop() -> tuple[int, list[str], str]:
         )
 
     try:
-        raw = json.loads(src.read_text(encoding="utf-8"))
+        raw = json.loads(src.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         # Line and column let the user fix their own file.
         return (0, [], f"Config is not valid JSON (line {exc.lineno}, column {exc.colno}).")

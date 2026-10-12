@@ -12,12 +12,15 @@ from types import SimpleNamespace
 from typing import Any, Literal
 from uuid import uuid4
 
+from jarvis.brain.identity import name_directive
+from jarvis.core.agent_brief import AGENT_BRIEF_RULE
 from jarvis.core.paths import user_data_dir
 from jarvis.core.runtime_refs import get_supervisor_tool_gateway
 from jarvis.core.tool_budget import VOICE_TOOL_BUDGET_S
+from jarvis.cu.direct import COMPUTER_CONTROL_RULES
 from jarvis.live.product import PRODUCT_BRIEF
 from jarvis.live.runtime import claim, register, unregister
-from jarvis.live.session import LiveVoiceSession
+from jarvis.live.session import LiveVoiceSession, _identity
 from jarvis.live.state import LiveLedger, TranscriptFragment
 from jarvis.live.tools import LiveTools, take_images
 from jarvis.realtime.audio import StreamingPcm16Resampler
@@ -36,7 +39,9 @@ _DUPLEX_REFUSAL_FALLBACK = "The selected voice engine cannot take a call right n
 # attribute so tests can pin it low.
 _TOOL_DEADLINE_S = VOICE_TOOL_BUDGET_S
 # Session built-ins of ``LiveTools``: always declared, whatever the budget.
-_SESSION_TOOLS = frozenset({"end_call", "discover_tools", "call_tool", "confirm_action"})
+_SESSION_TOOLS = frozenset(
+    {"end_call", "discover_tools", "call_tool", "confirm_action", "computer", "take_appshot"}
+)
 # Under a declaration budget (a provider's ``tool_declaration_budget_tokens``
 # or ``[voice].realtime_tool_declaration_budget_tokens``, the smaller wins), at
 # most this many catalog tools are declared directly; every other tool stays
@@ -104,6 +109,11 @@ def _log_late_probe(task: asyncio.Future) -> None:
 class NativeLiveVoiceSession(LiveVoiceSession):
     """Reuse native turn mechanics, without the legacy heuristic delegate loop."""
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._late_tool_results: list[tuple[int, int, str, dict]] = []
+        self._native_turn_complete = True
+
     async def _start(self, message: dict) -> None:
         self._adopt_desktop_session()
         gateway = get_supervisor_tool_gateway()
@@ -115,6 +125,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         self._tools = LiveTools(
             gateway, self._ledger, self.session_id, language=self._language, backend_model=""
         )
+        self._tools.ask_hangup = self._ask_voice_hangup
         try:
             claim(self.session_id)
             self._initial_seed = self._take_initial_context()
@@ -135,16 +146,21 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 language=self._language,
                 voice=getattr(settings, "voice", "") or "",
                 instructions=(
-                    "You are Personal Jarvis. "
+                    (_identity(self._config) or name_directive(""))
+                    + "\n\n"
                     + PRODUCT_BRIEF
                     + " "
                     + language_rule
                     + "Use your tools directly "
                     "for actions, private information and current facts. Use discover_tools and "
-                    "call_tool for any tool not declared directly. For computer control, capture "
-                    "screen_snapshot, inspect the image, call the desktop primitives, and verify "
-                    "the result with a new snapshot. Do not call a separate computer-use harness. "
-                    "When the user asks for an appshot, call take_appshot. "
+                    "call_tool for any tool not declared directly. "
+                    + (
+                        # Only when Computer Use is on: the tool is then in the catalog.
+                        COMPUTER_CONTROL_RULES
+                        if any(d.name == "computer" for d in self._tools.catalog())
+                        else ""
+                    )
+                    + " When the user asks for an appshot, call take_appshot. "
                     "Request confirmation for pending approvals. Use confirm_action only after "
                     "explicit approval. A started job is not complete. Never invent tool results. "
                     "Use workspace-orchestrate for coding tasks: inspect and resolve project, "
@@ -153,7 +169,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     "prompt) in the named or visible workspace; never spawn_worker. "
                     "Explicit references override the visible workspace; ask on ambiguity. "
                     "Do not switch the UI to address another workspace. Reuse request_id on "
-                    "retries and never replay uncertain delivery."
+                    "retries and never replay uncertain delivery. "
+                    + AGENT_BRIEF_RULE
                 ),
                 history=tuple(
                     {"role": item["role"], "text": item["delta"]} for item in self._initial_seed
@@ -205,6 +222,9 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             await self._send_json(
                 {
                     "type": "audio_ready",
+                    "sound_effects": bool(
+                        getattr(getattr(self._config, "ui", None), "sound_effects", True)
+                    ),
                     "provider": self.active_provider,
                     "model": model,
                     "input_sample_rate": rate,
@@ -214,6 +234,9 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     "input_muted": self._input_muted,
                 }
             )
+            # Audio flows over this socket: results that finished before the
+            # call may be offered at the first pause, which is now.
+            self._notify_pause()
         except BaseException:
             await self.end(reason="error")
             raise
@@ -390,11 +413,12 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     except asyncio.CancelledError:
                         raise
                     except Exception:
+                        # Shutdown is quiet; active failures enter the recovery loop.
                         if self._closing:
                             return
-                        if await self._recover():
+                        if await self._wait_for_connection():
                             break
-                        raise
+                        return
                     await self._native_event(event)
         except asyncio.CancelledError:
             raise
@@ -409,11 +433,17 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             )
         finally:
             unregister(self.session_id)
+            self._notify_ended()
             self._closed.set()
 
     async def _native_event(self, event: Any) -> None:
         assert self._tools is not None and self._ledger is not None
+        if event.type in {
+            "audio_delta", "input_transcript", "output_transcript_delta", "tool_call",
+        }:
+            self._native_turn_complete = False
         if event.type == "audio_delta" and event.audio is not None:
+            self._report_started()
             await self._note_speaking()
             await self._send_binary(event.audio.pcm)
         elif event.type in {"input_transcript", "output_transcript_delta"}:
@@ -448,6 +478,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                         task = asyncio.create_task(self._request_native_response(self._language))
                         self._control_tasks.add(task)
                         task.add_done_callback(self._control_tasks.discard)
+            if role == "assistant":
+                self._report_started()
             if role == "assistant" or event.is_final:
                 stamp = time.monotonic_ns() // 1_000_000
                 await asyncio.to_thread(
@@ -480,11 +512,15 @@ class NativeLiveVoiceSession(LiveVoiceSession):
             if role == "user" and event.is_final:
                 self._transcript.finish("user")
         elif event.type == "tool_call":
+            # The model is answering the report, starting with a tool.
+            self._report_started()
             await self._note_thinking()
             task = asyncio.create_task(self._call(event, self._tools.revision))
-            self._jobs.add(task)
-            task.add_done_callback(self._jobs.discard)
+            self._track_job(task)
         elif event.type in {"interrupted", "speech_started"}:
+            # A barge-in into a report: the user heard its start and chose to
+            # talk. The report is in the model's context for follow-ups.
+            self._report_finished(delivered=True)
             barge_in = event.type == "speech_started" and (self._speaking or self.playback_active)
             self._speaking = False
             self._thinking = False
@@ -492,8 +528,11 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 await self._interrupt_reply()
             await self._emit_indicator({"type": "tts_cancel"})
         elif event.type == "turn_complete":
+            self._native_turn_complete = True
+            self._report_finished(delivered=True)
             self._transcript.finish("assistant")
             await self._note_turn_end()
+            self._notify_pause()
         elif event.type == "usage":
             usage = event.usage or {}
             await asyncio.to_thread(
@@ -549,19 +588,12 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 work.cancel()  # cancelling the call still cancels its tool, as before
                 raise
             except TimeoutError:  # a slow tool is released, not dropped
-                result = self._release_slow_tool(work, str(event.tool_name or ""))
-            images = take_images(result)
+                self._native_turn_complete = False  # The pending answer starts another response.
+                result = self._release_slow_tool(work, str(event.tool_name or ""), revision)
             if self._closing:
                 return
-            send_image = getattr(self._connection, "send_image", None)
-            if images and not callable(send_image):
-                result = {
-                    "success": False,
-                    "error": "This voice server cannot receive screen images.",
-                }
-            if callable(send_image):
-                for image in images:
-                    await send_image(base64.b64decode(image["data"]), image["mime"])
+            result = await self._send_tool_images(result)
+            self._native_turn_complete = False
             await self._connection.send_tool_result(event.call_id, event.tool_name, result)
             if self._tools.end_requested:
                 asyncio.create_task(self.end(reason="voice_pattern"), name="native-live-hangup")
@@ -570,9 +602,94 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         except Exception:
             log.exception("Native tool call failed; receipt retained")
 
-    def _release_slow_tool(self, work: asyncio.Future, name: str) -> dict:
+    async def _send_tool_images(self, result: dict) -> dict:
+        """Keep the execution receipt even when its visual evidence cannot be delivered."""
+        images = take_images(result)
+        if not images:
+            return result
+        send_image = getattr(self._connection, "send_image", None)
+        try:
+            if not callable(send_image):
+                raise RuntimeError("This voice server cannot receive screen images.")
+            for image in images:
+                await send_image(base64.b64decode(image["data"]), image["mime"])
+        except Exception:
+            log.warning("Native tool screenshot delivery failed", exc_info=True)
+            return {
+                **result,
+                "success": False,
+                "verified": False,
+                "error": (
+                    str(result.get("error") or "") + " The tool's screenshot could not be "
+                    "delivered. Its execution receipt is preserved below; an action may "
+                    "already have run. Do not claim visual success or repeat that action "
+                    "without checking the current screen."
+                ).strip(),
+            }
+        return result
+
+    def _notify_pause(self) -> None:
+        # The original function call already received its pending answer. Its
+        # final receipt is a new report at a pause, never a second function
+        # response and never a repeated action. A changed request/connection
+        # invalidates the queued report; the durable ledger still keeps it.
+        if self._native_turn_complete and not self._has_pending_work():
+            self._thinking = False
+        if self._tools is not None:
+            self._late_tool_results = [
+                item for item in self._late_tool_results
+                if item[0] == self._wire_epoch and item[1] == self._tools.revision
+                and not self._tools.cancel_token.is_cancelled()
+            ]
+        if self._late_tool_results and self.ready_for_report:
+            item = self._late_tool_results.pop(0)
+            self._report_sent()  # Reserve the pause before any asynchronous send.
+            task = asyncio.create_task(self._report_late_tool(item), name="native-tool-report")
+            self._control_tasks.add(task)
+            task.add_done_callback(self._control_tasks.discard)
+            return
+        super()._notify_pause()
+
+    async def _report_late_tool(self, item: tuple[int, int, str, dict]) -> None:
+        from jarvis.realtime.report_prompt import report_update_prompt
+
+        epoch, revision, name, result = item
+        try:
+            if not self._late_tool_current(epoch, revision):
+                self._cancel_report_timeout()
+                self._report_state = ""
+                return
+            result = await self._send_tool_images(result)
+            if not self._late_tool_current(epoch, revision):
+                self._cancel_report_timeout()
+                self._report_state = ""
+                return
+            await self._connection.send_text(report_update_prompt(
+                f"The previously pending tool {name} has finished.",
+                json.dumps(result, ensure_ascii=False, default=str),
+                language=self._language,
+                kind="tool_completion",
+            ))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Delivery may be uncertain. Keep the durable receipt, but never
+            # retry an action or automatically repeat a partially sent report.
+            self._cancel_report_timeout()
+            self._report_state = ""
+            log.warning("Late native tool report could not be delivered", exc_info=True)
+
+    def _late_tool_current(self, epoch: int, revision: int) -> bool:
+        return bool(
+            self.is_active and not self._recovering and not self._input_active
+            and epoch == self._wire_epoch and self._tools is not None
+            and revision == self._tools.revision and not self._tools.cancel_token.is_cancelled()
+        )
+
+    def _release_slow_tool(self, work: asyncio.Future, name: str, revision: int) -> dict:
         """Answer the model honestly while the tool runs on in the background."""
         started = time.monotonic()
+        epoch = self._wire_epoch
         log.warning(
             "Native tool %s still running after %.0fs; releasing the live model with a "
             "pending result, the tool finishes in the background",
@@ -597,6 +714,14 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                     waited_ms,
                     bool(isinstance(outcome, dict) and outcome.get("success")),
                 )
+                if isinstance(outcome, dict) and not self._closing:
+                    self._late_tool_results.append((epoch, revision, name, outcome))
+                    if len(self._late_tool_results) > 16:
+                        self._late_tool_results.pop(0)
+                        log.warning(
+                            "Late native tool report queue full; oldest receipt stays in ledger"
+                        )
+                    self._notify_pause()
 
         work.add_done_callback(_late)
         return {
@@ -614,6 +739,7 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         if self._closing:
             return
         if message.get("type") == "text_input" and self._connection is not None:
+            self._native_turn_complete = False
             if self._tools is not None:
                 self._tools.user_text = str(message.get("text", ""))
                 self._tools.revision += 1
@@ -633,8 +759,8 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         if str(report or "").strip():
             # The model reasons over the agent's full report before speaking
             # (``report_prompt``); refused mid-turn so the caller retries at
-            # the next boundary instead of talking over anyone.
-            if self._thinking or self._speaking or self.playback_active or self._input_active:
+            # the next pause instead of talking over anyone.
+            if not self.ready_for_report:
                 return False
             from jarvis.realtime.report_prompt import report_update_prompt
 
@@ -644,6 +770,14 @@ class NativeLiveVoiceSession(LiveVoiceSession):
                 language=str(kwargs.get("language") or self._language),
                 kind=str(kwargs.get("spoken_kind") or "completion"),
             )
+            self._report_sent()
+            try:
+                await self._connection.send_text(text)
+            except BaseException:
+                self._cancel_report_timeout()
+                self._report_state = ""
+                raise
+            return True
         await self._connection.send_text(text)
         return True
 
@@ -654,11 +788,15 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         what it looks at when the user asks. Servers without image input
         decline, and the caller parks the appshot for the next message.
         """
-        del note
         send_image = getattr(self._connection, "send_image", None)
         if not self.is_active or not callable(send_image):
             return False
         await send_image(image, mime)
+        # Native transports have no silent text-input contract. The workspace
+        # tool asks the model to select this scoped ID before it can hand off work.
+        from jarvis.core.image_references import appshot_context
+
+        appshot_context(self.session_id, image, mime, self._config)
         return True
 
     async def end(self, *, reason: str = "client_stop") -> None:
@@ -668,9 +806,11 @@ class NativeLiveVoiceSession(LiveVoiceSession):
         self._stop_watching_input_mute()
         self._clear_media_levels()
         self._closing = True
+        self._late_tool_results.clear()
         await self._publish_phase("idle")
         self._hangup_reason = reason
         unregister(self.session_id)
+        self._notify_ended()
         if self._tools is not None:
             await self._tools.close()
         for task in list(self._control_tasks):

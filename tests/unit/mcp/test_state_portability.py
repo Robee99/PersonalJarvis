@@ -56,3 +56,17 @@ def test_explicit_mcp_config_path_is_not_silently_redirected(
 
     assert explicit.exists()
     assert not (tmp_path / "data" / "mcp.json").exists()
+
+
+def test_mcp_config_saved_with_a_byte_order_mark_still_loads(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    # PowerShell's Set-Content -Encoding UTF8 and older Notepad write a BOM;
+    # reading it as plain UTF-8 dropped every server the person added.
+    config = tmp_path / "mcp.json"
+    servers = {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}
+    config.write_bytes(b"\xef\xbb\xbf" + json.dumps({"mcpServers": servers}).encode())
+    monkeypatch.setenv("JARVIS_MCP_CONFIG", str(config))
+
+    assert state.load_config()["mcpServers"]["fetch"]["command"] == "uvx"

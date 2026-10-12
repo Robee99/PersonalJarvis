@@ -215,6 +215,15 @@ _DSH: Final[tuple[PermissionMode, ...]] = (
     ),
 )
 
+_HERMES: Final[tuple[PermissionMode, ...]] = (
+    PermissionMode(
+        "auto",
+        "Hermes policy",
+        "One-shot mode never asks; Hermes approves its own tool calls, so "
+        "only use it in a folder you would let it change.",
+    ),
+)
+
 _CURSOR: Final[tuple[PermissionMode, ...]] = (
     PermissionMode(
         "ask",
@@ -308,19 +317,20 @@ JARVIS_LADDER: Final[str] = "jarvis"
 
 # runner (or JARVIS_LADDER) -> (ladder, default)
 _LADDERS: Final[dict[str, tuple[tuple[PermissionMode, ...], str]]] = {
-    "claude-cli": (_CLAUDE, "acceptEdits"),
-    "codex-cli": (_CODEX, "auto"),
-    "agy-cli": (_AGY, "accept-edits"),
-    "grok-cli": (_GROK, "acceptEdits"),
-    "opencode-cli": (_OPENCODE, "default"),
+    "claude-cli": (_CLAUDE, "bypassPermissions"),
+    "codex-cli": (_CODEX, "full-access"),
+    "agy-cli": (_AGY, "skip-permissions"),
+    "grok-cli": (_GROK, "bypassPermissions"),
+    "opencode-cli": (_OPENCODE, "auto"),
     "kimi-cli": (_KIMI, "auto"),
     # GLM Coding Plan drives the Claude Code binary, so it takes Claude
     # Code's own words.
-    "glm-cli": (_CLAUDE, "acceptEdits"),
+    "glm-cli": (_CLAUDE, "bypassPermissions"),
     "dsh-cli": (_DSH, "auto"),
+    "hermes-cli": (_HERMES, "auto"),
     "cursor-cli": (_CURSOR, "auto"),
-    "api": (_API, "ask"),
-    JARVIS_LADDER: (_JARVIS, "ask"),
+    "api": (_API, "auto"),
+    JARVIS_LADDER: (_JARVIS, "bypass"),
     "society": (_SOCIETY, "bypass"),
 }
 
@@ -393,7 +403,16 @@ def society_mode_supported(runner: str, mode: str) -> bool:
     if mode == "bypass":
         return True
     if mode == "ask":
-        return runner in {"brain", "codex-cli", "claude-cli", "glm-cli"}
+        # Hermes and OpenClaw ask over ACP (session/request_permission) before
+        # the actions their own approval policy marks as risky.
+        return runner in {
+            "brain",
+            "codex-cli",
+            "claude-cli",
+            "glm-cli",
+            "hermes-cli",
+            "openclaw-cli",
+        }
     if mode == "always_ask":
         return runner in {"brain", "codex-cli"}
     return False

@@ -113,3 +113,30 @@ def test_files_plus_dragged_text_together() -> None:
     )
     assert len(images) == 1
     assert "x.png" in text and "https://ref.example" in text
+
+
+def test_a_working_document_arrives_whole() -> None:
+    """A 13 kB checklist used to lose its second half at 8 000 characters."""
+    body = "\n".join(f"- step {i}: do the thing carefully" for i in range(400))
+    assert 12_000 < len(body) < 24_000
+    text, _ = classify_and_compose([DroppedItem("audit.md", "text/markdown", body.encode())])
+    assert "step 399" in text
+    assert "Cut here" not in text
+
+
+def test_a_cut_file_says_it_was_cut() -> None:
+    body = "x" * 30_000
+    text, _ = classify_and_compose(
+        [DroppedItem("big.txt", "text/plain", body.encode())],
+        max_text_chars=1_000,
+        max_total_chars=50_000,
+    )
+    assert "Cut here: only the first 1,000 of 30,000 characters" in text
+
+
+def test_the_combined_budget_cut_is_announced() -> None:
+    items = [DroppedItem(f"f{i}.txt", "text/plain", ("y" * 900).encode()) for i in range(5)]
+    text, _ = classify_and_compose(items, max_text_chars=1_000, max_total_chars=2_000)
+    assert len(text) <= 2_000
+    assert text.rstrip().endswith("before acting on it.]")
+    assert " …" not in text

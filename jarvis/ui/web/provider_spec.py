@@ -387,10 +387,6 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             "AI Studio and Vertex are SEPARATE accounts."
         ),
         alt_credential=_GEMINI_VERTEX,
-        # Maintainer-recommended brain (2026-06-22): best real-world experience.
-        # Badge on the brain card; the model picker highlights gemini-3.5-flash.
-        recommended=True,
-        recommended_model="gemini-3.5-flash",
     ),
     # ── Brain: the SAME Gemini models on Google Cloud Vertex AI ──
     # Its own card, not a checkbox on the Gemini one, for a reason the 2026-06-22
@@ -530,6 +526,11 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             "OpenAI API key (starts with sk-). Billed per token. Shared by the "
             "GPT brain, Whisper STT and OpenAI TTS."
         ),
+        # Maintainer-recommended brain (2026-10-03, was Gemini): the same pick
+        # as the recommended starter plan (OpenAI GPT-Live), so the API Keys
+        # page and the first-run guide recommend one provider. Badge only — no
+        # recommended model, the live catalog decides which GPT is current.
+        recommended=True,
     ),
     ProviderSpec(
         id="codex",
@@ -593,6 +594,56 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         caution=(
             "The free NIM tier is slow — 10-30s to the first response. Fine for "
             "background tasks, sluggish as your main or voice brain."
+        ),
+    ),
+    # Nous Portal: Nous Research's hosted OpenAI-compatible API (a cloud model
+    # host). Not "Hermes Agent", which is a separate CLI agent product.
+    ProviderSpec(
+        id="nous",
+        label="Nous Portal",
+        tier="brain",
+        auth_mode="api_key",
+        secret_keys=("nous_api_key",),
+        dashboard_url="https://portal.nousresearch.com",
+        signup_url="https://portal.nousresearch.com",
+        credential_help=(
+            "Nous Portal API key (starts with sk-nous-) from the API keys "
+            "section of portal.nousresearch.com. A cloud service: one key "
+            "reaches the models Nous hosts, including Hermes. Free accounts "
+            "can use the :free models (about 50 requests a minute); other "
+            "models are billed on your Nous account. A gateway on this machine "
+            "(server URL on localhost) needs no key here."
+        ),
+        # The free route the picker highlights; works on a free account.
+        recommended_model="stepfun/step-3.7-flash:free",
+        # The server-URL field: point the card at a local OpenAI-compatible
+        # gateway. Still a cloud provider (billing "api", no vision) because the
+        # models behind such a gateway run at Nous.
+        supports_base_url=True,
+        default_base_url="https://inference-api.nousresearch.com/v1",
+    ),
+    # Hermes Agent as the main brain: Jarvis hands every turn to Hermes's local
+    # API server, and Hermes picks the model (local Qwen, local Gemma, cloud)
+    # and runs its own tools. Keyless here: the server key stays in Hermes's
+    # own .env and is read in place.
+    ProviderSpec(
+        id="hermes",
+        label="Hermes Agent",
+        tier="brain",
+        auth_mode="none",
+        secret_keys=(),
+        dashboard_url=None,
+        install_hint="hermes gateway",
+        signup_url="https://github.com/NousResearch/hermes-agent",
+        supports_base_url=True,
+        default_base_url="http://127.0.0.1:8642",
+        credential_help=(
+            "Hands every turn to Hermes Agent on this machine. Hermes chooses "
+            "the model (its local Qwen or Gemma, or a cloud model) and runs its "
+            "own tools, MCP servers, memory and subagents. Start its API server "
+            "with API_SERVER_ENABLED=true in Hermes's .env and run 'hermes "
+            "gateway'. The model field may name a Hermes route (qwen, gemma) or "
+            "provider::model; empty lets Hermes decide."
         ),
     ),
     # Ollama re-added 2026-07-25 as a keyless LOCAL provider (auth_mode

@@ -57,12 +57,21 @@ _FORBIDDEN_EXACT = frozenset(
         "computer_use",
         "click",
         "click-element",
+        "camera",
+        "camera-snapshot",
+        "camera_snapshot",
         "click_element",
         "dispatch-with-review",
         "dispatch_with_review",
         "drag",
         "hotkey",
         "jarvisctl",
+        "laptop-power",
+        "laptop_power",
+        "system-volume",
+        "system_volume",
+        "window-control",
+        "window_control",
         "jctl",
         "manage-mcp-server",
         "manage_mcp_server",
@@ -73,6 +82,8 @@ _FORBIDDEN_EXACT = frozenset(
         "navigate",
         "open-app",
         "open_app",
+        "point-at",
+        "point_at",
         "run-shell",
         "run_shell",
         "run-skill",
@@ -782,6 +793,9 @@ class WorkerToolBroker:
         if not scope.specs:
             return None
         server = self._ensure_server()
+        # A cold loopback server must not consume the worker's grant lifetime
+        # before the capability is handed to it. This scope is not published yet.
+        scope.expires_at = time.monotonic() + max(1.0, float(ttl_s))
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._reap_locked()

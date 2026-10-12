@@ -890,6 +890,8 @@ async def _frozen_status(current: str) -> dict[str, object]:
         # announced — the user should learn it exists — and apply refuses with
         # this sentence before downloading anything.
         "blocked_reason": None,
+        # The same verdict as a stable code the UI translates.
+        "blocked_code": None,
     }
     await _sweep_old_downloads_once()
 
@@ -932,7 +934,10 @@ async def _frozen_status(current: str) -> dict[str, object]:
     if _is_newer(version, current):
         result["update_available"] = True
         result["notes"] = latest.get("notes")
-        result["blocked_reason"] = update_blocker()
+        blocker = update_blocker()
+        if blocker is not None:
+            result["blocked_reason"] = blocker.message
+            result["blocked_code"] = blocker.code
     return result
 
 
@@ -1063,7 +1068,7 @@ async def _apply_frozen(
     if blocker is not None:
         # Asked before the download: otherwise the user waits for several
         # hundred MB only to learn the app cannot replace itself where it is.
-        raise HTTPException(status_code=409, detail=blocker)
+        raise HTTPException(status_code=409, detail=blocker.message)
 
     _progress.version = release_version
 
@@ -1295,6 +1300,27 @@ async def update_apply(request: Request, force: bool = False) -> dict[str, objec
         except Exception as exc:  # noqa: BLE001 — re-raised; this only records it
             _progress.fail(f"{type(exc).__name__}: {exc}")
             raise
+
+
+async def managed_checkout_root() -> Path | None:
+    """The managed checkout this process runs from, or ``None``.
+
+    The public face of the managed-install guard for ``jarvis update``
+    (``jarvis/cli/app_update.py``), which finalizes the update itself.
+    """
+    return await _resolve_managed_repo()
+
+
+async def stage_managed_update() -> dict[str, object]:
+    """Stage the newest release for a managed checkout from the terminal.
+
+    The twin of ``POST /api/update/apply`` for ``jarvis update`` while the app
+    is closed: same guard, same pinned tag, same pending-update manifest. The
+    caller then runs ``relauncher.finalize_pending_update`` instead of a
+    restart. Raises ``HTTPException`` exactly like the route does.
+    """
+    async with _apply_lock:
+        return await _apply_managed()
 
 
 async def _apply_managed() -> dict[str, object]:

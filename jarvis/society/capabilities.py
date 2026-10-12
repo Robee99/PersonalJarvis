@@ -60,6 +60,15 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
     {
         "spawn-worker",
         "spawn-subagents",
+        # A camera frame shows the person; an unattended agent never takes one.
+        "camera",
+        "camera-snapshot",
+        # The arrow speaks to the person at the screen, so only Jarvis aims it.
+        "point-at",
+        # Hardware power settings stay with Jarvis, like app control.
+        "laptop-power",
+        "system-volume",
+        "window-control",
         "multi-spawn",
         "dispatch-to-harness",
         "dispatch-to-admin",
@@ -97,6 +106,7 @@ _CORE_TOOLS: Final[frozenset[str]] = frozenset(
         "wiki-ingest",
         "wiki-list",
         "wiki-page-read",
+        "memory_chats",
         "run-skill",
         "inspect-pointer",
         "open-app",
@@ -199,6 +209,8 @@ def _one_liner(text: str, limit: int = 140) -> str:
 
 
 def _label(tool_name: str, kind: CapabilityKind, tool: Any = None) -> str:
+    if kind is CapabilityKind.PLUGIN and tool_name.startswith("api_"):
+        return getattr(tool, "display_name", None) or tool_name
     if kind is CapabilityKind.CLI:
         display = getattr(tool, "display_name", None)
         if isinstance(display, str) and display.strip():

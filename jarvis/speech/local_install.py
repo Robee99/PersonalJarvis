@@ -72,6 +72,13 @@ def _install_engine(entry: LocalProvider) -> tuple[bool, str]:
     return install_pip_package(entry.pip_package, only_binary=True)
 
 
+def _extras_missing(entry: LocalProvider) -> list[str]:
+    """The optional bundles of *entry* not on disk yet (fetched by the next install)."""
+    from jarvis.speech.local_models import bundle_present
+
+    return [model_id for model_id in entry.extra_bundles if not bundle_present(model_id)]
+
+
 def _download_model(
     entry: LocalProvider, progress: Callable[[str], None] | None = None
 ) -> None:
@@ -89,6 +96,11 @@ def _download_model(
     # and stopping after German would leave the assistant mute in English.
     for model_id in entry.bundles:
         download_sherpa_model(model_id, progress=progress)
+    for model_id in entry.extra_bundles:
+        try:
+            download_sherpa_model(model_id, progress=progress)
+        except Exception as exc:  # noqa: BLE001 — optional voice: the required ones above already speak
+            log.warning("Optional local model %s was not downloaded: %s", model_id, exc)
 
 
 def _run_install(provider_id: str) -> None:
@@ -249,7 +261,7 @@ def start_install(provider_id: str) -> dict[str, Any]:
             "message": f"'{provider_id}' is not a local provider.",
         }
     status = local_status(provider_id)
-    if status is not None and status.ready:
+    if status is not None and status.ready and not _extras_missing(entry):
         return {
             "state": "done",
             "ready": True,
@@ -269,6 +281,22 @@ def start_install(provider_id: str) -> dict[str, Any]:
         daemon=True,
     ).start()
     return {"state": "running", "ready": False, "message": "Install started."}
+
+
+def fetch_missing_extras(provider_id: str) -> bool:
+    """Start fetching *provider_id*'s optional bundles if its voice already works.
+
+    Only for an installed, ready provider with something missing, so this never
+    pip-installs anything and never starts a first-time install the user did not
+    ask for. Returns True when a download was started.
+    """
+    entry = get_local_provider(provider_id)
+    if entry is None or not entry.extra_bundles:
+        return False
+    status = local_status(provider_id)
+    if status is None or not status.ready or not _extras_missing(entry):
+        return False
+    return start_install(provider_id).get("state") == "running"
 
 
 def install_status(provider_id: str) -> dict[str, Any]:

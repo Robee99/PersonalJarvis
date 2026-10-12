@@ -69,6 +69,30 @@ The bundled Silero VAD model (`jarvis/assets/vad/`) carries its own MIT license
 from its own authors and keeps it — the switch does not touch it, and no
 dependency's terms change either. Nothing is relicensed by being included here.
 
+The Agentic IDE thread work log contains portions adapted from
+[T3 Code](https://github.com/pingdotgg/t3code) @ `e22c880`, MIT License,
+Copyright (c) 2026 T3 Tools Inc. The full text ships in
+[`third_party/t3code/LICENSE`](../third_party/t3code/LICENSE), and every adapted
+file names its source in a header comment.
+
+The Computers settings page (`jarvis/ui/web/frontend/src/views/computers/surface.tsx`
+and `ComputerRow.tsx`) contains portions of the settings layout, environment row,
+status dot and empty state adapted from T3 Code @ `12069ee` under the same MIT
+license; both files name their source in a header comment. The connection features of the same page — several addresses per computer, the SSH-config and Tailscale suggestions, the on/off switch, automatic placement and GitHub sharing (`jarvis/computers/ssh_config.py`, `tailscale.py`, `placement.py`, `github_access.py`; `views/computers/RouteList.tsx`, `Placement.tsx`, `GithubAccess.tsx`, `machineKind.tsx`) — adapt further portions of T3 Code @ `12069ee`, each credited the same way.
+
+The Agentic IDE explorer's coloured file-type icons
+(`jarvis/ui/web/frontend/src/components/agentic/sidePanel/explorer/fileIconSprite.ts`
+and `fileIcon.ts`) contain SVG symbols and file-name rules copied from
+[@pierre/trees](https://www.npmjs.com/package/@pierre/trees) 1.0.0-beta.6,
+Apache License 2.0, Copyright 2025 Pierre Computer Company, full text in
+[`third_party/pierre-trees/LICENSE`](../third_party/pierre-trees/LICENSE), plus a
+colour table adapted from T3 Code @ `31f9d83` under the MIT license above.
+
+A few well-separated portions of NousResearch/hermes-agent (MIT, Copyright (c)
+2025 Nous Research) are adapted into the agent code. Each adapted block names
+its upstream file and commit in a header comment; the license text and the list
+of adapted files live in [`third_party/hermes-agent/`](../third_party/hermes-agent/).
+
 ## Still to do at the 2.0 release
 
 - [ ] `homebrew-tap/Formula/personal-jarvis-installer.rb` and

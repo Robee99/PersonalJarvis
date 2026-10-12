@@ -24,6 +24,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
+import pytest
+
 import jarvis.speech.pipeline as pipeline_mod
 from jarvis.core.events import TranscriptionUpdate
 from jarvis.core.protocols import AudioChunk
@@ -32,6 +34,8 @@ from jarvis.platform.permissions import PermissionId
 from jarvis.sessions.constants import HANGUP_HOTKEY, HANGUP_TURN_COMPLETE
 from jarvis.speech.pipeline import PipelineState, SpeechPipeline, TurnTakingState
 from tests.fakes.fake_permission_service import FakePermissionService
+
+pytestmark = pytest.mark.usefixtures("granted_microphone")
 
 
 class FakeTTS:
@@ -229,7 +233,12 @@ async def test_ptt_session_records_until_release_and_submits(monkeypatch):
     reason = await asyncio.wait_for(pipe._ptt_session(), timeout=2.0)
 
     assert reason == HANGUP_TURN_COMPLETE
-    assert captured.get("pcm") == _CHUNK_100MS * 5, "held audio submitted on release"
+    held = _CHUNK_100MS * 5
+    submitted = captured.get("pcm")
+    assert isinstance(submitted, bytes)
+    assert submitted.startswith(held), "held audio submitted on release"
+    # Only digital silence follows: the quiet tail the recognizer needs.
+    assert set(submitted[len(held):]) <= {0}
     # PTT must bypass the incomplete-sentence buffer — the key release is the
     # endpoint, so the turn goes straight to the brain (no flush-timer delay).
     assert captured.get("skip_completion") is True
@@ -565,7 +574,8 @@ class _TrackedInputBuffer:
         self._chunks = chunks
         self.closed = asyncio.Event()
 
-    async def stream(self) -> AsyncIterator[AudioChunk]:
+    async def stream(self, *, discard_before_ns=None) -> AsyncIterator[AudioChunk]:
+        assert discard_before_ns is None, "PTT must retain all held audio"
         for pcm in self._chunks:
             yield AudioChunk(pcm=pcm, sample_rate=16_000, timestamp_ns=0, channels=1)
             await asyncio.sleep(0)

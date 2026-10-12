@@ -98,7 +98,7 @@ def test_dangerous_commands_carry_ask_tier() -> None:
     assert tools["app-restart"].risk_tier == "ask"
     assert tools["mission-cancel"].risk_tier == "ask"
     assert tools["task-cancel"].risk_tier == "ask"
-    assert tools["brain-switch"].risk_tier == "monitor"
+    assert tools["brain-switch"].risk_tier == "ask"
     assert tools["wake-word-get"].risk_tier == "monitor"
 
 

@@ -223,6 +223,13 @@ def text_is_sparse(
     return len(text.strip()) < threshold
 
 
+# Tesseract word confidence is 0-100 (-1 marks a layout box, not a word). A word
+# below this is not passed to the model as text: it becomes UNREADABLE_MARK so
+# the model knows something was there but cannot quote it as fact.
+OCR_MIN_WORD_CONFIDENCE = 40.0
+UNREADABLE_MARK = "[unreadable]"
+
+
 @dataclass(frozen=True, slots=True)
 class OcrTextRegion:
     """One OCR line and its image-local bounding rectangle."""
@@ -238,6 +245,9 @@ class OcrSupplement:
     text: str = ""
     regions: tuple[OcrTextRegion, ...] = ()
     degradation: Degradation | None = None
+    #: Mean word confidence (0-100) of the recognised words, when the engine
+    #: reports one. ``None`` means the engine gave no confidence at all.
+    confidence: float | None = None
 
 
 def _ocr_unavailable(message: str) -> OcrSupplement:
@@ -249,111 +259,265 @@ def _ocr_unavailable(message: str) -> OcrSupplement:
     )
 
 
-def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
-    """Run OCR once and retain line boxes for deterministic pixel redaction."""
+def _word_confidence(confs: list[Any], index: int) -> float | None:
+    """The engine's confidence for one word, or None when it reports none."""
+    try:
+        value = float(confs[index])
+    except (IndexError, TypeError, ValueError):  # engine gave no usable score
+        return None
+    return value if value >= 0 else None
+
+
+@dataclass(frozen=True, slots=True)
+class _OcrWord:
+    """One recognised word, engine-neutral: confidence on a 0-100 scale."""
+
+    text: str
+    confidence: float | None
+    bounds: tuple[int, int, int, int]
+    line: tuple[int, ...]
+
+
+_RAPIDOCR_ENGINE: Any = None
+#: Why RapidOCR could not start in this process (installed but broken: a
+#: missing native library, or a frozen build without its bundled models).
+#: Set once; the engine is then skipped instead of rebuilt on every capture.
+_RAPIDOCR_FAILURE: str | None = None
+#: One "no OCR engine" line per process, not one per capture.
+_NO_ENGINE_LOGGED = False
+
+
+def _rapidocr_engine() -> Any:
+    """The process's RapidOCR engine, or None when it is absent or broken."""
+    global _RAPIDOCR_ENGINE, _RAPIDOCR_FAILURE  # noqa: PLW0603 - one lazy engine per process
+    if _RAPIDOCR_ENGINE is not None:
+        return _RAPIDOCR_ENGINE
+    if _RAPIDOCR_FAILURE is not None:
+        return None
+    try:
+        from rapidocr import RapidOCR  # noqa: PLC0415
+    except ImportError:  # optional engine absent: the caller tries the next one
+        return None
+    try:
+        _RAPIDOCR_ENGINE = RapidOCR(params={"Global.log_level": "error"})
+    except Exception as exc:  # noqa: BLE001 - installed but unusable: fall back
+        _RAPIDOCR_FAILURE = f"{type(exc).__name__}: {exc}"
+        log.warning(
+            "screen_context: RapidOCR is installed but could not start (%s); "
+            "trying Tesseract instead.",
+            _RAPIDOCR_FAILURE,
+        )
+        return None
+    return _RAPIDOCR_ENGINE
+
+
+def _rapidocr_words(image: Any) -> list[_OcrWord] | None:
+    """Words from RapidOCR (PP-OCR models on ONNX Runtime), or None if absent.
+
+    Uses only the models bundled in the wheel, so nothing is downloaded. The
+    engine's own line filter is off (``text_score=0``): an uncertain line must
+    still reach the redaction geometry; masking is decided here. An install
+    that cannot start (see ``_RAPIDOCR_FAILURE``) counts as absent, so the
+    caller falls back to Tesseract.
+    """
+    engine = _rapidocr_engine()
+    if engine is None:
+        return None
+    output = engine(image, return_word_box=True, text_score=0.0)
+    words: list[_OcrWord] = []
+    for line_index, line in enumerate(getattr(output, "word_results", None) or ()):
+        for text, score, quad in line:
+            xs = [int(point[0]) for point in quad]
+            ys = [int(point[1]) for point in quad]
+            left, top = min(xs), min(ys)
+            confidence = float(score) * 100.0 if score is not None else None
+            words.append(_OcrWord(
+                text=str(text),
+                confidence=confidence,
+                bounds=(left, top, max(xs) - left, max(ys) - top),
+                line=(line_index,),
+            ))
+    return words
+
+
+def _tesseract_words(image: Any) -> list[_OcrWord] | None:
+    """Words from Tesseract via pytesseract, or None if the binding is absent."""
     try:
         import pytesseract  # noqa: PLC0415
-    except ImportError:
-        log.info(
-            "screen_context: OCR is enabled but no OCR engine is installed; "
-            "OCR-based pixel redaction was unavailable."
-        )
-        return _ocr_unavailable(
-            "Text recognition is switched on but no OCR engine is installed, "
-            "so OCR-based pixel redaction was unavailable."
-        )
-
-    try:
-        output = getattr(getattr(pytesseract, "Output", None), "DICT", "dict")
-        data = pytesseract.image_to_data(image, output_type=output)
-        texts = list(data.get("text", ()))
-        grouped: dict[tuple[int, int, int], list[tuple[str, int, int, int, int]]] = {}
-        for index, raw_text in enumerate(texts):
-            word = " ".join(str(raw_text or "").split())
-            if not word:
-                continue
-            try:
-                left = int(data["left"][index])
-                top = int(data["top"][index])
-                width = int(data["width"][index])
-                height = int(data["height"][index])
-                key = (
-                    int(data.get("block_num", list(range(len(texts))))[index]),
-                    int(data.get("par_num", [0] * len(texts))[index]),
-                    int(data.get("line_num", list(range(len(texts))))[index]),
-                )
-            except (IndexError, KeyError, TypeError, ValueError):  # OCR rows can be sparse.
-                continue
-            if width <= 0 or height <= 0:
-                continue
-            grouped.setdefault(key, []).append((word, left, top, width, height))
-
-        regions: list[OcrTextRegion] = []
-        for words in grouped.values():
-            left = min(word[1] for word in words)
-            top = min(word[2] for word in words)
-            right = max(word[1] + word[3] for word in words)
-            bottom = max(word[2] + word[4] for word in words)
-            regions.append(
-                OcrTextRegion(
-                    text=" ".join(word[0] for word in words),
-                    bounds=(left, top, right - left, bottom - top),
-                )
+    except ImportError:  # optional engine absent: the caller reports OCR_UNAVAILABLE
+        return None
+    output = getattr(getattr(pytesseract, "Output", None), "DICT", "dict")
+    data = pytesseract.image_to_data(image, output_type=output)
+    texts = list(data.get("text", ()))
+    confs = list(data.get("conf", ()))
+    words: list[_OcrWord] = []
+    for index, raw_text in enumerate(texts):
+        try:
+            bounds = (
+                int(data["left"][index]),
+                int(data["top"][index]),
+                int(data["width"][index]),
+                int(data["height"][index]),
             )
-        return OcrSupplement(
-            text="\n".join(region.text for region in regions),
-            regions=tuple(regions),
+            line = (
+                int(data.get("block_num", list(range(len(texts))))[index]),
+                int(data.get("par_num", [0] * len(texts))[index]),
+                int(data.get("line_num", list(range(len(texts))))[index]),
+            )
+        except (IndexError, KeyError, TypeError, ValueError):  # OCR rows can be sparse.
+            continue
+        words.append(_OcrWord(
+            text=str(raw_text or ""),
+            confidence=_word_confidence(confs, index),
+            bounds=bounds,
+            line=line,
+        ))
+    return words
+
+
+def _ocr_words(image: Any) -> list[_OcrWord] | None:
+    """Words from the first installed engine: RapidOCR, then Tesseract."""
+    words = _rapidocr_words(image)
+    if words is not None:
+        return words
+    return _tesseract_words(image)
+
+
+def _supplement_from_words(words: list[_OcrWord]) -> OcrSupplement:
+    grouped: dict[tuple[int, ...], list[tuple[str, int, int, int, int]]] = {}
+    # Per line, the words the model may read (low-confidence ones masked).
+    readable: dict[tuple[int, ...], list[str]] = {}
+    scores: list[float] = []
+    unreadable = 0
+    for item in words:
+        word = " ".join(item.text.split())
+        if not word:
+            continue
+        left, top, width, height = item.bounds
+        if width <= 0 or height <= 0:
+            continue
+        # Every word, however uncertain, stays in the redaction geometry:
+        # a half-read secret must still be burned out of the pixels.
+        grouped.setdefault(item.line, []).append((word, left, top, width, height))
+        conf = item.confidence
+        if conf is not None:
+            scores.append(conf)
+        if conf is not None and conf < OCR_MIN_WORD_CONFIDENCE:
+            unreadable += 1
+            word = UNREADABLE_MARK
+        readable.setdefault(item.line, []).append(word)
+
+    regions: list[OcrTextRegion] = []
+    for line_words in grouped.values():
+        left = min(word[1] for word in line_words)
+        top = min(word[2] for word in line_words)
+        right = max(word[1] + word[3] for word in line_words)
+        bottom = max(word[2] + word[4] for word in line_words)
+        regions.append(
+            OcrTextRegion(
+                text=" ".join(word[0] for word in line_words),
+                bounds=(left, top, right - left, bottom - top),
+            )
         )
+    confidence = sum(scores) / len(scores) if scores else None
+    degradation = None
+    if unreadable:
+        degradation = Degradation(
+            code=DegradationCode.OCR_LOW_CONFIDENCE,
+            message=(
+                f"Text recognition could not read {unreadable} word(s) reliably; "
+                f"they are shown as {UNREADABLE_MARK}. Do not guess them."
+            ),
+        )
+    return OcrSupplement(
+        text="\n".join(" ".join(line) for line in readable.values()),
+        regions=tuple(regions),
+        degradation=degradation,
+        confidence=confidence,
+    )
+
+
+def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
+    """Run OCR once and retain line boxes for deterministic pixel redaction.
+
+    Engines are optional and probed in order (RapidOCR, then Tesseract); an
+    absent engine is the typed ``OCR_UNAVAILABLE`` outcome, never an error.
+    """
+    try:
+        words = _ocr_words(image)
     except Exception as exc:  # noqa: BLE001 - optional binary/backend failures
         log.debug("OCR failed", exc_info=True)
         return _ocr_unavailable(
             f"Text recognition could not run ({exc}), so OCR-based pixel "
             "redaction was unavailable."
         )
+    if words is None:
+        global _NO_ENGINE_LOGGED  # noqa: PLW0603 - one line per process
+        if not _NO_ENGINE_LOGGED:
+            _NO_ENGINE_LOGGED = True
+            log.info(
+                "screen_context: OCR is enabled but no OCR engine is installed; "
+                "OCR-based pixel redaction is unavailable."
+            )
+        return _ocr_unavailable(
+            "Text recognition is switched on but no OCR engine is installed, "
+            "so OCR-based pixel redaction was unavailable."
+        )
+    return _supplement_from_words(words)
 
 
 def ocr_supplement(image: Any) -> tuple[str, Degradation | None]:
-    """Best-effort OCR over the captured image.
+    """Best-effort OCR text over the captured image, without the geometry.
 
-    Probes for an installed backend rather than depending on one: the base
-    install must stay torch-free and work on a slim container, so an absent
-    backend is a normal, named outcome — not an error and not a silent empty
-    string.
-
-    Returns ``(text, degradation)``; exactly one of them is meaningful.
+    Same engines and masking as ``ocr_supplement_with_regions``; returns
+    ``(text, degradation)``.
     """
-    try:
-        import pytesseract  # noqa: PLC0415
-    except ImportError:
-        log.info(
-            "screen_context: OCR is enabled in settings but no OCR engine is "
-            "installed — the capture used the image only. Install one to add "
-            "text recognition for windows without an accessibility layer."
-        )
-        return (
-            "",
-            Degradation(
-                code=DegradationCode.OCR_UNAVAILABLE,
-                message=(
-                    "Text recognition is switched on but no OCR engine is "
-                    "installed, so only the image was used."
-                ),
-            ),
-        )
-    try:
-        return (str(pytesseract.image_to_string(image) or "").strip(), None)
-    except Exception as exc:  # noqa: BLE001 — tesseract binary missing / unreadable
-        log.debug("OCR failed", exc_info=True)
-        return (
-            "",
-            Degradation(
-                code=DegradationCode.OCR_UNAVAILABLE,
-                message=(
-                    f"Text recognition could not run ({exc}), so only the image "
-                    "was used."
-                ),
-            ),
-        )
+    result = ocr_supplement_with_regions(image)
+    return result.text, result.degradation
+
+
+def _rapidocr_problem() -> str | None:
+    """Why RapidOCR cannot run here, or None when it can. Import-free.
+
+    A package that is merely importable is not enough: a frozen build that
+    bundled RapidOCR's modules without its config and ONNX models (or a box
+    without onnxruntime) would otherwise be reported as working OCR.
+    """
+    import importlib.util  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    if _RAPIDOCR_FAILURE is not None:
+        return f"RapidOCR could not start ({_RAPIDOCR_FAILURE})."
+    spec = importlib.util.find_spec("rapidocr")
+    if spec is None:
+        return "RapidOCR is not installed."
+    if importlib.util.find_spec("onnxruntime") is None:
+        return "RapidOCR needs onnxruntime, which is not installed."
+    locations = list(getattr(spec, "submodule_search_locations", None) or ())
+    if locations:
+        root = Path(locations[0])
+        has_config = (root / "config.yaml").is_file()
+        has_models = any((root / "models").glob("*.onnx"))
+        if not (has_config and has_models):
+            return "RapidOCR is installed without its bundled models."
+    return None
+
+
+def ocr_engine_status() -> tuple[bool, str]:
+    """Whether an OCR engine can run here, and why not when it cannot."""
+    import importlib.util  # noqa: PLC0415
+    import shutil  # noqa: PLC0415
+
+    rapidocr_problem = _rapidocr_problem()
+    if rapidocr_problem is None:
+        return True, ""
+    if importlib.util.find_spec("pytesseract") is None:
+        if rapidocr_problem == "RapidOCR is not installed.":
+            return False, "No optional OCR engine is installed (RapidOCR or Tesseract)."
+        return False, f"{rapidocr_problem} Tesseract is not installed either."
+    if shutil.which("tesseract") is None:
+        return False, "The optional Tesseract executable is not available."
+    return True, ""
 
 
 __all__ = [
@@ -361,6 +525,7 @@ __all__ = [
     "OcrTextRegion",
     "aggregate_text",
     "nodes_in_rect",
+    "ocr_engine_status",
     "ocr_supplement",
     "ocr_supplement_with_regions",
     "read_ui_text",

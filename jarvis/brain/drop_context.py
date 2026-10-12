@@ -18,6 +18,7 @@ this module.
 from __future__ import annotations
 
 import base64
+import logging
 import mimetypes
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from uuid import UUID
 
 from jarvis.core.protocols import ImageBlock
 
+logger = logging.getLogger(__name__)
+
 #: ``MessageSent.source_layer`` stamped on a drag-drop turn. Mirrored in
 #: ``jarvis.brain.manager._NON_SPAWN_SOURCE_LAYERS`` so a dropped file is
 #: *reacted to / discussed* inline, never auto-force-spawned into a worker
@@ -34,9 +37,11 @@ from jarvis.core.protocols import ImageBlock
 DROP_SOURCE_LAYER = "ui.drop"
 
 # Defaults (overridable) — bound the per-file text and the whole directive so a
-# huge drop cannot blow the token budget or the WS broadcast circuit-breaker.
-_DEFAULT_MAX_TEXT_CHARS = 8_000
-_DEFAULT_MAX_TOTAL_CHARS = 12_000
+# huge drop cannot blow the token budget. Sized for a working document (a
+# 13 kB checklist used to lose its second half at 8 000 characters); anything
+# longer is still cut, but never silently: see ``_truncation_note``.
+_DEFAULT_MAX_TEXT_CHARS = 24_000
+_DEFAULT_MAX_TOTAL_CHARS = 32_000
 # Per-image budget before it ships to the brain. Anthropic caps a single image at
 # 5 MB; 4 MB keeps headroom. Over-budget images are downscaled/JPEG-encoded by
 # ``cap_image_b64`` (best-effort, never raises, no-op when already small).
@@ -158,6 +163,22 @@ _is_textual = is_textual
 _is_pdf = is_pdf
 
 
+def _truncation_note(shown: int, total: int) -> str:
+    """The marker a cut text carries, so the brain knows part of it is missing."""
+    return (
+        f"[Cut here: only the first {shown:,} of {total:,} characters are shown. "
+        "Tell me the rest is missing, and ask for it, before acting on anything "
+        "that could be in the missing part.]"
+    )
+
+
+def _clip(text: str, limit: int) -> tuple[str, bool]:
+    """``text`` cut to ``limit`` characters, and whether anything was dropped."""
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
 def extract_pdf_text(data: bytes, *, max_chars: int) -> str:
     """Best-effort PDF text extraction; empty string when unavailable.
 
@@ -201,6 +222,7 @@ def classify_and_compose(
     notes: list[str] = []
     images: list[ImageBlock] = []
     names: list[str] = []
+    cut_names: list[str] = []
 
     for item in items:
         if not item.name:
@@ -220,12 +242,28 @@ def classify_and_compose(
             images.append(ImageBlock(mime=mime, data_b64=data_b64))
             notes.append(f"- {item.name} — image attached for you to see")
         elif _is_textual(item):
-            body = item.data.decode("utf-8", errors="replace")[:max_text_chars]
-            notes.append(f"- {item.name}:\n```\n{body}\n```")
+            full = item.data.decode("utf-8", errors="replace")
+            body, cut = _clip(full, max_text_chars)
+            note = f"- {item.name}:\n```\n{body}\n```"
+            if cut:
+                cut_names.append(item.name)
+                note += "\n" + _truncation_note(len(body), len(full))
+            notes.append(note)
         elif _is_pdf(item):
-            body = _extract_pdf_text(item.data, max_chars=max_text_chars)
+            # One character past the cap tells a long PDF from one that fits.
+            extracted = _extract_pdf_text(item.data, max_chars=max_text_chars + 1)
+            body, cut = _clip(extracted, max_text_chars)
             if body:
-                notes.append(f"- {item.name} (PDF):\n```\n{body}\n```")
+                note = f"- {item.name} (PDF):\n```\n{body}\n```"
+                if cut:
+                    cut_names.append(item.name)
+                    note += (
+                        "\n[Cut here: the PDF continues past the first "
+                        f"{len(body):,} characters. Tell me the rest is missing, "
+                        "and ask for it, before acting on anything that could be "
+                        "in the missing part.]"
+                    )
+                notes.append(note)
             else:
                 notes.append(
                     f"- {item.name} — PDF (text not extracted; ask me what you "
@@ -237,7 +275,13 @@ def classify_and_compose(
             )
 
     if dragged_text and dragged_text.strip():
-        notes.append(f"- dragged text:\n```\n{dragged_text.strip()[:max_text_chars]}\n```")
+        full = dragged_text.strip()
+        body, cut = _clip(full, max_text_chars)
+        note = f"- dragged text:\n```\n{body}\n```"
+        if cut:
+            cut_names.append("dragged text")
+            note += "\n" + _truncation_note(len(body), len(full))
+        notes.append(note)
 
     if not notes and not images:
         return "", ()
@@ -252,7 +296,20 @@ def classify_and_compose(
     )
     directive = "\n".join([header, *notes, instruction]).strip()
     if len(directive) > max_total_chars:
-        directive = directive[: max_total_chars - 2].rstrip() + " …"
+        # Several files together outgrew the budget. Cut at the budget, but say
+        # so in the text itself: a silent "…" let the brain act on half a
+        # document as if it were the whole one.
+        tail = (
+            "\n[Cut here: the dropped content exceeds the "
+            f"{max_total_chars:,}-character context budget and the rest is "
+            "missing. Tell me, and ask for the missing part, before acting on it.]"
+        )
+        directive = directive[: max_total_chars - len(tail)].rstrip() + tail
+        cut_names.append("(combined drop)")
+    if cut_names:
+        logger.warning(
+            "Dropped content cut to the context budget: %s", ", ".join(cut_names),
+        )
     return directive, tuple(images)
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Camera, Coins } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Camera, Coins, Cpu } from "lucide-react";
 import { useEventStore } from "@/store/events";
 import { useDeckStore } from "@/store/deck";
 import { countWords, type CaptureState } from "@/lib/deckState";
@@ -329,5 +330,108 @@ export function LiveCounter({ className }: { className?: string }) {
         </span>
       )}
     </div>
+  );
+}
+
+// ----------------------------------------------------------------------
+// Vitals — the machine itself: CPU, memory, GPU, battery, power mode
+// ----------------------------------------------------------------------
+
+export interface GpuVitals {
+  name: string;
+  util_percent: number | null;
+  vram_used_mb: number | null;
+  vram_total_mb: number | null;
+  temp_c: number | null;
+  power_w: number | null;
+}
+
+export interface Vitals {
+  cpu_percent: number;
+  cpu_logical: number | null;
+  ram_used_gb: number;
+  ram_total_gb: number;
+  battery: { percent: number; plugged: boolean } | null;
+  gpus: GpuVitals[];
+  power_mode: string | null;
+}
+
+async function fetchVitals(): Promise<Vitals> {
+  const res = await fetch("/api/deck/vitals");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as Vitals;
+}
+
+/**
+ * What the machine is doing while Jarvis runs on it (`/api/deck/vitals`,
+ * read every five seconds while the deck is visible). Every figure is a
+ * live reading from psutil or nvidia-smi; a sensor that did not answer is
+ * left out rather than shown as zero, and there is no GPU gauge on a
+ * machine nvidia-smi does not see.
+ */
+export function VitalsCard({ className }: { className?: string }) {
+  const t = useT();
+  const vitals = useQuery<Vitals>({
+    queryKey: ["deck", "vitals"],
+    queryFn: fetchVitals,
+    refetchInterval: 5_000,
+    retry: false,
+  });
+  const v = vitals.data;
+  const gpu = v?.gpus[0];
+  const vram =
+    gpu && gpu.vram_used_mb !== null && gpu.vram_total_mb
+      ? `${(gpu.vram_used_mb / 1024).toFixed(1)} / ${(gpu.vram_total_mb / 1024).toFixed(1)} GB`
+      : null;
+  const rows: Array<[string, string]> = [];
+  if (vram) rows.push([t("deck.vitals_vram"), vram]);
+  if (gpu?.temp_c != null) rows.push([t("deck.vitals_temp"), `${Math.round(gpu.temp_c)} °C`]);
+  if (gpu?.power_w != null) rows.push([t("deck.vitals_power"), `${gpu.power_w.toFixed(0)} W`]);
+  if (v?.battery) {
+    rows.push([
+      t("deck.vitals_battery"),
+      `${v.battery.percent} % · ${t(v.battery.plugged ? "deck.vitals_plugged" : "deck.vitals_on_battery")}`,
+    ]);
+  }
+  if (v?.power_mode) rows.push([t("deck.vitals_mode"), v.power_mode]);
+
+  return (
+    <DeckCard
+      icon={Cpu}
+      title={t("deck.card_vitals")}
+      meta={gpu ? gpu.name.replace(/^NVIDIA (GeForce )?/, "") : undefined}
+      live={Boolean(v && v.cpu_percent >= 50)}
+      variant="chamfer"
+      className={className}
+    >
+      {!v ? (
+        <p className="text-xs text-muted-foreground">
+          {t(vitals.isError ? "deck.vitals_error" : "deck.vitals_loading")}
+        </p>
+      ) : (
+        <div className="flex h-full min-h-0 items-center gap-3" data-testid="deck-vitals">
+          <HudGauge value={v.cpu_percent / 100} size={58} label={t("deck.vitals_cpu")} readout={`${Math.round(v.cpu_percent)}%`} />
+          <HudGauge
+            value={v.ram_total_gb > 0 ? v.ram_used_gb / v.ram_total_gb : 0}
+            size={58}
+            label={t("deck.vitals_ram")}
+            readout={`${v.ram_used_gb.toFixed(1)}G`}
+          />
+          {gpu?.util_percent != null && (
+            <HudGauge value={gpu.util_percent / 100} size={58} label={t("deck.vitals_gpu")} readout={`${Math.round(gpu.util_percent)}%`} />
+          )}
+          {rows.length > 0 && (
+            <ul className="min-w-0 flex-1 space-y-0.5">
+              {rows.map(([label, value]) => (
+                <li key={label} className="flex items-baseline gap-2 font-mono text-micro">
+                  <span className="shrink-0 uppercase tracking-[0.14em] text-muted-foreground">{label}</span>
+                  <span className="min-w-0 flex-1 truncate text-right tabular-nums text-foreground">{value}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </DeckCard>
   );
 }
