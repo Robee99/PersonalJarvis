@@ -43,6 +43,8 @@ class FakeHermesApi:
         self.scripts = list(scripts)
         self.runs: list[FakeRun] = []
         self.session_rows: list[dict[str, Any]] = []
+        #: Every run id asked to stop, including runs this fake never started.
+        self.stop_requests: list[str] = []
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -67,6 +69,12 @@ class FakeHermesApi:
             self.runs.append(run)
             return httpx.Response(202, json={"run_id": run.run_id, "status": "started"})
         parts = path.strip("/").split("/")
+        if parts[:2] == ["v1", "runs"] and len(parts) == 4 and parts[3] == "stop":
+            self.stop_requests.append(parts[2])
+            for known in self.runs:
+                if known.run_id == parts[2]:
+                    known.stopped = True
+            return httpx.Response(200, json={"status": "stopping"})
         if parts[:2] == ["v1", "runs"] and len(parts) == 4:
             run = self._run(parts[2])
             if parts[3] == "events":
@@ -79,9 +87,6 @@ class FakeHermesApi:
                 run.approvals.append(json.loads(request.content))
                 run.decided.set()
                 return httpx.Response(200, json={"resolved": 1})
-            if parts[3] == "stop":
-                run.stopped = True
-                return httpx.Response(200, json={"status": "stopping"})
         if parts[:2] == ["api", "sessions"] and parts[-1] == "messages":
             return httpx.Response(200, json={"data": list(self.session_rows)})
         raise AssertionError(f"unexpected {request.method} {path}")

@@ -105,7 +105,23 @@ def test_instructions_stay_identical_across_spoken_typed_and_language_turns() ->
     assert build_instructions(spoken) == build_instructions(typed_german)
     assert hermes.run_input(spoken) == "[spoken] REPLY LANGUAGE: English.\nhi"
     note = hermes.turn_note(typed_german, written=True)
-    assert note.startswith("[typed] REPLY LANGUAGE: German.")
+    assert note.startswith("[typed]")
+    assert "REPLY LANGUAGE: German." in note
+
+
+def test_only_the_first_message_of_a_typed_chat_says_it_is_a_new_chat() -> None:
+    first = BrainRequest(messages=(BrainMessage(role="user", content="hi"),))
+    later = BrainRequest(
+        messages=(
+            BrainMessage(role="user", content="add chicken to my cart"),
+            BrainMessage(role="assistant", content="Working on it."),
+            BrainMessage(role="user", content="what time is it"),
+        )
+    )
+    assert hermes.NEW_CHAT_NOTE in hermes.turn_note(first, written=True)
+    assert hermes.NEW_CHAT_NOTE not in hermes.turn_note(later, written=True)
+    # Voice has no chats: the note never goes on a spoken turn.
+    assert hermes.NEW_CHAT_NOTE not in hermes.turn_note(first)
 
 
 @pytest.mark.asyncio
@@ -178,6 +194,46 @@ async def test_a_failed_run_is_raised_for_the_fallback_chain() -> None:
 
     with pytest.raises(RuntimeError, match="429"):
         await _collect(_brain(FakeHermesApi(fails)), _req("hi"))
+
+
+# --- runs nobody reads anymore are stopped -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_new_turn_stops_an_earlier_run_still_going(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2026-10-12: a shopping task kept running beside the newer turns, and
+    # "stop" only reached the newest run.
+    monkeypatch.setattr(hermes, "_LIVE_RUNS", {"run_left": ("http://127.0.0.1:8642", hermes.SESSION_ID, None)})
+    server = FakeHermesApi(say("It's five."))
+    brain = _brain(server)
+    brain.join_conversation()
+    await _collect(brain, _req("what time is it"))
+    assert server.stop_requests == ["run_left"]
+    assert hermes._LIVE_RUNS == {}
+
+
+@pytest.mark.asyncio
+async def test_runs_left_by_an_earlier_jarvis_are_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Closing the app drops the event stream, not the run.
+    path = tmp_path / "hermes-live-runs.json"
+    path.write_text(
+        '{"run_old": {"base_url": "http://127.0.0.1:8642", "session_id": "jarvis-main"}}'
+    )
+    monkeypatch.setattr(hermes, "live_runs_path", lambda: path)
+    monkeypatch.setattr(hermes, "_LIVE_RUNS", {})
+    monkeypatch.setattr(hermes, "_ORPHAN_SWEEP", None)
+    server = FakeHermesApi(say("Hi."))
+    brain = _brain(server)
+    monkeypatch.setattr(brain, "_persists", lambda: True)
+    brain.join_conversation()
+    await _collect(brain, _req("hi"))
+    assert server.stop_requests == ["run_old"]
+    # The finished turn is not left on disk either.
+    assert hermes.read_live_runs(path) == {}
 
 
 # --- the manager: Hermes owns the turn ------------------------------------

@@ -140,6 +140,51 @@ def _session_state(session_id: str) -> _SessionState:
     return _SESSIONS.setdefault(session_id, _SessionState())
 
 
+#: Every run Jarvis started that may still be going: run id -> (base URL,
+#: session, the open run when this process reads it). Hermes keeps a run going
+#: after its reader is gone, and it runs two runs of one session side by side,
+#: so a run nobody reads anymore must be stopped by id (2026-10-12: a shopping
+#: task kept driving the PC for 15 minutes after the app was closed, reopened
+#: and a new chat started, and "stop" only reached the newer run).
+_LIVE_RUNS: dict[str, tuple[str, str, _OpenRun | None]] = {}
+#: Where the live runs are kept for the next Jarvis process; None = not on disk.
+LIVE_RUNS_FILE = "hermes-live-runs.json"
+_ORPHAN_SWEEP: asyncio.Task[int] | None = None
+
+
+def live_runs_path() -> Path:
+    from jarvis.core.paths import user_data_dir
+
+    return user_data_dir() / LIVE_RUNS_FILE
+
+
+def read_live_runs(path: Path) -> dict[str, tuple[str, str]]:
+    """The runs a Jarvis process left on disk (run id -> base URL, session)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    runs: dict[str, tuple[str, str]] = {}
+    for run_id, entry in data.items():
+        if isinstance(entry, dict) and isinstance(entry.get("base_url"), str):
+            runs[str(run_id)] = (entry["base_url"], str(entry.get("session_id") or ""))
+    return runs
+
+
+def write_live_runs(path: Path) -> None:
+    runs = {
+        run_id: {"base_url": base_url, "session_id": session_id}
+        for run_id, (base_url, session_id, _run) in _LIVE_RUNS.items()
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(runs), encoding="utf-8")
+    except OSError as exc:
+        log.debug("Could not save Hermes live runs: %s", exc)
+
+
 def take_checkpoint(session_id: str = "jarvis-main") -> Checkpoint | None:
     """The stopped task "continue" should pick up, once; ``None`` when none is fresh."""
     state = _session_state(session_id)
@@ -404,9 +449,25 @@ def build_instructions(req: BrainRequest) -> str:
     return "\n\n".join(parts)
 
 
+#: Added to the first message of a new typed chat. The chat shares the one
+#: Hermes session with voice, so without it the model picked an unfinished
+#: task from the history back up in a chat the user had just opened.
+NEW_CHAT_NOTE = (
+    "New chat: tasks from earlier messages are over. Do not continue or retry "
+    "them unless this message asks for it."
+)
+
+
+def is_first_chat_message(req: BrainRequest) -> bool:
+    """Whether the newest message is the first the user wrote in this chat."""
+    return sum(1 for m in req.messages if getattr(m, "role", None) == "user") == 1
+
+
 def turn_note(req: BrainRequest, *, written: bool = False) -> str:
     """The per-turn part of the contract, sent at the head of the user message."""
     parts = ["[typed]" if written else "[spoken]"]
+    if written and is_first_chat_message(req):
+        parts.append(NEW_CHAT_NOTE)
     lang = extract_reply_language_directive(req.system)
     if lang:
         parts.append(lang)
@@ -624,8 +685,19 @@ class HermesBrain:
         self._card_timeout_s = CARD_TIMEOUT_S
 
     def join_conversation(self) -> None:
-        """Put this brain on the person's conversation session (voice and chat)."""
+        """Put this brain on the person's conversation session (voice and chat).
+
+        Also stops what an earlier Jarvis process left running, as soon as
+        there is a loop to do it on.
+        """
         self.session_id = SESSION_ID
+        global _ORPHAN_SWEEP
+        if _ORPHAN_SWEEP is None and self._persists():
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return  # no loop yet: the first turn sweeps
+            _ORPHAN_SWEEP = _background(self.stop_orphaned_runs(), "hermes-orphan-sweep")
 
     @property
     def pending_approval(self) -> _PendingApproval | None:
@@ -692,6 +764,9 @@ class HermesBrain:
             # A new turn supersedes the answer still on its way.
             late.cancelled = True
             await self._close(late)
+        if self.session_id == SESSION_ID:
+            await self._sweep_orphans_once()
+            await self._stop_other_runs()
         self.last_runtime = None
         self._delegated = False
         context = turn_context()
@@ -751,8 +826,89 @@ class HermesBrain:
         if not run_id:
             raise RuntimeError("Hermes Agent started a run without a run id")
         run = _OpenRun(base_url=base_url, run_id=run_id, queue=asyncio.Queue())
+        self._track(run_id, base_url, run)
         run.task = asyncio.create_task(self._pump(run), name="hermes-run-events")
         return run
+
+    # --- runs nobody reads anymore ----------------------------------------
+
+    def _persists(self) -> bool:
+        # Only a real Hermes on this machine; tests use a mock transport.
+        return self.transport is None
+
+    def _track(self, run_id: str, base_url: str, run: _OpenRun | None) -> None:
+        _LIVE_RUNS[run_id] = (base_url, self.session_id, run)
+        if self._persists():
+            write_live_runs(live_runs_path())
+
+    def _untrack(self, run_id: str) -> None:
+        if _LIVE_RUNS.pop(run_id, None) is not None and self._persists():
+            write_live_runs(live_runs_path())
+
+    async def _post_stop(self, base_url: str, run_id: str) -> None:
+        try:
+            async with self._client() as client:
+                await client.post(
+                    f"{base_url}/v1/runs/{run_id}/stop", headers=self._headers(base_url)
+                )
+        except Exception as exc:  # noqa: BLE001 — Hermes ends the run on its own timeout
+            log.warning("Hermes run %s could not be stopped: %s", run_id, exc)
+
+    async def stop_orphaned_runs(self) -> int:
+        """Stop the runs an earlier Jarvis process started and never saw end.
+
+        Closing the app drops the event stream, not the run: Hermes carried a
+        task on, using the PC, after Jarvis was closed and reopened.
+        """
+        if not self._persists():
+            return 0
+        left = {
+            run_id: entry
+            for run_id, entry in read_live_runs(live_runs_path()).items()
+            if run_id not in _LIVE_RUNS
+        }
+        for run_id, (base_url, _session) in left.items():
+            if cfg.is_loopback_url(base_url):
+                await self._post_stop(base_url, run_id)
+                log.info("Stopped Hermes run %s left by an earlier Jarvis", run_id)
+        write_live_runs(live_runs_path())
+        return len(left)
+
+    async def _sweep_orphans_once(self) -> None:
+        global _ORPHAN_SWEEP
+        if not self._persists():
+            return
+        if _ORPHAN_SWEEP is None:
+            _ORPHAN_SWEEP = _background(self.stop_orphaned_runs(), "hermes-orphan-sweep")
+        try:
+            await asyncio.shield(_ORPHAN_SWEEP)
+        except Exception as exc:  # noqa: BLE001 — a failed sweep never blocks a turn
+            log.warning("Sweeping old Hermes runs failed: %s", exc)
+
+    async def _stop_other_runs(self, keep: _OpenRun | None = None) -> int:
+        """Stop every run of this conversation still going, but ``keep``.
+
+        A new turn supersedes them: Hermes would otherwise run them side by
+        side in one history, and a "stop" reached only the newest.
+        """
+        stopped = 0
+        for run_id, (base_url, session_id, run) in list(_LIVE_RUNS.items()):
+            if session_id != self.session_id or (keep is not None and run is keep):
+                continue
+            if run is not None:
+                if run.finished or run.closed:
+                    _LIVE_RUNS.pop(run_id, None)
+                    continue
+                run.cancelled = True
+                run.late = False
+                await self._close(run)
+            else:
+                await self._post_stop(base_url, run_id)
+                self._untrack(run_id)
+            stopped += 1
+        if stopped:
+            log.info("Stopped %d earlier Hermes run(s) of %s", stopped, self.session_id)
+        return stopped
 
     async def _pump(self, run: _OpenRun) -> None:
         url = f"{run.base_url}/v1/runs/{run.run_id}/events"
@@ -765,6 +921,7 @@ class HermesBrain:
                     raise RuntimeError(f"Hermes run events answered HTTP {resp.status_code}")
                 async for item in self._events(resp.aiter_lines()):
                     run.queue.put_nowait(item)
+            self._untrack(run.run_id)
             run.queue.put_nowait(_END)
         except Exception as exc:  # noqa: BLE001 — handed to the reader, which raises it
             run.queue.put_nowait(exc)
@@ -871,15 +1028,9 @@ class HermesBrain:
             state.checkpoint = progress
             publish_state("INTERRUPTED", session_id=self.session_id)
         if not run.finished:
-            try:
-                async with self._client() as client:
-                    await client.post(
-                        f"{run.base_url}/v1/runs/{run.run_id}/stop",
-                        headers=self._headers(run.base_url),
-                    )
-                log.info("Hermes run %s stopped: the turn ended early", run.run_id)
-            except Exception as exc:  # noqa: BLE001 — Hermes ends the run on its own timeout
-                log.warning("Hermes run %s could not be stopped: %s", run.run_id, exc)
+            await self._post_stop(run.base_url, run.run_id)
+            log.info("Hermes run %s stopped: the turn ended early", run.run_id)
+        self._untrack(run.run_id)
         if run.task is not None:
             run.task.cancel()
         # A turn still reading this run (stopped from another turn) ends now.
@@ -1089,6 +1240,8 @@ class HermesBrain:
             await self._post_approval(pending.run, pending.request_id, "deny")
             await self._close(pending.run)
             report.approval = True
+        if await self._stop_other_runs():
+            report.answer = True
         watcher = state.watcher
         delegated = state.checkpoint is not None and state.checkpoint.delegated
         if watcher is not None and not watcher.done():
