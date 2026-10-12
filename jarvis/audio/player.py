@@ -28,7 +28,7 @@ else:
     except Exception:  # noqa: BLE001 — sounddevice/PortAudio (libportaudio2) absent (headless/slim)
         sd = None  # type: ignore[assignment]
 
-from jarvis.audio import echo_reference, level_tap, topology
+from jarvis.audio import echo_canceller, echo_reference, level_tap, topology
 from jarvis.audio.device_select import is_legacy_primary_mapper
 from jarvis.audio.gain import PeakLimiter, apply_output_gain, clamp_volume
 from jarvis.core.events import AudioOutFirst
@@ -1249,6 +1249,12 @@ class AudioPlayer:
         # buffer: the property takes the stream-state lock stop() also uses —
         # bounded, benign contention, deliberately not per sub-block.
         level_delay_s = self.output_latency_s if feed_level else 0.0
+        # Far-end reference for the optional microphone echo canceller; the
+        # latency is its delay hint, read once per buffer for the same reason.
+        feed_aec = echo_canceller.is_active()
+        aec_latency_s = (
+            (level_delay_s if feed_level else self.output_latency_s) if feed_aec else 0.0
+        )
         # Master output volume is sampled for each sub-block via the gain
         # helper (makeup boost + look-ahead peak limiter above unity, plain
         # attenuation below), then write it in sub-blocks. ``arr_out is arr_f``
@@ -1336,6 +1342,10 @@ class AudioPlayer:
                     float(np.sqrt(np.mean(np.square(out)))),
                     out.shape[0] / device_rate,
                 )
+                # The same post-gain block is the far-end reference for the
+                # optional microphone echo canceller.
+                if feed_aec:
+                    echo_canceller.feed_playback(out, device_rate, aec_latency_s)
 
     @topology.native_stream_operation()
     def _close_output_stream(self, stream: sd.OutputStream) -> bool:

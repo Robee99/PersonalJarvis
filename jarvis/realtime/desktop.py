@@ -53,6 +53,10 @@ class DesktopRealtimeBargeInDetector:
 
     Detection deliberately matches the conservative classic-pipeline policy:
     a startup grace period, a high speech probability, and sustained speech.
+    "Sustained" means about half a second of confirmed speech, counted across
+    the short dips natural speech has between syllables and words: a cough, a
+    click or an echo blip never interrupts, a person talking over the
+    assistant does without having to hold one unbroken vowel.
     The returned PCM contains a short pre-speech window plus the confirmed speech
     frames, allowing the caller to cancel output and forward the user's opening
     syllables to any realtime provider without making the provider/model itself
@@ -124,13 +128,29 @@ class DesktopRealtimeBargeInDetector:
     _ECHO_CORR_MIN_COVERAGE = 0.8
     _ECHO_CORR_MIN_STD = 1e-4
 
+    # Interruption length. ``consecutive_frames`` (the historical name) is the
+    # number of high-probability frames a candidate must hold before it counts:
+    # 16 x 32 ms ~= 0.5 s of user speech, the point below which a "barge-in"
+    # is far more often a cough, a laugh or the assistant's own echo than a
+    # person taking the floor. Brief dips inside a candidate are bridged
+    # instead of restarting the count — a single frame between two words used
+    # to throw away everything said so far, so a natural interruption almost
+    # never confirmed — but only once the candidate holds one solid run
+    # (``_BRIDGE_AFTER_FRAMES``, about a syllable), only for gaps up to
+    # ``max_gap_frames`` long, and only up to half the required speech in
+    # total, so scattered echo blips can never add up to an interruption.
+    _DEFAULT_CONSECUTIVE_FRAMES = 16
+    _DEFAULT_MAX_GAP_FRAMES = 4
+    _BRIDGE_AFTER_FRAMES = 4
+
     def __init__(
         self,
         *,
         grace_s: float = 1.5,
         speech_threshold: float = 0.97,
-        consecutive_frames: int = 12,
+        consecutive_frames: int = _DEFAULT_CONSECUTIVE_FRAMES,
         pre_speech_frames: int = 10,
+        max_gap_frames: int = _DEFAULT_MAX_GAP_FRAMES,
         min_frame_rms: float | None = None,
         adaptive_floor_margin: float | None = None,
         adaptive_floor_cap: float | None = None,
@@ -145,6 +165,11 @@ class DesktopRealtimeBargeInDetector:
         self._speech_threshold = min(1.0, max(0.0, float(speech_threshold)))
         self._consecutive_frames = max(1, int(consecutive_frames))
         self._pre_speech_frames = max(1, int(pre_speech_frames))
+        self._max_gap_frames = max(0, int(max_gap_frames))
+        self._bridge_after_frames = min(
+            self._BRIDGE_AFTER_FRAMES, self._consecutive_frames
+        )
+        self._max_bridged_frames = self._consecutive_frames // 2
         self._min_frame_rms = (
             self._DEFAULT_MIN_FRAME_RMS if min_frame_rms is None else max(0.0, float(min_frame_rms))
         )
@@ -179,10 +204,12 @@ class DesktopRealtimeBargeInDetector:
             if echo_correlation_threshold is None
             else float(echo_correlation_threshold)
         )
-        # The lag must exceed the confirm run so genuine sustained speech is
-        # always judged against a baseline formed BEFORE it started.
+        # The lag must exceed the longest possible candidate (its speech plus
+        # every bridged dip) so genuine sustained speech is always judged
+        # against a baseline formed BEFORE it started.
         self._adaptive_floor_lag = max(
-            self._consecutive_frames + 4, self._ADAPTIVE_FLOOR_LAG_FRAMES
+            self._consecutive_frames + self._max_bridged_frames + 4,
+            self._ADAPTIVE_FLOOR_LAG_FRAMES,
         )
         self._rms_history: deque[float] = deque(
             maxlen=self._ADAPTIVE_FLOOR_WINDOW_FRAMES + self._adaptive_floor_lag
@@ -201,6 +228,12 @@ class DesktopRealtimeBargeInDetector:
         )
         self._candidate_frames: list[tuple[np.ndarray, float]] = []
         self._speech_run = 0
+        # Candidate bookkeeping: speech frames held, the current dip, the dip
+        # frames bridged so far, and whether one solid run has been seen.
+        self._speech_frames = 0
+        self._gap_run = 0
+        self._bridged_frames = 0
+        self._solid_run_seen = False
 
     @property
     def ready(self) -> bool:
@@ -301,13 +334,17 @@ class DesktopRealtimeBargeInDetector:
             else:
                 probability = float(self._model._prob(normalized))
             if probability >= self._speech_threshold:
-                if self._speech_run == 0:
+                if self._speech_frames == 0:
                     self._candidate_frames = [
                         (part.copy(), part_ts) for part, part_ts in self._pre_buffer
                     ]
                 self._candidate_frames.append((frame.copy(), frame_ts))
                 self._speech_run += 1
-                if self._speech_run >= self._consecutive_frames:
+                self._speech_frames += 1
+                self._gap_run = 0
+                if self._speech_run >= self._bridge_after_frames:
+                    self._solid_run_seen = True
+                if self._speech_frames >= self._consecutive_frames:
                     if self._candidate_matches_output_envelope():
                         # The confirmed "speech" tracks what the speakers are
                         # currently emitting — our own echo, not a user. Keep
@@ -329,12 +366,26 @@ class DesktopRealtimeBargeInDetector:
                     return detected.tobytes()
                 continue
 
+            if (
+                self._speech_frames
+                and self._solid_run_seen
+                and self._gap_run < self._max_gap_frames
+                and self._bridged_frames < self._max_bridged_frames
+            ):
+                # A short dip between syllables or words of speech already
+                # under way: keep the candidate and its count (see the
+                # ``_DEFAULT_CONSECUTIVE_FRAMES`` rationale).
+                self._candidate_frames.append((frame.copy(), frame_ts))
+                self._speech_run = 0
+                self._gap_run += 1
+                self._bridged_frames += 1
+                continue
+
             # A short high-probability burst is speaker bleed, not a barge-in.
             # Retain only the rolling pre-speech window for the next candidate.
             for candidate in self._candidate_frames:
                 self._pre_buffer.append(candidate)
-            self._candidate_frames = []
-            self._speech_run = 0
+            self._clear_candidate()
             self._pre_buffer.append((frame.copy(), frame_ts))
 
         self._residual = trailing
@@ -444,11 +495,18 @@ class DesktopRealtimeBargeInDetector:
         learned = self._adaptive_floor_margin * float(np.percentile(baseline, 90))
         return min(self._adaptive_floor_cap, max(self._min_frame_rms, learned))
 
+    def _clear_candidate(self) -> None:
+        self._candidate_frames = []
+        self._speech_run = 0
+        self._speech_frames = 0
+        self._gap_run = 0
+        self._bridged_frames = 0
+        self._solid_run_seen = False
+
     def _reset_buffers(self) -> None:
         self._residual = np.empty(0, dtype=np.dtype("<i2"))
         self._pre_buffer.clear()
-        self._candidate_frames = []
-        self._speech_run = 0
+        self._clear_candidate()
 
 
 class DesktopRealtimePlayback:

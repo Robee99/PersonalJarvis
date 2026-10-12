@@ -31,7 +31,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from jarvis.audio import level_tap, mic_level
+from jarvis.audio import echo_canceller, level_tap, mic_level
 from jarvis.audio.capture import (
     REALTIME_QUEUE_CHUNKS,
     MicrophoneAccessError,
@@ -48,7 +48,7 @@ from jarvis.audio.chime import (
 from jarvis.audio.device_init import wait_for_stable_audio_devices
 from jarvis.audio.effects import bind_shared_audio_player
 from jarvis.audio.player import AudioPlayer
-from jarvis.audio.vad import SileroEndpointer
+from jarvis.audio.vad import SileroEndpointer, pad_trailing_silence
 from jarvis.audio.vad_reasons import FORCED_CUT_REASONS
 from jarvis.brain.output_filter import FALLBACK_PHRASES, ScrubResult, scrub_for_voice
 from jarvis.brain.scrub_verdict import is_harmless_scrub_residue
@@ -128,6 +128,7 @@ from jarvis.sessions.constants import (
 from jarvis.skills.schema import SkillDirectTriggered
 from jarvis.skills.skill_context import try_get_skill_context
 from jarvis.skills.trigger_matcher import TriggerMatcher
+from jarvis.speech.barge_resume import FalseInterruptionResume
 from jarvis.speech.completeness import (
     Completeness,
     classify_completeness,
@@ -890,6 +891,19 @@ _REALTIME_TAIL_PENDING_MAX_BYTES = 256_000
 # to clear that overlap, short enough that a deliberate interruption a beat
 # after Jarvis goes quiet still lands.
 _THINKING_BARGE_QUIET_S = 0.35
+
+# While a barged-over sentence waits to learn whether the interruption was real
+# (``FalseInterruptionResume``), the LISTENING wait wakes at this cadence to
+# check for it; it never wakes more often, so a user still mid-utterance costs
+# a handful of cheap checks, not a busy loop.
+_FALSE_INTERRUPTION_POLL_S = 0.25
+
+# Post-answer input suppression while microphone echo cancellation runs
+# (``jarvis.audio.echo_canceller``). The full window exists to keep the
+# speaker tail out of the next turn; with the echo removed from the signal
+# only the room's reverberation is left, and a quick reply ("yes") right after
+# the question is no longer clipped. The self-echo text guard still backstops.
+_AEC_POST_TTS_SUPPRESSION_S = 0.25
 
 
 def _feed_live_mic_level(chunk: AudioChunk) -> None:
@@ -2915,6 +2929,12 @@ class SpeechPipeline:
         # without a code edit. Defensive getattr: ``config`` may be None (test
         # fixtures) and older TOMLs predate the fields — both mean "no override".
         _audio_cfg = getattr(config, "audio", None)
+        if _audio_cfg is not None:
+            # Optional microphone echo cancellation (needs the ``livekit``
+            # package); a no-op without it.
+            echo_canceller.configure(
+                bool(getattr(_audio_cfg, "echo_cancellation", True))
+            )
         self._output_priority: tuple[str, ...] = tuple(
             getattr(_audio_cfg, "output_device_priority", None) or ()
         )
@@ -9696,11 +9716,16 @@ class SpeechPipeline:
             # hung up with HANGUP_SHUTDOWN anyway). The task is recreated only
             # after it has yielded an utterance.
             next_task: asyncio.Task[bytes] | None = None
+            # True while the loop only woke to check a pending false
+            # interruption: the floor did not change hands, so LISTENING is
+            # not re-announced (it would also overwrite USER_SPEAKING).
+            resume_poll = False
             try:
                 while not self._hangup_event.is_set():
-                    if not self._assistant_work_in_flight():
+                    if not resume_poll and not self._assistant_work_in_flight():
                         await self._set_turn_state(TurnTakingState.LISTENING)
                         await self._publish_event(ListeningStarted(source_layer="speech"))
+                    resume_poll = False
                     if next_task is None:
                         next_task = asyncio.create_task(vad_iter.__anext__())
                     hangup_task = asyncio.create_task(self._hangup_event.wait())
@@ -9708,20 +9733,22 @@ class SpeechPipeline:
                         time.monotonic() + self._idle_timeout_s
                         if getattr(self, "_idle_hangup_enabled", True) else None
                     )
+                    # Idle auto-hangup disabled (``session_idle_timeout_s``
+                    # <= 0) → wait indefinitely for an utterance or a manual
+                    # hangup; the idle-expiry branch below is then never
+                    # reached, so the session stays active until the user hangs
+                    # up. Otherwise bound the LISTENING window so a silent
+                    # session hangs up after the timeout. A pending false
+                    # interruption may shorten the wait (``woke_for_resume``).
+                    wait_timeout, woke_for_resume = self._false_interruption_wait(
+                        self._idle_timeout_s
+                        if getattr(self, "_idle_hangup_enabled", True)
+                        else None
+                    )
                     try:
                         done, _pending = await asyncio.wait(
                             {next_task, hangup_task},
-                            # Idle auto-hangup disabled (``session_idle_timeout_s``
-                            # <= 0) → wait indefinitely for an utterance or a
-                            # manual hangup; the idle-expiry branch below is then
-                            # never reached, so the session stays active until the
-                            # user hangs up. Otherwise bound the LISTENING window
-                            # so a silent session hangs up after the timeout.
-                            timeout=(
-                                self._idle_timeout_s
-                                if getattr(self, "_idle_hangup_enabled", True)
-                                else None
-                            ),
+                            timeout=wait_timeout,
                             return_when=asyncio.FIRST_COMPLETED,
                         )
                     except asyncio.CancelledError:
@@ -9739,6 +9766,16 @@ class SpeechPipeline:
                                 "speech.pipeline._active_session.hangup_event"
                             )
                         return HANGUP_HOTKEY
+                    if next_task not in done and woke_for_resume:
+                        # Not the idle window: the false-interruption check.
+                        # Nothing was heard since a barge-in cut the answer
+                        # off, so finish the cut sentence; otherwise keep
+                        # waiting for the follow-up.
+                        if self._false_interruption_due():
+                            await self._resume_after_false_interruption()
+                        else:
+                            resume_poll = True
+                        continue
                     if next_task not in done:
                         if self._assistant_work_in_flight():
                             log.debug(
@@ -9922,8 +9959,8 @@ class SpeechPipeline:
         #
         # The grace period drops to a token value: on the playback detector it
         # exists to collect echo for the adaptive floor, and here there is
-        # none to collect. Detection strictness is unchanged (0.97 / 12 frames
-        # ~= 0.4 s of speech), so a cough or a door does not take the floor.
+        # none to collect. Detection strictness is unchanged (0.97, ~0.5 s of
+        # speech), so a cough or a door does not take the floor.
         thinking_detector = DesktopRealtimeBargeInDetector(
             grace_s=0.05, output_active=None
         )
@@ -11123,7 +11160,11 @@ class SpeechPipeline:
         # does not honour). A hangup phrase inside the turn still wins.
         # skip_completion: the key release is the endpoint — submit straight to
         # the brain, never park the turn in the incomplete-sentence buffer.
-        await self._handle_utterance(pcm, skip_completion=True)
+        # The key usually comes up on the last syllable, so unlike a VAD
+        # endpoint this capture has no silence after the final word; give the
+        # recognizer the quiet tail it needs to emit it (short commands came
+        # back empty or missing their last word).
+        await self._handle_utterance(pad_trailing_silence(pcm), skip_completion=True)
         if self._hangup_event.is_set():
             return self._session_end_reason or HANGUP_VOICE_PATTERN
         return HANGUP_TURN_COMPLETE
@@ -12501,6 +12542,7 @@ class SpeechPipeline:
             echo_cancellation_requested=bool(
                 getattr(audio_cfg, "echo_cancellation", True)
             ),
+            echo_cancellation_running=echo_canceller.running(),
         )
         audio_quality = AudioQualityAccumulator()
         capture_reported_dropouts = 0
@@ -15179,6 +15221,8 @@ class SpeechPipeline:
 
     def _suppress_session_input_after_tts(self, reason: str) -> None:
         seconds = max(0.0, float(getattr(self, "_post_tts_listen_suppression_s", 0.0)))
+        if echo_canceller.running():
+            seconds = min(seconds, _AEC_POST_TTS_SUPPRESSION_S)
         if seconds <= 0.0:
             return
         until_ns = time.time_ns() + int(seconds * 1_000_000_000)
@@ -15198,6 +15242,57 @@ class SpeechPipeline:
             guard = SelfEchoGuard()
             self._self_echo_guard = guard
         return guard
+
+    def _false_interruption(self) -> FalseInterruptionResume:
+        """The cut-off sentence a false barge-in may resume (lazy for ``__new__``)."""
+        resume = getattr(self, "_false_interruption_resume", None)
+        if resume is None:
+            resume = FalseInterruptionResume()
+            self._false_interruption_resume = resume
+        return resume
+
+    def _false_interruption_wait(
+        self, idle_timeout: float | None
+    ) -> tuple[float | None, bool]:
+        """Bound one LISTENING wait while a cut sentence may need resuming.
+
+        Returns ``(timeout, woke_for_resume)``: the idle window unchanged when
+        nothing is pending, otherwise the time until the quiet window of the
+        pending false-interruption check has elapsed (at least
+        ``_FALSE_INTERRUPTION_POLL_S``), flagged so a timeout is not mistaken
+        for the idle window running out.
+        """
+        until = self._false_interruption().seconds_until_quiet_check()
+        if until is None:
+            return idle_timeout, False
+        poll = max(until, _FALSE_INTERRUPTION_POLL_S)
+        if idle_timeout is not None and idle_timeout <= poll:
+            return idle_timeout, False
+        return poll, True
+
+    def _false_interruption_due(self) -> bool:
+        """The quiet window after a barge-in elapsed and nobody is speaking."""
+        if self._false_interruption().seconds_until_quiet_check() != 0.0:
+            return False
+        # Mid-utterance the follow-up is still being captured; its transcript
+        # decides (see ``_handle_utterance_turn``).
+        return not getattr(self, "_vad_speech_after_endpoint", False)
+
+    async def _resume_after_false_interruption(self) -> bool:
+        """Say the cut-off sentence again when the barge-in carried no words.
+
+        Called where a post-barge follow-up turned out empty (no transcript
+        text, speaker echo, a recognizer hallucination) and by the session loop
+        when nothing at all was heard. Returns ``True`` when it spoke.
+        """
+        cut = self._false_interruption().take()
+        if cut is None:
+            return False
+        text, language = cut
+        log.info("False interruption: resuming the cut sentence (%r).", text[:80])
+        await self._set_turn_state(TurnTakingState.JARVIS_SPEAKING)
+        await self._speak(text, language)
+        return True
 
     def _register_assistant_speech(self, text: str) -> None:
         """Remember what Jarvis is about to voice as an echo-guard reference."""
@@ -15707,6 +15802,7 @@ class SpeechPipeline:
             # pin or the running conversation (English by default), never a
             # hard-coded German line (live 2026-10-05).
             await self._speak_stt_unavailable(self._output_language(None, ""))
+            self._false_interruption().clear()
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
         log.info(
@@ -15738,6 +15834,9 @@ class SpeechPipeline:
             self._latency_tracker.mark(LatencyPhase.STT_FINALIZE)
         text = transcript.text.strip()
         if not text:
+            # No words: if this followed a barge-in, the interruption was
+            # false (a cough, a click, echo) — finish the cut sentence.
+            await self._resume_after_false_interruption()
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
 
@@ -15750,6 +15849,8 @@ class SpeechPipeline:
             pending_hangup is not None and pending_hangup.pending_turn is not None
         ):
             log.info("🤫 Wake-only-Turn (%r) — skip Brain, weiter zuhören.", text)
+            # Addressing Jarvis by name is a real interruption.
+            self._false_interruption().clear()
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
 
@@ -15768,6 +15869,7 @@ class SpeechPipeline:
         # open_app('WDR mediagroup GmbH im Auftrag des WDR, 2020').
         if _STT_HALLUCINATION_RE.search(text):
             log.info("🚫 STT hallucination detected (%r) — skip brain.", text[:80])
+            await self._resume_after_false_interruption()
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
 
@@ -15778,8 +15880,11 @@ class SpeechPipeline:
         # listening; a genuine user turn that adds anything new always passes.
         if self._looks_like_self_echo(text):
             log.info("🔁 Own speaker echo suppressed (%r) — skip brain.", text[:80])
+            await self._resume_after_false_interruption()
             await self._set_turn_state(TurnTakingState.LISTENING)
             return True
+        # Real words reached this point: any barge-in before them was genuine.
+        self._false_interruption().clear()
 
         # Turn language for EVERY output layer this turn (ack preamble, canned
         # phrases, TTS voice). An explicit ``brain.reply_language`` pin wins;
@@ -17191,6 +17296,9 @@ class SpeechPipeline:
         lookahead = max(1, int(lookahead))
         sentence_channels: asyncio.Queue = asyncio.Queue(maxsize=lookahead)
         synth_tasks: list[asyncio.Task] = []
+        # The sentence whose audio is playing right now — what a barge-in cuts
+        # off, and what a false interruption resumes.
+        playing_sentence: str | None = None
         # The answer as it forms, for the screen: each scrubbed sentence is
         # handed to the UI the moment the brain finishes it — seconds before
         # its audio is synthesised and SpeechSpoken confirms it. Scrubbed
@@ -17257,6 +17365,7 @@ class SpeechPipeline:
                     self._brain_first_frame_played = True
                     yield chunk
 
+            nonlocal playing_sentence
             while True:
                 item = await sentence_channels.get()
                 try:
@@ -17264,7 +17373,9 @@ class SpeechPipeline:
                         return
                     channel, sentence = item
 
+                    playing_sentence = sentence
                     result = await self._player.play_chunks(_sentence_chunks(channel))
+                    playing_sentence = None
                     if self._playback_confirmed(result):
                         self._emit_spoken(sentence, lang, SPOKEN_KIND_REPLY)
                 finally:
@@ -17465,6 +17576,8 @@ class SpeechPipeline:
                 log.info("🛑 Barge-in — stopping TTS playback")
                 barged = True
                 self._player.stop()
+                # Kept so a false interruption can resume it.
+                self._false_interruption().arm(playing_sentence or "", lang)
             elif (
                 barge_task in done
                 and not barge_task.cancelled()
@@ -18509,8 +18622,8 @@ class SpeechPipeline:
         their specific kind. Both are published only after playback succeeds.
 
         ``_barge_monitor`` runs on a separate mic instance in parallel with
-        playback. When Silero VAD detects user speech there (threshold 0.8,
-        3 consecutive frames, 400 ms grace period), player playback stops
+        playback. When it confirms about half a second of user speech there
+        (see ``DesktopRealtimeBargeInDetector``), player playback stops
         immediately. Return value: ``True`` when barged in.
 
         When muted (mascot doubleClick), we short-circuit: no synthesize
@@ -18596,6 +18709,9 @@ class SpeechPipeline:
                         log.info("🛑 Barge-in — stoppe TTS-Playback")
                         self._player.stop()
                         barged = True
+                        if kind == SPOKEN_KIND_REPLY:
+                            # Kept so a false interruption can resume it.
+                            self._false_interruption().arm(text, language)
                 if (
                     barge_task in done
                     and not barge_task.cancelled()

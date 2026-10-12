@@ -33,7 +33,7 @@ else:
     except Exception:  # noqa: BLE001 — sounddevice/PortAudio (libportaudio2) absent (headless/slim)
         sd = None  # type: ignore[assignment]
 
-from jarvis.audio import topology
+from jarvis.audio import echo_canceller, topology
 from jarvis.audio.device_select import is_legacy_primary_mapper
 from jarvis.core.events import PERMISSION_FEATURES, PermissionNeeded
 from jarvis.core.protocols import AudioChunk
@@ -848,6 +848,10 @@ class MicrophoneCapture:
         )
         self._stream: sd.InputStream | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Optional echo cancellation (``jarvis.audio.echo_canceller``): set
+        # after the stream opens when the setting is on and the engine is
+        # installed, otherwise None and capture is untouched.
+        self._echo_canceller: echo_canceller.CaptureEchoCanceller | None = None
         self._drops = 0
         self._overflows = 0
         self._closed: bool = False
@@ -946,6 +950,18 @@ class MicrophoneCapture:
                 self._drops += 1
                 _log.warning("Mic callback dropped malformed PCM: {}", exc)
                 return
+            if not pcm_bytes:
+                return
+        canceller = getattr(self, "_echo_canceller", None)
+        if canceller is not None:
+            try:
+                pcm_bytes = canceller.process(pcm_bytes)
+            except Exception as exc:  # noqa: BLE001 - never kill the audio thread
+                # Fall back to the raw signal for the rest of this stream;
+                # the echo guards downstream still apply.
+                self._echo_canceller = None
+                canceller.close()
+                _log.warning("Echo cancellation failed; microphone continues without it: {}", exc)
             if not pcm_bytes:
                 return
         chunk = AudioChunk(
@@ -1509,6 +1525,11 @@ class MicrophoneCapture:
     async def __aenter__(self) -> MicrophoneCapture:
         self._loop = asyncio.get_running_loop()
         await self._try_open_stream()
+        if echo_canceller.enabled():
+            # Off the loop: the first call may import the optional engine.
+            self._echo_canceller = await asyncio.to_thread(
+                echo_canceller.open_capture, self._sample_rate, self._channels
+            )
         # Start the watchdog only AFTER the first successful open; otherwise it
         # would race against a None stream during the initial open.
         self._watchdog_task = asyncio.create_task(
@@ -1522,6 +1543,10 @@ class MicrophoneCapture:
     async def __aexit__(self, *exc_info) -> None:
         topology.unregister_capture(self)
         self._closed = True
+        canceller = getattr(self, "_echo_canceller", None)
+        self._echo_canceller = None
+        if canceller is not None:
+            canceller.close()
         self._wake_parked_reader()
         watchdog = self._watchdog_task
         self._watchdog_task = None

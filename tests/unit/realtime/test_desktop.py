@@ -625,3 +625,73 @@ def test_echo_gate_suppression_keeps_scanning_for_real_speech() -> None:
     detected = detector.feed(alternating)
     assert detected is not None
     assert detector.active is False
+
+
+# --- Interruption length: ~0.5 s of speech, natural dips bridged ---------- #
+# A barge-in counts only after about half a second of user speech, so a cough
+# or an echo blip never cuts the answer off. That speech is counted across the
+# short dips between syllables and words: requiring one unbroken run meant a
+# natural interruption ("wait, no, the other one") almost never confirmed.
+
+
+def _length_detector(probabilities: list[float], **kwargs) -> DesktopRealtimeBargeInDetector:
+    detector = DesktopRealtimeBargeInDetector(
+        min_frame_rms=0.0,
+        grace_s=0,
+        model=FakeVadModel(probabilities),
+        **kwargs,
+    )
+    detector.warmup()
+    detector.start_output()
+    return detector
+
+
+def test_default_interruption_needs_half_a_second_of_speech() -> None:
+    # 15 speech frames (~480 ms) are not enough; the 16th (~512 ms) confirms.
+    detector = _length_detector([0.99] * 16)
+
+    assert detector.feed(_pcm_frames(*([1000] * 15))) is None
+    assert detector.active is True
+    assert detector.feed(_pcm_frames(1000)) is not None
+    assert detector.active is False
+
+
+def test_short_dips_between_words_do_not_restart_the_count() -> None:
+    # Speech with a two-frame dip after every five frames: 16 speech frames in
+    # total, never 16 in a row.
+    pattern = ([0.99] * 5 + [0.2] * 2) * 3 + [0.99]
+    detector = _length_detector(pattern)
+
+    detected = detector.feed(_pcm_frames(*range(1000, 1000 + len(pattern))))
+
+    assert detected is not None
+    # The bridged dips stay in the returned audio: it is the user's speech.
+    assert len(detected) == len(pattern) * VAD_FRAME_SAMPLES * 2
+
+
+def test_a_long_pause_restarts_the_count() -> None:
+    # Ten frames of speech, a 200 ms pause, ten more: never 16 in one stretch.
+    pattern = [0.99] * 10 + [0.1] * 6 + [0.99] * 10
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None
+    assert detector.active is True
+
+
+def test_scattered_blips_never_add_up_to_an_interruption() -> None:
+    # Echo/noise blips shorter than a syllable are never bridged, however
+    # many of them arrive.
+    pattern = ([0.99] * 3 + [0.1]) * 10
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None
+    assert detector.active is True
+
+
+def test_bridging_is_capped_at_half_the_required_speech() -> None:
+    # Five-frame runs separated by four-frame dips: each dip is allowed, but
+    # after eight bridged frames the next dip ends the candidate.
+    pattern = ([0.99] * 5 + [0.1] * 4) * 3 + [0.99] * 2
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None

@@ -233,7 +233,12 @@ async def test_ptt_session_records_until_release_and_submits(monkeypatch):
     reason = await asyncio.wait_for(pipe._ptt_session(), timeout=2.0)
 
     assert reason == HANGUP_TURN_COMPLETE
-    assert captured.get("pcm") == _CHUNK_100MS * 5, "held audio submitted on release"
+    held = _CHUNK_100MS * 5
+    submitted = captured.get("pcm")
+    assert isinstance(submitted, bytes)
+    assert submitted.startswith(held), "held audio submitted on release"
+    # Only digital silence follows: the quiet tail the recognizer needs.
+    assert set(submitted[len(held):]) <= {0}
     # PTT must bypass the incomplete-sentence buffer — the key release is the
     # endpoint, so the turn goes straight to the brain (no flush-timer delay).
     assert captured.get("skip_completion") is True
