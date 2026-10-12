@@ -137,6 +137,7 @@
     "access_local": "这台电脑",
     "agents_needs_access": "请先连接订阅或保存密钥。",
     "local_title": "在这台电脑上",
+    "local_servers_title": "在这台电脑上运行的模型",
     "local_desc": "智能体运行在本地模型上。无需账号，无需密钥，任何数据都不会离开这台电脑。",
     "default_title": "新任务的默认服务商",
     "default_desc": "{name} 自行分派的任务会交到这里。所有已开启的服务商都可以运行智能体。",

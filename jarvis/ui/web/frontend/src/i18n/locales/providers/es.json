@@ -138,6 +138,7 @@
     "access_local": "Este ordenador",
     "agents_needs_access": "Conecta primero la suscripción o guarda una clave.",
     "local_title": "En este ordenador",
+    "local_servers_title": "Modelos en este ordenador",
     "local_desc": "Los agentes funcionan con modelos locales. Sin cuenta, sin clave, nada sale de este ordenador.",
     "default_title": "Predeterminado para tareas nuevas",
     "default_desc": "Las tareas que {name} delega por su cuenta van aquí. Cada proveedor activado puede ejecutar un agente.",

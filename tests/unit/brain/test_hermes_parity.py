@@ -56,7 +56,7 @@ async def test_an_image_in_the_turn_reaches_hermes_as_an_image_part() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What am I holding?"},
+                {"type": "text", "text": "[spoken]\nWhat am I holding?"},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
             ],
         }
@@ -70,8 +70,8 @@ async def test_a_turn_without_images_still_sends_plain_text() -> None:
 
     await _ask(_brain(server), BrainMessage(role="user", content="say hi"))
 
-    assert server.runs[0].body["input"] == "say hi"
-    assert OBSERVE_ONLY_INSTRUCTIONS not in server.runs[0].body["instructions"]
+    assert server.runs[0].body["input"] == "[spoken]\nsay hi"
+    assert OBSERVE_ONLY_INSTRUCTIONS not in server.runs[0].body["input"]
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_a_look_only_turn_tells_hermes_and_denies_its_approvals_unasked() 
         brain, BrainMessage(role="user", content="Don't click anything, just look at my screen.")
     )
 
-    assert OBSERVE_ONLY_INSTRUCTIONS in server.runs[0].body["instructions"]
+    assert OBSERVE_ONLY_INSTRUCTIONS in server.runs[0].body["input"]
     assert [a["choice"] for a in server.approvals] == ["deny"]
     assert brain.pending_approval is None, "the user is not asked; the answer is no"
     assert answer == "I only looked: the desktop shows Notepad."

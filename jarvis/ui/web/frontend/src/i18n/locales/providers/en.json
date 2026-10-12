@@ -138,6 +138,7 @@
     "access_local": "This computer",
     "agents_needs_access": "Connect the subscription or save a key first.",
     "local_title": "On this computer",
+    "local_servers_title": "Models running on this computer",
     "local_desc": "Agents run on local models. No account, no key, nothing leaves this computer.",
     "default_title": "Default for new tasks",
     "default_desc": "Tasks {name} hands off on its own go here. Every provider that is on can run an agent.",

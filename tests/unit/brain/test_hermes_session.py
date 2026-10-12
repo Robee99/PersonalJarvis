@@ -66,7 +66,7 @@ async def test_every_turn_is_a_run_in_one_hermes_session_with_only_the_newest_tu
 
     assert answer == "You asked me to say hi."
     assert [r.body["session_id"] for r in server.runs] == [SESSION_ID, SESSION_ID]
-    assert server.runs[1].body["input"] == "what did I ask?"
+    assert server.runs[1].body["input"] == "[spoken]\nwhat did I ask?"
     assert "conversation_history" not in server.runs[1].body
 
 
@@ -164,7 +164,7 @@ async def test_a_background_delegation_result_comes_back_and_is_spoken() -> None
     assert spoken == [("The agent found one failing check: lint.", "en")]
     # Asked in the same session, as the newest turn only.
     assert server.runs[1].body["session_id"] == SESSION_ID
-    assert server.runs[1].body["input"] == hermes.DELIVERY_PROMPT
+    assert server.runs[1].body["input"].endswith("\n" + hermes.DELIVERY_PROMPT)
 
 
 def _config(primary: str = "hermes", mode: str = "realtime") -> Any:
@@ -272,7 +272,8 @@ async def test_a_typed_chat_turn_on_the_hermes_seat_reaches_the_same_hermes_sess
     assert typed_run.body["session_id"] == spoken_run.body["session_id"] == SESSION_ID
     assert typed_run.body["model"] == "stepfun/step-3.7-flash:free"
     assert typed_run.body["input"].endswith("Open Notepad and type hello from JARVIS")
-    assert "Always reply in English" in typed_run.body["instructions"]
+    assert "Always reply in English" in typed_run.body["input"]
+    assert typed_run.body["input"].startswith("[typed]")
 
 
 def test_the_chat_pick_uses_the_hermes_bridge_even_when_voice_has_another_brain(

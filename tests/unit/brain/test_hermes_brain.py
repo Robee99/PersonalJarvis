@@ -91,6 +91,23 @@ def test_hermes_gets_the_front_end_contract_not_jarvis_tool_rules() -> None:
     assert instructions.startswith(hermes.FRONT_END_INSTRUCTIONS)
 
 
+def test_instructions_stay_identical_across_spoken_typed_and_language_turns() -> None:
+    # Hermes puts the instructions in the system prompt; any per-turn change
+    # makes llama.cpp re-read the whole ~47k-token prompt (2026-10-12).
+    spoken = BrainRequest(
+        messages=(BrainMessage(role="user", content="hi"),),
+        system="X\n\nREPLY LANGUAGE: English.",
+    )
+    typed_german = BrainRequest(
+        messages=(BrainMessage(role="user", content="schau nur, klick nichts"),),
+        system="X\n\nREPLY LANGUAGE: German.",
+    )
+    assert build_instructions(spoken) == build_instructions(typed_german)
+    assert hermes.run_input(spoken) == "[spoken] REPLY LANGUAGE: English.\nhi"
+    note = hermes.turn_note(typed_german, written=True)
+    assert note.startswith("[typed] REPLY LANGUAGE: German.")
+
+
 @pytest.mark.asyncio
 async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() -> None:
     server = FakeHermesApi(
@@ -106,7 +123,7 @@ async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() 
     assert brain.last_runtime == {"provider": "local-qwen", "model": "qwen"}
     sent = server.runs[0].body
     assert sent["model"] == "hermes-agent" and "provider" not in sent
-    assert sent["input"] == "open notepad"
+    assert sent["input"] == "[spoken]\nopen notepad"
     assert "tools" not in sent and "conversation_history" not in sent
     assert server.runs[0].headers["x-hermes-session-key"] == hermes.SESSION_KEY
 

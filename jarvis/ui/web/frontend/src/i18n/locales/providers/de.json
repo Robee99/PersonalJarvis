@@ -138,6 +138,7 @@
     "access_local": "Dieser Computer",
     "agents_needs_access": "Verbinde zuerst das Abo oder speichere einen Schlüssel.",
     "local_title": "Auf diesem Computer",
+    "local_servers_title": "Modelle auf diesem Computer",
     "local_desc": "Die Agenten laufen mit lokalen Modellen. Kein Konto, kein Schlüssel, nichts verlässt diesen Computer.",
     "default_title": "Standard für neue Aufgaben",
     "default_desc": "Aufgaben, die {name} selbst abgibt, laufen hier. Jeder eingeschaltete Anbieter kann einen Agenten ausführen.",

@@ -270,10 +270,14 @@ PERSONA_INSTRUCTIONS = (
 
 FRONT_END_INSTRUCTIONS = (
     "You are answering through JARVIS, the user's voice and desktop front-end. "
-    "Your reply is spoken aloud: lead with the answer, in one to three short "
-    "sentences of plain text, no markdown, no lists, unless the user asks for "
-    "detail. Use your own tools to act on the computer, the browser and files. "
-    "Say you did something only after a tool actually did it."
+    "Each user message starts with a short note in square brackets. "
+    "[spoken]: the reply is spoken aloud, so lead with the answer, in one to "
+    "three short sentences of plain text, no markdown, no lists, unless the "
+    "user asks for detail. [typed]: the reply is read in the chat window, so "
+    "lead with the answer; short markdown (lists, code blocks, links) is fine "
+    "when it helps. Follow any reply-language or look-only rule in that note. "
+    "Use your own tools to act on the computer, the browser and files. Say you "
+    "did something only after a tool actually did it."
 )
 
 #: How to drive the Windows PC so the person sees the result. Live 2026-10-12:
@@ -290,15 +294,6 @@ PC_CONTROL_INSTRUCTIONS = (
     "playing, added or sent, check the result (a Snapshot, the window list, "
     "the page) and say what you actually see. Never say a cart, order, "
     "message or file changed unless a tool result in this turn shows it."
-)
-
-#: The same contract for a typed turn: the reply is read, not heard.
-WRITTEN_FRONT_END_INSTRUCTIONS = (
-    "You are answering through JARVIS, the user's desktop front-end, in its "
-    "chat window. Your reply is read, not heard: lead with the answer; short "
-    "markdown (lists, code blocks, links) is fine when it helps. Use your own "
-    "tools to act on the computer, the browser and files. Say you did "
-    "something only after a tool actually did it."
 )
 
 #: Added when the user asked only to look ("don't click anything, just look").
@@ -388,26 +383,36 @@ def model_fields(model: str | None) -> dict[str, str]:
     return {"model": value}
 
 
-def build_instructions(req: BrainRequest, *, written: bool = False) -> str:
+def build_instructions(req: BrainRequest) -> str:
     """The front-end contract layered on Hermes's own system prompt.
 
     Jarvis's own router prompt (its tool rules and tool names) is not sent:
     Hermes has its own tools and would chase names it does not have. The
-    user's standing preferences and the turn's reply language are kept. A
-    typed turn (``written``) is told it is read, not spoken.
+    user's standing preferences are kept.
+
+    The text is the same on every turn. Hermes puts it in the system prompt,
+    ahead of the tools and the history, and llama.cpp reuses its cache only
+    up to the first changed token: a per-turn variant (spoken vs typed, the
+    reply language, look-only) made Gemma re-read the whole ~47k-token prompt
+    whenever the user switched between voice and chat, about a minute each
+    time (2026-10-12). What changes per turn goes in ``turn_note`` instead.
     """
-    parts = [WRITTEN_FRONT_END_INSTRUCTIONS if written else FRONT_END_INSTRUCTIONS]
-    parts.append(PC_CONTROL_INSTRUCTIONS)
-    parts.append(PERSONA_INSTRUCTIONS)
+    parts = [FRONT_END_INSTRUCTIONS, PC_CONTROL_INSTRUCTIONS, PERSONA_INSTRUCTIONS]
     prefs = render_cli_standing_instructions(req.system)
     if prefs:
         parts.append(prefs)
+    return "\n\n".join(parts)
+
+
+def turn_note(req: BrainRequest, *, written: bool = False) -> str:
+    """The per-turn part of the contract, sent at the head of the user message."""
+    parts = ["[typed]" if written else "[spoken]"]
     lang = extract_reply_language_directive(req.system)
     if lang:
         parts.append(lang)
     if observation_only(latest_user_text(req)):
         parts.append(OBSERVE_ONLY_INSTRUCTIONS)
-    return "\n\n".join(parts)
+    return " ".join(parts)
 
 
 def observation_only(text: str) -> bool:
@@ -424,8 +429,8 @@ def latest_user_message(req: BrainRequest) -> BrainMessage | None:
     return None
 
 
-def run_input(req: BrainRequest) -> str | list[dict[str, Any]]:
-    """The run's ``input``: the newest user text, with its images when it has any.
+def run_input(req: BrainRequest, *, written: bool = False) -> str | list[dict[str, Any]]:
+    """The run's ``input``: the turn note, the newest user text, and its images.
 
     Images go as OpenAI ``image_url`` parts in one user message; Hermes hands
     them to a model that can see, or describes them with its own vision tool
@@ -433,11 +438,12 @@ def run_input(req: BrainRequest) -> str | list[dict[str, Any]]:
     decided before this brain is picked (``route_policy.media_chain``).
     """
     text = latest_user_text(req)
+    note = turn_note(req, written=written)
     message = latest_user_message(req)
     images = tuple(getattr(message, "images", ()) or ()) if message is not None else ()
     if not images:
-        return text
-    parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
+        return f"{note}\n{text}"
+    parts: list[dict[str, Any]] = [{"type": "text", "text": f"{note}\n{text}"}]
     for image in images:
         url = f"data:{image.mime};base64,{image.data_b64}"
         parts.append({"type": "image_url", "image_url": {"url": url}})
@@ -664,10 +670,8 @@ class HermesBrain:
         """One run in the Jarvis session: Hermes loads the history itself."""
         body: dict[str, Any] = {
             **model_fields(self._model),
-            "input": run_input(req),
-            "instructions": build_instructions(
-                req, written=turn_context().get("delivery") == "written"
-            ),
+            "input": run_input(req, written=turn_context().get("delivery") == "written"),
+            "instructions": build_instructions(req),
             "session_id": self.session_id,
         }
         if getattr(req, "reasoning_effort", None) == "none" or thinking_off_by_config():

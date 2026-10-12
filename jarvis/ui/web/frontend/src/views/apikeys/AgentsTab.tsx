@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FlaskConical, Loader2, LogIn, LogOut } from "lucide-react";
+import { listLocalServers, type LocalServer } from "@/components/providers/BrainPicker";
 import { ProviderLogo } from "@/components/providers/ProviderLogo";
 import { ProviderTestControl } from "@/components/providers/ProviderTierSection";
 import { Button } from "@/components/ui/button";
@@ -383,6 +384,8 @@ function ProviderDetail({
         </SettingsSectionCard>
       </div>
 
+      {family.local && <LocalServers />}
+
       {entry.rows.map((row) => (
         <AgentModels
           key={row.jarvis}
@@ -411,6 +414,32 @@ function ProviderDetail({
 
       {keyed && <SeparateKeys family={family} onChanged={onChanged} />}
     </div>
+  );
+}
+
+/**
+ * Every local model server Jarvis finds (llama.cpp Qwen on 11437, Gemma on
+ * 11438, LM Studio, Ollama…), the same list as Settings › Model. The
+ * "Local server" card below holds one URL only, so a second server (Qwen
+ * beside Gemma) was invisible on this page (2026-10-12).
+ */
+function LocalServers() {
+  const t = useT();
+  const { data } = useQuery({ queryKey: ["local-servers"], queryFn: listLocalServers, staleTime: 15_000 });
+  const servers: LocalServer[] = data?.servers ?? [];
+  if (!servers.length) return null;
+  return (
+    <SettingsSection title={t("providers_page.local_servers_title")} data-testid="agent-local-servers">
+      {servers.map((server) => (
+        <SettingsRow
+          key={server.url}
+          data-testid={`agent-local-server-${server.port}`}
+          title={server.models.join(", ") || server.kind}
+          description={`${server.kind} · ${server.url}`}
+          control={<span className="text-meta text-muted-foreground">{t(`brain_picker.state_${server.state}`)}</span>}
+        />
+      ))}
+    </SettingsSection>
   );
 }
 

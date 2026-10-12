@@ -41,7 +41,7 @@ import { useEventStore } from "@/store/events";
  * `POST /api/brain/switch`.
  */
 
-interface LocalServer {
+export interface LocalServer {
   url: string;
   port: number;
   kind: string;
@@ -57,7 +57,7 @@ interface LocalServersResult {
   servers: LocalServer[];
 }
 
-async function listLocalServers(): Promise<LocalServersResult> {
+export async function listLocalServers(): Promise<LocalServersResult> {
   const res = await fetch("/api/local-servers");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as LocalServersResult;

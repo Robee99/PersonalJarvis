@@ -110,7 +110,7 @@ async def test_the_checkpoint_is_used_once() -> None:
     await _cut_off(brain, "write me an essay about lighthouses")
     await _say(brain, "continue")
     await _say(brain, "continue")
-    assert server.runs[2].body["input"] == "continue"
+    assert server.runs[2].body["input"] == "[spoken]\ncontinue"
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_stop_asks_hermes_to_stop_delegated_work_and_announces_nothing() -
         if len(server.runs) == 2 and server.runs[1].body:
             break
         await asyncio.sleep(0.01)
-    assert server.runs[1].body["input"] == hermes.STOP_DELEGATIONS_PROMPT
+    assert server.runs[1].body["input"].endswith("\n" + hermes.STOP_DELEGATIONS_PROMPT)
     server.session_rows.append({"id": "41", "display_kind": hermes.DELIVERY_KIND})
     await asyncio.sleep(0.1)
     assert spoken == []
@@ -305,7 +305,7 @@ async def test_a_typed_turn_asks_the_chat_card_and_the_same_run_carries_on(
     assert asked == ["hermes:approval: del C:\\notes.txt"]
     assert server.approvals == [{"choice": expected, "request_id": "req-7"}]
     assert brain.pending_approval is None
-    assert "read, not heard" in server.runs[0].body["instructions"]
+    assert server.runs[0].body["input"].startswith("[typed]")
     await asyncio.sleep(0.05)
     if click == "allow":
         assert any(getattr(e, "tool_name", "") == "hermes:terminal" for e in tools)
