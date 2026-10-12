@@ -143,6 +143,45 @@ class DesktopRealtimeBargeInDetector:
     _DEFAULT_MAX_GAP_FRAMES = 4
     _BRIDGE_AFTER_FRAMES = 4
 
+    # Time-aligned echo floor (opt-in ``echo_tracking``; the classic pipeline's
+    # playback barge). The adaptive floor above is ONE number per window: the
+    # loudest sustained echo times a margin. On a laptop whose speakers sit a
+    # hand's width from the built-in mic the echo is louder than a user at arm's
+    # length, so that single number sits above the user's voice for the whole
+    # answer and speaking over Jarvis never interrupts (live 2026-10-12, Lenovo
+    # LOQ: no barge-in in an entire session). The echo is not uniformly loud,
+    # though: it follows what the speakers emit, syllable by syllable, and that
+    # envelope is recorded (``jarvis.audio.echo_reference``). The grace window,
+    # pure echo by construction, calibrates the device lag and the
+    # speaker->mic gain against it; afterwards each frame is gated against the
+    # echo PREDICTED for that instant (gain x the loudest output block within a
+    # reverb-smeared window at that lag) times ``_ECHO_TRACK_MARGIN``. In the
+    # gaps between Jarvis' words the gate drops toward the static floor, so a
+    # user's speech there counts, while the echo itself still has to beat
+    # twice its own predicted level. Conservative by construction: during
+    # Jarvis' words the tracked gate (2x the echo predicted for that instant)
+    # is STRICTER than the adaptive one (1.4x the 90th percentile), only his
+    # pauses get the lower gate, a poor calibration (correlation below
+    # ``_ECHO_TRACK_MIN_CORR``) or a frame outside the recorded reference
+    # falls back to the adaptive floor, the full ~0.5 s of
+    # high-probability speech is still required, frames masked by loud echo
+    # are neutral for a bounded run only (they neither count as speech nor
+    # break a candidate, ~0.75 s per run), and the envelope-correlation gate
+    # still judges every confirmed candidate on its unmasked frames. Physics
+    # sets the limit: without acoustic echo cancellation nobody can hear the
+    # user UNDER a louder echo, so a quiet interruption lands in Jarvis'
+    # pauses; ``[audio].echo_cancellation`` with its optional engine removes
+    # that limit.
+    _ECHO_TRACK_MIN_CORR = 0.5
+    _ECHO_TRACK_MIN_FRAMES = 16
+    _ECHO_TRACK_MARGIN = 2.0
+    _ECHO_TRACK_SIGNIFICANT_FRACTION = 0.25
+    _ECHO_TRACK_SMEAR_BACK_S = 0.15
+    _ECHO_TRACK_SMEAR_FWD_S = 0.08
+    _ECHO_TRACK_MAX_MASKED_RUN = 24
+    _ECHO_TRACK_MAX_MASKED_PER_SPEECH_FRAME = 4
+    _ECHO_TRACK_PAUSE_COVER_S = 2.0
+
     def __init__(
         self,
         *,
@@ -159,9 +198,28 @@ class DesktopRealtimeBargeInDetector:
             Callable[[float], list[tuple[float, float, float]]] | None
         ) = None,
         echo_correlation_threshold: float | None = None,
+        echo_tracking: bool = False,
         model: Any = None,
     ) -> None:
         self._grace_s = max(0.0, float(grace_s))
+        self._echo_tracking = bool(echo_tracking)
+        # (capture-time estimate, rms) of the grace frames — the echo-tracking
+        # calibration data — and the calibrated (lag_s, gain), None when off,
+        # not yet calibrated, or the calibration was not trustworthy.
+        self._grace_samples: list[tuple[float, float]] = []
+        self._track: tuple[float, float] | None = None
+        self._track_attempted = False
+        self._masked_run = 0
+        self._masked_frames = 0
+        self._masked_ts: set[float] = set()
+        # Read-only diagnostics (``stats``); never feed a decision.
+        self._stat_frames = 0
+        self._stat_gated = 0
+        self._stat_masked = 0
+        self._stat_echo_suppressed = 0
+        self._stat_best_speech = 0
+        self._stat_peak_rms = 0.0
+        self._stat_last_gate = 0.0
         self._speech_threshold = min(1.0, max(0.0, float(speech_threshold)))
         self._consecutive_frames = max(1, int(consecutive_frames))
         self._pre_speech_frames = max(1, int(pre_speech_frames))
@@ -260,6 +318,28 @@ class DesktopRealtimeBargeInDetector:
         # echo by construction) re-trains the adaptive floor for the volume /
         # coupling of THIS answer instead of trusting a stale estimate.
         self._rms_history.clear()
+        self._grace_samples = []
+        self._track = None
+        self._track_attempted = False
+
+    def stats(self) -> dict[str, Any]:
+        """Read-only counters for the caller's end-of-window diagnostics log."""
+
+        track = self._track
+        return {
+            "frames": self._stat_frames,
+            "gated": self._stat_gated,
+            "masked": self._stat_masked,
+            "echo_suppressed": self._stat_echo_suppressed,
+            "best_speech_frames": self._stat_best_speech,
+            "peak_rms": round(self._stat_peak_rms, 4),
+            "last_gate": round(self._stat_last_gate, 4),
+            "echo_track": (
+                f"lag={track[0] * 1000.0:.0f}ms gain={track[1]:.2f}"
+                if track is not None
+                else ("off" if not self._echo_tracking else "uncalibrated")
+            ),
+        }
 
     def stop_output(self) -> None:
         self._active = False
@@ -299,8 +379,17 @@ class DesktopRealtimeBargeInDetector:
                 grace_frames = samples[:framed_samples].reshape(
                     frame_count, VAD_FRAME_SAMPLES
                 )
-                for frame in grace_frames:
-                    self._rms_history.append(self._frame_rms(frame))
+                grace_now = time.monotonic()
+                for index, frame in enumerate(grace_frames):
+                    grace_rms = self._frame_rms(frame)
+                    self._rms_history.append(grace_rms)
+                    if self._echo_tracking:
+                        self._grace_samples.append(
+                            (
+                                grace_now - (frame_count - 1 - index) * _VAD_FRAME_S,
+                                grace_rms,
+                            )
+                        )
             self._reset_buffers()
             return None
 
@@ -318,6 +407,15 @@ class DesktopRealtimeBargeInDetector:
         # correlation gate searches lags far coarser than executor jitter.
         batch_now = time.monotonic()
 
+        if self._echo_tracking and not self._track_attempted:
+            self._track_attempted = True
+            self._track = self._calibrate_echo_track()
+        track_reference = (
+            self._echo_track_reference(frame_count * _VAD_FRAME_S)
+            if self._track is not None and self._min_frame_rms > 0.0
+            else None
+        )
+
         for index, frame in enumerate(frames):
             frame_ts = batch_now - (frame_count - 1 - index) * _VAD_FRAME_S
             normalized = frame.astype(np.float32) / 32768.0
@@ -328,9 +426,30 @@ class DesktopRealtimeBargeInDetector:
             # computed BEFORE this frame enters the history, so every frame is
             # judged against the lagged pure-echo past, never against itself.
             gate = self._effective_floor()
+            tracked = (
+                self._tracked_floor(track_reference, frame_ts)
+                if track_reference is not None
+                else None
+            )
+            if tracked is not None:
+                gate = tracked
+            # Masked: loud echo, not silence, is what holds this frame under
+            # the gate, so it says nothing about whether the user is talking.
+            masked = (
+                tracked is not None
+                and tracked > self._min_frame_rms
+                and frame_rms < gate
+            )
+            if masked:
+                self._masked_ts.add(frame_ts)
             self._rms_history.append(frame_rms)
+            self._stat_frames += 1
+            self._stat_last_gate = gate
+            if frame_rms > self._stat_peak_rms:
+                self._stat_peak_rms = frame_rms
             if gate > 0.0 and frame_rms < gate:
                 probability = 0.0
+                self._stat_gated += 1
             else:
                 probability = float(self._model._prob(normalized))
             if probability >= self._speech_threshold:
@@ -342,6 +461,9 @@ class DesktopRealtimeBargeInDetector:
                 self._speech_run += 1
                 self._speech_frames += 1
                 self._gap_run = 0
+                self._masked_run = 0
+                if self._speech_frames > self._stat_best_speech:
+                    self._stat_best_speech = self._speech_frames
                 if self._speech_run >= self._bridge_after_frames:
                     self._solid_run_seen = True
                 if self._speech_frames >= self._consecutive_frames:
@@ -350,6 +472,7 @@ class DesktopRealtimeBargeInDetector:
                         # currently emitting — our own echo, not a user. Keep
                         # the detector armed; a real interruption on top of
                         # the echo decorrelates and still breaks through.
+                        self._stat_echo_suppressed += 1
                         self._reset_buffers()
                         continue
                     tail_frames = frames[index + 1 :].reshape(-1)
@@ -364,6 +487,25 @@ class DesktopRealtimeBargeInDetector:
                     self._active = False
                     self._reset_buffers()
                     return detected.tobytes()
+                continue
+
+            if (
+                masked
+                and self._speech_frames
+                and self._solid_run_seen
+                and self._masked_run < self._ECHO_TRACK_MAX_MASKED_RUN
+                and self._masked_frames
+                < self._ECHO_TRACK_MAX_MASKED_PER_SPEECH_FRAME * self._consecutive_frames
+            ):
+                # Jarvis' own loud syllable covers this frame: neutral. It
+                # neither adds speech nor ends a candidate already under way,
+                # so a user talking through the answer accumulates evidence in
+                # the gaps between Jarvis' words. Bounded per run and in total.
+                self._candidate_frames.append((frame.copy(), frame_ts))
+                self._speech_run = 0
+                self._masked_run += 1
+                self._masked_frames += 1
+                self._stat_masked += 1
                 continue
 
             if (
@@ -387,6 +529,8 @@ class DesktopRealtimeBargeInDetector:
                 self._pre_buffer.append(candidate)
             self._clear_candidate()
             self._pre_buffer.append((frame.copy(), frame_ts))
+            if masked:
+                self._masked_ts.add(frame_ts)
 
         self._residual = trailing
         return None
@@ -425,13 +569,21 @@ class DesktopRealtimeBargeInDetector:
             return False
         if len(reference) < 2:
             return False
+        # Frames masked by loud echo (echo tracking) are the speakers' own
+        # envelope by definition; judging the user's frames, not those, is
+        # what tells an interruption over the answer from the answer itself.
+        judged = [
+            (frame, ts)
+            for frame, ts in self._candidate_frames
+            if ts not in self._masked_ts
+        ]
+        if len(judged) < self._ECHO_CORR_MIN_FRAMES:
+            return False
         candidate = np.array(
-            [self._frame_rms(frame) for frame, _ts in self._candidate_frames],
+            [self._frame_rms(frame) for frame, _ts in judged],
             dtype=np.float64,
         )
-        times = np.array(
-            [ts for _frame, ts in self._candidate_frames], dtype=np.float64
-        )
+        times = np.array([ts for _frame, ts in judged], dtype=np.float64)
         if float(candidate.std()) < self._ECHO_CORR_MIN_STD:
             return False
         starts = np.array([entry[0] for entry in reference], dtype=np.float64)
@@ -477,6 +629,157 @@ class DesktopRealtimeBargeInDetector:
         )
         return False
 
+    @staticmethod
+    def _reference_arrays(
+        reference: list[tuple[float, float, float]],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        if len(reference) < 2:
+            return None
+        starts = np.array([entry[0] for entry in reference], dtype=np.float64)
+        ends = starts + np.array([entry[1] for entry in reference], dtype=np.float64)
+        levels = np.array([entry[2] for entry in reference], dtype=np.float64)
+        return starts, ends, levels
+
+    def _smeared_reference(
+        self, arrays: tuple[np.ndarray, np.ndarray, np.ndarray], query: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Loudest output block audible around each query time, plus coverage.
+
+        The window reaches ``_ECHO_TRACK_SMEAR_BACK_S`` into the past (room
+        reverb keeps a loud syllable audible after the block ends) and a little
+        ahead (block-boundary jitter). A query before the recorded reference,
+        or longer than ``_ECHO_TRACK_PAUSE_COVER_S`` after its last block, is
+        reported uncovered so the caller never mistakes "no data" for "silent
+        speakers"; a shorter stretch after the last block is the pause between
+        two synthesized sentences, when the speakers really are quiet.
+        """
+
+        starts, ends, levels = arrays
+        lo = query - self._ECHO_TRACK_SMEAR_BACK_S
+        hi = query + self._ECHO_TRACK_SMEAR_FWD_S
+        overlap = (starts[None, :] <= hi[:, None]) & (ends[None, :] >= lo[:, None])
+        smeared = np.where(overlap, levels[None, :], 0.0).max(axis=1)
+        covered = (query >= starts[0]) & (query <= ends[-1] + self._ECHO_TRACK_PAUSE_COVER_S)
+        return smeared, covered
+
+    @staticmethod
+    def _point_reference(
+        arrays: tuple[np.ndarray, np.ndarray, np.ndarray], query: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Level of the output block playing at each query time, plus coverage.
+
+        Calibration estimates the lag on the UNsmeared envelope (the smear
+        would blur the very timing it is measuring), the same lookup the
+        envelope-correlation gate uses.
+        """
+
+        starts, ends, levels = arrays
+        idx = np.searchsorted(starts, query, side="right") - 1
+        idx_clamped = np.clip(idx, 0, len(starts) - 1)
+        inside = (idx >= 0) & (query < ends[idx_clamped])
+        values = np.where(inside, levels[idx_clamped], 0.0)
+        covered = (query >= starts[0]) & (query < ends[-1])
+        return values, covered
+
+    def _calibrate_echo_track(self) -> tuple[float, float] | None:
+        """Device lag and speaker->mic gain from the pure-echo grace window."""
+
+        samples = self._grace_samples
+        self._grace_samples = []
+        if len(samples) < self._ECHO_TRACK_MIN_FRAMES:
+            return None
+        times = np.array([ts for ts, _rms in samples], dtype=np.float64)
+        mic = np.array([rms for _ts, rms in samples], dtype=np.float64)
+        if float(mic.std()) < self._ECHO_CORR_MIN_STD:
+            return None
+        try:
+            window = (
+                time.monotonic() - float(times[0])
+                + self._ECHO_CORR_MAX_LAG_S
+                + self._ECHO_TRACK_SMEAR_BACK_S
+                + 1.0
+            )
+            arrays = self._reference_arrays(list(self._echo_reference_snapshot(window)))
+        except Exception:  # noqa: BLE001 — calibration failure = adaptive floor only
+            log.debug("Echo-tracking calibration snapshot failed", exc_info=True)
+            return None
+        if arrays is None:
+            return None
+        best_r = 0.0
+        best_lag: float | None = None
+        lag = 0.0
+        while lag <= self._ECHO_CORR_MAX_LAG_S:
+            point, covered = self._point_reference(arrays, times - lag)
+            if int(covered.sum()) >= self._ECHO_TRACK_MIN_FRAMES:
+                ref_values = point[covered]
+                mic_values = mic[covered]
+                if (
+                    float(ref_values.std()) >= self._ECHO_CORR_MIN_STD
+                    and float(mic_values.std()) >= self._ECHO_CORR_MIN_STD
+                ):
+                    r = float(np.corrcoef(mic_values, ref_values)[0, 1])
+                    if math.isfinite(r) and r > best_r:
+                        best_r = r
+                        best_lag = lag
+            lag += self._ECHO_CORR_LAG_STEP_S
+        if best_lag is None or best_r < self._ECHO_TRACK_MIN_CORR:
+            log.info(
+                "Barge echo tracking not calibrated (best correlation %.2f); "
+                "using the adaptive echo floor.",
+                best_r,
+            )
+            return None
+        point, covered = self._point_reference(arrays, times - best_lag)
+        ref_values = point[covered]
+        mic_values = mic[covered]
+        significant = ref_values >= self._ECHO_TRACK_SIGNIFICANT_FRACTION * float(
+            ref_values.max()
+        )
+        significant &= ref_values > 0.0
+        if int(significant.sum()) < 4:
+            return None
+        gain = float(np.percentile(mic_values[significant] / ref_values[significant], 90))
+        if not math.isfinite(gain) or gain <= 0.0:
+            return None
+        log.info(
+            "Barge echo tracking calibrated: output lag %.0f ms, speaker->mic "
+            "gain %.3f (correlation %.2f).",
+            best_lag * 1000.0,
+            gain,
+            best_r,
+        )
+        return best_lag, gain
+
+    def _echo_track_reference(
+        self, batch_s: float
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        track = self._track
+        if track is None:
+            return None
+        try:
+            window = batch_s + track[0] + self._ECHO_TRACK_SMEAR_BACK_S + 1.0
+            return self._reference_arrays(list(self._echo_reference_snapshot(window)))
+        except Exception:  # noqa: BLE001 — no reference = adaptive floor only
+            log.debug("Echo-tracking snapshot failed", exc_info=True)
+            return None
+
+    def _tracked_floor(
+        self, arrays: tuple[np.ndarray, np.ndarray, np.ndarray], frame_ts: float
+    ) -> float | None:
+        """Gate for one frame from the echo predicted at that instant, or None."""
+
+        track = self._track
+        if track is None:
+            return None
+        lag, gain = track
+        smeared, covered = self._smeared_reference(
+            arrays, np.array([frame_ts - lag], dtype=np.float64)
+        )
+        if not bool(covered[0]):
+            return None
+        predicted = gain * float(smeared[0])
+        return max(self._min_frame_rms, self._ECHO_TRACK_MARGIN * predicted)
+
     def _effective_floor(self) -> float:
         """Current energy gate: static minimum or the learned echo floor.
 
@@ -502,6 +805,14 @@ class DesktopRealtimeBargeInDetector:
         self._gap_run = 0
         self._bridged_frames = 0
         self._solid_run_seen = False
+        self._masked_run = 0
+        self._masked_frames = 0
+        # Masked stamps outlive a candidate only while their frame is still
+        # in the pre-speech window a next candidate would start from.
+        if self._masked_ts:
+            self._masked_ts = {
+                ts for _frame, ts in self._pre_buffer if ts in self._masked_ts
+            }
 
     def _reset_buffers(self) -> None:
         self._residual = np.empty(0, dtype=np.dtype("<i2"))

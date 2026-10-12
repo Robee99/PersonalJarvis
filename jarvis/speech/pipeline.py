@@ -280,6 +280,20 @@ _MAX_CARRY_PCM_BYTES = 16_000 * 2 * 60  # 16 kHz * int16 * 60 s ≈ 1.9 MB
 # there is no TTS playing, so speaker->mic echo is not a concern.
 _CONTINUATION_THINKING_GRACE_S: float = 0.3
 
+# Thinking-phase barge (classic pipeline): how long after any audible output
+# (an instant ack, an earcon, a mission readback played mid-think) the
+# microphone stays unjudged before the detector re-arms with a fresh grace.
+# Mirrors the realtime post-output echo guard; the classic post-TTS input lock
+# (``_input_suppressed_until_ns``) is honoured on top of it.
+_THINKING_BARGE_POST_OUTPUT_S: float = 0.5
+
+# When a barge-in is confirmed, the session's buffered microphone stream
+# resumes this much before the detector's estimate of where the interrupting
+# speech began (the detector's own capture already carries ~0.3 s of
+# pre-speech); everything older — the silent thinking wait, the speaker echo
+# of the answer — is dropped instead of being transcribed as the next turn.
+_BARGE_ONSET_MARGIN_S: float = 0.25
+
 # How long to wait for a cancelled brain turn to unwind before ABANDONING it.
 # A brain stream blocked on an inline action that ignores asyncio cancellation
 # (a long ``computer_use`` step stops only via its own ``cancel_active_cu``
@@ -17959,6 +17973,7 @@ class SpeechPipeline:
                 self._barge_monitor(
                     grace_s=_CONTINUATION_THINKING_GRACE_S,
                     respect_input_suppression=True,
+                    thinking=True,
                 ),
                 name="thinking-interrupt-monitor",
             )
@@ -18756,10 +18771,15 @@ class SpeechPipeline:
         return barged
 
     async def _barge_monitor(
-        self, *, grace_s: float = 1.5, respect_input_suppression: bool = False
+        self,
+        *,
+        grace_s: float = 1.5,
+        respect_input_suppression: bool = False,
+        thinking: bool = False,
     ) -> bool:
         """Listen on a second mic instance for the user speaking over Jarvis'
-        TTS output. Returns ``True`` as soon as that is confirmed.
+        TTS output (or, with ``thinking=True``, over his silent thinking wait).
+        Returns ``True`` as soon as that is confirmed.
 
         History: barge-in used to fire almost immediately after TTS start
         (~600 ms) and truncated the answer — speaker→mic echo (user feedback
@@ -18775,11 +18795,24 @@ class SpeechPipeline:
 
         This monitor therefore reuses the shared
         ``DesktopRealtimeBargeInDetector`` (the BUG-062 realtime fix) instead
-        of a bare Silero loop, gaining its two defenses:
+        of a bare Silero loop, gaining its defenses:
 
-        - the static RMS energy pre-gate (quiet frames never reach ONNX), and
+        - the static RMS energy pre-gate (quiet frames never reach ONNX),
         - the BUG-084 adaptive echo floor, calibrated per answer from the
-          grace-window frames — which during playback ARE our own echo.
+          grace-window frames — which during playback ARE our own echo, and
+        - (playback only) the time-aligned echo floor (``echo_tracking``):
+          the same grace window calibrates the device lag and speaker→mic
+          gain, so between Jarvis' words the gate drops to the user's level
+          instead of staying above the loudest echo for the whole answer —
+          what made interrupting impossible on laptop speakers (2026-10-12).
+
+        ``thinking=True`` (the stall guard's thinking-interrupt monitor) builds
+        the detector WITHOUT the playback probe, exactly like the realtime
+        thinking detector: with the probe attached ``feed`` returns None for as
+        long as nothing plays, so the classic thinking monitor never fired and
+        speaking during a 30-120 s PROCESSING wait did nothing (live
+        2026-10-12). Output played mid-think (an instant ack, an earcon) is
+        skipped and re-arms the detector after ``_THINKING_BARGE_POST_OUTPUT_S``.
 
         Every ``feed`` runs in a worker thread: the per-frame ONNX inference
         used to run synchronously on the voice event loop and starved the
@@ -18788,10 +18821,18 @@ class SpeechPipeline:
         """
         from jarvis.realtime.desktop import DesktopRealtimeBargeInDetector
 
-        detector = DesktopRealtimeBargeInDetector(
-            grace_s=grace_s,
-            output_active=level_tap.playback_active,
-        )
+        phase = "thinking" if thinking else "speaking"
+        if thinking:
+            detector = DesktopRealtimeBargeInDetector(
+                grace_s=grace_s,
+                output_active=None,
+            )
+        else:
+            detector = DesktopRealtimeBargeInDetector(
+                grace_s=grace_s,
+                output_active=level_tap.playback_active,
+                echo_tracking=True,
+            )
         try:
             # Model load off the event loop — it shares the turn with live
             # audio playback.
@@ -18799,6 +18840,16 @@ class SpeechPipeline:
         except asyncio.CancelledError:
             return False
         detector.start_output()
+        if thinking:
+            log.info(
+                "Thinking-phase barge monitor armed (grace %.1fs): speak to "
+                "interrupt.",
+                grace_s,
+            )
+        # Thinking mode: monotonic time of the last audible output frame, and
+        # whether the detector must re-arm (fresh grace) once it has settled.
+        last_output_at = 0.0
+        rearm = False
 
         try:
             async with MicrophoneCapture(
@@ -18826,13 +18877,74 @@ class SpeechPipeline:
                         chunk_ts = getattr(chunk, "timestamp_ns", 0) or time.time_ns()
                         if until_ns > 0 and chunk_ts < until_ns:
                             continue
-                    if await asyncio.to_thread(detector.feed, chunk.pcm) is not None:
+                    if thinking:
+                        # No playback probe on this detector, so audible output
+                        # during the think must be kept away from it here.
+                        now = time.monotonic()
+                        if level_tap.playback_active():
+                            last_output_at = now
+                            rearm = True
+                            continue
+                        if rearm:
+                            if now - last_output_at < _THINKING_BARGE_POST_OUTPUT_S:
+                                continue
+                            detector.start_output()
+                            rearm = False
+                    confirmed = await asyncio.to_thread(detector.feed, chunk.pcm)
+                    if confirmed is not None:
+                        self._resume_session_input_at_barge(confirmed, phase)
                         return True
         except asyncio.CancelledError:
+            self._log_barge_monitor_summary(detector, phase)
             return False
         except Exception as exc:  # noqa: BLE001
             log.warning("Barge-in monitor error: %s", exc)
+        self._log_barge_monitor_summary(detector, phase)
         return False
+
+    def _resume_session_input_at_barge(self, confirmed_pcm: bytes, phase: str) -> None:
+        """Point the session's buffered mic at the start of the interruption.
+
+        The session stream is not read while Jarvis thinks or speaks; its
+        replay buffer keeps up to 30 s. After a barge the LISTENING loop
+        resumes from that backlog, and without a cutoff it would either feed
+        the whole thinking wait and the answer's speaker echo to the VAD or —
+        past 30 s — refuse to skip the evicted prefix and end the session
+        ("Voice input exceeded the 30-second replay window"). The existing
+        post-TTS input lock is the cutoff both readers already honour, so the
+        barge sets it to just before the interrupting speech began.
+        """
+        duration_s = len(confirmed_pcm) / 2 / 16_000.0
+        onset_ns = time.time_ns() - int(
+            (duration_s + _BARGE_ONSET_MARGIN_S) * 1_000_000_000
+        )
+        previous = int(getattr(self, "_input_suppressed_until_ns", 0) or 0)
+        self._input_suppressed_until_ns = max(previous, onset_ns)
+        log.info(
+            "Barge-in confirmed by local VAD while Jarvis was %s "
+            "(%.2fs of speech captured); listening resumes from the "
+            "interruption.",
+            phase,
+            duration_s,
+        )
+
+    @staticmethod
+    def _log_barge_monitor_summary(detector: Any, phase: str) -> None:
+        """One diagnostics line per monitor window that ended without a barge."""
+        stats_fn = getattr(detector, "stats", None)
+        if not callable(stats_fn):
+            return
+        try:
+            stats = stats_fn()
+        except Exception:  # noqa: BLE001 — diagnostics never break the turn
+            return
+        if not stats.get("frames"):
+            return
+        log.info(
+            "barge monitor (%s) ended without interrupt: %s",
+            phase,
+            " ".join(f"{key}={value}" for key, value in stats.items()),
+        )
 
 
 # ----------------------------------------------------------------------
