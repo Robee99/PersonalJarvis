@@ -163,6 +163,20 @@ function ApiKeysPage() {
       >
         <div key={tab} role="tabpanel" id="apikeys-panel" aria-labelledby={`apikeys-tab-${tab}`} className="profile-rise w-full">
           {tab === "voice" && <VoiceTab data={families} onSaved={refetch} />}
+          {/* Who answers (Hermes Agent or Jarvis directly) and every local
+              llama.cpp server found (Qwen, Gemma): the same picker as
+              Settings › Model, so this page never hides the brain. */}
+          {tab === "agents" && (
+            <div className="mb-10" data-testid="apikeys-brain-picker">
+              <BrainPicker
+                onChanged={() => {
+                  refetch();
+                  void families.reload();
+                }}
+                onPickOther={() => openSettingsDestination("model", "brain")}
+              />
+            </div>
+          )}
           {tab === "agents" &&
             (families.error === "restart_required" ? (
               <RestartNeeded />
