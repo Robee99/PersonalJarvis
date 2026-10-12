@@ -250,6 +250,17 @@ for pkg in ("vosk",):
     binaries += _pkg_binaries
     datas += _pkg_datas
 
+# livekit (echo cancellation, jarvis/audio/echo_canceller.py) opens its FFI
+# library from livekit/rtc/resources through importlib.resources, which import
+# analysis never sees. Collected only when installed on the build machine;
+# without it the frozen app runs the microphone uncancelled.
+if importlib.util.find_spec("livekit") is not None:
+    try:
+        datas += collect_data_files("livekit.rtc", include_py_files=False)
+        binaries += collect_dynamic_libs("livekit.rtc")
+    except Exception as exc:
+        print(f"[jarvis.spec] WARNING: cannot collect livekit: {exc}")
+
 # RapidOCR (the optional [ocr] extra, ADR-0041) reads config.yaml,
 # default_models.yaml and its bundled PP-OCR ONNX models from its own package
 # folder and runs them on onnxruntime's native libraries. Collected only when
@@ -308,6 +319,13 @@ for pkg in (
 
 # RapidOCR resolves its public names and engines through import_module.
 hiddenimports += _rapidocr_hidden
+
+# livekit.rtc is imported lazily by the echo canceller.
+if importlib.util.find_spec("livekit") is not None:
+    try:
+        hiddenimports += collect_submodules("livekit")
+    except Exception as exc:
+        print(f"[jarvis.spec] WARNING: cannot collect livekit submodules: {exc}")
 
 # vosk is imported lazily (inside the wake provider) and opens its native
 # library through cffi's ABI mode, which needs the _cffi_backend extension.
