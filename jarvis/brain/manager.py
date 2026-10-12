@@ -11731,10 +11731,10 @@ class BrainManager:
         # Negations, questions and conditions never match and reach the brain.
         if not screen_context.has_image:
             from jarvis.platform.brightness import brightness_reflex
-            from jarvis.platform.pc_reflex import volume_reflex, window_reflex
+            from jarvis.platform.pc_reflex import url_reflex, volume_reflex, window_reflex
 
             reflex_reply = None
-            for reflex in (brightness_reflex, volume_reflex, window_reflex):
+            for reflex in (brightness_reflex, volume_reflex, window_reflex, url_reflex):
                 reflex_reply = await asyncio.to_thread(reflex, user_text)
                 if reflex_reply is not None:
                     break

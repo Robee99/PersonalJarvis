@@ -143,3 +143,41 @@ def test_close_matches_the_program_only(monkeypatch: pytest.MonkeyPatch) -> None
     assert seen == {"action": "close", "program_only": True}
     pc_reflex.window_reflex("maximize notepad")
     assert seen["program_only"] is False
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Open YouTube dot com", "https://youtube.com"),
+        ("open youtube.com", "https://youtube.com"),
+        ("Yeah, open youtube dot com.", "https://youtube.com"),
+        ("go to news.ycombinator.com please", "https://news.ycombinator.com"),
+        ("Jarvis, open https://www.github.com/Robee99", "https://github.com/Robee99"),
+        ("visit wikipedia dot org in my browser", "https://wikipedia.org"),
+    ],
+)
+def test_named_web_addresses_match(text: str, expected: str) -> None:
+    assert pc_reflex.parse_url_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "open youtube",  # an app or a site: the brain decides
+        "don't open youtube.com",
+        "open youtube.com and play lofi",
+        "can you tell me what youtube.com is?",
+        "open youtube.com later",
+        "search youtube.com for cats",
+    ],
+)
+def test_other_web_requests_go_to_the_brain(text: str) -> None:
+    assert pc_reflex.parse_url_command(text) is None
+
+
+def test_url_reflex_opens_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr("os.startfile", opened.append, raising=False)
+    assert pc_reflex.url_reflex("Open YouTube dot com") == "Opened youtube.com in your browser."
+    assert opened == ["https://youtube.com"]

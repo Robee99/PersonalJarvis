@@ -1,6 +1,7 @@
 """Volume and window commands as voice reflexes that only claim what Windows reads back.
 
-"Volume 40", "mute", "maximize Notepad", "bring Chrome back" are deterministic,
+"Volume 40", "mute", "maximize Notepad", "bring Chrome back", "open youtube.com"
+are deterministic,
 low-risk commands, so Jarvis answers them without a model round trip, also
 when Hermes is the brain, the same way it answers brightness
 (``jarvis/platform/brightness.py``). The work is done by the same code the
@@ -12,6 +13,11 @@ under Hermes kept "maximizing" Notepad with the Windows App tool's resize and
 said "Notepad has been maximized" while the window stayed normal, even with
 window_control offered and named in SOUL.md. Each of those turns also cost
 5-100 s of model time for a one-word action.
+
+A named web address opens in the default browser (the same as typing it into
+Run). Live 2026-10-12 06:30: "Open YouTube dot com" went to Hermes, Gemma
+called Jarvis's legacy screen tool, which had no vision model, and then said
+"I am opening YouTube for you now" while nothing opened.
 
 Only plain imperatives match. A negation, a question, a condition, a second
 clause ("unmute and open Spotify"), an app's own volume ("Spotify volume to
@@ -200,3 +206,42 @@ def window_reflex(text: str) -> str | None:
     if command.action == "focus" and result.state != "minimized":
         return f"{name} is in front."
     return f"{name} is {_STATE_WORDS.get(result.state, result.state)}."
+
+
+_TLD = r"(?:com|org|net|io|in|co|dev|ai|app|gg|tv|me|de|es|uk)"
+_DOMAIN = rf"((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+{_TLD})(/[^\s]*)?"
+_URL_OPEN = re.compile(
+    rf"^\s*{_PLEASE}(?:open|go\s+to|launch|visit|load|pull\s+up|bring\s+up)\s+"
+    rf"(?:up\s+)?(?:the\s+)?(?:website\s+|site\s+|page\s+)?(?:https?://)?(?:www\.)?{_DOMAIN}"
+    rf"(?:\s+(?:in\s+(?:my\s+|the\s+)?(?:browser|chrome)))?{_TAIL}",
+    re.IGNORECASE,
+)
+
+
+def parse_url_command(text: str) -> str | None:
+    """The web address this utterance plainly asks to open, as an https URL, else ``None``."""
+    from jarvis.brain.local_action_gate import _spoken_command  # noqa: PLC0415
+
+    command = _spoken_command((text or "").strip())
+    if not _plain(command):
+        return None
+    m = _URL_OPEN.match(command)
+    if not m:
+        return None
+    return f"https://{m.group(1).lower()}{m.group(2) or ''}"
+
+
+def url_reflex(text: str) -> str | None:
+    """Open a plainly named web address in the default browser on Windows, else ``None``."""
+    url = parse_url_command(text)
+    if url is None or sys.platform != "win32":
+        return None
+    import os  # noqa: PLC0415
+
+    try:
+        os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606 - a fixed https URL, opened by the browser
+    except OSError as exc:
+        log.warning("url reflex failed: %s", exc)
+        return None
+    site = url.removeprefix("https://").rstrip("/")
+    return f"Opened {site} in your browser."
