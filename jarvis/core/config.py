@@ -1980,6 +1980,17 @@ class JarvisLearningConfig(BaseModel):
     timeout_s: float = Field(default=90.0, ge=5.0, le=600.0)
 
 
+class CogneeMemoryConfig(BaseModel):
+    """Optional, isolated Cognee semantic index over explicitly authorized wiki pages."""
+
+    enabled: bool = False
+    python_executable: str = ""
+    worker_script: str = ""
+    data_dir: str = ""
+    dataset_name: str = "jarvis-authorized-wiki"
+    timeout_s: float = Field(default=90.0, ge=5.0, le=300.0)
+
+
 class MemoryConfig(BaseModel):
     recall_store: str = "sqlite"
     # chromadb was removed (2026-06-28); there is no chroma backend in
@@ -1989,6 +2000,7 @@ class MemoryConfig(BaseModel):
     retention_days_recall: int = 90
     data_dir: str = "./data"
     wiki: WikiMemoryConfig = Field(default_factory=WikiMemoryConfig)
+    cognee: CogneeMemoryConfig = Field(default_factory=CogneeMemoryConfig)
     legacy_curator: LegacyCuratorConfig = Field(default_factory=LegacyCuratorConfig)
     learning: JarvisLearningConfig = Field(default_factory=JarvisLearningConfig)
 

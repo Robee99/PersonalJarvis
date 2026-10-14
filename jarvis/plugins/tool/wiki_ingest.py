@@ -98,11 +98,13 @@ class WikiIngestTool:
         self,
         *,
         curator_resolver: Callable[[], Any],
+        cognee_adapter: Any | None = None,
     ) -> None:
         # Lazy resolver so the curator can be set up after the brain is
         # built (mirrors the spawn-worker lazy-resolver pattern in
         # ``factory.py:_load_tools_for_tier``).
         self._resolve_curator = curator_resolver
+        self._cognee = cognee_adapter
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
         text = str(args.get("text", "")).strip()
@@ -115,4 +117,18 @@ class WikiIngestTool:
         )
         if not outcome.success:
             return ToolResult(success=False, output="", error=outcome.error)
-        return ToolResult(success=True, output=outcome.render_summary())
+        summary = outcome.render_summary()
+        if self._cognee is not None and self._cognee.enabled:
+            indexed = 0
+            for path in outcome.applied:
+                try:
+                    await self._cognee.index_path(path)
+                    indexed += 1
+                except Exception as exc:  # native wiki write remains authoritative
+                    import logging
+
+                    logging.getLogger(__name__).warning(
+                        "wiki-ingest: Cognee indexing failed for %s: %s", path.name, exc
+                    )
+            summary += f"\n- Cognee semantic sources indexed: {indexed}/{len(outcome.applied)}"
+        return ToolResult(success=True, output=summary)

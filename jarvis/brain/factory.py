@@ -171,6 +171,7 @@ ROUTER_TOOLS = frozenset({
     # explicitly store a fact ("merk dir: …") rather than relying on the
     # VoiceFactBridge acknowledgement heuristic.
     "wiki-ingest",
+    "cognee-source",
     # CLI-Integration (2026-05-24): virtual loader that expands to one
     # ``cli_<name>`` tool per connected & usable CLI (gcloud, gh, docker, …).
     # This is the MCP/plugin model for command-line tools: only connected
@@ -564,7 +565,17 @@ def _load_tools_for_tier(
                 # default so the tool surface stays stable).
                 from jarvis.plugins.tool.wiki_recall import _build_search_instance
 
-                inst = cls(search=_build_search_instance())
+                search_instance = _build_search_instance()
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
+
+                inst = cls(
+                    search=search_instance,
+                    cognee=build_cognee_adapter(search_instance._root),
+                )
+            elif ep.name == "cognee-source":
+                from jarvis.plugins.tool.cognee_source import build_cognee_source_tool
+
+                inst = build_cognee_source_tool()
             elif ep.name == "wiki-page-read":
                 # Phase B5 follow-up: same vault-root resolution as wiki-recall.
                 from jarvis.plugins.tool.wiki_page_read import _build_page_read_tool
@@ -581,10 +592,15 @@ def _load_tools_for_tier(
                 # constructed by ``bootstrap_wiki_integration`` after the brain
                 # is built, so the tool must defer the lookup to execute time.
                 # Mirrors the spawn-worker lazy-resolver pattern.
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
                 from jarvis.memory.wiki.integration import get_running_curator
+                from jarvis.memory.wiki.vault_root import resolve_vault_root
                 from jarvis.plugins.tool.wiki_ingest import WikiIngestTool
 
-                inst = WikiIngestTool(curator_resolver=get_running_curator)
+                inst = WikiIngestTool(
+                    curator_resolver=get_running_curator,
+                    cognee_adapter=build_cognee_adapter(resolve_vault_root(None).path),
+                )
             elif ep.name == "create-skill":
                 # Skill authoring by voice/chat: the tool resolves the live
                 # SkillRegistry (skill_context) and the live BrainManager
