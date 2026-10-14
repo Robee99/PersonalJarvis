@@ -258,8 +258,21 @@ def ensure_normal_process_priority() -> str | None:
         return None
     try:
         import ctypes  # noqa: PLC0415 — Windows-only, keep it off the import floor
+        from ctypes import wintypes  # noqa: PLC0415 — Windows-only
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # ctypes defaults unannotated Win32 functions to c_int. On 64-bit
+        # Windows that truncates HANDLE values; GetCurrentProcess's pseudo-
+        # handle then reaches GetPriorityClass as 0x00000000FFFFFFFF instead
+        # of the pointer-sized -1 and terminates the process with
+        # STATUS_INVALID_HANDLE before the launcher can bind its API port.
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetPriorityClass.argtypes = [wintypes.HANDLE]
+        kernel32.GetPriorityClass.restype = wintypes.DWORD
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetPriorityClass.restype = wintypes.BOOL
+
         handle = kernel32.GetCurrentProcess()
         current = int(kernel32.GetPriorityClass(handle))
         if current not in (_BELOW_NORMAL_PRIORITY_CLASS, _IDLE_PRIORITY_CLASS):

@@ -271,7 +271,11 @@ class PluginToolRegistry:
             # refresh_plugin, which clears the entry first.
             return
         try:
-            tokens = self._store.load(plugin.id)
+            # Credential Manager and other OS keyrings are synchronous and may
+            # block for seconds (or longer during a locked profile). This
+            # bootstrap runs on the web event loop; keep the credential read
+            # on the loop's executor so health and MCP requests stay answerable.
+            tokens = await asyncio.to_thread(self._store.load, plugin.id)
         except Exception as exc:  # noqa: BLE001 — corrupt token must not nuke the rest
             log.warning("plugin-registry: token load failed for %s: %s", plugin.id, exc)
             return
@@ -314,12 +318,12 @@ class PluginToolRegistry:
                 )
                 self._last_errors[plugin.id] = message
                 if attempt.outcome == SKIPPED:
-                    self._maybe_mark_needs_reauth(plugin.id, message)
+                    await self._maybe_mark_needs_reauth(plugin.id, message)
                 return
 
             fresh_tokens: Any | None = None
             try:
-                fresh_tokens = self._store.load(plugin.id)
+                fresh_tokens = await asyncio.to_thread(self._store.load, plugin.id)
                 fresh_resolved = (
                     plugin_to_mcp_server_spec(plugin, fresh_tokens)
                     if fresh_tokens is not None
@@ -339,7 +343,7 @@ class PluginToolRegistry:
                 )
                 self._last_errors[plugin.id] = retry_message
                 if _connect_needs_reauth(retry_message) and fresh_tokens is not None:
-                    self._maybe_mark_needs_reauth(
+                    await self._maybe_mark_needs_reauth(
                         plugin.id,
                         retry_message,
                         expected_tokens=fresh_tokens,
@@ -369,7 +373,7 @@ class PluginToolRegistry:
         await client.start()
         return await client.list_tools()
 
-    def _maybe_mark_needs_reauth(
+    async def _maybe_mark_needs_reauth(
         self,
         plugin_id: str,
         message: str,
@@ -385,7 +389,7 @@ class PluginToolRegistry:
             reason = _connect_reauth_reason(message)
             if reason is None:
                 return
-            tokens = self._store.load(plugin_id)
+            tokens = await asyncio.to_thread(self._store.load, plugin_id)
             if tokens is None:
                 return
             if expected_tokens is not None and tokens != expected_tokens:
@@ -396,7 +400,11 @@ class PluginToolRegistry:
                 return
             from jarvis.marketplace.refresh_scheduler import flag_for_reauth
 
-            self._store.save(plugin_id, flag_for_reauth(tokens, reason))
+            await asyncio.to_thread(
+                self._store.save,
+                plugin_id,
+                flag_for_reauth(tokens, reason),
+            )
             log.warning(
                 "plugin-registry: %s connect needs re-auth (%s) — marked: %s",
                 plugin_id,
