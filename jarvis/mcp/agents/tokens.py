@@ -49,7 +49,7 @@ _SECRET_BYTES: Final[int] = 32
 
 #: What a token may do. Deliberately three, not a per-tool matrix: a permission
 #: model nobody can hold in their head is one nobody sets correctly.
-SCOPES: Final[tuple[str, ...]] = ("read", "work", "full")
+SCOPES: Final[tuple[str, ...]] = ("read", "work", "full", "tools")
 
 #: Tools a ``work`` token may call on top of every read-only one. Governance
 #: (approvals, the kill switch) and roster edits stay with ``full``, because
@@ -87,6 +87,9 @@ class McpToken:
     note: str = ""
     #: Free-form label for where it was installed ("claude-desktop", "cursor").
     client: str = ""
+    #: Exact Jarvis tool names this credential may use on the tools surface.
+    #: Agent-surface tokens leave this empty.
+    allowed_tools: list[str] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
@@ -104,6 +107,7 @@ class McpToken:
             "revoked": not self.active,
             "revoked_ms": self.revoked_ms,
             "note": self.note,
+            "allowed_tools": list(self.allowed_tools),
         }
 
 
@@ -151,7 +155,13 @@ class TokenStore:
     # ------------------------------------------------------------ commands
 
     def issue(
-        self, *, name: str, scope: str = "work", client: str = "", note: str = ""
+        self,
+        *,
+        name: str,
+        scope: str = "work",
+        client: str = "",
+        note: str = "",
+        allowed_tools: list[str] | tuple[str, ...] = (),
     ) -> tuple[McpToken, str]:
         """Mint a token. Returns it plus the secret, which is shown ONCE."""
         name = name.strip()
@@ -159,6 +169,13 @@ class TokenStore:
             raise TokenError("a token needs a name — you will read it in the list later")
         if scope not in SCOPES:
             raise TokenError(f"scope must be one of {', '.join(SCOPES)}")
+        selected_tools = sorted({str(item).strip() for item in allowed_tools if str(item).strip()})
+        if scope == "tools" and not selected_tools:
+            raise TokenError("a tools token needs at least one allowed tool")
+        if scope != "tools" and selected_tools:
+            raise TokenError("allowed_tools is only valid for a tools token")
+        if any(len(item) > 128 for item in selected_tools):
+            raise TokenError("tool names must be at most 128 characters")
         self.load()
         token_id = secrets.token_hex(_ID_BYTES)
         while token_id in self._tokens:
@@ -172,6 +189,7 @@ class TokenStore:
             created_ms=int(time.time() * 1000),
             client=client[:60],
             note=note[:400],
+            allowed_tools=selected_tools,
         )
         self._tokens[token_id] = token
         self.save()
@@ -243,6 +261,20 @@ def allows(scope: str, tool_name: str, *, dangerous: bool) -> bool:
     return False  # read
 
 
+def allows_jarvis_tool(token: McpToken, tool_name: str, risk_tier: str) -> bool:
+    """Whether a scoped tools credential may see and call one Jarvis tool.
+
+    Remote tool clients have no live Jarvis chat card to receive an ``ask``
+    approval. Keep those actions unavailable; the normal executor still
+    evaluates argument-sensitive tiers when an allowed tool is called.
+    """
+    return (
+        token.scope == "tools"
+        and tool_name in token.allowed_tools
+        and risk_tier in {"safe", "monitor"}
+    )
+
+
 def _hash(secret: str) -> str:
     return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
@@ -305,6 +337,7 @@ __all__ = [
     "TokenError",
     "TokenStore",
     "allows",
+    "allows_jarvis_tool",
     "looks_like_token",
     "store",
     "token_file",

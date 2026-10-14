@@ -34,6 +34,32 @@ def test_a_token_is_returned_once_and_stored_only_as_a_hash(store: tk.TokenStore
     assert public["revoked"] is False
 
 
+def test_tools_token_persists_an_exact_allowlist_and_excludes_other_scopes(
+    store: tk.TokenStore,
+) -> None:
+    token, secret = store.issue(
+        name="Hermes local", scope="tools", allowed_tools=["click", "inspect_pointer", "click"]
+    )
+
+    assert token.allowed_tools == ["click", "inspect_pointer"]
+    assert store.verify(secret).allowed_tools == token.allowed_tools
+    persisted = store.path.read_text(encoding="utf-8")
+    assert secret not in persisted
+    assert "secret_hash" in persisted
+    assert tk.allows_jarvis_tool(token, "click", "monitor")
+    assert tk.allows_jarvis_tool(token, "inspect_pointer", "safe")
+    assert not tk.allows_jarvis_tool(token, "click", "ask")
+    assert not tk.allows_jarvis_tool(token, "run_shell", "monitor")
+
+
+def test_tools_token_requires_allowlist(store: tk.TokenStore) -> None:
+    with pytest.raises(tk.TokenError, match="at least one allowed tool"):
+        store.issue(name="Empty Hermes", scope="tools")
+
+    with pytest.raises(tk.TokenError, match="only valid for a tools token"):
+        store.issue(name="Wrong scope", scope="work", allowed_tools=["click"])
+
+
 def test_verify_accepts_the_real_secret_and_nothing_else(store: tk.TokenStore) -> None:
     token, secret = store.issue(name="Cursor", scope="read")
 

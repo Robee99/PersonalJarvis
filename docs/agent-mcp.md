@@ -18,9 +18,11 @@ there is a client somewhere breaking silently.
 | `/api/control/mcp` | Jarvis' **tools** — `open-app`, `google-calendar`, `wiki-recall`, every registered tool plugin | a session Jarvis itself spawned, reaching back in |
 | `/api/control/mcp/agents` | the **ecosystem** — roster, board, rooms, assignments, approvals | any client holding the control key |
 
-Both are Streamable HTTP, both authenticate with the Control API's bearer key,
-and **loopback does not bypass it**: anything on the machine could otherwise
-open a socket and start driving somebody's team.
+Both are Streamable HTTP. The owner control key opens both surfaces; a named
+agent token opens only the agent ecosystem, and a separate `tools` token can
+open only its explicitly allowlisted safe/monitor tools. **Loopback does not
+bypass authentication**: anything on the machine could otherwise open a socket
+and start driving somebody's team.
 
 Note the trailing slash: the tools surface is addressed as
 `/api/control/mcp/` (what `jarvis_harness` has always sent). Without it
@@ -108,6 +110,7 @@ recovered.
 | `read` | look, never spend: roster, board, quests, capabilities, approvals |
 | `work` | that, plus talk to agents, post quests, assign, speak in rooms, hire |
 | `full` | that, plus governance: resolve approvals, the kill switch, import a team |
+| `tools` | only an explicit allowlist on `/api/control/mcp`; safe and monitor risk tiers only |
 
 Scope is enforced by **not listing** a tool, not by refusing it afterwards: a
 model shown a tool it may not call will call it, read the refusal, and try
@@ -118,14 +121,27 @@ naming the scope it would need.
 Manage them at `GET /api/agent-mcp/tokens` and
 `DELETE /api/agent-mcp/tokens/{id}`.
 
+### Pairing a local MCP client with Jarvis' tools
+
+Use `POST /api/agent-mcp/pair` with `surface: "tools"`, `scope: "tools"`,
+`transport: "http"`, and the exact `allowed_tools` names the client needs.
+This creates a named, revocable token for the loopback tools endpoint and
+returns a pasteable MCP config. The token cannot open `/agents`; it cannot
+discover or call tools outside its allowlist; and tools whose base risk tier is
+`ask` or `block` stay hidden because a remote client has no Jarvis approval
+card. Argument-sensitive checks still run in the normal tool gateway. Pairing
+the tools surface is loopback-only and never writes directly into a client
+configuration file.
+
 ### Why a token passes the CSRF guard
 
 Worth knowing, because it looks like a hole and is not. The app's surface guard
 treats cookie- and open-access requests as browser-shaped and demands an
 `Origin` header on unsafe methods; Bearer credentials are exempt, because a
 browser cannot silently mint one. An MCP token is such a credential, so it is
-exempt too — but **only on `/api/control/mcp/agents`**. Everywhere else it is
-an unknown Bearer and authenticates nothing. That narrowness is deliberate: the
+exempt too — but only on its matching MCP surface: agent tokens on
+`/api/control/mcp/agents` and tools tokens on `/api/control/mcp`. Everywhere
+else it is an unknown Bearer and authenticates nothing. That narrowness is deliberate: the
 desktop UI routes (`/api/settings/*`) are not key-gated and rely on this guard,
 so a token accepted app-wide would have opened them.
 
