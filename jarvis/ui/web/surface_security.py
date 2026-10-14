@@ -828,9 +828,10 @@ class SurfaceSecurity:
             return False
         return origin == _scope_origin(scope) or origin in self._trusted_origins
 
-    #: The only path where a per-client MCP token counts as a credential.
+    #: The only MCP paths where a per-client token counts as a credential.
     #: Deliberately exact: the desktop UI routes are NOT key-gated — they rely
     #: on this guard — so a token accepted app-wide would open them too.
+    _MCP_TOOLS_SURFACE_PATH: ClassVar[str] = "/api/control/mcp"
     _MCP_AGENT_SURFACE_PATH: ClassVar[str] = "/api/control/mcp/agents"
 
     def _mcp_token_accepted(self, scope: Scope, bearer: str) -> bool:
@@ -841,17 +842,23 @@ class SurfaceSecurity:
         rule below). It is scoped to one path because it grants less: the agent
         ecosystem, never the rest of the Control API or the UI routes.
         """
-        if str(scope.get("path", "") or "").rstrip("/") != self._MCP_AGENT_SURFACE_PATH:
+        path = str(scope.get("path", "") or "").rstrip("/")
+        if path not in {self._MCP_TOOLS_SURFACE_PATH, self._MCP_AGENT_SURFACE_PATH}:
             return False
         try:
             from jarvis.mcp.agents import tokens
         except Exception:  # noqa: BLE001 — no MCP package → no such credential
             return False
         try:
-            return tokens.store().verify(bearer) is not None
+            token = tokens.store().verify(bearer)
         except Exception:  # noqa: BLE001 — an unreadable token store denies, never crashes
             log.debug("surface security: MCP token check failed", exc_info=True)
             return False
+        if token is None:
+            return False
+        if path == self._MCP_TOOLS_SURFACE_PATH:
+            return token.scope == "tools" and bool(token.allowed_tools)
+        return token.scope in {"read", "work", "full"}
 
     def _authenticate(self, scope: Scope) -> AuthKind | None:
         bearer_present, bearer = _presented_bearer(scope)
