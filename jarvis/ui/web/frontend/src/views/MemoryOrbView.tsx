@@ -53,12 +53,13 @@ async function getJson<T>(url: string): Promise<T | undefined> {
 }
 
 async function fetchSources(): Promise<OrbSources> {
-  const [wiki, skills, tools, apps, mcp] = await Promise.all([
+  const [wiki, skills, tools, apps, mcp, semanticIndex] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
     getJson<{ skills: OrbSources["skills"] }>("/api/skills"),
     getJson<{ tools: OrbSources["tools"] }>("/api/tools"),
     getJson<{ plugins: OrbSources["apps"] }>("/api/marketplace/plugins"),
     getJson<{ servers: OrbSources["mcp"] }>("/api/mcps"),
+    getJson<OrbSources["semanticIndex"]>("/api/wiki/semantic-index"),
   ]);
   return {
     wiki,
@@ -66,6 +67,7 @@ async function fetchSources(): Promise<OrbSources> {
     tools: tools?.tools,
     apps: apps?.plugins,
     mcp: mcp?.servers,
+    semanticIndex: semanticIndex?.enabled ? semanticIndex : undefined,
   };
 }
 
@@ -102,6 +104,7 @@ export function MemoryOrbView() {
   const thinking = useEventStore((s) => s.chatThinking);
   const messages = useEventStore((s) => s.messages);
   const setActiveSection = useEventStore((s) => s.setActiveSection);
+  const requestWikiPage = useEventStore((s) => s.requestWikiPage);
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ["orb", "sources"],
@@ -169,6 +172,13 @@ export function MemoryOrbView() {
     ctx.arc(node.x ?? 0, node.y ?? 0, focus ? r * 1.6 : r, 0, 2 * Math.PI);
     ctx.fillStyle = colour;
     ctx.fill();
+    if (node.semanticIndexed) {
+      ctx.beginPath();
+      ctx.arc(node.x ?? 0, node.y ?? 0, r + 2 / Math.max(scale, 0.6), 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(52,211,153,0.9)";
+      ctx.lineWidth = 1.5 / Math.max(scale, 0.6);
+      ctx.stroke();
+    }
     ctx.shadowBlur = 0;
     const family = node.group === "core" || isFamily(node);
     const showLabel =
@@ -224,6 +234,9 @@ export function MemoryOrbView() {
             setPicked(node as DrawNode);
             graphRef.current?.centerAt((node as DrawNode).x, (node as DrawNode).y, 600);
             graphRef.current?.zoom(3, 600);
+            if (node.group === "wiki" || node.group === "concepts") {
+              requestWikiPage(node.slug ?? node.id.replace(/^wiki:/, ""));
+            }
           }}
           onBackgroundClick={() => setPicked(null)}
         />
@@ -321,10 +334,19 @@ export function MemoryOrbView() {
                   {node.label}
                 </p>
                 {node.detail && <p className="mt-1 leading-5 text-slate-400">{node.detail}</p>}
+                {node.semanticIndexed && (
+                  <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
+                    Cognee indexed · source {node.sourceId?.slice(0, 12)}
+                  </p>
+                )}
                 {picked && node.section && (
                   <button
                     type="button"
-                    onClick={() => setActiveSection(node.section!)}
+                    onClick={() =>
+                      node.slug && (node.group === "wiki" || node.group === "concepts")
+                        ? requestWikiPage(node.slug)
+                        : setActiveSection(node.section!)
+                    }
                     className="mt-2 rounded-full bg-cyan-400/15 px-3 py-1 text-cyan-200 hover:bg-cyan-400/25"
                   >
                     Open

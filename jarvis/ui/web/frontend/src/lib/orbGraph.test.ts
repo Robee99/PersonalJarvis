@@ -5,7 +5,7 @@ import { buildOrbGraph, filterOrbGraph, matchOrbNodes } from "@/lib/orbGraph";
 const sources = {
   wiki: {
     nodes: [
-      { id: "user", kind: "entity", title: "User" },
+      { id: "user", kind: "entity", title: "User", path: "entities/user.md" },
       { id: "log", kind: "meta", title: "Log" },
     ],
     edges: [
@@ -23,6 +23,10 @@ const sources = {
     { id: "notion", display_name: "Notion", category: "Knowledge", status: "not_connected" },
   ],
   mcp: [{ name: "fs", display: "Files", status: "running" }],
+  semanticIndex: {
+    enabled: true,
+    sources: [{ source_id: "stable-source-1234", source_path: "entities/user.md" }],
+  },
 };
 
 describe("buildOrbGraph", () => {
@@ -40,6 +44,13 @@ describe("buildOrbGraph", () => {
     const graph = buildOrbGraph(sources);
     expect(graph.links).toContainEqual({ source: "wiki:log", target: "wiki:user" });
     expect(graph.links.some((l) => l.target === "wiki:missing")).toBe(false);
+  });
+
+  it("adds provenance only to the wiki page present in Cognee's source registry", () => {
+    const byId = new Map(buildOrbGraph(sources).nodes.map((n) => [n.id, n]));
+    expect(byId.get("wiki:user")?.semanticIndexed).toBe(true);
+    expect(byId.get("wiki:user")?.sourceId).toBe("stable-source-1234");
+    expect(byId.get("wiki:log")?.semanticIndexed).toBe(false);
   });
 
   it("marks only live things bright", () => {

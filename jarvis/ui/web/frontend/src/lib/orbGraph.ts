@@ -26,6 +26,9 @@ export interface OrbNode {
   section?: "memory" | "skills" | "plugins" | "mcps" | "jarvis-actions";
   /** The wiki slug, for wiki pages. */
   slug?: string;
+  /** Stable source identity from the authorized semantic index. */
+  sourceId?: string;
+  semanticIndexed?: boolean;
 }
 
 export interface OrbLink {
@@ -41,8 +44,12 @@ export interface OrbGraph {
 
 export interface OrbSources {
   wiki?: {
-    nodes: { id: string; kind: string; title?: string }[];
+    nodes: { id: string; kind: string; title?: string; path?: string }[];
     edges: { source: string; target: string }[];
+  };
+  semanticIndex?: {
+    enabled: boolean;
+    sources: { source_id: string; source_path: string }[];
   };
   skills?: { name: string; category?: string; description?: string; state?: string }[];
   tools?: { name: string; description?: string; risk_tier?: string }[];
@@ -111,10 +118,18 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
   if (wiki && wiki.nodes.length) {
     hub("hub:wiki", "Memory", "wiki", "core", "What the assistant remembers");
     const wikiIds = new Set<string>();
+    const semanticByPath = new Map(
+      (src.semanticIndex?.sources ?? []).map((source) => [
+        source.source_path.replaceAll("\\", "/").toLowerCase(),
+        source.source_id,
+      ]),
+    );
     for (const page of wiki.nodes) {
       const group: OrbGroup = CONCEPT_KINDS.has(page.kind) ? "concepts" : "wiki";
       counts[group] += 1;
       wikiIds.add(`wiki:${page.id}`);
+      const sourcePath = (page.path || `${page.id}.md`).replaceAll("\\", "/").toLowerCase();
+      const sourceId = semanticByPath.get(sourcePath);
       add(
         {
           id: `wiki:${page.id}`,
@@ -125,6 +140,8 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
           detail: `${titleCase(page.kind)} page in the wiki`,
           section: "memory",
           slug: page.id,
+          sourceId,
+          semanticIndexed: Boolean(sourceId),
         },
         "hub:wiki",
       );

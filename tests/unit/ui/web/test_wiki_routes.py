@@ -7,8 +7,11 @@ JSON shapes defined in ``docs/plans/b3/00-OVERVIEW.md §3.1``.
 The tests use real files in ``tmp_path`` (AP-5 forbids mocking the
 filesystem). They never write to the real ``wiki/obsidian-vault/``.
 """
+
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from jarvis.core.config import CogneeMemoryConfig
 from jarvis.ui.web import wiki_routes
 from jarvis.ui.web.wiki_routes import router as wiki_router
 
@@ -133,22 +137,16 @@ def starter_obsidian_vault(tmp_path: Path) -> Path:
         "schema.md": "# Wiki Schema\n\nEditing contract.\n",
         "log.md": "# Change Log\n\nNo changes yet.\n",
         "memory.md": "# Memory\n\nLong-term notes.\n",
-        "00-index/Home.md": (
-            "# Home\n\nSee [[Personal Knowledge Management]] and [[README]].\n"
-        ),
+        "00-index/Home.md": ("# Home\n\nSee [[Personal Knowledge Management]] and [[README]].\n"),
         "10-notes/Evergreen Notes.md": "# Evergreen Notes\n\nDurable ideas.\n",
         "10-notes/Graph View Visualisation.md": (
             "# Graph View Visualisation\n\nConnected notes.\n"
         ),
-        "10-notes/Markdown as Foundation.md": (
-            "# Markdown as Foundation\n\nPlain text lasts.\n"
-        ),
+        "10-notes/Markdown as Foundation.md": ("# Markdown as Foundation\n\nPlain text lasts.\n"),
         "10-notes/Personal Knowledge Management.md": (
             "# Personal Knowledge Management\n\nA connected knowledge practice.\n"
         ),
-        "10-notes/Zettelkasten Method.md": (
-            "# Zettelkasten Method\n\nAtomic linked notes.\n"
-        ),
+        "10-notes/Zettelkasten Method.md": ("# Zettelkasten Method\n\nAtomic linked notes.\n"),
         "99-templates/Daily Note.md": "# Daily Note\n\nTemplate body.\n",
         "99-templates/Note Template.md": "# Note Template\n\nTemplate body.\n",
     }
@@ -366,6 +364,9 @@ def test_graph_with_linked_pages_produces_nodes_and_edges(populated_vault: Path)
     assert ("example-user", "example-parent") in edge_pairs
     assert ("example-user", "pixel-art-editor") in edge_pairs
     assert body["broken"] == []
+    assert next(node for node in body["nodes"] if node["id"] == "example-user")["path"] == (
+        "entities/example-user.md"
+    )
     # Edge contexts include the wikilink in question.
     for edge in body["edges"]:
         assert edge["context"] != ""
@@ -380,6 +381,45 @@ def test_graph_names_the_hub_when_the_user_page_exists(populated_vault: Path) ->
     with TestClient(app) as client:
         body = client.get("/api/wiki/graph").json()
     assert body["hub"] == "example-user"
+
+
+def test_semantic_index_returns_only_active_current_sources(
+    populated_vault: Path, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source = populated_vault / "entities" / "example-user.md"
+    content = source.read_text(encoding="utf-8")
+    state_db = data_dir / "source-state.sqlite3"
+    with sqlite3.connect(state_db) as conn:
+        conn.execute(
+            "CREATE TABLE sources (source_id TEXT, source_path TEXT, "
+            "content_hash TEXT, status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO sources VALUES (?, ?, ?, 'active')",
+            (
+                "stable-user-source",
+                "entities/example-user.md",
+                hashlib.sha256(content.encode()).hexdigest(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO sources VALUES (?, ?, ?, 'active')",
+            ("stale-source", "entities/example-parent.md", "stale-content-hash"),
+        )
+    app = _make_app(populated_vault)
+    app.state.config.memory.data_dir = data_dir
+    app.state.config.memory.cognee = CogneeMemoryConfig(enabled=True, data_dir=str(data_dir))
+
+    with TestClient(app) as client:
+        body = client.get("/api/wiki/semantic-index").json()
+
+    assert body["enabled"] is True
+    assert body["available"] is True
+    assert body["sources"] == [
+        {"source_id": "stable-user-source", "source_path": "entities/example-user.md"}
+    ]
 
 
 def test_graph_hub_is_null_when_no_such_page_and_without_config(populated_vault: Path) -> None:
@@ -419,12 +459,8 @@ def test_starter_vault_pages_are_readable_and_connected_in_graph(
     with TestClient(app) as client:
         graph = client.get("/api/wiki/graph").json()
         root_page = client.get("/api/wiki/page/README").json()
-        note_page = client.get(
-            "/api/wiki/page/Personal%20Knowledge%20Management"
-        ).json()
-        backlinks = client.get(
-            "/api/wiki/backlinks/Personal%20Knowledge%20Management"
-        ).json()
+        note_page = client.get("/api/wiki/page/Personal%20Knowledge%20Management").json()
+        backlinks = client.get("/api/wiki/backlinks/Personal%20Knowledge%20Management").json()
 
     assert graph["ok"] is True
     # Template scaffolding stays out of the graph (10 of the 12 tree pages).
@@ -475,9 +511,7 @@ def test_template_placeholder_titles_fall_back_to_filename(tmp_path: Path) -> No
         graph = client.get("/api/wiki/graph").json()
 
     folders_by_name = {folder["name"]: folder for folder in tree["folders"]}
-    template_titles = {
-        f["slug"]: f["title"] for f in folders_by_name["99-templates"]["files"]
-    }
+    template_titles = {f["slug"]: f["title"] for f in folders_by_name["99-templates"]["files"]}
     assert template_titles == {
         "Daily Note": "Daily Note",
         "Note Template": "Note Template",
@@ -533,9 +567,7 @@ def test_search_happy_path_returns_scored_hits(
 
     fts_index = pytest.importorskip("jarvis.memory.wiki.fts_index")
     db = tmp_path / "fts.db"
-    monkeypatch.setattr(
-        "jarvis.memory.wiki.search._default_db_path", lambda: db
-    )
+    monkeypatch.setattr("jarvis.memory.wiki.search._default_db_path", lambda: db)
     conn = sqlite3.connect(str(db))
     try:
         fts_index.index_vault(populated_vault, conn)
@@ -720,15 +752,16 @@ def test_backfill_execute_reports_only_writes_from_this_request(
     historical_key = "session:v2:historical"
     attempted_key = "session:v2:attempted"
     try:
-        assert journal.claim_capture(
-            historical_key, "old", "session-sweep", "a" * 64, "historical"
+        assert journal.claim_capture(historical_key, "old", "session-sweep", "a" * 64, "historical")
+        assert (
+            journal.commit_capture_candidates(
+                [CandidateFact(fact="An older fact.", evidence_turn_id="old-turn")],
+                review_key=historical_key,
+                source_label="old",
+                turn_hash=historical_key,
+            )
+            == 1
         )
-        assert journal.commit_capture_candidates(
-            [CandidateFact(fact="An older fact.", evidence_turn_id="old-turn")],
-            review_key=historical_key,
-            source_label="old",
-            turn_hash=historical_key,
-        ) == 1
         historical_id = journal.pending()[0].id
         journal.mark(
             [historical_id],
@@ -736,24 +769,31 @@ def test_backfill_execute_reports_only_writes_from_this_request(
             decision="add",
             target_path="entities/old.md",
         )
-        assert journal.claim_capture(
-            attempted_key, "new", "session-sweep", "b" * 64, "attempted"
+        assert journal.claim_capture(attempted_key, "new", "session-sweep", "b" * 64, "attempted")
+        assert (
+            journal.commit_capture_candidates(
+                [CandidateFact(fact="A current fact.", evidence_turn_id="new-turn")],
+                review_key=attempted_key,
+                source_label="new",
+                turn_hash=attempted_key,
+            )
+            == 1
         )
-        assert journal.commit_capture_candidates(
-            [CandidateFact(fact="A current fact.", evidence_turn_id="new-turn")],
-            review_key=attempted_key,
-            source_label="new",
-            turn_hash=attempted_key,
-        ) == 1
-        assert journal.append(
-            [CandidateFact(fact="An unrelated pending fact.")],
-            source_label="unrelated",
-            turn_hash="unrelated",
-        ) == 1
+        assert (
+            journal.append(
+                [CandidateFact(fact="An unrelated pending fact.")],
+                source_label="unrelated",
+                turn_hash="unrelated",
+            )
+            == 1
+        )
 
         class _Scheduler:
             async def trigger(  # noqa: ANN202
-                self, _source, *, review_keys  # noqa: ANN001
+                self,
+                _source,
+                *,
+                review_keys,  # noqa: ANN001
             ):
                 assert tuple(review_keys) == (historical_key, attempted_key)
                 pending_id = journal.pending(review_keys=review_keys)[0].id
@@ -769,12 +809,8 @@ def test_backfill_execute_reports_only_writes_from_this_request(
                     curator_output_label="journal-batch:1",
                 )
 
-        runtime = SimpleNamespace(
-            extractor=object(), journal=journal, scheduler=_Scheduler()
-        )
-        monkeypatch.setattr(
-            wiki_routes, "get_running_capture_runtime", lambda: runtime
-        )
+        runtime = SimpleNamespace(extractor=object(), journal=journal, scheduler=_Scheduler())
+        monkeypatch.setattr(wiki_routes, "get_running_capture_runtime", lambda: runtime)
         result = SimpleNamespace(
             review_keys=(historical_key, attempted_key),
             attempted_review_keys=(attempted_key,),
@@ -815,9 +851,7 @@ def test_backfill_execute_reports_only_writes_from_this_request(
         assert body["stage2"]["add"] == 1
         assert body["stage2"]["update"] == 1
         assert body["journal_backlog"] == 1
-        assert [row.fact for row in journal.pending()] == [
-            "An unrelated pending fact."
-        ]
+        assert [row.fact for row in journal.pending()] == ["An unrelated pending fact."]
     finally:
         journal.close()
 
@@ -842,16 +876,22 @@ def test_backfill_execute_reports_terminal_stage2_loss(
     journal = CandidateJournal(tmp_path / "data" / "jarvis.db")
     key = "session:v2:loss"
     assert journal.claim_capture(key, "loss", "session-sweep", "c" * 64, "loss")
-    assert journal.commit_capture_candidates(
-        [CandidateFact(fact="A candidate that cannot land.", evidence_turn_id="t1")],
-        review_key=key,
-        source_label="loss",
-        turn_hash=key,
-    ) == 1
+    assert (
+        journal.commit_capture_candidates(
+            [CandidateFact(fact="A candidate that cannot land.", evidence_turn_id="t1")],
+            review_key=key,
+            source_label="loss",
+            turn_hash=key,
+        )
+        == 1
+    )
 
     class _Scheduler:
         async def trigger(  # noqa: ANN202
-            self, _source, *, review_keys  # noqa: ANN001
+            self,
+            _source,
+            *,
+            review_keys,  # noqa: ANN001
         ):
             candidate_id = journal.pending(review_keys=review_keys)[0].id
             journal.mark([candidate_id], status=terminal_status)
@@ -883,13 +923,9 @@ def test_backfill_execute_reports_terminal_stage2_loss(
     async def _fake_backfill(**_kwargs):  # noqa: ANN003, ANN202
         return result
 
-    runtime = SimpleNamespace(
-        extractor=object(), journal=journal, scheduler=_Scheduler()
-    )
+    runtime = SimpleNamespace(extractor=object(), journal=journal, scheduler=_Scheduler())
     monkeypatch.setattr(wiki_routes, "get_running_capture_runtime", lambda: runtime)
-    monkeypatch.setattr(
-        "jarvis.memory.wiki.backfill.backfill_realtime_sessions", _fake_backfill
-    )
+    monkeypatch.setattr("jarvis.memory.wiki.backfill.backfill_realtime_sessions", _fake_backfill)
     app = _make_app(tmp_path / "vault")
     app.state.session_store = object()
     try:
@@ -922,9 +958,7 @@ def test_backfill_execute_fails_closed_on_incomplete_extraction(
     from jarvis.memory.wiki.journal import CandidateJournal
 
     journal = CandidateJournal(tmp_path / "data" / "jarvis.db")
-    runtime = SimpleNamespace(
-        extractor=object(), journal=journal, scheduler=object()
-    )
+    runtime = SimpleNamespace(extractor=object(), journal=journal, scheduler=object())
     monkeypatch.setattr(wiki_routes, "get_running_capture_runtime", lambda: runtime)
     result = SimpleNamespace(
         review_keys=(),
@@ -948,9 +982,7 @@ def test_backfill_execute_fails_closed_on_incomplete_extraction(
     async def _fake_backfill(**_kwargs):  # noqa: ANN003, ANN202
         return result
 
-    monkeypatch.setattr(
-        "jarvis.memory.wiki.backfill.backfill_realtime_sessions", _fake_backfill
-    )
+    monkeypatch.setattr("jarvis.memory.wiki.backfill.backfill_realtime_sessions", _fake_backfill)
     app = _make_app(tmp_path / "vault")
     app.state.session_store = object()
     try:
@@ -1135,22 +1167,28 @@ def test_health_restores_last_write_and_backlog_from_journal(tmp_path: Path) -> 
     app = _make_app(vault)
     db_path = app.state.config.memory.data_dir / "jarvis.db"
     journal = CandidateJournal(db_path)
-    assert journal.append(
-        [CandidateFact(fact="A durable fact")],
-        source_label="test-source",
-        turn_hash="hash-1",
-    ) == 1
+    assert (
+        journal.append(
+            [CandidateFact(fact="A durable fact")],
+            source_label="test-source",
+            turn_hash="hash-1",
+        )
+        == 1
+    )
     journal.mark(
         [1],
         status="consolidated",
         decision="add",
         target_path="entities/example-user.md",
     )
-    assert journal.append(
-        [CandidateFact(fact="A pending fact")],
-        source_label="test-source",
-        turn_hash="hash-2",
-    ) == 1
+    assert (
+        journal.append(
+            [CandidateFact(fact="A pending fact")],
+            source_label="test-source",
+            turn_hash="hash-2",
+        )
+        == 1
+    )
     assert journal.claim_capture(
         "live:v2:s1:t1",
         "realtime:1",

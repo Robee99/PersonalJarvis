@@ -219,6 +219,56 @@ class CogneeMemoryAdapter:
         )
         return list(result.get("results", []))
 
+    def list_active_sources(self) -> list[dict[str, str]]:
+        """Return only current, authorized source records for the memory map.
+
+        The registry is derived state. A row is shown only while its source is
+        still inside the vault, unchanged since indexing, and passes the same
+        secret guard used by semantic retrieval.
+        """
+        if not self.enabled:
+            return []
+        configured_data = str(self._config.data_dir or "").strip()
+        root = _resolve_data_root(configured_data)
+        state_db = root / "source-state.sqlite3"
+        if not state_db.is_file():
+            return []
+        try:
+            with sqlite3.connect(state_db, timeout=2) as conn:
+                rows = conn.execute(
+                    "SELECT source_id,source_path,content_hash FROM sources WHERE status='active'"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise CogneeUnavailable(
+                f"Cognee source state could not be checked safely: {exc}"
+            ) from exc
+
+        from jarvis.memory.wiki.secret_guard import contains_secret
+
+        visible: list[dict[str, str]] = []
+        for source_id, source_path, content_hash in rows:
+            relative = Path(source_path)
+            if relative.is_absolute() or ".." in relative.parts or relative.suffix.lower() != ".md":
+                continue
+            candidate = (self._vault_root / relative).resolve()
+            if not candidate.is_relative_to(self._vault_root) or not candidate.is_file():
+                continue
+            try:
+                content = candidate.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if hashlib.sha256(content.encode("utf-8")).hexdigest() != content_hash:
+                continue
+            if contains_secret(content):
+                continue
+            visible.append(
+                {
+                    "source_id": str(source_id),
+                    "source_path": relative.as_posix(),
+                }
+            )
+        return visible
+
     def _sources_with_unsafe_content(self, root: Path) -> list[str]:
         """Use the authoritative wiki secret guard before worker reconciliation."""
         state_db = root / "source-state.sqlite3"
