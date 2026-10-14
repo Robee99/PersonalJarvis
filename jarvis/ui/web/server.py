@@ -1373,10 +1373,12 @@ class WebServer:
                 codex_connected = False
                 codex_installed = False
             try:
-                codex_key = bool(
-                    get_secret(
-                        "codex_openai_api_key",
-                        env_fallback="CODEX_OPENAI_API_KEY",
+                codex_key = await asyncio.to_thread(
+                    lambda: bool(
+                        get_secret(
+                            "codex_openai_api_key",
+                            env_fallback="CODEX_OPENAI_API_KEY",
+                        )
                     )
                 )
             except Exception:  # noqa: BLE001
@@ -1429,7 +1431,9 @@ class WebServer:
             except Exception:  # noqa: BLE001
                 antigravity_connected = False
             try:
-                antigravity_key = bool(get_jarvis_agent_secret("gemini"))
+                antigravity_key = await asyncio.to_thread(
+                    lambda: bool(get_jarvis_agent_secret("gemini"))
+                )
             except Exception:  # noqa: BLE001
                 antigravity_key = False
             antigravity_ready = (

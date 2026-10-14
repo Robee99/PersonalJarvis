@@ -70,6 +70,8 @@ class CogneeMemoryAdapter:
         root.mkdir(parents=True, exist_ok=True)
         isolated_profile = root / "profile"
         isolated_profile.mkdir(parents=True, exist_ok=True)
+        isolated_tmp = root / "tmp"
+        isolated_tmp.mkdir(parents=True, exist_ok=True)
         return python_path, worker_path, float(self._config.timeout_s)
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +84,8 @@ class CogneeMemoryAdapter:
         root.mkdir(parents=True, exist_ok=True)
         isolated_profile = root / "profile"
         isolated_profile.mkdir(parents=True, exist_ok=True)
+        isolated_tmp = root / "tmp"
+        isolated_tmp.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
         # Cognee is explicitly local-only here. Do not inherit ambient hosted
         # model credentials into the isolated process.
@@ -116,6 +120,14 @@ class CogneeMemoryAdapter:
                 "CACHE_ROOT_DIRECTORY": str(root / "cache"),
                 "HF_HOME": str(isolated_profile / ".cache" / "huggingface"),
                 "HUGGINGFACE_HUB_CACHE": str(isolated_profile / ".cache" / "huggingface" / "hub"),
+                # FastEmbed defaults to tempfile.gettempdir(), which can point
+                # at a restricted Windows app-container temp directory. Keep
+                # both temporary downloads and the final model cache inside the
+                # adapter's own data root; this also avoids touching the user's
+                # global Hugging Face/FastEmbed caches.
+                "TEMP": str(isolated_tmp),
+                "TMP": str(isolated_tmp),
+                "FASTEMBED_CACHE_PATH": str(root / "fastembed_cache"),
                 "COGNEE_LOGS_DIR": str(root / "logs"),
                 "COGNEE_TELEMETRY_DISABLED": "true",
                 "TELEMETRY_DISABLED": "1",
