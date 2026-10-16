@@ -2217,7 +2217,9 @@ class DesktopApp:
 
         async def _build_brain_bg() -> None:
             try:
-                built = await asyncio.to_thread(build_default_brain, bus=server.bus, tier="router")
+                built = await asyncio.to_thread(
+                    build_default_brain, bus=server.bus, tier="router", config=self.cfg
+                )
                 brain_holder["brain"] = built
                 server.app.state.brain = built
                 from loguru import logger

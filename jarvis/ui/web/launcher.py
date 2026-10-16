@@ -664,7 +664,9 @@ async def _run_headless(args) -> int:
 
     async def _build_brain_bg() -> None:
         try:
-            built = await asyncio.to_thread(build_default_brain, bus=server.bus, tier="router")
+            built = await asyncio.to_thread(
+                build_default_brain, bus=server.bus, tier="router", config=cfg
+            )
             brain_holder["brain"] = built
             server.app.state.brain = built
             # Re-wire the late-built brain into the task runner: _init_task_stack

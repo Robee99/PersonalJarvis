@@ -921,6 +921,7 @@ def _register_runtime_manager(manager: Any) -> None:
 def _phase2_full_brain(
     tier: Literal["router"] = "router",
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Build the BrainManager in router tier.
 
@@ -947,7 +948,10 @@ def _phase2_full_brain(
     from jarvis.memory.curator import Curator
     from jarvis.safety import ApprovalWorkflow, RiskTierEvaluator, ToolExecutor
 
-    config = cfg.load_config()
+    # The web/desktop runtime owns the authoritative config object. Reusing it
+    # keeps the brain resolver and provider UI in sync and avoids a second disk
+    # read racing a settings update during deferred startup.
+    config = config if config is not None else cfg.load_config()
     if bus is None:
         bus = EventBus()
 
@@ -1597,6 +1601,7 @@ def build_default_brain(
     tier: Literal["router"] = "router",
     allow_phase2: bool = True,
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Return a brain callback (async (str)->str) according to the fallback chain.
 
@@ -1610,6 +1615,8 @@ def build_default_brain(
         allow_phase2: When ``False``, skips BrainManager and falls back
             immediately to the Phase-1 Gemini fallback. Intended for tests.
         bus: Optional ``EventBus``. ``None`` = own bus (voice-pipeline default).
+        config: Optional runtime config to share with BrainManager. When
+            supplied, this is the same authoritative object used by the UI.
 
     Control via ENV:
     - `JARVIS_BRAIN=echo`    → pure echo (no LLM)
@@ -1723,7 +1730,7 @@ def build_default_brain(
     # fallback in the production path: if the manager cannot be built, the UI
     # should show a genuine error state.
     try:
-        brain = _phase2_full_brain(tier=tier, bus=bus)
+        brain = _phase2_full_brain(tier=tier, bus=bus, config=config)
         log.info(
             "Brain stack: BrainManager tier=%s active — provider=%s, tools=%d",
             tier,
