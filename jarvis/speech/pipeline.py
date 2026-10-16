@@ -2253,10 +2253,12 @@ class SpeechPipeline:
         # consistently-slow vision profile.
         brain_timeout_s: float = 30.0,
         # Absolute ceiling backstop for a brain turn that keeps drip-feeding
-        # progress forever (pathological). Bounds the worst case so the session
-        # can never wedge in PROCESSING. Generous: real vision+tool turns finish
-        # well under it; only a misbehaving provider ever reaches it.
-        brain_hard_timeout_s: float = 90.0,
+        # progress forever (pathological). Local models can legitimately need
+        # more than 90 seconds for a large prompt or a long spoken answer while
+        # still making progress, so keep the safety ceiling well above normal
+        # voice turn lengths. The no-progress timeout below remains the fast
+        # guard against a genuinely wedged provider.
+        brain_hard_timeout_s: float = 600.0,
         # Poll cadence for the stall guard. Small + cheap (only runs during an
         # in-flight brain turn). Sub-second so the spoken fallback is timely.
         brain_stall_poll_s: float = 0.5,
@@ -17624,7 +17626,7 @@ class SpeechPipeline:
         # defaults so the guard is self-sufficient on a bare instance.
         poll_s = getattr(self, "_brain_stall_poll_s", 0.5)
         stall_s = getattr(self, "_brain_timeout_s", 30.0)
-        ceiling_s = getattr(self, "_brain_hard_timeout_s", 90.0)
+        ceiling_s = getattr(self, "_brain_hard_timeout_s", 600.0)
         self._mark_brain_progress()
         # Each turn starts with the ceiling fully armed: only a computer_use
         # step THIS turn (ObservationCaptured/ActionPlanned → _on_agent_progress)
