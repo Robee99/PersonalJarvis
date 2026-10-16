@@ -139,6 +139,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _configure_voice_for_mode(args: argparse.Namespace) -> None:
+    """Mark local voice as disabled for a headless server process.
+
+    The headless launcher serves text and browser-mic clients; it never creates
+    the desktop ``SpeechPipeline``. Leaving ``JARVIS_VOICE`` unset made the
+    WebServer wait for a ``VoiceBootStatus`` event that this process cannot
+    publish, then report a misleading ``watchdog_timeout``. A headless boot is
+    therefore explicitly voice-off, matching the background-service mode.
+    """
+    if args.headless:
+        os.environ["JARVIS_VOICE"] = "0"
+
+
 def _select_instance_early(argv: list[str]) -> str | None:
     """Pin ``--instance`` into the environment BEFORE anything reads it.
 
@@ -2238,6 +2251,7 @@ def _main(argv: list[str] | None = None) -> int:
     args = _parse_args(_raw_argv)
     if args.background_service:
         args.headless = True
+    _configure_voice_for_mode(args)
 
     # From here on every desktop launch is written down — see the helper.
     if not args.headless:

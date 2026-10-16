@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
-from jarvis.ui.web.launcher import _parse_args
+from jarvis.ui.web.launcher import _configure_voice_for_mode, _parse_args
 
 
 def test_defaults():
@@ -49,6 +51,26 @@ def test_combined_flags():
     assert ns.dev is True
     assert ns.no_lock is True
     assert ns.port == 1234
+
+
+@pytest.mark.parametrize("inherited", [None, "1", "true", "off"])
+def test_headless_mode_disables_local_voice(monkeypatch, inherited):
+    if inherited is None:
+        monkeypatch.delenv("JARVIS_VOICE", raising=False)
+    else:
+        monkeypatch.setenv("JARVIS_VOICE", inherited)
+
+    _configure_voice_for_mode(_parse_args(["--headless"]))
+
+    assert os.environ["JARVIS_VOICE"] == "0"
+
+
+def test_desktop_mode_preserves_voice_environment(monkeypatch):
+    monkeypatch.setenv("JARVIS_VOICE", "1")
+
+    _configure_voice_for_mode(_parse_args([]))
+
+    assert os.environ["JARVIS_VOICE"] == "1"
 
 
 def test_second_desktop_start_focuses_existing_instance(monkeypatch):
