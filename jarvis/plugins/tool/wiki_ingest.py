@@ -99,12 +99,14 @@ class WikiIngestTool:
         *,
         curator_resolver: Callable[[], Any],
         cognee_adapter: Any | None = None,
+        graphrag_adapter: Any | None = None,
     ) -> None:
         # Lazy resolver so the curator can be set up after the brain is
         # built (mirrors the spawn-worker lazy-resolver pattern in
         # ``factory.py:_load_tools_for_tier``).
         self._resolve_curator = curator_resolver
         self._cognee = cognee_adapter
+        self._graphrag = graphrag_adapter
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
         text = str(args.get("text", "")).strip()
@@ -131,4 +133,21 @@ class WikiIngestTool:
                         "wiki-ingest: Cognee indexing failed for %s: %s", path.name, exc
                     )
             summary += f"\n- Cognee semantic sources indexed: {indexed}/{len(outcome.applied)}"
+        if self._graphrag is not None and self._graphrag.enabled:
+            indexed = 0
+            try:
+                # The isolated worker is a one-shot process. Batch the pages
+                # from this curator turn so a multi-page update pays for one
+                # GraphRAG startup/index pass, not one per page.
+                result = await self._graphrag.index_paths(outcome.applied)
+                indexed = min(len(outcome.applied), max(0, int(result.get("indexed", 0))))
+            except Exception as exc:  # native wiki write remains authoritative
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "wiki-ingest: GraphRAG indexing failed for %d page(s): %s",
+                    len(outcome.applied),
+                    exc,
+                )
+            summary += f"\n- GraphRAG sources indexed: {indexed}/{len(outcome.applied)}"
         return ToolResult(success=True, output=summary)

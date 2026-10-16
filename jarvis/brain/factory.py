@@ -567,10 +567,12 @@ def _load_tools_for_tier(
 
                 search_instance = _build_search_instance()
                 from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
 
                 inst = cls(
                     search=search_instance,
                     cognee=build_cognee_adapter(search_instance._root),
+                    graphrag=build_graphrag_adapter(search_instance._root),
                 )
             elif ep.name == "cognee-source":
                 from jarvis.plugins.tool.cognee_source import build_cognee_source_tool
@@ -593,6 +595,7 @@ def _load_tools_for_tier(
                 # is built, so the tool must defer the lookup to execute time.
                 # Mirrors the spawn-worker lazy-resolver pattern.
                 from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
                 from jarvis.memory.wiki.integration import get_running_curator
                 from jarvis.memory.wiki.vault_root import resolve_vault_root
                 from jarvis.plugins.tool.wiki_ingest import WikiIngestTool
@@ -600,6 +603,7 @@ def _load_tools_for_tier(
                 inst = WikiIngestTool(
                     curator_resolver=get_running_curator,
                     cognee_adapter=build_cognee_adapter(resolve_vault_root(None).path),
+                    graphrag_adapter=build_graphrag_adapter(resolve_vault_root(None).path),
                 )
             elif ep.name == "create-skill":
                 # Skill authoring by voice/chat: the tool resolves the live
