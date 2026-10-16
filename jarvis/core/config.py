@@ -1991,6 +1991,23 @@ class CogneeMemoryConfig(BaseModel):
     timeout_s: float = Field(default=90.0, ge=5.0, le=300.0)
 
 
+class GraphRagMemoryConfig(BaseModel):
+    """Optional GraphRAG corpus for bounded, local-only wiki analysis."""
+
+    enabled: bool = False
+    python_executable: str = ""
+    worker_script: str = ""
+    data_dir: str = ""
+    # Local Qwen llama.cpp endpoint. The isolated worker supplies its own
+    # CPU-only FastEmbed endpoint; no hosted provider or API key is used.
+    api_base: str = "http://127.0.0.1:11440/v1"
+    chat_model: str = "qwen3-vl-8b"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    timeout_s: float = Field(default=300.0, ge=10.0, le=1800.0)
+    max_sources: int = Field(default=200, ge=1, le=2000)
+    max_source_chars: int = Field(default=40_000, ge=256, le=500_000)
+
+
 class MemoryConfig(BaseModel):
     recall_store: str = "sqlite"
     # chromadb was removed (2026-06-28); there is no chroma backend in
@@ -2001,6 +2018,7 @@ class MemoryConfig(BaseModel):
     data_dir: str = "./data"
     wiki: WikiMemoryConfig = Field(default_factory=WikiMemoryConfig)
     cognee: CogneeMemoryConfig = Field(default_factory=CogneeMemoryConfig)
+    graphrag: GraphRagMemoryConfig = Field(default_factory=GraphRagMemoryConfig)
     legacy_curator: LegacyCuratorConfig = Field(default_factory=LegacyCuratorConfig)
     learning: JarvisLearningConfig = Field(default_factory=JarvisLearningConfig)
 
