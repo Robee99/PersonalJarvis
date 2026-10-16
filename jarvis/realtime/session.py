@@ -241,10 +241,11 @@ _END_CALL_DECLARATION: dict[str, Any] = {
 # Delegate mode: the realtime model gets ONE action function instead of the
 # full router-tool set. The handler runs a complete classic router-brain turn
 # (ToolExecutor risk tiers, two-turn voice confirm, spawn-worker escalation)
-# and returns the spoken reply for the realtime voice to deliver. Hard budget:
-# the router turn itself offloads heavy work to background missions, so a
-# turn that exceeds this is stuck, not busy.
-_DELEGATE_TIMEOUT_S = 90.0
+# and returns the spoken reply for the realtime voice to deliver. The router
+# turn offloads heavy work to background missions; keep a hard stop while
+# allowing bounded local vision/tool inference. The former 90 s ceiling exactly
+# matched the reported voice failure and cancelled healthy inference at 1:30.
+_DELEGATE_TIMEOUT_S = 180.0
 # Stability window before a boundary-less dispatch: the surface's own
 # endpointing already closed the utterance before the delegate started, so
 # the old fixed 3.0 s wait round was pure added latency in front of EVERY
