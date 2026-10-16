@@ -3347,7 +3347,14 @@ class BrainManager:
         """Return the canonical Tool Model provider or its legacy fallback."""
         from jarvis.core.model_selection import operation_model, worker_selection
 
-        selection = operation_model.get() or worker_selection(self._config)
+        # An operation-scoped model is the narrowest selection and remains
+        # authoritative for the duration of that operation. Otherwise the
+        # explicit global Tool Model must win over the general worker model:
+        # the latter configures delegated workers, while Tool Model configures
+        # tool-bearing turns and computer use. Letting worker selection win
+        # here made the Tool Model UI report (for example) Nous even after the
+        # user had explicitly pinned a local vision/tool model.
+        selection = operation_model.get()
         if selection is not None:
             return selection.provider
         try:
@@ -3357,9 +3364,15 @@ class BrainManager:
             if provider:
                 return provider
             legacy = getattr(brain_cfg, "computer_use", None)
-            return (getattr(legacy, "provider", None) or "").strip()
+            provider = (getattr(legacy, "provider", None) or "").strip()
+            if provider:
+                return provider
         except Exception:  # noqa: BLE001 -- config failure must not block dispatch
-            return ""
+            pass
+        # Preserve the previous worker preference as a fallback for installs
+        # that have not configured either the canonical or legacy Tool Model.
+        selection = worker_selection(self._config)
+        return selection.provider if selection is not None else ""
 
     def _tool_model_source(self) -> str:
         """Identify whether the selection came from canonical or legacy config."""
