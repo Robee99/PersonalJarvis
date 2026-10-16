@@ -16,6 +16,7 @@ import { DockRail } from "@/components/layout/DockRail";
 
 import { GigiMark } from "@/components/GigiMark";
 import { DeckOrb, type OrbReadouts } from "@/components/deck/DeckOrb";
+import { DeckChatInput } from "@/components/deck/DeckChatInput";
 import type { ThinkingStep } from "@/lib/thinkingSteps";
 import { DeckStandby, ORB_TRAVEL } from "@/components/deck/DeckStandby";
 import { DeckReveal } from "@/components/deck/DeckReveal";
@@ -566,6 +567,7 @@ function BoardCentre({
       >
         {headline}
       </motion.p>
+      <DeckChatInput />
     </div>
   );
 }
