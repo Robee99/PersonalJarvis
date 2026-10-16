@@ -141,6 +141,16 @@ async def test_every_catalog_provider_health_is_bound_to_its_exact_id(
         lambda _spec: {"ready": True, "detail": "installed"},
     )
 
+    async def _local_server_ready(_cfg, spec):
+        return provider_routes.SectionHealth(
+            status=sh.OK,
+            reason="ready",
+            detail="server ready",
+            subject_id=spec.id,
+        )
+
+    monkeypatch.setattr(provider_routes, "_local_openai_section_health", _local_server_ready)
+
     modality = ledger.modality_for_tier(spec.tier)
     if modality is not None:
         ledger.get_ledger().record(spec.id, modality, provider_test.OK)
@@ -438,6 +448,95 @@ async def test_a_login_based_provider_is_ok_on_its_login(monkeypatch) -> None:
 
     assert health.status == sh.OK
     assert health.reason == "connected"
+
+
+@pytest.mark.asyncio
+async def test_local_openai_reports_llama_server_with_no_loaded_model(monkeypatch) -> None:
+    """A keyless local server is not healthy merely because no key is needed."""
+    import httpx
+
+    from jarvis.ui.web import provider_routes as pr
+
+    class Response:
+        status_code = 200
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {"status": "ok", "loaded": False}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **_kwargs):
+            assert url.endswith("/health")
+            return Response()
+
+    monkeypatch.setattr(
+        pr.cfg_mod,
+        "resolve_provider_endpoint",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            base_url="http://127.0.0.1:11438/v1", credential=None
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    result = await pr._tier_section_health(
+        None, pr.get_spec("local-openai"), modality="brain"
+    )
+
+    assert result.status == sh.NEEDS_SETUP
+    assert result.reason == "model_not_loaded"
+    assert "no model is loaded" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_local_openai_server_without_health_endpoint_stays_unverified(monkeypatch) -> None:
+    """OpenAI model-list reachability alone does not prove inference works."""
+    import httpx
+
+    from jarvis.ui.web import provider_routes as pr
+
+    class Response:
+        status_code = 200
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {"data": [{"id": "some-model"}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, **_kwargs):
+            if url.endswith("/health"):
+                raise httpx.ConnectError("no generic health endpoint")
+            assert url.endswith("/v1/models")
+            return Response()
+
+    monkeypatch.setattr(
+        pr.cfg_mod,
+        "resolve_provider_endpoint",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            base_url="http://127.0.0.1:1234", credential=None
+        ),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_kwargs: Client())
+
+    result = await pr._tier_section_health(
+        None, pr.get_spec("local-openai"), modality="brain"
+    )
+
+    assert result.status == sh.UNKNOWN
+    assert result.reason == "reachable_unverified"
 
 
 def test_passive_health_polls_reuse_the_cache_for_minutes() -> None:
