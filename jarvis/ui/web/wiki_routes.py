@@ -649,7 +649,7 @@ async def get_graph(request: Request) -> dict[str, Any]:
 
 @router.get("/semantic-index")
 async def get_semantic_index(request: Request) -> dict[str, Any]:
-    """Expose source identifiers for current, authorized Cognee wiki pages."""
+    """Expose source identifiers for current, authorized Cognee memory sources."""
     vault_root = _resolve_vault_root(request)
     config = getattr(request.app.state, "config", None)
     cognee_config = getattr(getattr(config, "memory", None), "cognee", None)
@@ -661,10 +661,23 @@ async def get_semantic_index(request: Request) -> dict[str, Any]:
     adapter = CogneeMemoryAdapter(vault_root=vault_root, config=cognee_config)
     try:
         sources = await asyncio.to_thread(adapter.list_active_sources)
+        conversation_sources = await asyncio.to_thread(adapter.list_conversation_sources)
     except Exception as exc:  # noqa: BLE001 - an unavailable index must not blank the wiki
         log.warning("wiki_route_failed route=/semantic-index error=%s", exc)
-        return {"ok": True, "enabled": True, "sources": [], "available": False}
-    return {"ok": True, "enabled": True, "sources": sources, "available": True}
+        return {
+            "ok": True,
+            "enabled": True,
+            "sources": [],
+            "conversation_sources": [],
+            "available": False,
+        }
+    return {
+        "ok": True,
+        "enabled": True,
+        "sources": sources,
+        "conversation_sources": conversation_sources,
+        "available": True,
+    }
 
 
 @router.get("/backlinks/{slug}")

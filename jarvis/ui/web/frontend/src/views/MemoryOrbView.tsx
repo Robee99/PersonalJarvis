@@ -14,6 +14,7 @@ import { Crosshair, Search, Send, X } from "lucide-react";
 
 import { ReactorCore } from "@/components/deck/ReactorCore";
 import { sendChatMessage } from "@/lib/chat";
+import { useConversations } from "@/hooks/useConversations";
 import {
   ORB_GROUP_COLOUR,
   ORB_GROUP_LABEL,
@@ -53,13 +54,14 @@ async function getJson<T>(url: string): Promise<T | undefined> {
 }
 
 async function fetchSources(): Promise<OrbSources> {
-  const [wiki, skills, tools, apps, mcp, semanticIndex] = await Promise.all([
+  const [wiki, skills, tools, apps, mcp, semanticIndex, conversations] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
     getJson<{ skills: OrbSources["skills"] }>("/api/skills"),
     getJson<{ tools: OrbSources["tools"] }>("/api/tools"),
     getJson<{ plugins: OrbSources["apps"] }>("/api/marketplace/plugins"),
     getJson<{ servers: OrbSources["mcp"] }>("/api/mcps"),
     getJson<OrbSources["semanticIndex"]>("/api/wiki/semantic-index"),
+    getJson<NonNullable<OrbSources["conversations"]>>("/api/chats?limit=1000"),
   ]);
   return {
     wiki,
@@ -68,6 +70,7 @@ async function fetchSources(): Promise<OrbSources> {
     apps: apps?.plugins,
     mcp: mcp?.servers,
     semanticIndex: semanticIndex?.enabled ? semanticIndex : undefined,
+    conversations,
   };
 }
 
@@ -105,6 +108,7 @@ export function MemoryOrbView() {
   const messages = useEventStore((s) => s.messages);
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const requestWikiPage = useEventStore((s) => s.requestWikiPage);
+  const { openConversation } = useConversations();
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ["orb", "sources"],
@@ -236,6 +240,9 @@ export function MemoryOrbView() {
             graphRef.current?.zoom(3, 600);
             if (node.group === "wiki" || node.group === "concepts") {
               requestWikiPage(node.slug ?? node.id.replace(/^wiki:/, ""));
+            } else if (node.group === "conversations" && node.threadId && node.conversationKind) {
+              setActiveSection("chats");
+              void openConversation(node.conversationKind, node.threadId);
             }
           }}
           onBackgroundClick={() => setPicked(null)}
@@ -257,7 +264,7 @@ export function MemoryOrbView() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find a note, skill, tool or app"
+            placeholder="Find a note, conversation, skill, tool or app"
             aria-label="Search the memory orb"
             className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-slate-500"
           />
@@ -345,7 +352,9 @@ export function MemoryOrbView() {
                     onClick={() =>
                       node.slug && (node.group === "wiki" || node.group === "concepts")
                         ? requestWikiPage(node.slug)
-                        : setActiveSection(node.section!)
+                        : node.group === "conversations" && node.threadId && node.conversationKind
+                          ? (setActiveSection("chats"), void openConversation(node.conversationKind, node.threadId))
+                          : setActiveSection(node.section!)
                     }
                     className="mt-2 rounded-full bg-cyan-400/15 px-3 py-1 text-cyan-200 hover:bg-cyan-400/25"
                   >

@@ -11,7 +11,7 @@
  * of the map is testable without a canvas.
  */
 
-export type OrbGroup = "core" | "wiki" | "concepts" | "skills" | "tools" | "apps" | "mcp";
+export type OrbGroup = "core" | "wiki" | "concepts" | "conversations" | "skills" | "tools" | "apps" | "mcp";
 
 export interface OrbNode {
   id: string;
@@ -23,12 +23,15 @@ export interface OrbNode {
   live: boolean;
   detail: string;
   /** Where clicking the node leads, when there is a section for it. */
-  section?: "memory" | "skills" | "plugins" | "mcps" | "jarvis-actions";
+  section?: "memory" | "chats" | "skills" | "plugins" | "mcps" | "jarvis-actions";
   /** The wiki slug, for wiki pages. */
   slug?: string;
   /** Stable source identity from the authorized semantic index. */
   sourceId?: string;
   semanticIndexed?: boolean;
+  /** Original conversation record for indexed conversation memories. */
+  threadId?: string;
+  conversationKind?: "text" | "voice";
 }
 
 export interface OrbLink {
@@ -50,7 +53,9 @@ export interface OrbSources {
   semanticIndex?: {
     enabled: boolean;
     sources: { source_id: string; source_path: string }[];
+    conversation_sources?: { source_id: string; source_path: string; thread_id: string }[];
   };
+  conversations?: { kind: "text" | "voice"; id: string; title?: string; updated_ms?: number }[];
   skills?: { name: string; category?: string; description?: string; state?: string }[];
   tools?: { name: string; description?: string; risk_tier?: string }[];
   apps?: { id: string; display_name?: string; description?: string; category?: string; status?: string }[];
@@ -61,6 +66,7 @@ export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
   core: "#f5f7ff",
   wiki: "#5bd4a4",
   concepts: "#ffb84d",
+  conversations: "#f5a35c",
   skills: "#b48cf2",
   tools: "#f47fa4",
   apps: "#6aa9ff",
@@ -70,6 +76,7 @@ export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
 export const ORB_GROUP_LABEL: Record<Exclude<OrbGroup, "core">, string> = {
   wiki: "Notes",
   concepts: "Concepts",
+  conversations: "Conversations",
   skills: "Skills",
   tools: "Tools",
   apps: "Apps",
@@ -100,7 +107,7 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
   const nodes: OrbNode[] = [];
   const links: OrbLink[] = [];
   const seen = new Set<string>();
-  const counts = { wiki: 0, concepts: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
+  const counts = { wiki: 0, concepts: 0, conversations: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
 
   const add = (node: OrbNode, parent?: string) => {
     if (seen.has(node.id)) return;
@@ -150,6 +157,36 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
       const a = `wiki:${edge.source}`;
       const b = `wiki:${edge.target}`;
       if (a !== b && wikiIds.has(a) && wikiIds.has(b)) links.push({ source: a, target: b });
+    }
+  }
+
+  // Only show conversation records present in both the active Cognee source
+  // registry and the canonical chat archive. This makes each node traceable
+  // to a real source and keeps deleted/stale records out of the visualization.
+  const indexedConversations = src.semanticIndex?.conversation_sources ?? [];
+  const conversationsById = new Map((src.conversations ?? []).map((item) => [item.id, item]));
+  const availableConversationSources = indexedConversations.flatMap((source) => {
+    const conversation = conversationsById.get(source.thread_id);
+    return conversation ? [{ source, conversation }] : [];
+  });
+  if (availableConversationSources.length) {
+    hub("hub:conversations", "Indexed conversations", "conversations", "core", "Selected conversation memory with source links");
+    for (const { source, conversation } of availableConversationSources) {
+      counts.conversations += 1;
+      const title = conversation.title?.trim() || `${conversation.kind} conversation`;
+      add({
+        id: `conversation:${conversation.kind}:${conversation.id}`,
+        label: title.length > 48 ? `${title.slice(0, 47)}…` : title,
+        group: "conversations",
+        hub: false,
+        live: true,
+        detail: `Cognee semantic memory · ${conversation.kind} source`,
+        section: "chats",
+        sourceId: source.source_id,
+        semanticIndexed: true,
+        threadId: conversation.id,
+        conversationKind: conversation.kind,
+      }, "hub:conversations");
     }
   }
 
