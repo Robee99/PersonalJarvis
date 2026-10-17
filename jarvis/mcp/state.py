@@ -72,7 +72,15 @@ def _explicit_mcp_json_path() -> Path | None:
 def _user_mcp_json_path() -> Path:
     from jarvis.core.paths import user_data_dir
 
-    return user_data_dir() / "mcp.json"
+    preferred = user_data_dir() / "mcp.json"
+    if preferred.exists() or os.name != "nt":
+        return preferred
+
+    # Packaged Windows launches can inherit a sandboxed LOCALAPPDATA. If that
+    # location has no MCP config, keep using the user's existing standard
+    # Jarvis config instead of silently falling back to the checkout's copy.
+    standard = Path.home() / "AppData" / "Local" / "Jarvis" / "mcp.json"
+    return standard if standard.exists() else preferred
 
 
 def _active_mcp_json_path() -> Path:

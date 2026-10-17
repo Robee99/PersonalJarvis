@@ -30,11 +30,14 @@ def test_unwritable_project_config_crosses_to_per_user_storage(
     monkeypatch,
     tmp_path,
 ) -> None:
+    from pathlib import Path
+
     blocked_parent = tmp_path / "not-a-directory"
     blocked_parent.write_text("blocked", encoding="utf-8")
     monkeypatch.delenv("JARVIS_DATA_DIR", raising=False)
     monkeypatch.delenv("JARVIS_MCP_CONFIG", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user-data"))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.setattr(state, "MCP_JSON_PATH", blocked_parent / "mcp.json")
 
     state.save_config({"mcpServers": {"hosted": {"enabled": True}}})
@@ -70,3 +73,28 @@ def test_mcp_config_saved_with_a_byte_order_mark_still_loads(
     monkeypatch.setenv("JARVIS_MCP_CONFIG", str(config))
 
     assert state.load_config()["mcpServers"]["fetch"]["command"] == "uvx"
+
+
+def test_windows_finds_existing_standard_config_when_localappdata_is_sandboxed(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Packaged launches may expose a sandbox LOCALAPPDATA, not the user's app data."""
+    from pathlib import Path
+
+    home = tmp_path / "user"
+    sandbox_local = tmp_path / "sandbox" / "AC"
+    standard_config = home / "AppData" / "Local" / "Jarvis" / "mcp.json"
+    standard_config.parent.mkdir(parents=True)
+    standard_config.write_text(
+        json.dumps({"mcpServers": {"windows-desktop": {"enabled": True}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("LOCALAPPDATA", str(sandbox_local))
+    monkeypatch.delenv("JARVIS_DATA_DIR", raising=False)
+    monkeypatch.delenv("JARVIS_MCP_CONFIG", raising=False)
+    monkeypatch.setattr(state, "MCP_JSON_PATH", tmp_path / "repo" / "mcp.json")
+
+    assert state._active_mcp_json_path() == standard_config
+    assert state.load_config()["mcpServers"]["windows-desktop"]["enabled"] is True
