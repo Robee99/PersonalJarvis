@@ -32,6 +32,7 @@ import {
 import { ApiStatsCard, CaptureCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
 import { LogCard } from "@/components/deck/DeckLogCard";
 import { TurnCard } from "@/components/deck/DeckTurnCard";
+import { MissionProgressCard } from "@/components/deck/MissionProgressCard";
 import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
@@ -407,10 +408,11 @@ export function MissionDeckView({
                 reveal={revealBoard}
                 className={cn("min-h-[8rem]", depthSlot("centre-bottom").className)}
                 style={depthSlot("centre-bottom").style}
-                bodyClassName="flex items-stretch justify-center gap-3"
+                bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
               >
-                <CaptureCard className="w-full min-w-0 max-w-[24rem]" />
-                <VitalsCard className="w-full min-w-0 max-w-[24rem]" />
+                <CaptureCard className="min-h-0 w-full min-w-0" />
+                <VitalsCard className="min-h-0 w-full min-w-0" />
+                <MissionProgressCard steps={thinkingSteps} className="min-h-0 w-full min-w-0" />
               </DeckReveal>
 
               {/* RIGHT bottom: terminals and the coding workspace */}
