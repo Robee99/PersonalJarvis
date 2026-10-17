@@ -156,14 +156,18 @@ export function McpsView() {
   const toggle = useMutation({
     mutationFn: async ({ name, enable }: { name: string; enable: boolean }) => {
       setCheckingName(name);
-      // Playwright and Agent Browser are alternative browser providers. Turn
-      // the current browser provider off before starting the other one.
+      // Keep only one provider active for each surface so the brain does not
+      // receive competing browser or desktop controls.
       const exclusivePeer =
         name === "playwright"
           ? "agent-browser"
           : name === "agent-browser"
             ? "playwright"
-            : null;
+            : name === "windows-desktop"
+              ? "desktop-commander"
+              : name === "desktop-commander"
+                ? "windows-desktop"
+                : null;
       if (
         enable &&
         exclusivePeer &&

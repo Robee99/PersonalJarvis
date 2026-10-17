@@ -163,7 +163,7 @@ describe("McpsView — table", () => {
     });
   });
 
-  it("does not couple the Windows Desktop and Desktop Commander switches", async () => {
+  it("switches desktop controllers exclusively before enabling the selected one", async () => {
     const calls = installFetchMock({
       ...SERVERS,
       servers: [
@@ -178,8 +178,9 @@ describe("McpsView — table", () => {
 
     await waitFor(() => {
       const enabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/desktop-commander/enable"));
-      expect(enabled).toBeGreaterThan(-1);
-      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/api/mcps/windows-desktop/disable"))).toBe(false);
+      const disabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/windows-desktop/disable"));
+      expect(disabled).toBeGreaterThan(-1);
+      expect(enabled).toBeGreaterThan(disabled);
     });
   });
 });
