@@ -107,19 +107,20 @@ def close_strays(own_pid: int = 0) -> str:
     Returns what was closed (empty when nothing was).
     """
     fronts = ",".join(str(p) for p in FRONT.values())
+    gemma_backend = BACK[GEMMA]
     return _ps(
         "$fronts=@(" + fronts + ");"
         "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | ForEach-Object {"
         " $p=$_; if ($p.ProcessId -eq " + str(own_pid) + ") { return };"
-        " $ports=@(Get-NetTCPConnection -OwningProcess $p.ProcessId -State Listen"
-        " -ErrorAction SilentlyContinue | ForEach-Object LocalPort);"
-        " $onFront=@($ports | Where-Object { $fronts -contains $_ }).Count -gt 0;"
-        " $gemma=$p.CommandLine -like '*gemma-4-12B-it-qat*';"
-        f" $ownBack=$ports -contains {BACK[GEMMA]};"
+        " $line=$p.CommandLine;"
+        " $onFront=$false; foreach($port in $fronts){"
+        " if($line -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)')){$onFront=$true} };"
+        " $gemma=$line -like '*gemma-4-12B-it-qat*';"
+        f" $ownBack=$line -match ('--port(?:\\s+|=){gemma_backend}(?:\\s|$)');"
         " if ($onFront -or ($gemma -and -not $ownBack)) {"
         "  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue;"
-        "  'closed ' + $p.ProcessId + ' ports=' + ($ports -join '/') } }",
-        timeout=60,
+        "  'closed ' + $p.ProcessId + ' command=' + $line } }",
+        timeout=20,
     ).strip()
 
 
@@ -228,10 +229,11 @@ class Swapper:
                 self.gemma_proc.kill()
         # A Gemma started before this service (or by hand) on the backend port.
         _ps(
-            f"Get-NetTCPConnection -LocalPort {BACK[GEMMA]} -State Listen "
-            "-ErrorAction SilentlyContinue |"
-            " % { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }",
-            timeout=30,
+            "$port=" + str(BACK[GEMMA]) + ";"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
+            "Where-Object { $_.CommandLine -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)') } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            timeout=20,
         )
         self.gemma_proc = None
 
@@ -310,10 +312,11 @@ class Swapper:
             except subprocess.TimeoutExpired:
                 self.qwen_vl_proc.kill()
         _ps(
-            f"Get-NetTCPConnection -LocalPort {BACK[QWEN_VL]} -State Listen "
-            "-ErrorAction SilentlyContinue | % { Stop-Process -Id $_.OwningProcess "
-            "-Force -ErrorAction SilentlyContinue }",
-            timeout=30,
+            "$port=" + str(BACK[QWEN_VL]) + ";"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
+            "Where-Object { $_.CommandLine -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)') } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            timeout=20,
         )
         self.qwen_vl_proc = None
 
@@ -560,7 +563,12 @@ async def main() -> None:
                     raise
                 await asyncio.sleep(1.0)
         runners.append(runner)
-    log.info("model-swap listening: gemma %s, qwen %s", FRONT[GEMMA], FRONT[QWEN])
+    log.info(
+        "model-swap listening: gemma %s, qwen %s, qwen3-vl %s",
+        FRONT[GEMMA],
+        FRONT[QWEN],
+        FRONT[QWEN_VL],
+    )
     # Cold start: neither model is loaded until first request.
     await swapper.idle_loop()
 

@@ -39,6 +39,24 @@ def test_qwen_vl_front_and_backend_are_loopback_profiles(monkeypatch: pytest.Mon
     assert len(set(swap.BACK.values())) == len(swap.BACK)
 
 
+def test_stray_cleanup_avoids_slow_listener_enumeration(monkeypatch: pytest.MonkeyPatch) -> None:
+    swap = _load(monkeypatch)
+    captured: dict[str, Any] = {}
+
+    def fake_ps(command: str, timeout: float) -> str:
+        captured["command"] = command
+        captured["timeout"] = timeout
+        return ""
+
+    monkeypatch.setattr(swap, "_ps", fake_ps)
+    swap.close_strays()
+
+    assert "11440" in captured["command"]
+    assert "Get-CimInstance Win32_Process" in captured["command"]
+    assert "Get-NetTCPConnection" not in captured["command"]
+    assert captured["timeout"] == 20
+
+
 def test_qwen_vl_transition_stops_other_profiles_before_starting_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
