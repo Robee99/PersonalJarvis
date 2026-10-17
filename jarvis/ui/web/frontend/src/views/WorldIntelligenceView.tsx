@@ -1,4 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Globe2 } from "lucide-react";
+import {
+  clearPendingGeVView,
+  readPendingGeVView,
+} from "@/lib/gevViewBridge";
 
 /** The local GEV server is the one globe runtime controlled by the GEV MCP. */
 export const DEFAULT_GEV_EMBED_URL = "http://127.0.0.1:4173/";
@@ -26,6 +31,86 @@ export const GEV_EMBED_URL = resolveGeVEmbedUrl(
 );
 
 export function WorldIntelligenceView() {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [globeStatus, setGlobeStatus] = useState("Connecting to globe");
+
+  useEffect(() => {
+    if (!GEV_EMBED_URL) return;
+    const origin = new URL(GEV_EMBED_URL).origin;
+    let ready = false;
+    let queuedView: Record<string, unknown> | null = readPendingGeVView();
+    let activeRequest: string | null = null;
+    let timeout: number | undefined;
+    let sequence = 0;
+
+    const sendView = (view: Record<string, unknown>) => {
+      const target = frameRef.current?.contentWindow;
+      if (!ready || !target) {
+        queuedView = view;
+        return;
+      }
+      const id = `jarvis-gev-${Date.now()}-${++sequence}`;
+      activeRequest = id;
+      clearPendingGeVView();
+      setGlobeStatus("Applying requested view");
+      target.postMessage({ type: "gev:view", id, view }, origin);
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => {
+        if (activeRequest === id)
+          setGlobeStatus("The globe did not confirm the requested view");
+      }, 15_000);
+    };
+
+    const onMessage = (event: MessageEvent) => {
+      if (
+        event.source !== frameRef.current?.contentWindow ||
+        event.origin !== origin ||
+        !event.data ||
+        typeof event.data !== "object"
+      )
+        return;
+      if (event.data.type === "gev:ready") {
+        ready = true;
+        setGlobeStatus("Globe connected");
+        if (queuedView) {
+          const view = queuedView;
+          queuedView = null;
+          sendView(view);
+        }
+      } else if (
+        event.data.type === "gev:view-applied" &&
+        event.data.id === activeRequest
+      ) {
+        window.clearTimeout(timeout);
+        activeRequest = null;
+        setGlobeStatus(
+          event.data.ok === true ? "View applied" : "The globe could not apply this view",
+        );
+      }
+    };
+
+    const onRequestedView = (event: Event) => {
+      const view = (event as CustomEvent<{ view?: unknown }>).detail?.view;
+      if (
+        view &&
+        typeof view === "object" &&
+        !Array.isArray(view) &&
+        "camera" in view &&
+        view.camera &&
+        typeof view.camera === "object"
+      )
+        sendView(view as Record<string, unknown>);
+    };
+
+    window.addEventListener("message", onMessage);
+    window.addEventListener("jarvis:gev-view", onRequestedView);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("jarvis:gev-view", onRequestedView);
+      window.clearTimeout(timeout);
+    };
+  }, []);
+
   if (!GEV_EMBED_URL) {
     return (
       <section className="flex h-full min-h-0 min-w-0 flex-col items-center justify-center gap-3 bg-background p-8 text-center">
@@ -44,8 +129,8 @@ export function WorldIntelligenceView() {
           <Globe2 className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
           <div className="min-w-0">
             <h1 className="truncate text-heading">World Intelligence</h1>
-            <p className="truncate text-meta text-muted-foreground">
-              God’s Eye View · local globe and live layers
+            <p aria-live="polite" className="truncate text-meta text-muted-foreground">
+              God’s Eye View · {globeStatus}
             </p>
           </div>
         </div>
@@ -60,6 +145,7 @@ export function WorldIntelligenceView() {
         </a>
       </header>
       <iframe
+        ref={frameRef}
         className="min-h-0 min-w-0 flex-1 border-0 bg-black"
         title="God’s Eye View"
         src={GEV_EMBED_URL}

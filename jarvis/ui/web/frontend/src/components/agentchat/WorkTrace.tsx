@@ -14,6 +14,7 @@ import { activityParts, traceToolIdentity, traceToolName } from "./traceActivity
 import { ToolChoiceIcon } from "./ToolChoiceChips";
 import type { ToolChoice } from "./toolChoices";
 import { toolIdentityStyle } from "./toolIdentity";
+import { publishGeVViewResult } from "@/lib/gevViewBridge";
 import "./WorkTrace.css";
 
 export type Decide = (id: string, decision: ApprovalDecision) => void | Promise<void>;
@@ -393,6 +394,10 @@ function Detail({ label, text }: { label: string; text: string }) {
 }
 
 export const TraceTool = memo(function TraceTool({ block, status, onDecide }: { block: ToolBlock; status: TurnStatus; onDecide?: Decide }) {
+  useEffect(() => {
+    if (!block.isError && block.output !== null)
+      publishGeVViewResult(block.name, block.output, block.callId);
+  }, [block.callId, block.isError, block.name, block.output]);
   if (block.question) return <QuestionCard question={block.question} />;
   return <TraceToolRow block={block} status={status} onDecide={onDecide} />;
 });
