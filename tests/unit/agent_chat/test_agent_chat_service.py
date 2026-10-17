@@ -161,6 +161,44 @@ def test_deny_feeds_a_denied_result_and_allow_always_flips_the_mode(tmp_path: Pa
     asyncio.run(scenario())
 
 
+def test_malformed_tool_arguments_are_rejected_with_a_repairable_result(
+    tmp_path: Path, scripted
+):
+    ScriptedBrain.script = [
+        [
+            BrainDelta(
+                tool_call={
+                    "id": "bad-args",
+                    "name": "Write",
+                    "input": '{"file_path": "must-not-exist.txt",',
+                }
+            )
+        ],
+        [BrainDelta(content="The tool arguments were malformed, so I stopped safely.")],
+    ]
+
+    async def scenario() -> None:
+        svc = AgentChatService(AgentChatStore(":memory:"))
+        session = svc.create_session(
+            provider="fakeprov", cwd=str(tmp_path), permission_mode="auto"
+        )
+        q = svc.subscribe(session.session_id)
+        await svc.send(session.session_id, "create a file")
+        events = await _drain(q, "turn_finished")
+
+        tool_result = next(e["payload"] for e in events if e["kind"] == "tool_result")
+        assert tool_result["call_id"] == "bad-args"
+        assert tool_result["is_error"] is True
+        assert "valid JSON object" in tool_result["output"]
+        assert "retry" in tool_result["output"].casefold()
+        assert not (tmp_path / "must-not-exist.txt").exists()
+        assert len(ScriptedBrain.seen) == 2
+        assert ScriptedBrain.seen[1].messages[-1].role == "tool"
+
+    with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+        runner.run(scenario())
+
+
 def test_cancel_ends_the_turn(tmp_path: Path, scripted):
     ScriptedBrain.script = [
         [

@@ -86,6 +86,28 @@ def supports_api_runner(provider: str) -> bool:
     return (provider or "").strip().lower() in BRAIN_BY_PROVIDER
 
 
+def _tool_arguments(raw: Any) -> dict[str, Any]:
+    """Normalize provider tool arguments without hiding malformed payloads.
+
+    Some OpenAI-compatible providers encode the arguments as a JSON string.
+    Accept that form only when it decodes to an object. The caller turns a
+    ``ValueError`` into a tool-error result so the model can repair its call;
+    malformed arguments must never be silently changed to ``{}`` and executed.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("arguments must be a valid JSON object") from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("arguments must be a JSON object")
+
+
 def build_brain(provider: str, model: str) -> Any:
     mod_name, cls_name = BRAIN_BY_PROVIDER[provider]
     mod = __import__(mod_name, fromlist=[cls_name])
@@ -448,12 +470,13 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                         status = "cancelled"
                         break
                     name = str(tc.get("name") or "")
-                    args = tc.get("input") or {}
-                    if not isinstance(args, dict):
-                        try:
-                            args = json.loads(str(args))
-                        except (TypeError, ValueError):
-                            args = {}
+                    raw_args = tc.get("input", {})
+                    argument_error = ""
+                    try:
+                        args = _tool_arguments(raw_args)
+                    except ValueError as exc:
+                        args = {}
+                        argument_error = str(exc)
                     call_id = str(tc["id"])
                     meta = (
                         {"thought_signature": tc["thought_signature"]}
@@ -474,9 +497,17 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                         )
                     )
                     t_tool = time.perf_counter()
-                    output, is_error = await _run_gated_tool(
-                        handle, permission_mode, call_id, name, args, cwd
-                    )
+                    if argument_error:
+                        output = (
+                            f"Invalid tool arguments: {argument_error}. "
+                            "Retry with arguments encoded as a JSON object that "
+                            "matches the tool's input schema. No action was run."
+                        )
+                        is_error = True
+                    else:
+                        output, is_error = await _run_gated_tool(
+                            handle, permission_mode, call_id, name, args, cwd
+                        )
                     if output == _PERMISSION_UPGRADED:
                         permission_mode = "auto"
                         output, is_error = await execute_tool(name, args, cwd=cwd)
