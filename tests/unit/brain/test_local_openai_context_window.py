@@ -17,10 +17,11 @@ def test_local_openai_uses_conservative_llama_cpp_context_default(monkeypatch) -
     brain = LocalOpenAIBrain("qwen3-vl-8b")
 
     assert brain.context_window == 8_192
+    assert brain.max_tools == 48
 
 
 def test_local_openai_respects_configured_context_window(monkeypatch) -> None:
-    provider = SimpleNamespace(context_window=16_384)
+    provider = SimpleNamespace(context_window=16_384, max_tools=32)
     monkeypatch.setattr(
         cfg,
         "load_config",
@@ -32,3 +33,4 @@ def test_local_openai_respects_configured_context_window(monkeypatch) -> None:
     brain = LocalOpenAIBrain("qwen3-vl-8b")
 
     assert brain.context_window == 16_384
+    assert brain.max_tools == 32

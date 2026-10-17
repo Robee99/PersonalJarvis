@@ -863,6 +863,11 @@ class BrainProviderConfig(BaseModel):
     # lets the prompt and tool fitter stay inside llama.cpp's context window.
     # None uses the provider's conservative default.
     context_window: int | None = Field(default=None, ge=1024, le=1_048_576)
+    # Optional per-request cap for local OpenAI-compatible tool schemas.
+    # llama.cpp builds a grammar from the complete list and can reject overly
+    # large surfaces before inference. ``None`` keeps the adapter's safe cap;
+    # ``0`` opts out for a server that has been verified with larger lists.
+    max_tools: int | None = Field(default=None, ge=0, le=2_048)
     # Canonical model for tool-bearing turns. ``cu_model`` remains a
     # compatibility alias for installations predating the Tool Model rename.
     tool_model: str | None = Field(

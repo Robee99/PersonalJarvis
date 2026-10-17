@@ -112,6 +112,11 @@ class LocalOpenAIBrain:
     # actual limit only after paying the full prompt-build cost). Installations
     # with a larger window can set [brain.providers."local-openai"].context_window.
     context_window: int = 8_192
+    # llama.cpp's JSON-Schema grammar can reject very large aggregate tool
+    # surfaces before generation starts. Keep the local OpenAI-compatible
+    # surface below that parser ceiling; users can raise it for servers that
+    # have been verified with a larger tool set.
+    max_tools: int = 48
     supports_tools: bool = True
     supports_vision: bool = False
     # Set per selected model from the catalog: the server takes
@@ -128,6 +133,9 @@ class LocalOpenAIBrain:
             configured_window = getattr(provider_cfg, "context_window", None)
             if configured_window is not None:
                 self.context_window = int(configured_window)
+            configured_max_tools = getattr(provider_cfg, "max_tools", None)
+            if configured_max_tools is not None:
+                self.max_tools = max(0, int(configured_max_tools))
         except Exception:  # noqa: BLE001 — context sizing must never break startup
             log.debug("local-openai: context-window hint unavailable", exc_info=True)
         self.supports_vision = _declared_vision_support(self._model)
