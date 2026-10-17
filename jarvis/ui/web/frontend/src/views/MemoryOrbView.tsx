@@ -53,6 +53,19 @@ async function getJson<T>(url: string): Promise<T | undefined> {
   }
 }
 
+async function postJson<T>(url: string, body: unknown): Promise<T | undefined> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok ? ((await res.json()) as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function fetchSources(): Promise<OrbSources> {
   const [wiki, skills, tools, apps, mcp, semanticIndex, conversations, graphrag] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
@@ -64,6 +77,20 @@ async function fetchSources(): Promise<OrbSources> {
     getJson<NonNullable<OrbSources["conversations"]>>("/api/chats?limit=1000"),
     getJson<OrbSources["graphrag"]>("/api/wiki/graphrag-communities"),
   ]);
+  const indexedConversationIds = (semanticIndex?.conversation_sources ?? [])
+    .map((source) => source.thread_id)
+    .filter(Boolean)
+    .slice(0, 1000);
+  const indexedConversations = indexedConversationIds.length
+    ? await postJson<NonNullable<OrbSources["conversations"]>>(
+        "/api/chats/indexed-summaries",
+        { ids: indexedConversationIds },
+      )
+    : [];
+  const conversationsByKey = new Map<string, NonNullable<OrbSources["conversations"]>[number]>();
+  for (const item of [...(indexedConversations ?? []), ...(conversations ?? [])]) {
+    conversationsByKey.set(`${item.kind}:${item.id}`, item);
+  }
   return {
     wiki,
     skills: skills?.skills,
@@ -71,7 +98,7 @@ async function fetchSources(): Promise<OrbSources> {
     apps: apps?.plugins,
     mcp: mcp?.servers,
     semanticIndex: semanticIndex?.enabled ? semanticIndex : undefined,
-    conversations,
+    conversations: [...conversationsByKey.values()],
     graphrag,
   };
 }
