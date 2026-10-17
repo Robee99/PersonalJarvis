@@ -156,6 +156,8 @@ ROUTER_TOOLS = frozenset({
     # The brain calls this when the user asks "what do we know about X" or
     # references a past project, person, or decision by name.
     "wiki-recall",
+    # Optional read-only external archive search, disabled until a vault path is configured.
+    "kept-archive-search",
     # Phase B5 follow-up: full-page reader for the wiki vault. Used after
     # wiki-recall when the brain has narrowed to one page and needs the
     # complete content, not the 240-char snippet.
@@ -555,6 +557,11 @@ def _load_tools_for_tier(
                 )
             elif ep.name == "whoami":
                 inst = cls(profile=user_profile, people=people)
+            elif ep.name == "kept-archive-search":
+                # Kept is an explicit, read-only external archive. Its default
+                # unset path keeps the capability disabled until configured.
+                integration = getattr(config, "wiki_integration", None)
+                inst = cls(archive_root=getattr(integration, "kept_archive_root", None))
             elif ep.name == "wiki-recall":
                 # Phase B5: build VaultSearch with the configured vault root.
                 # The search instance is created once per brain build and

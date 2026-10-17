@@ -3156,6 +3156,9 @@ class WikiIntegrationConfig(BaseModel):
 
     enabled: bool = True
     vault_root: Path = Path("wiki/obsidian-vault")
+    # Optional read-only Kept archive search. None disables it; never infer a
+    # vault from the user's home directory.
+    kept_archive_root: Path | None = None
     subscribe_idle: bool = True  # listen for IdleEntered
     fallback_to_direct_ingest: bool = True  # when scheduler is missing
 

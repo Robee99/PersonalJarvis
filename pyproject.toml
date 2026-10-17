@@ -795,6 +795,8 @@ message-agent = "jarvis.plugins.tool.message_agent:LeadMessageAgentTool"
 run-skill = "jarvis.plugins.tool.run_skill:RunSkillTool"
 # Phase B5 — long-term wiki recall (router-tier, read-only).
 wiki-recall = "jarvis.plugins.tool.wiki_recall:WikiRecallTool"
+# Optional read-only search for an explicitly configured Kept Markdown archive.
+kept-archive-search = "jarvis.plugins.tool.kept_archive_search:KeptArchiveSearchTool"
 # Phase B5 follow-up — full-page reader (router-tier, read-only).
 wiki-page-read = "jarvis.plugins.tool.wiki_page_read:WikiPageReadTool"
 # Grounded vault listing (2026-07-14) — deterministic "what is in my wiki"
