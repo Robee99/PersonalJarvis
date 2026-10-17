@@ -5283,6 +5283,13 @@ _FILE_BACKEND_ACTIVE: bool = False
 # still readable from the OS store, and recovery probes must not mistake the
 # currently installed file backend for a recovered platform backend.
 _PLATFORM_KEYRING_BACKEND: Any | None = None
+# A platform credential read that raises is a process-local circuit breaker for
+# NORMAL reads. Some Windows Credential Manager failures can block for many
+# seconds rather than raising promptly; retrying the retained backend for each
+# provider during brain construction multiplied that delay. Keep the backend
+# reference for explicit recovery/deletion semantics, but stop probing it until
+# a successful user-initiated recovery.
+_PLATFORM_KEYRING_READ_UNAVAILABLE: bool = False
 # The credential slot whose OS-keyring read failed most recently. On macOS a
 # user who clicks "Deny" on the Keychain prompt lands exactly here: the read
 # raises, the process degrades to the file backend, and only a fresh read of a
@@ -5561,6 +5568,7 @@ def _try_restore_platform_keyring_backend() -> bool:
     is active, including when no fallback swap had occurred.
     """
     global _FILE_BACKEND_ACTIVE, _PLATFORM_KEYRING_BACKEND
+    global _PLATFORM_KEYRING_READ_UNAVAILABLE
     if not _FILE_BACKEND_ACTIVE:
         return True
 
@@ -5621,6 +5629,7 @@ def _try_restore_platform_keyring_backend() -> bool:
 
     _PLATFORM_KEYRING_BACKEND = candidate
     _FILE_BACKEND_ACTIVE = False
+    _PLATFORM_KEYRING_READ_UNAVAILABLE = False
     logging.getLogger(__name__).info(
         "OS credential store recovered; future credential saves use the platform keyring."
     )
@@ -5689,6 +5698,7 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
         key: Secret name in the Credential Manager (e.g. "anthropic_api_key").
         env_fallback: ENV variable checked when keyring is empty (e.g. "ANTHROPIC_API_KEY").
     """
+    global _LAST_KEYRING_FAILED_SLOT, _PLATFORM_KEYRING_READ_UNAVAILABLE
     _ensure_keyring_backend()
     # H2 (open-source AP-22 / headless VPS): when the caller passes no explicit ENV
     # var, derive it from the slot name (``groq_api_key`` → ``GROQ_API_KEY``) so the
@@ -5720,10 +5730,15 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
             # a fallback, so one failed write does not hide all OS credentials.
             file_val = active_val or file_val
             platform_backend = _PLATFORM_KEYRING_BACKEND
-            if platform_backend is not None and _is_platform_keyring_backend(platform_backend):
+            if (
+                not _PLATFORM_KEYRING_READ_UNAVAILABLE
+                and platform_backend is not None
+                and _is_platform_keyring_backend(platform_backend)
+            ):
                 try:
                     platform_val = platform_backend.get_password(KEYRING_SERVICE, key)
                 except Exception:  # noqa: BLE001 — locked platform stays fallback-only
+                    _PLATFORM_KEYRING_READ_UNAVAILABLE = True
                     platform_val = None
         else:
             platform_val = active_val
@@ -5732,8 +5747,8 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
         # _ensure_keyring_backend saw a viable backend. Degrade to the 0600 file
         # store and retry once, so a key saved to the file fallback in a prior run
         # is still visible instead of dead-ending on the locked keyring.
-        global _LAST_KEYRING_FAILED_SLOT
         _LAST_KEYRING_FAILED_SLOT = key
+        _PLATFORM_KEYRING_READ_UNAVAILABLE = True
         if _install_file_cred_backend("keyring read failed"):
             try:
                 import keyring
