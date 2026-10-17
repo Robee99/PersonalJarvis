@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from jarvis.mcp import state
 
 
@@ -98,3 +100,21 @@ def test_windows_finds_existing_standard_config_when_localappdata_is_sandboxed(
 
     assert state._active_mcp_json_path() == standard_config
     assert state.load_config()["mcpServers"]["windows-desktop"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_config_info_reports_the_active_mcp_file(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from jarvis.ui.web.mcp_routes import config_info
+
+    active = tmp_path / "user" / "mcp.json"
+    active.parent.mkdir(parents=True)
+    active.write_text('{"mcpServers":{"fetch":{"enabled":true}}}', encoding="utf-8")
+    monkeypatch.setattr(state, "_active_mcp_json_path", lambda: active)
+
+    result = await config_info()
+
+    assert result["path"] == str(active)
+    assert '"fetch"' in result["content"]

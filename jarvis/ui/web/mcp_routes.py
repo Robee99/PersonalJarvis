@@ -518,17 +518,17 @@ async def mcp_files(name: str, request: Request) -> dict[str, Any]:
 @router.get("/config/info")
 async def config_info() -> dict[str, Any]:
     """Path + existence + raw content of mcp.json (for the UI editor)."""
-    from jarvis.mcp.state import MCP_JSON_PATH
+    path = mcp_state._active_mcp_json_path()
 
-    exists = MCP_JSON_PATH.exists()
+    exists = path.exists()
     content: str | None = None
     if exists:
         try:
-            content = MCP_JSON_PATH.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8-sig")
         except OSError:
             content = None
     return {
-        "path": str(MCP_JSON_PATH),
+        "path": str(path),
         "exists": exists,
         "content": content,
     }
