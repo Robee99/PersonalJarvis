@@ -156,19 +156,14 @@ export function McpsView() {
   const toggle = useMutation({
     mutationFn: async ({ name, enable }: { name: string; enable: boolean }) => {
       setCheckingName(name);
-      // Each pair controls the same surface. Turn the current provider off
-      // before starting its alternative so the model never gets duplicate
-      // browser or desktop controls at the same time.
+      // Playwright and Agent Browser are alternative browser providers. Turn
+      // the current browser provider off before starting the other one.
       const exclusivePeer =
         name === "playwright"
           ? "agent-browser"
           : name === "agent-browser"
             ? "playwright"
-            : name === "windows-desktop"
-              ? "desktop-commander"
-              : name === "desktop-commander"
-                ? "windows-desktop"
-                : null;
+            : null;
       if (
         enable &&
         exclusivePeer &&
