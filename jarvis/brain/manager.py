@@ -12028,6 +12028,26 @@ class BrainManager:
             self._evidence_required_is_write = False
             self._evidence_required_domain = ""
 
+        # A typed chat may explicitly select one MCP and ask Jarvis to use it.
+        # Agent-owned turns normally stand down from the generic CLI evidence
+        # gate above, but this per-turn user selection is narrower and must
+        # still be executed (or reported honestly). The existing dispatcher
+        # and post-turn evidence guard enforce it; no permission is granted.
+        selected_tool = getattr(_TURN_OVERRIDE.get(), "required_tool_name", "")
+        if selected_tool and (
+            selected_tool in (getattr(self, "_tools", None) or {})
+            or selected_tool in (getattr(_TURN_OVERRIDE.get(), "tools_extra", {}) or {})
+        ):
+            self._evidence_directive = (
+                f"MANDATORY THIS TURN: call the selected tool {selected_tool!r} to carry out "
+                "the user's explicit request. Do not answer from memory or claim a result "
+                "without the tool result. If execution fails or is denied, say so plainly."
+            )
+            self._evidence_required_tool = selected_tool
+            self._evidence_required_is_write = False
+            self._evidence_required_domain = "selected MCP"
+            log.info("Explicit chat MCP selection — mandating %s", selected_tool)
+
         # Phase 5 / ADR-0006: pre-call budget gate. Block rather than request
         # when cooldown is active or the task/daily budget is exhausted.
         trace_uuid = turn_trace_id
