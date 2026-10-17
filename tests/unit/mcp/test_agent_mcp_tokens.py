@@ -103,6 +103,24 @@ def test_tokens_survive_a_reload(tmp_path: Path) -> None:
     assert second.verify(secret) is not None
 
 
+def test_loaded_store_observes_tokens_issued_or_revoked_by_another_process(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mcp_tokens.json"
+    issuer = tk.TokenStore(path)
+    verifier = tk.TokenStore(path)
+
+    first, first_secret = issuer.issue(name="Already running client")
+    assert verifier.verify(first_secret) is not None  # load the file into this process
+
+    second, second_secret = issuer.issue(name="Client paired after startup")
+    assert verifier.verify(second_secret) is not None
+
+    issuer.revoke(first.token_id)
+    assert verifier.verify(first_secret) is None
+    assert {token.token_id for token in verifier.list()} == {second.token_id}
+
+
 def test_a_corrupt_file_does_not_lock_anyone_out(tmp_path: Path) -> None:
     path = tmp_path / "mcp_tokens.json"
     path.write_text("{ not json at all", encoding="utf-8")

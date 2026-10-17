@@ -118,9 +118,23 @@ class TokenStore:
     path: Path
     _tokens: dict[str, McpToken] = field(default_factory=dict)
     _loaded: bool = False
+    _file_signature: tuple[int, int, int] | None = None
+
+    @staticmethod
+    def _signature(path: Path) -> tuple[int, int, int] | None:
+        """A cheap version for noticing writes made by another app worker."""
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
     def load(self) -> TokenStore:
-        if self._loaded:
+        # The web app can have multiple workers. A worker that cached this
+        # small file at startup must see a token paired or revoked by another
+        # worker before it authenticates the next MCP request.
+        signature = self._signature(self.path)
+        if self._loaded and signature == self._file_signature:
             return self
         self._tokens = {}
         try:
@@ -140,6 +154,7 @@ class TokenStore:
                 continue
             self._tokens[token.token_id] = token
         self._loaded = True
+        self._file_signature = self._signature(self.path)
         return self
 
     def save(self) -> None:
@@ -151,6 +166,8 @@ class TokenStore:
         _restrict(tmp)
         tmp.replace(self.path)
         _restrict(self.path)
+        self._file_signature = self._signature(self.path)
+        self._loaded = True
 
     # ------------------------------------------------------------ commands
 
