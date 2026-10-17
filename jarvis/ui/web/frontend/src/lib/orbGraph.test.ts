@@ -32,7 +32,16 @@ const sources = {
 describe("buildOrbGraph", () => {
   it("hangs every family off the core and counts its leaves", () => {
     const graph = buildOrbGraph(sources);
-    expect(graph.counts).toEqual({ wiki: 1, concepts: 1, skills: 2, tools: 1, apps: 2, mcp: 1 });
+    expect(graph.counts).toEqual({
+      wiki: 1,
+      concepts: 1,
+      conversations: 0,
+      communities: 0,
+      skills: 2,
+      tools: 1,
+      apps: 2,
+      mcp: 1,
+    });
     for (const hub of ["hub:wiki", "hub:skills", "hub:tools", "hub:apps", "hub:mcp"]) {
       expect(graph.links).toContainEqual({ source: "core", target: hub });
     }
@@ -65,6 +74,31 @@ describe("buildOrbGraph", () => {
   it("leaves out a family whose catalog is empty", () => {
     const graph = buildOrbGraph({ tools: [] });
     expect(graph.nodes.map((n) => n.id)).toEqual(["core"]);
+  });
+
+  it("preserves GraphRAG source provenance and wiki slugs", () => {
+    const graph = buildOrbGraph({
+      graphrag: {
+        enabled: true,
+        available: true,
+        communities: [{
+          id: "community-id",
+          title: "Local rescue network",
+          level: 0,
+          rank: 2,
+          size: 4,
+          sources: [
+            { source_id: "source-id", source_path: "projects/rescue-network.md" },
+            { source_id: "text-source", source_path: "archive/source.txt" },
+          ],
+        }],
+      },
+    });
+
+    expect(graph.nodes.find((node) => node.id === "community:community-id")?.sourceLinks).toEqual([
+      { sourceId: "source-id", sourcePath: "projects/rescue-network.md", slug: "rescue-network" },
+      { sourceId: "text-source", sourcePath: "archive/source.txt", slug: undefined },
+    ]);
   });
 });
 

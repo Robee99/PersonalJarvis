@@ -348,6 +348,37 @@ export function MemoryOrbView() {
                     Cognee indexed · source {node.sourceId?.slice(0, 12)}
                   </p>
                 )}
+                {node.group === "communities" && (
+                  <div className="mt-3 border-t border-white/10 pt-2">
+                    <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                      Indexed source notes
+                    </p>
+                    {node.sourceLinks?.length ? (
+                      <ul className="space-y-1">
+                        {node.sourceLinks.map((source) => (
+                          <li key={source.sourceId}>
+                            {source.slug ? (
+                              <button
+                                type="button"
+                                onClick={() => requestWikiPage(source.slug!)}
+                                className="w-full truncate text-left text-cyan-200 hover:text-cyan-100"
+                                title={`Open ${source.sourcePath}`}
+                              >
+                                {source.sourcePath}
+                              </button>
+                            ) : (
+                              <span className="block truncate text-slate-400" title={source.sourcePath}>
+                                {source.sourcePath}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-slate-500">No active source links in this indexed report.</p>
+                    )}
+                  </div>
+                )}
                 {picked && node.section && (
                   <button
                     type="button"

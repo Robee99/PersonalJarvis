@@ -32,6 +32,8 @@ export interface OrbNode {
   /** Original conversation record for indexed conversation memories. */
   threadId?: string;
   conversationKind?: "text" | "voice";
+  /** Exact wiki sources linked through the GraphRAG export ID chain. */
+  sourceLinks?: { sourceId: string; sourcePath: string; slug?: string }[];
 }
 
 export interface OrbLink {
@@ -59,7 +61,15 @@ export interface OrbSources {
   graphrag?: {
     enabled: boolean;
     available: boolean;
-    communities: { id: string; title: string; summary?: string; level: number; rank: number; size: number }[];
+    communities: {
+      id: string;
+      title: string;
+      summary?: string;
+      level: number;
+      rank: number;
+      size: number;
+      sources?: { source_id: string; source_path: string }[];
+    }[];
   };
   skills?: { name: string; category?: string; description?: string; state?: string }[];
   tools?: { name: string; description?: string; risk_tier?: string }[];
@@ -212,6 +222,11 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
         hub: false,
         live: true,
         detail: `Level ${community.level} · ${community.size} members · ${oneLine(community.summary, 320)}`,
+        sourceLinks: (community.sources ?? []).map((source) => {
+          const leaf = source.source_path.split(/[\\/]/).pop() ?? "";
+          const slug = leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : undefined;
+          return { sourceId: source.source_id, sourcePath: source.source_path, slug };
+        }),
       }, "hub:communities");
     }
   }

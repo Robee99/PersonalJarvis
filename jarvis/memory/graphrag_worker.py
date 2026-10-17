@@ -14,6 +14,7 @@ import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 
@@ -322,6 +323,94 @@ def _query(project: Path, body: dict, db: sqlite3.Connection) -> dict:
     return {"answer": str(answer), "hits": hits}
 
 
+def _community_source_links(
+    project: Path,
+    reports: list[dict[str, Any]],
+    db: sqlite3.Connection,
+) -> dict[int, list[dict[str, str]]]:
+    """Join GraphRAG's community -> text unit -> document IDs to active notes."""
+    import pyarrow.parquet as pq
+    from graphrag_provenance import map_community_sources
+
+    output_dir = project / "output"
+    communities_path = output_dir / "communities.parquet"
+    text_units_path = output_dir / "text_units.parquet"
+    documents_path = output_dir / "documents.parquet"
+    if not all(path.is_file() for path in (communities_path, text_units_path, documents_path)):
+        return {}
+
+    target_community_ids = {
+        int(row["community"]) for row in reports if row.get("community") is not None
+    }
+    if not target_community_ids:
+        return {}
+
+    community_to_units: dict[int, set[str]] = {}
+    unit_to_documents: dict[str, str] = {}
+    document_to_sources: dict[str, str] = {}
+    max_unit_ids = 20_000
+    total_unit_ids = 0
+
+    community_file = pq.ParquetFile(communities_path)
+    for group_index in range(community_file.num_row_groups):
+        rows = community_file.read_row_group(
+            group_index, columns=["community", "text_unit_ids"]
+        ).to_pylist()
+        for row in rows:
+            community_id = int(row["community"])
+            if community_id not in target_community_ids:
+                continue
+            units = community_to_units.setdefault(community_id, set())
+            for unit_id in row.get("text_unit_ids") or []:
+                if total_unit_ids >= max_unit_ids:
+                    break
+                if unit_id not in units:
+                    units.add(str(unit_id))
+                    total_unit_ids += 1
+        if total_unit_ids >= max_unit_ids:
+            break
+
+    required_units = {
+        unit_id for unit_ids in community_to_units.values() for unit_id in unit_ids
+    }
+    if not required_units:
+        return {}
+
+    units_file = pq.ParquetFile(text_units_path)
+    for group_index in range(units_file.num_row_groups):
+        rows = units_file.read_row_group(group_index, columns=["id", "document_id"]).to_pylist()
+        for row in rows:
+            unit_id = str(row["id"])
+            if unit_id in required_units and row.get("document_id"):
+                unit_to_documents[unit_id] = str(row["document_id"])
+
+    required_documents = set(unit_to_documents.values())
+    documents_file = pq.ParquetFile(documents_path)
+    for group_index in range(documents_file.num_row_groups):
+        rows = documents_file.read_row_group(group_index, columns=["id", "title"]).to_pylist()
+        for row in rows:
+            document_id = str(row["id"])
+            if document_id not in required_documents:
+                continue
+            # The builder names each input file with its stable JARVIS source ID.
+            title = Path(str(row.get("title") or "")).name
+            match = re.fullmatch(r"([0-9a-f]{64})\.txt", title, flags=re.IGNORECASE)
+            if match:
+                document_to_sources[document_id] = match.group(1).lower()
+
+    active_sources = {
+        str(row["source_id"]): str(row["source_path"])
+        for row in _active(db)
+    }
+    return map_community_sources(
+        community_to_units=community_to_units,
+        unit_to_documents=unit_to_documents,
+        document_to_sources=document_to_sources,
+        active_sources=active_sources,
+        max_sources=8,
+    )
+
+
 def _handle(body: dict) -> dict:
     root = Path(body["data_dir"]).resolve()
     vault = Path(body["vault_root"]).resolve()
@@ -483,7 +572,10 @@ def _handle(body: dict) -> dict:
             parquet = pq.ParquetFile(report_path)
             count = int(parquet.metadata.num_rows)
             limit = max(1, min(int(body.get("limit", 80)), 100))
-            columns = ["id", "human_readable_id", "level", "title", "summary", "rank", "size"]
+            columns = [
+                "id", "human_readable_id", "community", "level", "title",
+                "summary", "rank", "size",
+            ]
             communities: list[dict[str, Any]] = []
             for group_index in range(parquet.num_row_groups):
                 rows = parquet.read_row_group(group_index, columns=columns).slice(
@@ -503,6 +595,10 @@ def _handle(body: dict) -> dict:
                     )
                 if len(communities) >= limit:
                     break
+            source_links = _community_source_links(project, communities, db)
+            for community in communities:
+                community["sources"] = source_links.get(int(community["community"]), [])
+                community.pop("community", None)
             return {
                 "ok": True,
                 "communities": communities,
