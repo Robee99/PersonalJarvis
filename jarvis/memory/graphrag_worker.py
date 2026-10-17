@@ -468,6 +468,47 @@ def _handle(body: dict) -> dict:
                 "SELECT value FROM metadata WHERE key='current_project'"
             ).fetchone()
             return {"ok": True, "source_count": count, "workspace": current[0] if current else None}
+        if op == "communities":
+            current = db.execute(
+                "SELECT value FROM metadata WHERE key='current_project'"
+            ).fetchone()
+            if current is None:
+                return {"ok": True, "communities": [], "community_count": 0}
+            project = Path(current[0]).resolve()
+            report_path = project / "output" / "community_reports.parquet"
+            if not report_path.is_file() or not (project / "index.complete").is_file():
+                raise RuntimeError("The current GraphRAG index has no complete community reports")
+            import pyarrow.parquet as pq
+
+            parquet = pq.ParquetFile(report_path)
+            count = int(parquet.metadata.num_rows)
+            limit = max(1, min(int(body.get("limit", 80)), 100))
+            columns = ["id", "human_readable_id", "level", "title", "summary", "rank", "size"]
+            communities: list[dict[str, Any]] = []
+            for group_index in range(parquet.num_row_groups):
+                rows = parquet.read_row_group(group_index, columns=columns).slice(
+                    0, limit - len(communities)
+                )
+                for row in rows.to_pylist():
+                    communities.append(
+                        {
+                            "id": str(row["id"]),
+                            "human_readable_id": int(row["human_readable_id"]),
+                            "level": int(row["level"]),
+                            "title": str(row["title"] or "Untitled community")[:180],
+                            "summary": str(row["summary"] or "")[:900],
+                            "rank": float(row["rank"] or 0),
+                            "size": int(row["size"] or 0),
+                        }
+                    )
+                if len(communities) >= limit:
+                    break
+            return {
+                "ok": True,
+                "communities": communities,
+                "community_count": count,
+                "workspace_id": project.name,
+            }
         raise ValueError(f"Unknown GraphRAG operation: {op}")
     finally:
         db.close()

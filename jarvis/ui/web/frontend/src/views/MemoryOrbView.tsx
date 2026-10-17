@@ -54,7 +54,7 @@ async function getJson<T>(url: string): Promise<T | undefined> {
 }
 
 async function fetchSources(): Promise<OrbSources> {
-  const [wiki, skills, tools, apps, mcp, semanticIndex, conversations] = await Promise.all([
+  const [wiki, skills, tools, apps, mcp, semanticIndex, conversations, graphrag] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
     getJson<{ skills: OrbSources["skills"] }>("/api/skills"),
     getJson<{ tools: OrbSources["tools"] }>("/api/tools"),
@@ -62,6 +62,7 @@ async function fetchSources(): Promise<OrbSources> {
     getJson<{ servers: OrbSources["mcp"] }>("/api/mcps"),
     getJson<OrbSources["semanticIndex"]>("/api/wiki/semantic-index"),
     getJson<NonNullable<OrbSources["conversations"]>>("/api/chats?limit=1000"),
+    getJson<OrbSources["graphrag"]>("/api/wiki/graphrag-communities"),
   ]);
   return {
     wiki,
@@ -71,6 +72,7 @@ async function fetchSources(): Promise<OrbSources> {
     mcp: mcp?.servers,
     semanticIndex: semanticIndex?.enabled ? semanticIndex : undefined,
     conversations,
+    graphrag,
   };
 }
 
@@ -264,7 +266,7 @@ export function MemoryOrbView() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find a note, conversation, skill, tool or app"
+            placeholder="Find a note, conversation, community, skill, tool or app"
             aria-label="Search the memory orb"
             className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-slate-500"
           />

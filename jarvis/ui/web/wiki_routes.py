@@ -680,6 +680,26 @@ async def get_semantic_index(request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/graphrag-communities")
+async def get_graphrag_communities(request: Request) -> dict[str, Any]:
+    """Return bounded community reports from the current authorized wiki index."""
+    vault_root = _resolve_vault_root(request)
+    config = getattr(request.app.state, "config", None)
+    graph_config = getattr(getattr(config, "memory", None), "graphrag", None)
+    if vault_root is None or graph_config is None or not graph_config.enabled:
+        return {"ok": True, "enabled": False, "available": False, "communities": []}
+
+    from jarvis.memory.graphrag_adapter import GraphRagMemoryAdapter
+
+    adapter = GraphRagMemoryAdapter(vault_root=vault_root, config=graph_config)
+    try:
+        result = await adapter.communities()
+    except Exception as exc:  # noqa: BLE001 - unavailable graph must not blank the orb
+        log.warning("wiki_route_failed route=/graphrag-communities error=%s", exc)
+        return {"ok": True, "enabled": True, "available": False, "communities": []}
+    return {"ok": True, "enabled": True, "available": True, **result}
+
+
 @router.get("/backlinks/{slug}")
 async def get_backlinks(slug: str, request: Request) -> dict[str, Any]:
     """Return all pages whose body contains a wikilink to ``slug``."""

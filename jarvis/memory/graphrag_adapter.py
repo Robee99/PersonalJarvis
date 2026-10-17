@@ -220,6 +220,13 @@ class GraphRagMemoryAdapter:
     async def status(self) -> dict[str, Any]:
         return await asyncio.to_thread(self._request, {"op": "status"})
 
+    async def communities(self, *, limit: int = 80) -> dict[str, Any]:
+        """Return bounded community reports from the current indexed corpus."""
+        return await asyncio.to_thread(
+            self._request,
+            {"op": "communities", "limit": max(1, min(int(limit), 100))},
+        )
+
 
 def build_graphrag_adapter(vault_root: Path) -> GraphRagMemoryAdapter:
     return GraphRagMemoryAdapter(vault_root=vault_root)

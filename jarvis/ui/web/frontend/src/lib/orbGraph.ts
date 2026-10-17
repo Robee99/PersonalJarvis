@@ -11,7 +11,7 @@
  * of the map is testable without a canvas.
  */
 
-export type OrbGroup = "core" | "wiki" | "concepts" | "conversations" | "skills" | "tools" | "apps" | "mcp";
+export type OrbGroup = "core" | "wiki" | "concepts" | "conversations" | "communities" | "skills" | "tools" | "apps" | "mcp";
 
 export interface OrbNode {
   id: string;
@@ -56,6 +56,11 @@ export interface OrbSources {
     conversation_sources?: { source_id: string; source_path: string; thread_id: string }[];
   };
   conversations?: { kind: "text" | "voice"; id: string; title?: string; updated_ms?: number }[];
+  graphrag?: {
+    enabled: boolean;
+    available: boolean;
+    communities: { id: string; title: string; summary?: string; level: number; rank: number; size: number }[];
+  };
   skills?: { name: string; category?: string; description?: string; state?: string }[];
   tools?: { name: string; description?: string; risk_tier?: string }[];
   apps?: { id: string; display_name?: string; description?: string; category?: string; status?: string }[];
@@ -67,6 +72,7 @@ export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
   wiki: "#5bd4a4",
   concepts: "#ffb84d",
   conversations: "#f5a35c",
+  communities: "#df8cff",
   skills: "#b48cf2",
   tools: "#f47fa4",
   apps: "#6aa9ff",
@@ -77,6 +83,7 @@ export const ORB_GROUP_LABEL: Record<Exclude<OrbGroup, "core">, string> = {
   wiki: "Notes",
   concepts: "Concepts",
   conversations: "Conversations",
+  communities: "GraphRAG communities",
   skills: "Skills",
   tools: "Tools",
   apps: "Apps",
@@ -107,7 +114,7 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
   const nodes: OrbNode[] = [];
   const links: OrbLink[] = [];
   const seen = new Set<string>();
-  const counts = { wiki: 0, concepts: 0, conversations: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
+  const counts = { wiki: 0, concepts: 0, conversations: 0, communities: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
 
   const add = (node: OrbNode, parent?: string) => {
     if (seen.has(node.id)) return;
@@ -187,6 +194,25 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
         threadId: conversation.id,
         conversationKind: conversation.kind,
       }, "hub:conversations");
+    }
+  }
+
+  // GraphRAG community reports are genuine corpus outputs. Their schema does
+  // not identify exact source documents for each claim, so this view does not
+  // invent source edges.
+  const communities = src.graphrag?.available ? src.graphrag.communities : [];
+  if (communities.length) {
+    hub("hub:communities", "GraphRAG", "communities", "core", "Communities from the current indexed wiki corpus");
+    for (const community of communities) {
+      counts.communities += 1;
+      add({
+        id: `community:${community.id}`,
+        label: community.title,
+        group: "communities",
+        hub: false,
+        live: true,
+        detail: `Level ${community.level} · ${community.size} members · ${oneLine(community.summary, 320)}`,
+      }, "hub:communities");
     }
   }
 
