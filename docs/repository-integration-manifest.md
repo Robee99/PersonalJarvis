@@ -3,7 +3,7 @@
 **Reconciled:** 2026-10-17  
 **Canonical application:** `Robee99/PersonalJarvis` (PersonalJarvis/Dodaios fork)  
 **Upstream:** `Dodaios/Dodaios`
-**Current implementation branch:** `codex-gemma-mcp-fix-20261014`; latest milestone commit `d451768f4` adds the World Intelligence section and loopback embed. Earlier source commits include `09d715bef` (local context fit), `08504c6a0` (local voice acknowledgment adapter), and `67addbf0b` (Windows evidence).
+**Current implementation branch:** `codex-gemma-mcp-fix-20261014`; latest commit `7bd27f6da` refreshes the MCP token store when another worker changes its file. Earlier milestones include `8e6e98a5c` (World Intelligence section and loopback embed), `f2cbe7e` in the GEV checkout (safe embed framing), `09d715bef` (local context fit), `08504c6a0` (local voice acknowledgment adapter), and `67addbf0b` (Windows evidence).
 
 This manifest records repository identity, local clone evidence, intended role, and delivery state. A local HEAD is an inventory snapshot, not a claim that it matches the current upstream tip. No broad model tournament or framework migration is authorized by this manifest.
 
@@ -27,7 +27,7 @@ Local clone inventory was read from `Documents/Codex/2026-10-14/external-repos`.
 
 | Repository | Local HEAD | License observed | Role and status |
 |---|---:|---|---|
-| [Robee99/PersonalJarvis](https://github.com/Robee99/PersonalJarvis) | `d451768f4` on `codex-gemma-mcp-fix-20261014` | Main project | Authoritative application. Source was writable for this implementation; the user's installed app remains untouched. Preserve all unrelated dirty files and user data. |
+| [Robee99/PersonalJarvis](https://github.com/Robee99/PersonalJarvis) | `7bd27f6da` on `codex-gemma-mcp-fix-20261014` | Main project | Authoritative application. Source was writable for this implementation; the user's installed app remains untouched. Preserve all unrelated dirty files and user data. |
 | [Dodaios/Dodaios](https://github.com/Dodaios/Dodaios) | `a9e449d` | Apache-2.0 | Upstream architecture/reference; never replace the user's fork with this checkout. **CLONED**. |
 | [topoteretes/cognee](https://github.com/topoteretes/cognee) | `f154b32` | Apache-2.0 | Memory engine. PersonalJarvis has isolated adapter/worker code. **CLONED: yes; ADAPTED: yes; TESTED: synthetic lifecycle passes; real Cognee 1.6.4 Windows lifecycle failed on three isolated roots, including once with Cognee's LanceDB subprocess proxy enabled. `cognify` cannot commit `TextSummary_text` versions because LanceDB's local file-copy operation fails; latest run failed after 84 s. DEPLOYED: no; LIVE WINDOWS: no.** Cognee 1.6.4 is installed in isolated `C:\models\jarvis-cognee-runtime-final`; no real conversation source is registered. Keep disabled until a supported Windows storage path passes the full persistence/update/delete acceptance. |
 | [microsoft/graphrag](https://github.com/microsoft/graphrag) | `5faaaf4` | MIT | Optional multi-document knowledge graph retrieval. **CLONED: yes; ADAPTED: yes; TESTED: unit tests (3 passed, 1 skipped) plus Windows local integration acceptance (1 passed): three synthetic source records indexed through local Qwen llama.cpp and CPU FastEmbed; GraphRAG produced entities, relationships, community reports, text units and SQLite vectors; semantic and global retrieval returned source provenance.** No paid APIs used. The feature remains disabled and is not deployed/live-verified. Windows worker emits a successful result then exits with `3221225480` during native Python shutdown; the adapter accepts only valid positive result JSON and logs this warning. The isolated SQLite vector store avoids LanceDB's Windows manifest access-denied failure. |
@@ -44,6 +44,14 @@ Local clone inventory was read from `Documents/Codex/2026-10-14/external-repos`.
 | [LeiQingliang/J.A.R.V.I.S.-Holographic-Interface](https://github.com/LeiQingliang/J.A.R.V.I.S.-Holographic-Interface) | Not in observed local clone inventory | Not verified | Holographic UI reference project. **CLONED/ADAPTED/TESTED/DEPLOYED/LIVE: no evidence.** Don’t replace the current Command Center or add a separate dashboard. |
 | [Divyansh900/PyCode-Agent](https://github.com/Divyansh900/PyCode-Agent) | `0569b68` | GPL-2.0 | Disambiguated PyCode candidate, not the intended PyGPT. **CLONED: yes; reject/defer** absent a specific need and license-compatible module. |
 | [spkc83/pycode-mcp-server](https://github.com/spkc83/pycode-mcp-server) | `4c26ac4` | MIT | Separate code-execution MCP, not PyGPT. **CLONED: yes; not enabled.** High local execution privilege makes it unsuitable as a default. |
+
+## Current Windows runtime evidence — 2026-10-17
+
+- **JARVIS backend:** `GET http://127.0.0.1:47821/api/health` returned `ok`, version `2.7.1`.
+- **Local model route:** the live `local-openai` catalog reported `qwen3-vl-8b` as the current model; `GET /v1/models` on `127.0.0.1:11440` exposed that model. JARVIS's real local provider test returned `ok` in `548.8 ms`. The separate Ollama catalog returned no installed models. This does not establish that Gemma or UI Vision 2 is reachable.
+- **MCP:** the live status endpoint reports 26 agent-surface tools and the token inventory contains one active restricted “Hermes local Gemma” token. Unit/contract coverage after commit `7bd27f6da` passed 55 tests. A live MCP request with a newly paired, restricted smoke token returned 401 on the pre-commit running backend; the smoke token was revoked. The committed cross-worker token refresh fix has not yet been loaded into the running application, and the actual Gemma → Hermes tool action is still unverified.
+- **Cognee:** real Windows indexing remains blocked by Cognee 1.6.4/LanceDB local version-file handling; keep the feature disabled.
+- **God's Eye View:** the source embed and CSP tests pass in isolated validation, but the installed JARVIS application and the running GEV server have not been rebuilt/restarted with the committed changes.
 
 ## Selected repositories and optional candidates
 
