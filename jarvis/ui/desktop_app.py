@@ -5674,6 +5674,22 @@ class DesktopApp:
         exc = getattr(self, "_backend_boot_error", None)
         return f"{type(exc).__name__}: {exc}" if exc is not None else ""
 
+    def _run_backend_guarded(self, *, prebound: tuple[Any, Any] | None = None) -> None:
+        """Preserve uncaught backend-thread failures for the startup UI.
+
+        ``_run_backend`` records a failure at the initial bind, but an import,
+        loop setup, or other early startup error can escape before that seam.
+        The thread hook logs the traceback; keeping the exception here lets the
+        window report the same real cause instead of the generic not-ready text.
+        Re-raise so the crash hook and process behavior remain unchanged.
+        """
+        try:
+            self._run_backend(prebound=prebound)
+        except BaseException as exc:  # noqa: BLE001 — preserve fatal thread errors
+            if self._backend_boot_error is None:
+                self._backend_boot_error = exc
+            raise
+
     # ---- Main entry point ------------------------------------------------------
 
     def run(self) -> int:
@@ -5685,7 +5701,7 @@ class DesktopApp:
         directly — both share the identical window code below.
         """
         self._backend_thread = threading.Thread(
-            target=self._run_backend,
+            target=self._run_backend_guarded,
             name="jarvis-backend",
             daemon=True,
         )

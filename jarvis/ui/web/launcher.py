@@ -2076,7 +2076,7 @@ def _desktop_backend_main(args, port: int, token: str, holder: dict, app_ready) 
         return
     app_ready.set()
     # Build + serve the real app on this loop, reusing the already-bound bootstrap.
-    app._run_backend(prebound=(loop, bootstrap))
+    app._run_backend_guarded(prebound=(loop, bootstrap))
 
 
 def _run_desktop_fast(args) -> int | None:
