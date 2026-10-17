@@ -30,7 +30,7 @@ import platform
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -310,6 +310,221 @@ def _close_dangling_tool_calls(messages: list[BrainMessage]) -> list[BrainMessag
     return out
 
 
+_CONTEXT_CHARS_PER_TOKEN: Final[int] = 3
+
+
+def _response_token_limit(context_window: int) -> int:
+    """Scale the reply allowance so small local windows remain usable."""
+    try:
+        window = int(context_window or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window <= 0:
+        return MAX_TOKENS
+    return min(MAX_TOKENS, max(256, int(window * 0.15)))
+
+
+def _context_tokens(message: BrainMessage) -> int:
+    content = message.content
+    if not isinstance(content, str):
+        try:
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            content = str(content)
+    return len(content) // _CONTEXT_CHARS_PER_TOKEN + 5
+
+
+def _history_units(messages: list[BrainMessage]) -> list[list[BrainMessage]]:
+    """Keep each assistant tool request with its matching tool results."""
+    units: list[list[BrainMessage]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        unit = [message]
+        calls: set[str] = set()
+        if message.role == "assistant" and isinstance(message.content, list):
+            calls = {
+                str(block.get("id"))
+                for block in message.content
+                if isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id")
+            }
+        index += 1
+        answered: set[str] = set()
+        while calls and index < len(messages):
+            result = messages[index]
+            call_id = str(result.tool_call_id or "")
+            if result.role != "tool" or call_id not in calls:
+                break
+            unit.append(result)
+            answered.add(call_id)
+            index += 1
+            if calls.issubset(answered):
+                break
+        units.append(unit)
+    return units
+
+
+def _excerpt(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    marker = "\n…[middle omitted to fit context]…\n"
+    usable = max(0, max_chars - len(marker))
+    head = usable * 2 // 3
+    tail = usable - head
+    return text[:head].rstrip() + marker + (text[-tail:].lstrip() if tail else "")
+
+
+def _fit_unit(unit: list[BrainMessage], budget: int) -> list[BrainMessage]:
+    """Fit one history unit without altering tool arguments or call IDs."""
+    if sum(_context_tokens(message) for message in unit) <= budget:
+        return unit
+    call_message = unit[0]
+    is_tool_round = (
+        call_message.role == "assistant"
+        and isinstance(call_message.content, list)
+        and any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in call_message.content
+        )
+    )
+    if not is_tool_round:
+        if len(unit) != 1 or budget < 8:
+            return []
+        message = unit[0]
+        content = message.content
+        if isinstance(content, str):
+            return [replace(message, content=_excerpt(content, max(1, (budget - 5) * 3)))]
+        # Never truncate tool arguments. Text blocks may be shortened, while
+        # image payloads are replaced with a compact marker for old context.
+        if message.role == "assistant" and isinstance(content, list):
+            blocks: list[dict[str, Any]] = []
+            remaining = max(8, budget - 5)
+            for block in content:
+                if not isinstance(block, dict):
+                    return []
+                if block.get("type") in {"text", "input_text"}:
+                    text = str(block.get("text") or "")
+                    text = _excerpt(text, max(1, remaining * 3))
+                    blocks.append({**block, "text": text})
+                    remaining -= len(text) // 3 + 1
+                elif block.get("type") in {"image", "image_url", "input_image"}:
+                    blocks.append({"type": "text", "text": "[Earlier image omitted]"})
+                    remaining -= 8
+                else:
+                    return []
+                if remaining <= 0:
+                    break
+            return [replace(message, content=blocks)]
+        return []
+
+    call_cost = _context_tokens(call_message)
+    if call_cost >= budget:
+        return []
+    remaining = budget - call_cost
+    fitted = [call_message]
+    results = unit[1:]
+    if not results:
+        return fitted
+    if remaining < 8 * len(results):
+        return []
+    for result_index, result in enumerate(results):
+        content = result.content
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        left = len(results) - result_index
+        result_budget = max(8, remaining // left)
+        clipped = _excerpt(content, max(1, (result_budget - 5) * 3))
+        fitted_result = replace(result, content=clipped)
+        cost = _context_tokens(fitted_result)
+        if cost > remaining:
+            return []
+        fitted.append(fitted_result)
+        remaining -= cost
+    return fitted
+
+
+def fit_messages_to_context(
+    messages: list[BrainMessage],
+    *,
+    context_window: int,
+    system: str | None = None,
+    tools: tuple[dict[str, Any], ...] = (),
+) -> tuple[BrainMessage, ...]:
+    """Bound an agent-chat request to a model's context without changing storage.
+
+    This applies the token-budgeted rolling-context pattern used by PyGPT to
+    this separate API agent-chat runner. It reserves output room and estimates
+    fixed prompt/tool costs conservatively. The newest user message is always
+    represented; older exchanges and oversized tool results are compacted in
+    the request copy only. Tool argument payloads and call/result IDs stay
+    intact, and an unbounded provider retains the prior behavior.
+    """
+    try:
+        window = int(context_window or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window <= 0 or not messages:
+        return tuple(messages)
+
+    fixed = len(system or "") // _CONTEXT_CHARS_PER_TOKEN + 8
+    if tools:
+        try:
+            tool_wire = json.dumps(tools, ensure_ascii=False, default=str)
+            fixed += len(tool_wire) // _CONTEXT_CHARS_PER_TOKEN
+        except (TypeError, ValueError):
+            fixed += 512
+    output_reserve = min(
+        max(512, int(window * 0.15)),
+        max(128, int(window * 0.35)),
+    )
+    budget = max(1, window - output_reserve - fixed)
+    units = _history_units(messages)
+    if sum(_context_tokens(message) for message in messages) <= budget:
+        return tuple(messages)
+
+    last_user = max(
+        (i for i, unit in enumerate(units) if unit[0].role == "user"),
+        default=-1,
+    )
+    chosen: dict[int, list[BrainMessage]] = {}
+    remaining = budget
+
+    # Preserve the newest user prompt, then the latest tool/assistant rounds.
+    # Older exchanges are considered only after the active turn fits.
+    order = list(range(len(units) - 1, last_user, -1))
+    if last_user >= 0:
+        order.append(last_user)
+    order.extend(range(last_user - 1, -1, -1))
+    for index in order:
+        # Earlier turns are either kept in full or omitted; clipping an old
+        # answer could make it look complete when the useful middle was lost.
+        if index < last_user and sum(_context_tokens(m) for m in units[index]) > remaining:
+            continue
+        fitted = _fit_unit(units[index], remaining)
+        cost = sum(_context_tokens(message) for message in fitted)
+        if not fitted or cost > remaining:
+            continue
+        chosen[index] = fitted
+        remaining -= cost
+
+    result = tuple(message for index in sorted(chosen) for message in chosen[index])
+    if not result:
+        latest_user = next((m for m in reversed(messages) if m.role == "user"), None)
+        if latest_user is None:
+            return ()
+        return tuple(_fit_unit([latest_user], max(8, budget)) or [latest_user])
+    if len(result) < len(messages):
+        log.info(
+            "Agent chat context compacted: %d -> %d messages, "
+            "about %d -> %d tokens; saved history unchanged",
+            len(messages), len(result), sum(_context_tokens(m) for m in messages),
+            sum(_context_tokens(m) for m in result),
+        )
+    return result
+
+
 def _cap(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -375,12 +590,18 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                 if handle.cancel.is_set():
                     status = "cancelled"
                     break
+                context_window = getattr(brain, "context_window", 0)
                 req = BrainRequest(
-                    messages=tuple(messages),
+                    messages=fit_messages_to_context(
+                        messages,
+                        context_window=context_window,
+                        system=system,
+                        tools=tools,
+                    ),
                     tools=tools,
                     system=system,
                     temperature=0.2,
-                    max_tokens=MAX_TOKENS,
+                    max_tokens=_response_token_limit(context_window),
                     stream=True,
                     reasoning_effort=effort or None,  # type: ignore[arg-type]
                 )
