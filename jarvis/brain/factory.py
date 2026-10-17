@@ -1892,7 +1892,9 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
             sorted(REGISTRY.keys()),
         )
         return None
-    provider_cfg = getattr(ack_cfg.providers, provider_name)
+    # Provider ids can contain hyphens while Pydantic config fields use
+    # underscores (for example ``local-openai`` -> ``local_openai``).
+    provider_cfg = getattr(ack_cfg.providers, provider_name.replace("-", "_"))
     return provider_cls(provider_cfg)
 
 
