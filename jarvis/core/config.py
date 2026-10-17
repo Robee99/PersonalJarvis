@@ -858,6 +858,11 @@ class BrainProviderConfig(BaseModel):
 
     model: str | None = None
     deep_model: str | None = None  # Optional: stronger reasoning model
+    # Context-size hint for self-hosted OpenAI-compatible servers. For
+    # local-openai this is the server's actual n_ctx / loaded-model limit; it
+    # lets the prompt and tool fitter stay inside llama.cpp's context window.
+    # None uses the provider's conservative default.
+    context_window: int | None = Field(default=None, ge=1024, le=1_048_576)
     # Canonical model for tool-bearing turns. ``cu_model`` remains a
     # compatibility alias for installations predating the Tool Model rename.
     tool_model: str | None = Field(
