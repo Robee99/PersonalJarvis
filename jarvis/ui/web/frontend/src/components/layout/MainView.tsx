@@ -137,6 +137,11 @@ const MarketplaceView = lazyView(["marketplace"], () =>
     default: m.MarketplaceView,
   })),
 );
+const WorldIntelligenceView = lazyView(["world-intelligence"], () =>
+  import("@/views/WorldIntelligenceView").then((m) => ({
+    default: m.WorldIntelligenceView,
+  })),
+);
 
 /** Quiet time before a loading section admits it is loading. */
 export const LOADING_HINT_MS = 400;
@@ -408,6 +413,8 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     // place, installable without leaving the app.
     case "marketplace":
       return <MarketplaceView />;
+    case "world-intelligence":
+      return <WorldIntelligenceView />;
     // Deliberately nothing: the coding workspace is rendered by the STICKY
     // branch in `MainView` above, which keeps it mounted across section
     // changes. This switch is not rendered at all while one of those ids is

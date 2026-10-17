@@ -9,7 +9,7 @@
  * A second hand-written list anywhere would be the classic drift trap (AP-4):
  * a section added here would silently never appear on the deck.
  */
-import { Gauge, KeyRound, Orbit, Swords, type LucideIcon } from "lucide-react";
+import { Gauge, Globe2, KeyRound, Orbit, Swords, type LucideIcon } from "lucide-react";
 import { OllamaIcon } from "@/components/icons/OllamaIcon";
 import {
   AgentsIcon,
@@ -161,6 +161,12 @@ export const NAV_GROUPS: NavItem[][] = [
     },
     { id: "board", labelKey: "nav.board", icon: BoardIcon },
     { id: "memory", labelKey: "nav.wiki", icon: WikiIcon },
+    {
+      id: "world-intelligence",
+      labelKey: "nav.world_intelligence",
+      icon: Globe2,
+      fallbackLabel: "World Intelligence",
+    },
     { id: "docs", labelKey: "nav.docs", icon: DocsIcon },
   ],
   // 2) Tools — the instruments: transcription, the run inspector, the CLIs
