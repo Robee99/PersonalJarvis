@@ -156,6 +156,31 @@ export function McpsView() {
   const toggle = useMutation({
     mutationFn: async ({ name, enable }: { name: string; enable: boolean }) => {
       setCheckingName(name);
+      // Each pair controls the same surface. Turn the current provider off
+      // before starting its alternative so the model never gets duplicate
+      // browser or desktop controls at the same time.
+      const exclusivePeer =
+        name === "playwright"
+          ? "agent-browser"
+          : name === "agent-browser"
+            ? "playwright"
+            : name === "windows-desktop"
+              ? "desktop-commander"
+              : name === "desktop-commander"
+                ? "windows-desktop"
+                : null;
+      if (
+        enable &&
+        exclusivePeer &&
+        data?.servers.some((server) => server.name === exclusivePeer && server.enabled)
+      ) {
+        const disabled = await postJson<{ ok: boolean; error?: string }>(
+          `/api/mcps/${exclusivePeer}/disable`,
+        );
+        if (!disabled.ok) {
+          throw new Error(disabled.error ?? `Could not disable ${exclusivePeer}`);
+        }
+      }
       const action = enable ? "enable" : "disable";
       return postJson<{ ok: boolean; error?: string; enabled: boolean }>(
         `/api/mcps/${name}/${action}`,
