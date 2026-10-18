@@ -205,3 +205,17 @@ def test_ui_venus_launch_uses_the_grounding_profile(
     assert "--no-mmap" not in args
     assert args[args.index("-lm") + 1] == "none"
     assert "--offline" in args
+
+
+def test_context_meter_reads_the_final_stream_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    swap = _load(monkeypatch)
+    tail = (
+        b'data: {"choices":[{"delta":{}}],"usage":{"completion_tokens":12,"prompt_tokens":4100,'
+        b'"total_tokens":4112},"timings":{"cache_n":4000,"prompt_n":100,"prompt_ms":90.1,'
+        b'"predicted_n":12,"predicted_ms":400.0}}\n\ndata: [DONE]\n\n'
+    )
+    assert swap.context_used(tail) == 4112
+    # Without timings the OpenAI usage block answers.
+    assert swap.context_used(b'"usage":{"prompt_tokens":900,"completion_tokens":30}') == 930
+    assert swap.context_used(b"data: [DONE]") is None
+    assert swap.CTX[swap.QWEN_VL] == 65536

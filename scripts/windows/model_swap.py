@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -70,6 +71,19 @@ MODEL_ID = {
     QWEN_VL: "qwen3-vl-8b",
     UI_VENUS: "ui-venus-2-9b",
 }
+#: The context window each profile is started with (its -c / --ctx-size).
+CTX = {GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384}
+#: Where a finished completion reports its size: llama-server's timings
+#: (cache_n + prompt_n + predicted_n), or the OpenAI usage block.
+_TIMINGS_RE = re.compile(
+    rb'"cache_n"\s*:\s*(\d+).{0,400}?"prompt_n"\s*:\s*(\d+).{0,400}?"predicted_n"\s*:\s*(\d+)',
+    re.S,
+)
+_USAGE_RE = re.compile(
+    rb'"completion_tokens"\s*:\s*(\d+)\s*,\s*"prompt_tokens"\s*:\s*(\d+)'
+    rb'|"prompt_tokens"\s*:\s*(\d+)\s*,\s*"completion_tokens"\s*:\s*(\d+)'
+)
+
 #: The brain Hermes and JARVIS talk to; every other profile hands the GPU back
 #: to it when idle.
 MAIN = QWEN_VL
@@ -170,6 +184,8 @@ class Swapper:
         self.qwen_vl_proc: subprocess.Popen | None = None
         self.ui_venus_proc: subprocess.Popen | None = None
         self.session: aiohttp.ClientSession | None = None
+        #: The newest agent turn's context fill, for the HUD's context meter.
+        self.context: dict[str, object] | None = None
 
     async def healthy(self, name: str) -> bool:
         assert self.session is not None
@@ -578,6 +594,23 @@ def _log_shape(name: str, body: bytes) -> None:
         log.info("%s request: %d bytes (not JSON)", name, len(body))
 
 
+def context_used(tail: bytes) -> int | None:
+    """Tokens a finished completion held in context, read from its last bytes.
+
+    The last timings block wins: a stream repeats none, but a tail can hold
+    the end of an earlier chunk.
+    """
+    timings = _TIMINGS_RE.findall(tail)
+    if timings:
+        cache_n, prompt_n, predicted_n = timings[-1]
+        return int(cache_n) + int(prompt_n) + int(predicted_n)
+    usage = _USAGE_RE.findall(tail)
+    if usage:
+        out_a, in_a, in_b, out_b = usage[-1]
+        return int(in_a or in_b) + int(out_a or out_b)
+    return None
+
+
 def handler_for(name: str):
     async def handle(request: web.Request) -> web.StreamResponse:
         path = request.match_info.get("tail", "")
@@ -592,7 +625,13 @@ def handler_for(name: str):
         if request.method == "GET" and path == "health":
             return web.json_response({"status": "ok", "loaded": swapper.active == name})
         if request.method == "GET" and path == "swap/status":
-            return web.json_response({"active": swapper.active, "inflight": swapper.inflight})
+            return web.json_response(
+                {
+                    "active": swapper.active,
+                    "inflight": swapper.inflight,
+                    "context": swapper.context,
+                }
+            )
         try:
             await swapper.ensure(name)
         except MemoryError as exc:
@@ -637,9 +676,23 @@ def handler_for(name: str):
                     ):
                         response.headers[key] = value
                 await response.prepare(request)
+                tail = b""
                 async for chunk in upstream.content.iter_any():
                     await response.write(chunk)
+                    tail = (tail + chunk)[-8192:]
                 await response.write_eof()
+                # Only agent turns move the meter: they send tools. A title or
+                # compression call without tools would read as an empty context.
+                if path.endswith("chat/completions") and b'"tools"' in body:
+                    used = context_used(tail)
+                    if used is not None:
+                        swapper.context = {
+                            "profile": name,
+                            "model": MODEL_ID[name],
+                            "used": used,
+                            "window": CTX[name],
+                            "at": time.time(),
+                        }
                 return response
         finally:
             swapper.inflight[name] -= 1
