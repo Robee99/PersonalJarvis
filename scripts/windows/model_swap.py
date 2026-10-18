@@ -1,13 +1,16 @@
 """One local model in VRAM at a time, swapped on demand.
 
-Gemma answers every turn. Qwen 35B-A3B and Qwen3-VL 8B are on-demand profiles:
-the active model is unloaded before another profile is loaded. Qwen 35B-A3B
-uses its guarded launcher; Qwen3-VL uses the optimized local GGUF profile.
+Qwen3-VL 8B is the main brain and stays warm. Gemma, Qwen 35B-A3B and
+UI-Venus 2 (screen grounding) are on-demand profiles: the active model is
+unloaded before another profile is loaded, and an on-demand profile hands the
+GPU back to Qwen3-VL after QWEN_IDLE_S without requests. Qwen 35B-A3B uses its
+guarded launcher; the others run llama-server directly.
 
 Front ports keep the addresses Hermes already uses:
   127.0.0.1:11438 -> Gemma (backend 11448)
   127.0.0.1:11437 -> Qwen  (backend 11447)
   127.0.0.1:11440 -> Qwen3-VL 8B (backend 11449)
+  127.0.0.1:11441 -> UI-Venus 2 9B (backend 11451)
 
 Before unloading Gemma for Qwen, the same RAM check Qwen-Server.ps1 makes is
 done up front (available RAM plus what Gemma frees must reach the guard), so
@@ -38,6 +41,7 @@ WORK = Path(
     r"C:\Users\rober\Documents\Codex\2026-10-04\referenced-chatgpt-conversation-this-is-an\work"
 )
 RUNTIME = WORK / r"runtimes\cuda-b11388\llama-server.exe"
+QWEN_VL_RUNTIME = WORK / r"runtimes\turboquant-v0.4.0\llama-server.exe"
 SNAP = Path(
     r"C:\Users\rober\.cache\huggingface\hub\models--unsloth--gemma-4-12B-it-qat-GGUF"
     r"\snapshots\980b060c40a8539ac159e0501a3e0f66a6365af3"
@@ -51,13 +55,24 @@ QWEN_VL_SNAP = Path(
 #: Qwen-Server.ps1's protected profile: WorkingSetLimitMiB 8704 plus 1024 headroom.
 QWEN_RAM_NEEDED_MIB = 8704 + 1024
 QWEN_VL_RAM_NEEDED_MIB = 6144
+UI_VENUS_DIR = Path(r"C:\Users\rober\Downloads\UI-Venus-2-9B")
+#: UI-Venus runs fully on the GPU without mmap; RAM holds the runtime only.
+UI_VENUS_RAM_NEEDED_MIB = 3072
 QWEN_IDLE_S = 180.0
 LOAD_TIMEOUT_S = 420.0
 
-GEMMA, QWEN, QWEN_VL = "gemma", "qwen", "qwen3-vl"
-FRONT = {GEMMA: 11438, QWEN: 11437, QWEN_VL: 11440}
-BACK = {GEMMA: 11448, QWEN: 11447, QWEN_VL: 11449}
-MODEL_ID = {GEMMA: "gemma-4-12b-qat", QWEN: "qwen", QWEN_VL: "qwen3-vl-8b"}
+GEMMA, QWEN, QWEN_VL, UI_VENUS = "gemma", "qwen", "qwen3-vl", "ui-venus"
+FRONT = {GEMMA: 11438, QWEN: 11437, QWEN_VL: 11440, UI_VENUS: 11441}
+BACK = {GEMMA: 11448, QWEN: 11447, QWEN_VL: 11449, UI_VENUS: 11451}
+MODEL_ID = {
+    GEMMA: "gemma-4-12b-qat",
+    QWEN: "qwen",
+    QWEN_VL: "qwen3-vl-8b",
+    UI_VENUS: "ui-venus-2-9b",
+}
+#: The brain Hermes and JARVIS talk to; every other profile hands the GPU back
+#: to it when idle.
+MAIN = QWEN_VL
 
 logging.basicConfig(
     filename=r"C:\models\model-swap.log",
@@ -153,6 +168,7 @@ class Swapper:
         self.last_used = {name: 0.0 for name in FRONT}
         self.gemma_proc: subprocess.Popen | None = None
         self.qwen_vl_proc: subprocess.Popen | None = None
+        self.ui_venus_proc: subprocess.Popen | None = None
         self.session: aiohttp.ClientSession | None = None
 
     async def healthy(self, name: str) -> bool:
@@ -249,12 +265,12 @@ class Swapper:
     def start_qwen_vl(self) -> None:
         model = QWEN_VL_SNAP / "Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf"
         mmproj = QWEN_VL_SNAP / "mmproj-F16.gguf"
-        missing = [str(path) for path in (RUNTIME, model, mmproj) if not path.is_file()]
+        missing = [str(path) for path in (QWEN_VL_RUNTIME, model, mmproj) if not path.is_file()]
         if missing:
             raise FileNotFoundError("Qwen3-VL startup files are missing: " + ", ".join(missing))
         stamp = time.strftime("%Y%m%d-%H%M%S")
         args = [
-            str(RUNTIME),
+            str(QWEN_VL_RUNTIME),
             "-m",
             str(model),
             "--mmproj",
@@ -266,19 +282,24 @@ class Swapper:
             "--port",
             str(BACK[QWEN_VL]),
             "-c",
-            "8192",
+            "65536",
             "-np",
             "1",
             "-fa",
             "on",
-            "--fit",
-            "on",
-            "--fit-target",
-            "2048",
+            # All layers + 64k turbo3 KV on the GPU; --fit put layers on the
+            # CPU (36 tok/s prompt). mmproj on CPU keeps the KV in 8 GB VRAM.
+            "-ngl",
+            "99",
+            "--no-mmproj-offload",
+            # All layers live in VRAM; without mmap the 4.4 GB file is not
+            # kept in RAM after the upload.
+            "--no-mmap",
+            # turbo3 K returned empty output past ~10k tokens; turbo4 K holds at 40k.
             "-ctk",
-            "q4_0",
+            "turbo4",
             "-ctv",
-            "q4_0",
+            "turbo3",
             "--image-min-tokens",
             "1024",
             "-t",
@@ -286,9 +307,9 @@ class Swapper:
             "-tb",
             "8",
             "-b",
-            "256",
+            "1024",
             "-ub",
-            "64",
+            "512",
             "--cache-ram",
             "1024",
             "--jinja",
@@ -320,6 +341,72 @@ class Swapper:
         )
         self.qwen_vl_proc = None
 
+    def start_ui_venus(self) -> None:
+        model = UI_VENUS_DIR / "UI-Venus-2-9B-Q4_K_L.gguf"
+        mmproj = UI_VENUS_DIR / "mmproj-UI-Venus-2-9B-f16.gguf"
+        missing = [str(path) for path in (RUNTIME, model, mmproj) if not path.is_file()]
+        if missing:
+            raise FileNotFoundError("UI-Venus startup files are missing: " + ", ".join(missing))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        args = [
+            str(RUNTIME),
+            "-m",
+            str(model),
+            "--mmproj",
+            str(mmproj),
+            "--alias",
+            MODEL_ID[UI_VENUS],
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(BACK[UI_VENUS]),
+            # Screen grounding: one screenshot plus a short instruction.
+            "-c",
+            "16384",
+            "-np",
+            "1",
+            "-fa",
+            "on",
+            "-ngl",
+            "99",
+            # cuda-b11388 has no --no-mmap; -lm none is its equivalent.
+            "-lm",
+            "none",
+            "-ctk",
+            "q8_0",
+            "-ctv",
+            "q8_0",
+            "-t",
+            "8",
+            "--jinja",
+            "--no-ui",
+            "--offline",
+            "--log-file",
+            rf"C:\models\ui-venus-server-{stamp}.log",
+        ]
+        self.ui_venus_proc = subprocess.Popen(  # noqa: S603
+            args,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def stop_ui_venus(self) -> None:
+        if self.ui_venus_proc and self.ui_venus_proc.poll() is None:
+            self.ui_venus_proc.terminate()
+            try:
+                self.ui_venus_proc.wait(20)
+            except subprocess.TimeoutExpired:
+                self.ui_venus_proc.kill()
+        _ps(
+            "$port=" + str(BACK[UI_VENUS]) + ";"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
+            "Where-Object { $_.CommandLine -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)') } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            timeout=20,
+        )
+        self.ui_venus_proc = None
+
     def stop_profile(self, name: str) -> None:
         if name == GEMMA:
             self.stop_gemma()
@@ -327,6 +414,8 @@ class Swapper:
             self.stop_qwen()
         elif name == QWEN_VL:
             self.stop_qwen_vl()
+        elif name == UI_VENUS:
+            self.stop_ui_venus()
 
     def start_profile(self, name: str) -> None:
         if name == GEMMA:
@@ -335,6 +424,8 @@ class Swapper:
             self.start_qwen()
         elif name == QWEN_VL:
             self.start_qwen_vl()
+        elif name == UI_VENUS:
+            self.start_ui_venus()
 
     async def ensure(self, name: str) -> None:
         async with self.lock:
@@ -357,6 +448,15 @@ class Swapper:
                 if projected < QWEN_VL_RAM_NEEDED_MIB:
                     raise MemoryError(
                         f"Qwen3-VL needs {QWEN_VL_RAM_NEEDED_MIB} MiB free RAM; "
+                        f"only about {projected} MiB would be free. "
+                        "The active model keeps the turn."
+                    )
+            elif name == UI_VENUS:
+                freed = _working_set_mib(BACK[self.active]) if self.active in BACK else 0
+                projected = available_mib() + freed
+                if projected < UI_VENUS_RAM_NEEDED_MIB:
+                    raise MemoryError(
+                        f"UI-Venus needs {UI_VENUS_RAM_NEEDED_MIB} MiB free RAM; "
                         f"only about {projected} MiB would be free. "
                         "The active model keeps the turn."
                     )
@@ -394,15 +494,21 @@ class Swapper:
                     log.warning("closed a duplicate model server: %s", closed.replace("\n", "; "))
             active = self.active
             if (
-                active in (QWEN, QWEN_VL)
+                # Qwen3-VL is the main brain and stays loaded: once unloaded,
+                # the RAM guard refused every reload while JARVIS and Chrome ran.
+                # Every other profile hands the GPU back to it after idling.
+                active is not None
+                and active != MAIN
                 and self.inflight[active] == 0
                 and time.monotonic() - self.last_used[active] > QWEN_IDLE_S
             ):
                 try:
                     async with self.lock:
-                        log.info("%s idle — unloading, staying cold", active)
+                        log.info("%s idle - unloading", active)
                         await asyncio.to_thread(self.stop_profile, active)
                         self.active = None
+                    await self.ensure(MAIN)
+                    log.info("%s warm again after %s idled", MAIN, active)
                 except Exception:  # noqa: BLE001
                     log.exception("could not unload Qwen after idle")
 
@@ -564,10 +670,11 @@ async def main() -> None:
                 await asyncio.sleep(1.0)
         runners.append(runner)
     log.info(
-        "model-swap listening: gemma %s, qwen %s, qwen3-vl %s",
+        "model-swap listening: gemma %s, qwen %s, qwen3-vl %s, ui-venus %s",
         FRONT[GEMMA],
         FRONT[QWEN],
         FRONT[QWEN_VL],
+        FRONT[UI_VENUS],
     )
     # Cold start: neither model is loaded until first request.
     await swapper.idle_loop()

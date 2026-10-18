@@ -141,3 +141,15 @@ def test_connect_reuses_the_provider_hermes_already_has() -> None:
 def test_connect_without_hermes_on_path_says_so() -> None:
     with pytest.raises(RuntimeError, match="hermes command"):
         local_servers.connect(_server(), hermes_config={}, hermes_argv=None, run=lambda _a: (0, ""))
+
+
+def test_hermes_providers_written_with_an_api_key_are_found() -> None:
+    # Hermes's v12 provider blocks name the address ``api:``; local-qwen-vl on
+    # 11440 used to be missing from the picker because only base_url was read.
+    config = {
+        "providers": {
+            "local-qwen-vl": {"api": "http://127.0.0.1:11440/v1", "default_model": "qwen3-vl-8b"},
+        }
+    }
+    found = local_servers.hermes_local_providers(config)
+    assert found == {"http://127.0.0.1:11440": ("local-qwen-vl", "qwen3-vl-8b")}

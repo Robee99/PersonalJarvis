@@ -35,10 +35,13 @@ import httpx
 log = logging.getLogger(__name__)
 
 #: Ports a local model server usually listens on, with what usually runs there.
-#: 11437/11438 are the owner's Qwen and Gemma ``llama-server`` launchers.
+#: 11437/11438/11440/11441 are the owner's Qwen, Gemma, Qwen3-VL and UI-Venus
+#: fronts on scripts/windows/model_swap.py.
 KNOWN_PORTS: tuple[tuple[int, str], ...] = (
     (11437, "llama.cpp"),
     (11438, "llama.cpp"),
+    (11440, "llama.cpp"),
+    (11441, "llama.cpp"),
     (11435, "llama.cpp"),
     (8080, "llama.cpp"),
     (1234, "LM Studio"),
@@ -162,7 +165,8 @@ def hermes_local_providers(config: dict[str, Any]) -> dict[str, tuple[str, str]]
         if not name or entry.get("enabled") is False:
             continue
         try:
-            root = server_root(str(entry.get("base_url") or entry.get("url") or ""))
+            address = entry.get("base_url") or entry.get("url") or entry.get("api") or ""
+            root = server_root(str(address))
         except NotLocal:  # a cloud provider in Hermes's config: not a local server, skipped
             continue
         model = str(entry.get("model") or entry.get("default_model") or "")

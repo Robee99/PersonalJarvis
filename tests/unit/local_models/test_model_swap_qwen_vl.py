@@ -83,6 +83,7 @@ def test_qwen_vl_transition_stops_other_profiles_before_starting_target(
     assert events == [
         ("stop", swap.GEMMA),
         ("stop", swap.QWEN),
+        ("stop", swap.UI_VENUS),
         ("start", swap.QWEN_VL),
     ]
     assert instance.active == swap.QWEN_VL
@@ -121,7 +122,7 @@ def test_qwen_vl_launch_is_validated_and_uses_optimized_loopback_profile(
     mmproj = tmp_path / "mmproj.gguf"
     for file in (runtime, model, mmproj):
         file.touch()
-    monkeypatch.setattr(swap, "RUNTIME", runtime)
+    monkeypatch.setattr(swap, "QWEN_VL_RUNTIME", runtime)
     monkeypatch.setattr(swap, "QWEN_VL_SNAP", tmp_path)
     model.rename(tmp_path / "Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gguf")
     mmproj.rename(tmp_path / "mmproj-F16.gguf")
@@ -136,6 +137,8 @@ def test_qwen_vl_launch_is_validated_and_uses_optimized_loopback_profile(
         captured["kwargs"] = kwargs
         return FakeProcess()
 
+    # CREATE_NO_WINDOW only exists on Windows; the flag value is what matters.
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     instance = swap.Swapper()
     instance.start_qwen_vl()
@@ -143,9 +146,11 @@ def test_qwen_vl_launch_is_validated_and_uses_optimized_loopback_profile(
 
     assert args[args.index("--host") + 1] == "127.0.0.1"
     assert args[args.index("--port") + 1] == "11449"
-    assert args[args.index("-c") + 1] == "8192"
-    assert args[args.index("--fit-target") + 1] == "2048"
-    assert args[args.index("-ctk") + 1] == "q4_0"
+    assert args[args.index("-c") + 1] == "65536"
+    assert args[args.index("-ngl") + 1] == "99"
+    # turbo3 K returned empty output past ~10k tokens; turbo4 K is the tested one.
+    assert args[args.index("-ctk") + 1] == "turbo4"
+    assert "--no-mmproj-offload" in args and "--no-mmap" in args
     assert "--mmproj" in args and "--offline" in args and "--jinja" in args
     assert captured["kwargs"]["creationflags"] == subprocess.CREATE_NO_WINDOW
 
@@ -155,7 +160,7 @@ def test_qwen_vl_missing_model_files_fails_before_launch(
     tmp_path: Path,
 ) -> None:
     swap = _load(monkeypatch)
-    monkeypatch.setattr(swap, "RUNTIME", tmp_path / "missing-runtime.exe")
+    monkeypatch.setattr(swap, "QWEN_VL_RUNTIME", tmp_path / "missing-runtime.exe")
     monkeypatch.setattr(swap, "QWEN_VL_SNAP", tmp_path / "missing-snapshot")
     monkeypatch.setattr(
         subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not launch")
@@ -163,3 +168,40 @@ def test_qwen_vl_missing_model_files_fails_before_launch(
 
     with pytest.raises(FileNotFoundError, match="startup files are missing"):
         swap.Swapper().start_qwen_vl()
+
+
+def test_ui_venus_launch_uses_the_grounding_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    swap = _load(monkeypatch)
+    runtime = tmp_path / "llama-server.exe"
+    runtime.touch()
+    (tmp_path / "UI-Venus-2-9B-Q4_K_L.gguf").touch()
+    (tmp_path / "mmproj-UI-Venus-2-9B-f16.gguf").touch()
+    monkeypatch.setattr(swap, "RUNTIME", runtime)
+    monkeypatch.setattr(swap, "UI_VENUS_DIR", tmp_path)
+    captured: dict[str, Any] = {}
+
+    class FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        captured["args"] = args
+        return FakeProcess()
+
+    # CREATE_NO_WINDOW only exists on Windows; the flag value is what matters.
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    swap.Swapper().start_ui_venus()
+    args = captured["args"]
+
+    assert swap.FRONT[swap.UI_VENUS] == 11441
+    assert args[args.index("--port") + 1] == "11451"
+    assert args[args.index("--alias") + 1] == "ui-venus-2-9b"
+    assert args[args.index("--host") + 1] == "127.0.0.1"
+    # cuda-b11388 rejects --no-mmap; -lm none is its spelling.
+    assert "--no-mmap" not in args
+    assert args[args.index("-lm") + 1] == "none"
+    assert "--offline" in args
