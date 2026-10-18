@@ -8198,6 +8198,17 @@
       "thinking": "思考中…",
       "speaking": "正在说话",
       "idle": "待命中"
+    },
+    "world": {
+      "title": "全球情报",
+      "news": "新闻播报",
+      "live": "直播",
+      "news_loading": "正在接收全球新闻源…",
+      "news_error": "没有新闻源响应。地球仪仍可使用。",
+      "feeds": "新闻源",
+      "feed_up": "在线",
+      "feed_down": "无响应",
+      "breaking": "直播"
     }
   }
 }

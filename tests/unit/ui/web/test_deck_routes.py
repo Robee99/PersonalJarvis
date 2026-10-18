@@ -162,3 +162,47 @@ def test_context_meter_without_a_swapper_says_so(
         httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(refuse), **kw)
     )
     assert client.get("/api/deck/context").json() == {"available": False}
+
+
+RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>World</title>
+<item><title>Older story</title><link>https://example.org/a</link>
+<pubDate>Sat, 18 Oct 2026 08:00:00 GMT</pubDate></item>
+<item><title>Newer story</title><link>https://example.org/b</link>
+<pubDate>Sat, 18 Oct 2026 10:00:00 GMT</pubDate></item>
+<item><title>No link</title></item>
+<item><title>Script link</title><link>javascript:alert(1)</link></item>
+</channel></rss>"""
+
+
+def test_rss_items_are_parsed_and_unsafe_links_dropped():
+    items = deck_routes.parse_rss("Test", RSS)
+    assert [i["title"] for i in items] == ["Older story", "Newer story"]
+    assert items[0]["source"] == "Test"
+    assert items[1]["published"] > items[0]["published"]
+
+
+def test_a_feed_with_entities_is_refused():
+    evil = b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x "boom">]><rss><channel><item><title>&x;</title><link>https://e.org</link></item></channel></rss>'
+    assert deck_routes.parse_rss("Evil", evil) == []
+
+
+def test_news_merges_feeds_newest_first_and_names_the_failed_ones(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    import httpx
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if "bbci" in str(request.url):
+            return httpx.Response(200, content=RSS)
+        return httpx.Response(503)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(answer), **kw)
+    )
+    monkeypatch.setattr(deck_routes, "_news_cache", {"at": 0.0, "body": None})
+    body = client.get("/api/deck/news").json()
+    assert [i["title"] for i in body["items"]] == ["Newer story", "Older story"]
+    assert body["failed"] == ["Al Jazeera", "NPR World"]
+    assert body["sources"] == ["BBC World", "Al Jazeera", "NPR World"]

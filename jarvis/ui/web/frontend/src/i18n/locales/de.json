@@ -8104,6 +8104,17 @@
       "thinking": "Denke nach…",
       "speaking": "Spreche",
       "idle": "In Bereitschaft"
+    },
+    "world": {
+      "title": "Weltlage",
+      "news": "Nachrichten",
+      "live": "Live",
+      "news_loading": "Weltweite Feeds werden empfangen…",
+      "news_error": "Kein Nachrichten-Feed hat geantwortet. Der Globus funktioniert weiter.",
+      "feeds": "Feeds",
+      "feed_up": "Auf Sendung",
+      "feed_down": "Keine Antwort",
+      "breaking": "Live"
     }
   }
 }

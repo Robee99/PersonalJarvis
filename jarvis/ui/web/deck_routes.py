@@ -10,6 +10,8 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
                                       the Windows power mode where it exists.
     GET  /api/deck/context          → how full the local model's context was
                                       on the newest agent turn (model_swap.py).
+    GET  /api/deck/news             → world headlines from free public RSS
+                                      feeds, for the World screen's broadcast.
 
 Two producers, two shapes, one reason: the deck shows the user what Jarvis
 just looked at.
@@ -33,6 +35,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -170,6 +175,86 @@ async def context() -> dict[str, Any]:
         "at": ctx.get("at"),
         "compress_at": _compress_at(window),
     }
+
+
+#: Free, keyless world-news feeds (the owner's rule: free sources only).
+NEWS_FEEDS: tuple[tuple[str, str], ...] = (
+    ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+    ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
+    ("NPR World", "https://feeds.npr.org/1004/rss.xml"),
+)
+NEWS_TTL_S = 600.0
+_NEWS_MAX_BYTES = 2_000_000
+_news_cache: dict[str, Any] = {"at": 0.0, "body": None}
+
+
+def parse_rss(source: str, raw: bytes, limit: int = 15) -> list[dict[str, Any]]:
+    """The newest items of one RSS feed as ``{title, link, source, published}``.
+
+    A feed that declares a DOCTYPE or entities is refused outright: the
+    standard parser would expand them, and no news feed needs them.
+    """
+    head = raw[:4096].upper()
+    if b"<!DOCTYPE" in head or b"<!ENTITY" in raw.upper():
+        return []
+    try:
+        root = ET.fromstring(raw)  # noqa: S314 - DOCTYPE/ENTITY refused above
+    except ET.ParseError:
+        return []
+    items: list[dict[str, Any]] = []
+    for node in root.iter("item"):
+        title = (node.findtext("title") or "").strip()
+        link = (node.findtext("link") or "").strip()
+        if not title or not link.startswith(("https://", "http://")):
+            continue
+        published: float | None = None
+        stamp = node.findtext("pubDate")
+        if stamp:
+            try:
+                published = parsedate_to_datetime(stamp).timestamp()
+            except (TypeError, ValueError):
+                published = None
+        items.append({"title": title, "link": link, "source": source, "published": published})
+        if len(items) >= limit:
+            break
+    return items
+
+
+@router.get("/news", summary="World headlines from free public RSS feeds")
+async def news() -> dict[str, Any]:
+    """Headlines for the World screen, newest first, cached for ten minutes.
+
+    A feed that fails is left out and named in ``failed``; nothing is made up.
+    """
+    import httpx  # noqa: PLC0415 - lazy (AP-26)
+
+    cached = _news_cache["body"]
+    if cached is not None and time.monotonic() - _news_cache["at"] < NEWS_TTL_S:
+        return cached
+    items: list[dict[str, Any]] = []
+    failed: list[str] = []
+    async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as http:
+        for source, url in NEWS_FEEDS:
+            try:
+                res = await http.get(url, headers={"User-Agent": "Jarvis-HUD/1.0"})
+                res.raise_for_status()
+                got = parse_rss(source, res.content[:_NEWS_MAX_BYTES])
+            except httpx.HTTPError:
+                got = []
+            if got:
+                items += got
+            else:
+                failed.append(source)
+    items.sort(key=lambda i: i["published"] or 0, reverse=True)
+    body = {
+        "items": items[:40],
+        "sources": [name for name, _ in NEWS_FEEDS],
+        "failed": failed,
+        "fetched_at": time.time(),
+    }
+    if items:
+        _news_cache.update(at=time.monotonic(), body=body)
+    return body
 
 
 def _compress_at(window: int) -> int | None:

@@ -1,14 +1,66 @@
-import { render, screen } from "@testing-library/react";
-import { act } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { render as rtlRender, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, type ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_GEV_EMBED_URL,
   GEV_EMBED_URL,
   resolveGeVEmbedUrl,
   WorldIntelligenceView,
 } from "@/views/WorldIntelligenceView";
+import { ago } from "@/components/stark/WorldPanels";
+import { useI18nStore } from "@/i18n";
+
+const NEWS = {
+  items: [
+    { title: "Newest headline", link: "https://example.org/a", source: "BBC World", published: 1_700_000_000 },
+    { title: "Older headline", link: "https://example.org/b", source: "NPR World", published: 1_699_990_000 },
+  ],
+  sources: ["BBC World", "Al Jazeera", "NPR World"],
+  failed: ["Al Jazeera"],
+  fetched_at: 1_700_000_100,
+};
+
+function render(node: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+}
 
 describe("WorldIntelligenceView", () => {
+  beforeEach(() => {
+    useI18nStore.getState().setUi("en", { push: false });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === "/api/deck/news"
+          ? new Response(JSON.stringify(NEWS), { status: 200 })
+          : new Response("{}", { status: 404 }),
+      ),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the news broadcast, the feeds that answered and the ticker", async () => {
+    render(<WorldIntelligenceView />);
+    const items = await screen.findAllByTestId("stark-news-item");
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain("Newest headline");
+    expect(items[0].querySelector("a")?.getAttribute("href")).toBe("https://example.org/a");
+    expect(items[0].querySelector("a")?.getAttribute("rel")).toContain("noopener");
+    expect(screen.getAllByTestId("stark-feed-up")).toHaveLength(2);
+    expect(screen.getByTestId("stark-feed-down").textContent).toContain("Al Jazeera");
+    expect(screen.getByTestId("stark-ticker").textContent).toContain("Older headline");
+  });
+
+  it("says how old a story is", () => {
+    const now = 1_700_000_000;
+    expect(ago(null, now)).toBe("—");
+    expect(ago(now - 30, now)).toBe("now");
+    expect(ago(now - 12 * 60, now)).toBe("12m");
+    expect(ago(now - 3 * 3600, now)).toBe("3h");
+    expect(ago(now - 2 * 86_400, now)).toBe("2d");
+  });
+
   it("embeds the local God's Eye View runtime with voice permission", () => {
     render(<WorldIntelligenceView />);
 

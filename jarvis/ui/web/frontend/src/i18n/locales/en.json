@@ -8198,6 +8198,17 @@
       "thinking": "Thinking…",
       "speaking": "Speaking",
       "idle": "Standing by"
+    },
+    "world": {
+      "title": "World Intelligence",
+      "news": "News broadcast",
+      "live": "Live",
+      "news_loading": "Tuning in to the world feeds…",
+      "news_error": "No news feed answered. The globe still works.",
+      "feeds": "Feeds",
+      "feed_up": "On air",
+      "feed_down": "No answer",
+      "breaking": "Live"
     }
   }
 }

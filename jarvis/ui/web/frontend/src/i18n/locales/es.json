@@ -8104,6 +8104,17 @@
       "thinking": "Pensando…",
       "speaking": "Hablando",
       "idle": "En espera"
+    },
+    "world": {
+      "title": "Inteligencia mundial",
+      "news": "Noticias en directo",
+      "live": "En directo",
+      "news_loading": "Sintonizando las fuentes mundiales…",
+      "news_error": "Ninguna fuente de noticias respondió. El globo sigue funcionando.",
+      "feeds": "Fuentes",
+      "feed_up": "En el aire",
+      "feed_down": "Sin respuesta",
+      "breaking": "En directo"
     }
   }
 }
