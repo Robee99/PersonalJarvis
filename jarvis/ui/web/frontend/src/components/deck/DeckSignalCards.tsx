@@ -356,7 +356,7 @@ export interface Vitals {
   power_mode: string | null;
 }
 
-async function fetchVitals(): Promise<Vitals> {
+export async function fetchVitals(): Promise<Vitals> {
   const res = await fetch("/api/deck/vitals");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as Vitals;

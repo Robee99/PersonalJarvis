@@ -8035,5 +8035,75 @@
       "map_title": "Gedächtniskarte",
       "map_close": "Zurück zum HUD"
     }
+  },
+  "stark": {
+    "tagline": "Just A Rather Very Intelligent System",
+    "context": {
+      "title": "Kontext",
+      "error": "Die Kontextanzeige hat nicht geantwortet.",
+      "none": "Noch meldet kein lokales Modell seinen Kontext. Er erscheint nach dem nächsten Zug auf einem lokalen Gehirn.",
+      "window": "Fenster",
+      "trim": "Kürzen",
+      "limit": "Grenze"
+    },
+    "status": {
+      "title": "Systemstatus",
+      "core": "Kernverbindung",
+      "online": "Online",
+      "offline": "Offline",
+      "voice": "Stimme",
+      "starting": "Startet",
+      "muted": "Mikro stumm",
+      "brain": "Gehirn",
+      "model": "Modell",
+      "control": "PC-Steuerung",
+      "active": "Aktiv",
+      "standby": "Bereit",
+      "words": "Gehörte Wörter"
+    },
+    "vitals": {
+      "title": "Vitalwerte"
+    },
+    "quick": {
+      "code": "Code",
+      "memory": "Gedächtnis",
+      "world": "Welt",
+      "agents": "Agenten",
+      "skills": "Skills",
+      "tools": "Tools",
+      "costs": "Verbrauch",
+      "settings": "Einstellungen"
+    },
+    "weather": {
+      "title": "Wetter",
+      "change": "Stadt ändern",
+      "loading": "Lese den Himmel…",
+      "error": "Der Wetterdienst hat nicht geantwortet.",
+      "feels": "Gefühlt",
+      "set_city": "Deine Stadt",
+      "placeholder": "z. B. Berlin",
+      "set": "Setzen",
+      "not_found": "Keine Stadt mit diesem Namen.",
+      "privacy": "Kostenlose Open-Meteo-Vorhersage, ohne Schlüssel. Nur die Stadt wird gesendet.",
+      "clear": "Klar",
+      "partly": "Teils bewölkt",
+      "overcast": "Bedeckt",
+      "fog": "Nebel",
+      "drizzle": "Niesel",
+      "rain": "Regen",
+      "snow": "Schnee",
+      "showers": "Schauer",
+      "storm": "Gewitter"
+    },
+    "chat": {
+      "title": "Funk"
+    },
+    "listen": {
+      "offline": "Offline — verbinde neu",
+      "listening": "Ich höre… frag mich alles",
+      "thinking": "Denke nach…",
+      "speaking": "Spreche",
+      "idle": "In Bereitschaft"
+    }
   }
 }

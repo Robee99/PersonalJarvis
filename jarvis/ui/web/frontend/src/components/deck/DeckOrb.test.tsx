@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 // framer-motion is real here; only the reduced-motion hook is pinned, so the
 // voice loops do not run during the assertions.
@@ -26,7 +26,12 @@ import type { ThinkingStep } from "@/lib/thinkingSteps";
  * the live voice state so it can breathe with it.
  */
 describe("DeckOrb", () => {
-  afterEach(() => cleanup());
+  // These tests are about Gigi in the centre; the reactor is the default now.
+  beforeEach(() => window.localStorage.setItem("deck.avatar.v1", "gigi"));
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem("deck.avatar.v1");
+  });
 
   test("is display only without a press handler", () => {
     render(<DeckOrb steps={[]} busy={false} />);

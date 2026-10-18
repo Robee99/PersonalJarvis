@@ -8,6 +8,8 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
                                       recorder, addressed by content hash.
     GET  /api/deck/vitals           → CPU, RAM, battery and GPU load now, plus
                                       the Windows power mode where it exists.
+    GET  /api/deck/context          → how full the local model's context was
+                                      on the newest agent turn (model_swap.py).
 
 Two producers, two shapes, one reason: the deck shows the user what Jarvis
 just looked at.
@@ -131,6 +133,63 @@ def vitals() -> dict[str, Any]:
     reading: dict[str, Any] = dict(live_vitals())
     reading["power_mode"] = _power_mode()
     return reading
+
+
+#: The model swapper's fronts all answer ``/swap/status`` with the same state;
+#: 11440 is Qwen3-VL's, the brain's default (scripts/windows/model_swap.py).
+SWAP_STATUS_URL = "http://127.0.0.1:11440/swap/status"
+
+
+@router.get("/context", summary="The local brain's context fill on its newest turn")
+async def context() -> dict[str, Any]:
+    """What the context meter shows: tokens in the newest agent turn, the
+    window the model was started with, and where Hermes compresses.
+
+    The swapper reads the numbers from llama-server's own timings, so they are
+    the model's count, not an estimate. No swapper (a cloud brain, another
+    machine): ``available: false``, and the meter says so.
+    """
+    import httpx  # noqa: PLC0415 - lazy (AP-26)
+
+    try:
+        async with httpx.AsyncClient(trust_env=False, timeout=1.5) as http:
+            res = await http.get(SWAP_STATUS_URL)
+            res.raise_for_status()
+            status = res.json()
+    except (httpx.HTTPError, ValueError):
+        return {"available": False}
+    ctx = status.get("context") if isinstance(status, dict) else None
+    if not isinstance(ctx, dict) or not isinstance(ctx.get("used"), int):
+        return {"available": False, "active": status.get("active")}
+    window = int(ctx.get("window") or 0)
+    return {
+        "available": True,
+        "used": int(ctx["used"]),
+        "window": window,
+        "model": str(ctx.get("model") or ""),
+        "at": ctx.get("at"),
+        "compress_at": _compress_at(window),
+    }
+
+
+def _compress_at(window: int) -> int | None:
+    """Where Hermes compresses the conversation, from its own config."""
+    from jarvis.brain.local_servers import read_hermes_config  # noqa: PLC0415 - lazy (AP-26)
+
+    try:
+        compression = read_hermes_config().get("compression") or {}
+    except Exception:  # noqa: BLE001 - no Hermes: no mark on the meter
+        log.debug("deck: no Hermes compression setting", exc_info=True)
+        return None
+    if not isinstance(compression, dict) or compression.get("enabled") is False:
+        return None
+    tokens = compression.get("threshold_tokens")
+    if isinstance(tokens, int) and tokens > 0:
+        return min(tokens, window) if window else tokens
+    ratio = compression.get("threshold")
+    if isinstance(ratio, (int, float)) and 0 < ratio < 1 and window:
+        return int(window * ratio)
+    return None
 
 
 def _power_mode() -> str | None:

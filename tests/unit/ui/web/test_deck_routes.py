@@ -109,3 +109,56 @@ def test_cu_frame_serves_a_recorded_blob_by_hash(
 
     # A hash the recorder never wrote (or already pruned) is a plain 404.
     assert client.get(f"/api/deck/cu-frame/{'cd' * 32}").status_code == 404
+
+
+def test_context_meter_reads_the_swapper(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    import httpx
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == deck_routes.SWAP_STATUS_URL
+        return httpx.Response(
+            200,
+            json={
+                "active": "qwen3-vl",
+                "context": {
+                    "profile": "qwen3-vl",
+                    "model": "qwen3-vl-8b",
+                    "used": 31000,
+                    "window": 65536,
+                    "at": 1.0,
+                },
+            },
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(answer), **kw)
+    )
+    monkeypatch.setattr(
+        "jarvis.brain.local_servers.read_hermes_config",
+        lambda: {"compression": {"enabled": True, "threshold": 0.5, "threshold_tokens": 56000}},
+    )
+    body = client.get("/api/deck/context").json()
+    assert body == {
+        "available": True,
+        "used": 31000,
+        "window": 65536,
+        "model": "qwen3-vl-8b",
+        "at": 1.0,
+        "compress_at": 56000,
+    }
+
+
+def test_context_meter_without_a_swapper_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    import httpx
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(refuse), **kw)
+    )
+    assert client.get("/api/deck/context").json() == {"available": False}

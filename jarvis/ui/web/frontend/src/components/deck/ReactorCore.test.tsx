@@ -17,13 +17,14 @@ describe("deck avatar", () => {
     useEventStore.setState({ voiceState: "idle" });
   });
 
-  test("Gigi is the default and a broken value falls back to it", () => {
-    expect(readDeckAvatar()).toBe("gigi");
+  test("the reactor is the default and a broken value falls back to it", () => {
+    expect(readDeckAvatar()).toBe("reactor");
     window.localStorage.setItem("deck.avatar.v1", "toaster");
-    expect(readDeckAvatar()).toBe("gigi");
+    expect(readDeckAvatar()).toBe("reactor");
   });
 
   test("switching to the reactor swaps the centre and is remembered", () => {
+    window.localStorage.setItem("deck.avatar.v1", "gigi");
     const { container } = render(<DeckOrb steps={[]} busy={false} />);
     expect(screen.getByTestId("jarvis-orb")).toBeTruthy();
 

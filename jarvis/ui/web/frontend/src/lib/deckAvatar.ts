@@ -3,19 +3,19 @@ import { useSyncExternalStore } from "react";
 /**
  * What stands in the centre of the deck: Gigi, or the reactor ring.
  *
- * Gigi is the default and the product's face. The reactor is the Iron Man
- * style alternative people know from the JARVIS builds this deck is compared
- * with. Both read the same `--orb-level` the orb root writes, so they move
+ * The reactor is the default since the Stark HUD (HUD v4, 2026-10-18: the
+ * owner's concept boards put an arc reactor in the centre). Gigi, the
+ * product's mascot, is one press away in the header. Both read the same `--orb-level` the orb root writes, so they move
  * with the voice the same way.
  *
  * Persisted in localStorage, like the deck/classic switch (lib/deckMode.ts).
- * A broken or absent value falls back to Gigi.
+ * A broken or absent value falls back to the reactor.
  */
 
 export type DeckAvatar = "gigi" | "reactor";
 
 const STORAGE_KEY = "deck.avatar.v1";
-const DEFAULT_AVATAR: DeckAvatar = "gigi";
+const DEFAULT_AVATAR: DeckAvatar = "reactor";
 const listeners = new Set<() => void>();
 
 function isDeckAvatar(v: unknown): v is DeckAvatar {

@@ -17,6 +17,19 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
   RunsCard: () => <section>runs</section>,
   TerminalsCard: () => <section>terminals</section>,
 }));
+// The Stark instruments poll their own endpoints; each has its own tests.
+vi.mock("@/components/stark/StarkInstruments", () => ({
+  SystemStatusPanel: () => <section>status</section>,
+  VitalsPanel: () => <section>vitals</section>,
+  QuickAccess: () => <nav>quick</nav>,
+  StarkClock: () => <span>clock</span>,
+}));
+vi.mock("@/components/stark/ContextMeter", () => ({
+  ContextMeter: () => <section>context</section>,
+  useDeckContext: () => ({ data: undefined }),
+  fmtK: (n: number) => String(n),
+}));
+vi.mock("@/components/stark/WeatherGlobe", () => ({ WeatherGlobe: () => <section>weather</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,

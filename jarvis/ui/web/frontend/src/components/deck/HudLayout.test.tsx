@@ -15,6 +15,19 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
   OutputsCard: () => <section>outputs</section>,
   RunsCard: () => <section>runs</section>,
 }));
+// The Stark instruments poll their own endpoints; each has its own tests.
+vi.mock("@/components/stark/StarkInstruments", () => ({
+  SystemStatusPanel: () => <section>status</section>,
+  VitalsPanel: () => <section>vitals</section>,
+  QuickAccess: () => <nav>quick</nav>,
+  StarkClock: () => <span>clock</span>,
+}));
+vi.mock("@/components/stark/ContextMeter", () => ({
+  ContextMeter: () => <section>context</section>,
+  useDeckContext: () => ({ data: undefined }),
+  fmtK: (n: number) => String(n),
+}));
+vi.mock("@/components/stark/WeatherGlobe", () => ({ WeatherGlobe: () => <section>weather</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   LiveCounter: () => <div>counter</div>,
@@ -126,7 +139,7 @@ describe("HUD v2 layout and controls", { timeout: 15_000 }, () => {
     vi.unstubAllGlobals();
   });
 
-  test("the orb and its controls hold the centre; the chat right, the memory orb left", async () => {
+  test("the reactor and its controls hold the centre; instruments left, the chat right over the memory orb", async () => {
     stubFetch();
     renderBoard();
     const board = screen.getByTestId("deck-board");
@@ -142,10 +155,17 @@ describe("HUD v2 layout and controls", { timeout: 15_000 }, () => {
     expect(within(right).getByTestId("hud-chat")).toBeTruthy();
     expect(await within(right).findByTestId("chat-stage")).toBeTruthy();
     expect(within(right).queryByTestId("hud-composer")).toBeNull();
-    // The memory orb is on the board by default — no toggle to find first.
+    // The orb stands in the reactor's halo.
+    expect(within(screen.getByTestId("stark-halo")).getByTestId("deck-orb")).toBeTruthy();
+    // The instruments run down the left: status, vitals, context, weather.
     const left = screen.getByTestId("deck-slot-left-top");
-    expect(within(left).getByTestId("hud-memory")).toBeTruthy();
-    expect(within(left).getByTestId("memory-orb-3d").className).not.toContain("hidden");
+    for (const name of ["status", "vitals", "context", "weather"]) {
+      expect(within(left).getByText(name)).toBeTruthy();
+    }
+    // The memory orb is on the board by default — no toggle to find first.
+    const memory = screen.getByTestId("deck-slot-right-bottom");
+    expect(within(memory).getByTestId("hud-memory")).toBeTruthy();
+    expect(within(memory).getByTestId("memory-orb-3d").className).not.toContain("hidden");
     // The heavy secondary instruments are off the board.
     expect(screen.queryByText("wiki")).toBeNull();
     expect(screen.queryByText("terminals")).toBeNull();

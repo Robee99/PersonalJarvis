@@ -22,12 +22,14 @@ import type { ThinkingStep } from "@/lib/thinkingSteps";
 import { DeckStandby, ORB_TRAVEL } from "@/components/deck/DeckStandby";
 import { DeckReveal } from "@/components/deck/DeckReveal";
 import { DeckFloor, useDeckParallax } from "@/components/deck/DeckStage3D";
-import { SLOT_DEPTH, slotDepthVars } from "@/lib/deckDepth";
+import { slotDepthVars } from "@/lib/deckDepth";
 import { HudLamp } from "@/components/deck/HudFrame";
-import { OutputsCard, RunsCard } from "@/components/deck/DeckActivityCards";
-import { ApiStatsCard, LiveCounter, VitalsCard } from "@/components/deck/DeckSignalCards";
 import { LogCard } from "@/components/deck/DeckLogCard";
-import { TurnCard } from "@/components/deck/DeckTurnCard";
+import { StarkPanel } from "@/components/stark/StarkPanel";
+import { ArcHalo } from "@/components/stark/ArcHalo";
+import { ContextMeter, useDeckContext } from "@/components/stark/ContextMeter";
+import { QuickAccess, StarkClock, SystemStatusPanel, VitalsPanel } from "@/components/stark/StarkInstruments";
+import { WeatherGlobe } from "@/components/stark/WeatherGlobe";
 import { HudControls } from "@/components/deck/HudControls";
 import { HudMemoryPanel, type FullMapRequest } from "@/components/deck/HudMemoryPanel";
 import { HudChatPanel } from "@/components/deck/HudChatPanel";
@@ -281,16 +283,28 @@ export function MissionDeckView({
 
   return (
     <MotionConfig reducedMotion="user">
-    <div className="flex h-full min-h-0 flex-col">
-      {/* The deck's own instruments. Theme, restart and the window buttons
-          live in the window caption, not in a second row here. */}
-      <header className="relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
+    <div className="stark-hud flex h-full min-h-0 flex-col" data-testid="stark-hud">
+      {/* The Stark header: the name as a wordmark, the voice, the lamps that
+          have to be true for a voice turn, the engine and the clock. Theme,
+          restart and the window buttons live in the window caption. */}
+      <header className="relative flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2.5">
         <span
           className="flex h-8 w-8 shrink-0 items-center justify-center"
           data-testid="deck-header-gigi"
         >
-          <PetMark size={32} reactive />
+          <PetMark size={30} reactive />
         </span>
+        <div className="flex flex-col leading-none">
+          <span
+            className="stark-title font-mono text-xl font-bold tracking-[0.42em] text-primary"
+            data-testid="stark-wordmark"
+          >
+            {wordmark(assistantName)}
+          </span>
+          <span className="mt-1 font-mono text-[9px] uppercase tracking-[0.28em] text-muted-foreground">
+            {t("stark.tagline")}
+          </span>
+        </div>
         <div className="flex items-center gap-3">
           <VoiceWaveform
             levelRef={voiceInputLevelRef}
@@ -311,7 +325,7 @@ export function MissionDeckView({
         </div>
 
         {/* Lamp row: the things that have to be true for a voice turn. */}
-        <div className="flex items-center gap-3 font-mono text-micro uppercase tracking-[0.14em] text-muted-foreground">
+        <div className="hidden items-center gap-3 font-mono text-micro uppercase tracking-[0.14em] text-muted-foreground 2xl:flex">
           <Lamp on={connected} label={t("deck.lamp_link")} />
           <Lamp on={voiceReady} label={t("deck.lamp_voice")} />
           <Lamp
@@ -321,12 +335,7 @@ export function MissionDeckView({
           <Lamp on={cuActive} label={t("deck.lamp_cu")} />
         </div>
 
-        <LiveCounter />
-
         <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-display text-sm font-bold uppercase tracking-[0.18em]">
-            {assistantName}
-          </span>
           <HeaderStat
             label={t(engine.tier === "realtime" ? "deck.stat_realtime" : "deck.stat_brain")}
             value={engine.providerLabel}
@@ -346,6 +355,7 @@ export function MissionDeckView({
             testId="deck-stat-avatar"
             onClick={() => writeDeckAvatar(avatar === "gigi" ? "reactor" : "gigi")}
           />
+          <StarkClock />
           {headerAccessory}
         </div>
 
@@ -379,39 +389,39 @@ export function MissionDeckView({
                 // overflow-x stays hidden: the planes' depth transforms reach a few
                 // pixels past the board's edge, and must not buy it a sideways scrollbar.
                 "deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto overflow-x-hidden p-3",
-                // Two columns from a laptop-narrow stage up: the orb over the
-                // memory on the left, the chat down the right; the page scrolls.
-                "lg:grid-cols-2",
-                // Three from 1280 px: memory | orb | chat, on one screen with
-                // nothing to scroll. The chat runs the full height — it is the
-                // one panel that is read line by line.
-                "xl:grid-cols-[minmax(240px,3fr)_minmax(0,4.4fr)_minmax(320px,4fr)] xl:grid-rows-[minmax(0,1fr)_minmax(0,0.34fr)] xl:overflow-hidden",
+                // Two columns from a laptop-narrow stage up: the reactor and the
+                // instruments on the left, the chat down the right; the page scrolls.
+                "lg:grid-cols-[minmax(0,1fr)_minmax(320px,26rem)]",
+                // Three from 1280 px, the concept board's layout: instruments |
+                // reactor | chat, on one screen with nothing to scroll.
+                "xl:grid-cols-[minmax(270px,21rem)_minmax(0,1fr)_minmax(330px,26rem)] xl:grid-rows-[minmax(0,1fr)] xl:overflow-hidden",
               )}
             >
               {/* The floor the case stands on — behind every plane, on the wall's side. */}
               <DeckFloor />
 
-              {/* LEFT top: the memory orb — everything remembered in 3D,
-                  following the conversation (MemoryOrb3D); the list, the
-                  search, the full map and the data import are in its title
-                  strip. On a narrow window the orb, the voice and the chat
-                  come first. */}
+              {/* LEFT: 01 status, 02 vitals, 03 context, 04 weather, the log. */}
               <DeckReveal
                 slot="left-top"
                 reveal={revealBoard}
                 className={cn(
-                  "order-3 min-h-[24rem] xl:order-none xl:col-start-1 xl:row-start-1 xl:min-h-0",
-                  depthSlot("left-top").className,
+                  "order-3 lg:col-start-1 xl:order-none xl:row-start-1 xl:min-h-0",
+                  flatSlot("left-top").className,
                 )}
-                style={depthSlot("left-top").style}
-                bodyClassName="flex min-h-0 flex-col"
+                style={flatSlot("left-top").style}
+                bodyClassName="flex min-h-0 flex-col gap-3 xl:overflow-y-auto xl:pr-1"
               >
-                <HudMemoryPanel className="min-h-0 flex-1" onOpenMap={setFullMap} />
+                <SystemStatusPanel brainLabel={engine.providerLabel} modelLabel={engine.model} className="shrink-0" />
+                <VitalsPanel className="shrink-0" />
+                <ContextMeter className="shrink-0" />
+                <WeatherGlobe className="shrink-0" />
+                {/* The log — the terminal of the session — takes what is left. */}
+                <LogCard className="min-h-[9rem] flex-1" />
               </DeckReveal>
 
-              {/* CENTRE: the orb on its stage, the controls under it — the
-                  largest, emptiest region of the board on purpose. */}
-              <div className="order-1 flex min-h-[28rem] flex-col gap-2 xl:order-none xl:col-start-2 xl:row-start-1 xl:min-h-0">
+              {/* CENTRE, full height: the reactor in its halo, the listening
+                  bar and the controls under it, quick access at its foot. */}
+              <div className="order-1 flex min-h-[34rem] flex-col gap-2 lg:col-start-1 xl:order-none xl:col-start-2 xl:row-start-1 xl:min-h-0">
                 <BoardCentre
                   steps={running}
                   busy={busy}
@@ -420,14 +430,17 @@ export function MissionDeckView({
                   pressLabel={orbPressLabel}
                   pressDisabled={pressDisabled}
                   reveal={revealBoard}
+                  voiceState={voiceState}
+                  title={wordmark(assistantName)}
                 />
                 <DeckReveal
                   slot="centre-top"
                   reveal={revealBoard}
-                  className={cn("shrink-0", depthSlot("centre-top").className)}
-                  style={depthSlot("centre-top").style}
-                  bodyClassName="flex justify-center pb-1"
+                  className={cn("shrink-0", flatSlot("centre-top").className)}
+                  style={flatSlot("centre-top").style}
+                  bodyClassName="flex flex-col items-center gap-2 pb-1"
                 >
+                  <ListeningBar voiceState={voiceState} connected={connected} />
                   <HudControls
                     status={status}
                     statusLabel={statusLabel}
@@ -438,64 +451,45 @@ export function MissionDeckView({
                     onTalk={pressOrb}
                     wakePhrase={wakePhrase}
                   />
+                  <QuickAccess className="w-full max-w-3xl" />
                 </DeckReveal>
+                {/* The mission in flight, while there is one. */}
+                {thinkingSteps.length > 0 && (
+                  <DeckReveal
+                    slot="centre-bottom"
+                    reveal={revealBoard}
+                    className={cn("max-h-40 shrink-0", flatSlot("centre-bottom").className)}
+                    style={flatSlot("centre-bottom").style}
+                    bodyClassName="flex min-h-0 flex-col"
+                  >
+                    <MissionProgressCard steps={thinkingSteps} className="min-h-0 flex-1" />
+                  </DeckReveal>
+                )}
               </div>
 
-              {/* RIGHT, full height: the chat — the real one, its history and
-                  its composer, with the spoken turn in flight as its tail. */}
-              <DeckReveal
-                slot="right-top"
-                reveal={revealBoard}
-                className={cn(
-                  "order-2 min-h-[30rem] lg:row-span-2 xl:order-none xl:col-start-3 xl:row-span-2 xl:row-start-1 xl:min-h-0",
-                  flatSlot("right-top").className,
-                )}
-                style={flatSlot("right-top").style}
-                bodyClassName="flex min-h-0 flex-col"
-              >
-                <HudChatPanel className="min-h-0 flex-1" />
-              </DeckReveal>
-
-              {/* BOTTOM, under the memory and the orb: the instruments. Below
-                  1280 px the row dissolves (`contents`) and each instrument
-                  takes its own place in the stack. */}
-              <div className="contents xl:col-span-2 xl:col-start-1 xl:row-start-2 xl:flex xl:min-h-0 xl:gap-3">
-                {/* The log — the terminal of the session */}
+              {/* RIGHT: the chat — the real one, its history and its composer,
+                  with the spoken turn in flight as its tail — over the memory
+                  orb, which is on the board by default. */}
+              <div className="contents lg:col-start-2 lg:row-span-4 lg:row-start-1 lg:flex lg:min-h-0 lg:flex-col lg:gap-3 xl:col-start-3 xl:row-span-1">
                 <DeckReveal
-                  slot="left-bottom"
+                  slot="right-top"
                   reveal={revealBoard}
-                  className={cn("order-4 min-h-[8rem] xl:order-none xl:min-h-0 xl:min-w-0 xl:flex-[2]", flatSlot("left-bottom").className)}
-                  style={flatSlot("left-bottom").style}
+                  className={cn("order-2 min-h-[26rem] lg:order-none lg:min-h-0 lg:flex-[3]", flatSlot("right-top").className)}
+                  style={flatSlot("right-top").style}
                   bodyClassName="flex min-h-0 flex-col"
                 >
-                  <LogCard className="min-h-0 flex-1" />
+                  <StarkPanel index="05" title={t("stark.chat.title")} className="min-h-0 flex-1" bodyClassName="flex min-h-0 flex-col px-1 pb-1">
+                    <HudChatPanel className="min-h-0 flex-1" />
+                  </StarkPanel>
                 </DeckReveal>
-
-                {/* The turn's timings, what it cost, the machine */}
-                <DeckReveal
-                  slot="centre-bottom"
-                  reveal={revealBoard}
-                  className={cn("order-5 min-h-[8rem] xl:order-none xl:min-h-0 xl:min-w-0 xl:flex-[3.2]", flatSlot("centre-bottom").className)}
-                  style={flatSlot("centre-bottom").style}
-                  bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
-                >
-                  <TurnCard className="min-h-0" />
-                  <ApiStatsCard className="min-h-0" />
-                  <VitalsCard className="min-h-0" />
-                  <MissionProgressCard steps={thinkingSteps} className="min-h-0" />
-                </DeckReveal>
-
-                {/* Outputs and runs. Between 1280 and 1536 px the row has no
-                    room left for them; Work (Artifacts, Runs) has both. */}
                 <DeckReveal
                   slot="right-bottom"
                   reveal={revealBoard}
-                  className={cn("order-6 min-h-[8rem] xl:hidden 2xl:flex xl:order-none 2xl:min-h-0 2xl:min-w-0 2xl:flex-[2]", flatSlot("right-bottom").className)}
+                  className={cn("order-4 min-h-[18rem] lg:order-none lg:min-h-[14rem] lg:flex-[2]", flatSlot("right-bottom").className)}
                   style={flatSlot("right-bottom").style}
-                  bodyClassName="grid grid-cols-2 gap-3"
+                  bodyClassName="flex min-h-0 flex-col"
                 >
-                  <OutputsCard className="min-h-0" />
-                  <RunsCard className="min-h-0" />
+                  <HudMemoryPanel className="min-h-0 flex-1" onOpenMap={setFullMap} />
                 </DeckReveal>
               </div>
 
@@ -581,19 +575,6 @@ function FullMemoryMap({ request, onClose }: { request: FullMapRequest; onClose:
 }
 
 /**
- * A slot's place in the display case (lib/deckDepth.ts) as the props its
- * DeckReveal wrapper takes: the transform rule's class, the depth as custom
- * properties, and `deck-slot-far` for planes behind the wall so their cards
- * read softer.
- */
-function depthSlot(slot: BoardSlot): { className: string; style: CSSProperties } {
-  return {
-    className: cn("deck-slot-3d", SLOT_DEPTH[slot].z < 0 && "deck-slot-far"),
-    style: slotDepthVars(slot) as CSSProperties,
-  };
-}
-
-/**
  * A plane on the wall itself — flat, unturned — keeping only its parallax
  * (HUD v3). The instrument strip (log, turn/api/vitals, outputs/runs) shares
  * ONE row under the memory and the orb now, so it stands together instead
@@ -615,17 +596,18 @@ function flatSlot(slot: BoardSlot): { className: string; style: CSSProperties } 
 }
 
 
-/** The HUD orb's bounds: below the minimum the readouts collide, above the
- * maximum the reticle stops reading as an instrument and starts reading as
- * wallpaper. */
-const HUD_ORB_MIN = 200;
-const HUD_ORB_MAX = 440;
+/** The halo's bounds: below the minimum the orb's readouts collide, above
+ * the maximum the rings stop reading as an instrument and start reading as
+ * wallpaper. The orb sits inside the halo's inner race. */
+const HUD_HALO_MIN = 220;
+const HUD_HALO_MAX = 640;
+const ORB_IN_HALO = 0.62;
 
-/** The reticle size for the centre stage — as large as the room allows. */
-function hudOrbSize(width: number, height: number): number {
-  if (!width || !height) return 320;
-  const fit = Math.min(width - 24, height - 16);
-  return Math.max(HUD_ORB_MIN, Math.min(HUD_ORB_MAX, Math.floor(fit)));
+/** The halo size for the centre stage — as large as the room allows. */
+function hudHaloSize(width: number, height: number): number {
+  if (!width || !height) return 460;
+  const fit = Math.min(width - 16, height - 8);
+  return Math.max(HUD_HALO_MIN, Math.min(HUD_HALO_MAX, Math.floor(fit)));
 }
 
 /**
@@ -645,6 +627,8 @@ function BoardCentre({
   pressLabel,
   pressDisabled,
   reveal,
+  voiceState,
+  title,
 }: {
   steps: ThinkingStep[];
   busy: boolean;
@@ -653,10 +637,18 @@ function BoardCentre({
   pressLabel: string;
   pressDisabled: boolean;
   reveal: boolean;
+  voiceState: VoiceState;
+  title: string;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
-  const orbSize = hudOrbSize(stage.width, stage.height);
+  const haloSize = hudHaloSize(stage.width, stage.height);
+  const orbSize = Math.round(haloSize * ORB_IN_HALO);
+  const context = useDeckContext().data;
+  const ctx =
+    context?.available && typeof context.used === "number" && context.window
+      ? { used: context.used, window: context.window }
+      : null;
   const reduced = useReducedMotion() ?? false;
   // The landing ring fires once and leaves the DOM.
   const [landed, setLanded] = useState(false);
@@ -667,6 +659,7 @@ function BoardCentre({
     >
       {/* The same layoutId as the standby's orb: when the board takes over,
           the orb travels here instead of blinking — and lands with a ring. */}
+      <ArcHalo size={haloSize} voiceState={voiceState} busy={busy} context={ctx} title={title}>
       <div className="relative isolate">
         {/* The wash that lifts the centre off the background. It rides on the
             orb, on a square of its own, because it used to be a background
@@ -707,8 +700,50 @@ function BoardCentre({
           />
         )}
       </div>
+      </ArcHalo>
     </div>
   );
+}
+
+/**
+ * The bar under the reactor: what the assistant is doing right now in one
+ * line ("Listening… ask me anything"), with the microphone's level as bars
+ * on both sides. At rest it says it is standing by; the wake phrase is the
+ * controls' hint right under it.
+ */
+function ListeningBar({ voiceState, connected }: { voiceState: VoiceState; connected: boolean }) {
+  const t = useT();
+  const line = !connected
+    ? t("stark.listen.offline")
+    : voiceState === "listening"
+      ? t("stark.listen.listening")
+      : voiceState === "thinking"
+        ? t("stark.listen.thinking")
+        : voiceState === "speaking"
+          ? t("stark.listen.speaking")
+          : t("stark.listen.idle");
+  const phase = waveformPhase(voiceState, connected);
+  return (
+    <div
+      className="stark-listen-bar flex w-full max-w-2xl items-center justify-center gap-4 px-4 py-1.5"
+      data-testid="stark-listen"
+      data-voice={voiceState}
+    >
+      <VoiceWaveform levelRef={voiceInputLevelRef} phase={phase} count={18} className="h-5" />
+      <span className="whitespace-nowrap font-mono text-xs uppercase tracking-[0.22em] text-foreground">
+        {line}
+      </span>
+      <VoiceWaveform levelRef={voiceInputLevelRef} phase={phase} count={18} className="h-5 -scale-x-100" />
+    </div>
+  );
+}
+
+/** The name as the header's wordmark: "Jarvis" is J.A.R.V.I.S., any other
+ * name the owner gave the assistant is set in capitals. */
+export function wordmark(name: string): string {
+  const clean = name.trim();
+  if (clean.toLowerCase() === "jarvis") return "J.A.R.V.I.S.";
+  return (clean || "J.A.R.V.I.S.").toUpperCase();
 }
 
 /**

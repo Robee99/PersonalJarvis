@@ -3008,3 +3008,192 @@ body {
     color: hsl(var(--diff-del));
   }
 }
+
+/* --- The Stark HUD (HUD v4, 2026-10-18) -------------------------------------
+   The front page in the owner's concept-board look: deep navy glass, reactor
+   cyan, an orange hot colour for limits. The palette is scoped to the HUD, so
+   the chat and memory panels inside it take it on and the rest of the app
+   keeps its theme. */
+@layer components {
+  .stark-hud {
+    color-scheme: dark;
+    --background: 216 50% 4%;
+    --sidebar: 216 40% 7%;
+    --card: 214 40% 8%;
+    --card-foreground: 190 30% 94%;
+    --secondary: 210 40% 13%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 210 40% 13%;
+    --input: 210 40% 13%;
+    --popover: 214 40% 9%;
+    --popover-foreground: 0 0% 98%;
+    --surface-raised: 210 35% 15%;
+    --user-bubble: 200 50% 16%;
+    --user-bubble-foreground: 0 0% 98%;
+    --chat-bubble-in: 212 38% 12%;
+    --chat-bubble-in-foreground: 190 30% 94%;
+    --chat-bubble-out: 188 85% 38%;
+    --chat-bubble-out-foreground: 0 0% 100%;
+    --border: 194 55% 20%;
+    --border-strong: 190 65% 32%;
+    --foreground-strong: 0 0% 100%;
+    --foreground: 190 35% 94%;
+    --foreground-secondary: 196 25% 78%;
+    --muted-foreground: 196 22% 62%;
+    --faint-foreground: 200 15% 45%;
+    --foreground-faint: 200 15% 45%;
+    --primary: 188 95% 55%;
+    --primary-foreground: 216 50% 4%;
+    --accent: 188 95% 55%;
+    --accent-foreground: 216 50% 4%;
+    --ring: 188 95% 55%;
+    --accent-rgb: 26 214 240;
+    --stage-bg: 216 50% 4%;
+    --stark-hot: 26 100% 58%;
+    position: relative;
+    isolation: isolate;
+    color: hsl(var(--foreground));
+    background:
+      radial-gradient(ellipse 55% 50% at 50% 44%, rgb(26 214 240 / 0.13), transparent 70%),
+      radial-gradient(ellipse 90% 60% at 50% 115%, rgb(20 110 240 / 0.12), transparent 65%),
+      hsl(216 55% 3.5%);
+  }
+  /* A faint blueprint grid and scan lines over the whole stage. */
+  .stark-hud::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgb(26 214 240 / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(26 214 240 / 0.045) 1px, transparent 1px),
+      repeating-linear-gradient(0deg, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
+    background-size: 44px 44px, 44px 44px, 100% 3px;
+    mask-image: radial-gradient(ellipse 85% 85% at 50% 45%, black 40%, transparent 100%);
+  }
+
+  .stark-panel {
+    position: relative;
+    background: linear-gradient(180deg, rgb(26 214 240 / 0.07), rgb(4 10 18 / 0.78) 38%);
+    border: 1px solid rgb(26 214 240 / 0.22);
+    box-shadow:
+      inset 0 1px 0 rgb(26 214 240 / 0.14),
+      inset 0 0 28px rgb(26 214 240 / 0.04),
+      0 12px 32px -14px rgb(0 0 0 / 0.75);
+    backdrop-filter: blur(6px);
+  }
+  .stark-panel::before,
+  .stark-panel::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
+    border-color: hsl(var(--primary));
+    filter: drop-shadow(0 0 3px hsl(var(--primary)));
+  }
+  .stark-panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 2px solid;
+    border-left: 2px solid;
+  }
+  .stark-panel::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 2px solid;
+    border-right: 2px solid;
+  }
+  .stark-rule {
+    background: linear-gradient(90deg, rgb(26 214 240 / 0.45), rgb(26 214 240 / 0.04));
+  }
+  .stark-tile {
+    border: 1px solid rgb(26 214 240 / 0.2);
+    background: linear-gradient(180deg, rgb(26 214 240 / 0.08), rgb(26 214 240 / 0.02));
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
+  }
+  .stark-tile:hover,
+  .stark-tile:focus-visible {
+    border-color: rgb(26 214 240 / 0.6);
+    background: rgb(26 214 240 / 0.14);
+    box-shadow: inset 0 0 18px rgb(26 214 240 / 0.18);
+  }
+  .stark-seg-beyond {
+    background: repeating-linear-gradient(135deg, rgb(26 214 240 / 0.12) 0 2px, transparent 2px 4px);
+  }
+  .stark-gauge-arc {
+    transition: stroke-dasharray 0.8s cubic-bezier(0.3, 0, 0.2, 1), stroke 0.3s;
+  }
+  .stark-title {
+    text-shadow:
+      0 0 10px rgb(26 214 240 / 0.7),
+      0 0 28px rgb(26 214 240 / 0.35);
+  }
+  .stark-listen-bar {
+    background: linear-gradient(90deg, transparent, rgb(26 214 240 / 0.1) 20%, rgb(26 214 240 / 0.1) 80%, transparent);
+    border-top: 1px solid rgb(26 214 240 / 0.3);
+    border-bottom: 1px solid rgb(26 214 240 / 0.3);
+  }
+
+  /* The halo's rings: each turns on its own clock around the centre. */
+  .stark-spin {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    animation: stark-spin 120s linear infinite;
+  }
+  .stark-spin-dial {
+    animation-duration: 140s;
+  }
+  .stark-spin-text {
+    animation-duration: 90s;
+    animation-direction: reverse;
+  }
+  .stark-spin-armour {
+    animation-duration: 46s;
+    animation-direction: reverse;
+  }
+  .stark-spin-race {
+    animation-duration: 30s;
+  }
+  .stark-halo[data-voice="listening"] .stark-spin-armour,
+  .stark-halo[data-voice="speaking"] .stark-spin-armour {
+    animation-duration: 12s;
+  }
+  .stark-halo[data-busy="true"] .stark-spin-armour,
+  .stark-halo[data-voice="thinking"] .stark-spin-armour {
+    animation-duration: 5s;
+  }
+  .stark-halo[data-voice="listening"] .stark-spin-race,
+  .stark-halo[data-busy="true"] .stark-spin-race {
+    animation-duration: 8s;
+  }
+  .stark-halo[data-voice="listening"] svg,
+  .stark-halo[data-voice="speaking"] svg,
+  .stark-halo[data-busy="true"] svg {
+    filter: drop-shadow(0 0 6px rgb(26 214 240 / 0.55));
+  }
+  .stark-ticker {
+    animation: stark-marquee 60s linear infinite;
+  }
+  .stark-ticker:hover {
+    animation-play-state: paused;
+  }
+
+  @keyframes stark-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes stark-marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  /* Reduced motion: the app-wide floor at the end of the reduce rules stops
+     these rings and the ticker with everything else. */
+}

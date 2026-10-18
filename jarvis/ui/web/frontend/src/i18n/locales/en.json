@@ -8129,5 +8129,75 @@
       "install": "Install",
       "open": "Open"
     }
+  },
+  "stark": {
+    "tagline": "Just A Rather Very Intelligent System",
+    "context": {
+      "title": "Context",
+      "error": "The context reading did not answer.",
+      "none": "No local model reports its context yet. It shows after the next turn on a local brain.",
+      "window": "window",
+      "trim": "Trim",
+      "limit": "Limit"
+    },
+    "status": {
+      "title": "System status",
+      "core": "Core link",
+      "online": "Online",
+      "offline": "Offline",
+      "voice": "Voice",
+      "starting": "Starting",
+      "muted": "Mic muted",
+      "brain": "Brain",
+      "model": "Model",
+      "control": "PC control",
+      "active": "Active",
+      "standby": "Standby",
+      "words": "Words heard"
+    },
+    "vitals": {
+      "title": "Vitals"
+    },
+    "quick": {
+      "code": "Code",
+      "memory": "Memory",
+      "world": "World",
+      "agents": "Agents",
+      "skills": "Skills",
+      "tools": "Tools",
+      "costs": "Usage",
+      "settings": "Settings"
+    },
+    "weather": {
+      "title": "Weather",
+      "change": "Change city",
+      "loading": "Reading the sky…",
+      "error": "The weather service did not answer.",
+      "feels": "Feels",
+      "set_city": "Your city",
+      "placeholder": "e.g. Mumbai",
+      "set": "Set",
+      "not_found": "No city by that name.",
+      "privacy": "Free Open-Meteo forecast, no key. Only the city is sent.",
+      "clear": "Clear",
+      "partly": "Partly cloudy",
+      "overcast": "Overcast",
+      "fog": "Fog",
+      "drizzle": "Drizzle",
+      "rain": "Rain",
+      "snow": "Snow",
+      "showers": "Showers",
+      "storm": "Storm"
+    },
+    "chat": {
+      "title": "Comms"
+    },
+    "listen": {
+      "offline": "Offline — reconnecting",
+      "listening": "Listening… ask me anything",
+      "thinking": "Thinking…",
+      "speaking": "Speaking",
+      "idle": "Standing by"
+    }
   }
 }

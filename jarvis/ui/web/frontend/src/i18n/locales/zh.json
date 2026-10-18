@@ -8129,5 +8129,75 @@
       "install": "安装",
       "open": "打开"
     }
+  },
+  "stark": {
+    "tagline": "Just A Rather Very Intelligent System",
+    "context": {
+      "title": "上下文",
+      "error": "上下文读数没有响应。",
+      "none": "还没有本地模型报告上下文。下一次本地大脑回合后显示。",
+      "window": "窗口",
+      "trim": "压缩",
+      "limit": "上限"
+    },
+    "status": {
+      "title": "系统状态",
+      "core": "核心连接",
+      "online": "在线",
+      "offline": "离线",
+      "voice": "语音",
+      "starting": "启动中",
+      "muted": "麦克风静音",
+      "brain": "大脑",
+      "model": "模型",
+      "control": "电脑控制",
+      "active": "活动",
+      "standby": "待命",
+      "words": "听到的词"
+    },
+    "vitals": {
+      "title": "运行状态"
+    },
+    "quick": {
+      "code": "代码",
+      "memory": "记忆",
+      "world": "世界",
+      "agents": "智能体",
+      "skills": "技能",
+      "tools": "工具",
+      "costs": "用量",
+      "settings": "设置"
+    },
+    "weather": {
+      "title": "天气",
+      "change": "更换城市",
+      "loading": "正在读取天空…",
+      "error": "天气服务没有响应。",
+      "feels": "体感",
+      "set_city": "你的城市",
+      "placeholder": "例如 上海",
+      "set": "设置",
+      "not_found": "找不到这个城市。",
+      "privacy": "免费的 Open-Meteo 预报，无需密钥。只发送城市。",
+      "clear": "晴",
+      "partly": "局部多云",
+      "overcast": "阴",
+      "fog": "雾",
+      "drizzle": "毛毛雨",
+      "rain": "雨",
+      "snow": "雪",
+      "showers": "阵雨",
+      "storm": "雷暴"
+    },
+    "chat": {
+      "title": "通讯"
+    },
+    "listen": {
+      "offline": "离线 — 正在重连",
+      "listening": "正在聆听… 随便问我",
+      "thinking": "思考中…",
+      "speaking": "正在说话",
+      "idle": "待命中"
+    }
   }
 }

@@ -8035,5 +8035,75 @@
       "map_title": "Mapa de memoria",
       "map_close": "Volver al HUD"
     }
+  },
+  "stark": {
+    "tagline": "Just A Rather Very Intelligent System",
+    "context": {
+      "title": "Contexto",
+      "error": "La lectura del contexto no respondió.",
+      "none": "Ningún modelo local informa aún de su contexto. Aparece tras el próximo turno con un cerebro local.",
+      "window": "ventana",
+      "trim": "Recorte",
+      "limit": "Límite"
+    },
+    "status": {
+      "title": "Estado del sistema",
+      "core": "Enlace central",
+      "online": "En línea",
+      "offline": "Sin conexión",
+      "voice": "Voz",
+      "starting": "Iniciando",
+      "muted": "Micro silenciado",
+      "brain": "Cerebro",
+      "model": "Modelo",
+      "control": "Control del PC",
+      "active": "Activo",
+      "standby": "En espera",
+      "words": "Palabras oídas"
+    },
+    "vitals": {
+      "title": "Constantes"
+    },
+    "quick": {
+      "code": "Código",
+      "memory": "Memoria",
+      "world": "Mundo",
+      "agents": "Agentes",
+      "skills": "Skills",
+      "tools": "Herramientas",
+      "costs": "Consumo",
+      "settings": "Ajustes"
+    },
+    "weather": {
+      "title": "Tiempo",
+      "change": "Cambiar ciudad",
+      "loading": "Leyendo el cielo…",
+      "error": "El servicio del tiempo no respondió.",
+      "feels": "Sensación",
+      "set_city": "Tu ciudad",
+      "placeholder": "p. ej. Madrid",
+      "set": "Fijar",
+      "not_found": "No hay ninguna ciudad con ese nombre.",
+      "privacy": "Previsión gratuita de Open-Meteo, sin clave. Solo se envía la ciudad.",
+      "clear": "Despejado",
+      "partly": "Parcialmente nublado",
+      "overcast": "Cubierto",
+      "fog": "Niebla",
+      "drizzle": "Llovizna",
+      "rain": "Lluvia",
+      "snow": "Nieve",
+      "showers": "Chubascos",
+      "storm": "Tormenta"
+    },
+    "chat": {
+      "title": "Comunicaciones"
+    },
+    "listen": {
+      "offline": "Sin conexión — reconectando",
+      "listening": "Escuchando… pregúntame lo que quieras",
+      "thinking": "Pensando…",
+      "speaking": "Hablando",
+      "idle": "En espera"
+    }
   }
 }
