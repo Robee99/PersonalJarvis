@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -47,7 +49,29 @@ async def test_selected_conversation_persists_updates_and_forgets(tmp_path: Path
     source_id = indexed["source_id"]
 
     restarted = CogneeMemoryAdapter(vault_root=vault, config=config)
+    unchanged = await restarted.index_conversation(thread_id, initial_messages)
+    assert unchanged["indexed"] is False
+    assert unchanged["unchanged"] is True
+    assert unchanged["source_id"] == source_id
+    assert [item["source_id"] for item in restarted.list_conversation_sources()] == [source_id]
+
+    # Conversation retrieval must not reconcile unrelated wiki sources. In
+    # particular, a note edited to contain a credential must never be ingested
+    # through the conversation-only path, which has no wiki safety denylist.
+    note = vault / "cross-role-safety.md"
+    safe_body = "The synthetic mountain station has a cedar observation deck."
+    await asyncio.to_thread(note.write_text, safe_body, encoding="utf-8")
+    wiki_indexed = await restarted.index_path(note)
+    await asyncio.to_thread(
+        note.write_text, "password: synthetic-cross-role-test", encoding="utf-8"
+    )
     original = await restarted.search_conversations("green comet observatory violet telescope", k=5)
+    with sqlite3.connect(root / "data" / "source-state.sqlite3") as conn:
+        wiki_hash = conn.execute(
+            "SELECT content_hash FROM sources WHERE source_id=?",
+            (wiki_indexed["source_id"],),
+        ).fetchone()[0]
+    assert wiki_hash == hashlib.sha256(safe_body.encode()).hexdigest()
     assert original
     assert original[0]["source_id"] == source_id
     assert original[0]["source_ref"] == thread_id
@@ -70,7 +94,7 @@ async def test_selected_conversation_persists_updates_and_forgets(tmp_path: Path
     )
 
     await restarted.forget_conversation(thread_id)
-    forgotten = await CogneeMemoryAdapter(
-        vault_root=vault, config=config
-    ).search_conversations("Europa silver radio dish", k=5)
+    after_delete = CogneeMemoryAdapter(vault_root=vault, config=config)
+    assert after_delete.list_conversation_sources() == []
+    forgotten = await after_delete.search_conversations("Europa silver radio dish", k=5)
     assert not any(item["source_id"] == source_id for item in forgotten)
