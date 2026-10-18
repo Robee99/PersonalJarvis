@@ -2,18 +2,23 @@
  * One project, opened: its health and why, progress, what it holds, where it
  * comes from, its conversation thread, and every item one click away.
  *
- * Three tabs keep it glanceable: Overview (health, progress, next actions,
- * sources, files, recent activity), Thread (the branching conversation tree)
- * and Items (decisions, tasks, blockers, milestones, conversations,
- * artifacts, with a filter). Opening anything shows its branch over the tab,
+ * Four tabs keep it glanceable: Overview (health, progress, next actions,
+ * sources, files, recent activity), Thread (the branching conversation tree),
+ * Items (decisions, tasks, blockers, milestones, conversations, artifacts,
+ * with a filter) and Notes (the vault pages the project's items come from,
+ * each readable in place). Opening an item shows its branch over the tab,
  * with a breadcrumb back to the trunk.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, GitBranch, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { ArrowLeft, FileText, FolderOpen, GitBranch, X } from "lucide-react";
 
 import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { fetchWikiPage } from "@/components/deck/hudMemoryApi";
+import { splitFrontMatter } from "@/components/outputs/MarkdownProse";
 
 import {
   HEALTH_HEX,
@@ -28,11 +33,11 @@ import {
 } from "./brainMap";
 import { BranchPanel } from "./BranchPanel";
 import { HealthRing } from "./HealthRing";
-import { matchesText, pathTo } from "./projectView";
+import { matchesText, pathTo, projectNotes, type ProjectNote } from "./projectView";
 import { ThreadTree } from "./ThreadTree";
 
-export type PanelTab = "overview" | "thread" | "items";
-const TABS: PanelTab[] = ["overview", "thread", "items"];
+export type PanelTab = "overview" | "thread" | "items" | "notes";
+const TABS: PanelTab[] = ["overview", "thread", "items", "notes"];
 const ITEM_LIMIT = 30;
 
 /** An item the thread does not carry (a cut branch) as a branch of its own. */
@@ -274,6 +279,102 @@ function Items({ detail, onOpenItem }: { detail: ProjectDetail; onOpenItem(id: s
   );
 }
 
+function NoteView({ note, onBack, onOpenItem }: { note: ProjectNote; onBack(): void; onOpenItem(id: string): void }) {
+  const t = useT();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["orb2", "note", note.slug],
+    queryFn: ({ signal }) => fetchWikiPage(note.slug, signal),
+    staleTime: 60_000,
+  });
+  const body = useMemo(() => (data ? splitFrontMatter(data.body_md).body : ""), [data]);
+  return (
+    <div className="space-y-2" data-testid="orb2-note">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label={t("orb2.notes.back")}
+          className="rounded-full p-1 text-slate-400 hover:bg-white/5 hover:text-slate-100"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </button>
+        <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-100" title={note.locator}>
+          {data?.title || note.title}
+        </h3>
+        <button
+          type="button"
+          onClick={() => onOpenItem(note.entity_id)}
+          className="shrink-0 rounded-full border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-300 hover:border-cyan-300/40"
+        >
+          {t("orb2.notes.open_item")}
+        </button>
+      </div>
+      <p className="truncate font-mono text-[10px] text-slate-500" title={note.locator}>
+        {note.locator}
+      </p>
+      {isLoading && <p className="text-xs text-slate-400">{t("orb2.rail.loading")}</p>}
+      {isError && <p className="text-xs text-rose-300">{t("orb2.notes.failed")}</p>}
+      {data && (
+        <div className="space-y-2 break-words text-[12px] leading-5 text-slate-200 [&_a]:text-cyan-300 [&_code]:font-mono [&_code]:text-[11px] [&_h1]:text-[14px] [&_h1]:font-semibold [&_h2]:text-[13px] [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-white/5 [&_pre]:p-2 [&_strong]:text-slate-50 [&_ul]:list-disc">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Notes({ notes, onOpenItem }: { notes: ProjectNote[]; onOpenItem(id: string): void }) {
+  const t = useT();
+  const [text, setText] = useState("");
+  const [open, setOpen] = useState<ProjectNote | null>(null);
+  const [all, setAll] = useState(false);
+  const list = useMemo(() => notes.filter((n) => matchesText(`${n.title} ${n.locator}`, text)), [notes, text]);
+  if (open) return <NoteView note={open} onBack={() => setOpen(null)} onOpenItem={onOpenItem} />;
+  return (
+    <div className="space-y-2">
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={t("orb2.notes.filter")}
+        aria-label={t("orb2.notes.filter")}
+        className="h-8 w-full rounded-full border border-cyan-400/20 bg-black/50 px-3 text-xs text-slate-200 outline-none placeholder:text-slate-500 focus:border-cyan-300/60"
+      />
+      {notes.length === 0 && <p className="text-[11px] text-slate-500">{t("orb2.notes.empty")}</p>}
+      {notes.length > 0 && (
+        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-slate-500">
+          {fill(t("orb2.notes.count"), { count: list.length })}
+        </p>
+      )}
+      <ul className="space-y-0.5">
+        {(all ? list : list.slice(0, ITEM_LIMIT)).map((n) => (
+          <li key={n.locator}>
+            <button
+              type="button"
+              data-testid="orb2-note-row"
+              onClick={() => setOpen(n)}
+              title={n.locator}
+              className="flex w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left hover:bg-white/5"
+            >
+              <FileText className="h-3 w-3 shrink-0 text-slate-500" aria-hidden />
+              <span className="truncate text-[12px] text-slate-200">{n.title}</span>
+              <span className="ml-auto shrink-0 font-mono text-[10px] text-slate-500">{isoDay(n.last_activity_ms)}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {list.length > ITEM_LIMIT && !all && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="px-1.5 text-[11px] text-cyan-300/80 hover:text-cyan-200"
+        >
+          {fill(t("orb2.items.show_all"), { count: list.length })}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ProjectPanel({
   project,
   rules,
@@ -300,6 +401,7 @@ export function ProjectPanel({
   const health = detail?.health ?? project.health;
   const rule = rules.find((r) => r.id === health.rule);
   const path = resolvePath(detail, branchId);
+  const notes = useMemo(() => (detail ? projectNotes(allEntities(detail)) : []), [detail]);
 
   return (
     <aside
@@ -351,6 +453,7 @@ export function ProjectPanel({
             >
               {t(`orb2.panel.tab_${id}`)}
               {id === "thread" && detail ? ` · ${detail.thread.branches.length + detail.thread.hidden_branches}` : ""}
+              {id === "notes" && detail ? ` · ${notes.length}` : ""}
             </button>
           ))}
         </div>
@@ -367,6 +470,7 @@ export function ProjectPanel({
                 <ThreadTree thread={detail.thread} title={project.title} selectedId={branchId} onOpen={(b) => onBranch(b.id)} />
               )}
               {tab === "items" && <Items detail={detail} onOpenItem={(id) => onBranch(id)} />}
+              {tab === "notes" && <Notes notes={notes} onOpenItem={(id) => onBranch(id)} />}
             </div>
             {path.length > 0 && (
               <BranchPanel

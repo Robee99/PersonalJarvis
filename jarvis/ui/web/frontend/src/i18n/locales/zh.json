@@ -7849,6 +7849,7 @@
       "tab_overview": "概览",
       "tab_thread": "话题",
       "tab_items": "条目",
+      "tab_notes": "笔记",
       "progress": "进度",
       "progress_value": "已完成 {done} / {total}",
       "next": "下一步",
@@ -7866,6 +7867,14 @@
       "milestones": "里程碑",
       "conversations": "对话",
       "reports": "成果"
+    },
+    "notes": {
+      "filter": "筛选笔记",
+      "empty": "还没有笔记。笔记是本项目条目所来自的知识库页面。",
+      "count": "{count} 条笔记",
+      "back": "返回笔记",
+      "open_item": "打开条目",
+      "failed": "无法从知识库读取这条笔记。"
     },
     "item": {
       "suggested": "建议的链接"

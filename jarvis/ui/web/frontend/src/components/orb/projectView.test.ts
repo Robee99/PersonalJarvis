@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Project, ProjectThread } from "./brainMap";
+import type { Entity, Project, ProjectThread } from "./brainMap";
 import {
   MAX_MAP_PROJECTS,
   MAX_PER_BRANCH,
@@ -10,6 +10,7 @@ import {
   filterProjects,
   filterThread,
   pathTo,
+  projectNotes,
 } from "./projectView";
 import { branch, project } from "./testFixtures";
 
@@ -102,5 +103,38 @@ describe("thread helpers", () => {
     expect(only.map((b) => b.id)).toEqual(["chat-a"]);
     expect(only[0].children.map((b) => b.id)).toEqual(["dec-1"]);
     expect(filterThread(tree, new Set())).toBe(tree);
+  });
+});
+
+describe("project notes", () => {
+  const item = (id: string, locator: string, last: number, title = id): Entity => ({
+    id,
+    kind: "CONVERSATION",
+    title,
+    status: "blue",
+    status_reason: "",
+    confidence: 1,
+    origin: "native",
+    last_activity_ms: last,
+    last_updated_ms: last,
+    priority_score: 0,
+    priority_reason: "",
+    assignment: "confirmed",
+    source: { source_kind: "wiki_import", source_id: id, conversation_id: id, api: null, locator },
+  });
+
+  it("lists each vault page once, newest first, and skips items with no page", () => {
+    const notes = projectNotes([
+      item("a", "imports/ai/conversations-001/Trip plan.md", 5, "Trip plan"),
+      item("b", "imports\\ai\\conversations-002\\Budget.MD", 9, "Budget"),
+      item("c", "imports/ai/conversations-001/Trip plan.md", 7, "Trip plan, later"),
+      item("d", "", 20),
+      item("e", "missions/m-1.json", 30),
+    ]);
+    expect(notes.map((n) => [n.slug, n.title, n.entity_id])).toEqual([
+      ["Budget", "Budget", "b"],
+      ["Trip plan", "Trip plan, later", "c"],
+    ]);
+    expect(notes[0].locator).toBe("imports/ai/conversations-002/Budget.MD");
   });
 });

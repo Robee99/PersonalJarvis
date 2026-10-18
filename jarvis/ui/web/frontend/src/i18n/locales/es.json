@@ -7849,6 +7849,7 @@
       "tab_overview": "Resumen",
       "tab_thread": "Hilo",
       "tab_items": "Elementos",
+      "tab_notes": "Notas",
       "progress": "Progreso",
       "progress_value": "{done} de {total} hechos",
       "next": "Próximos pasos",
@@ -7866,6 +7867,14 @@
       "milestones": "Hitos",
       "conversations": "Conversaciones",
       "reports": "Artefactos"
+    },
+    "notes": {
+      "filter": "Filtrar notas",
+      "empty": "Aún no hay notas. Las notas son las páginas del vault de las que vienen los elementos de este proyecto.",
+      "count": "{count} notas",
+      "back": "Volver a las notas",
+      "open_item": "Abrir elemento",
+      "failed": "No se pudo leer esta nota del vault."
     },
     "item": {
       "suggested": "vínculo sugerido"

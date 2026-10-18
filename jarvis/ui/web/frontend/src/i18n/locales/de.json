@@ -7849,6 +7849,7 @@
       "tab_overview": "Überblick",
       "tab_thread": "Verlauf",
       "tab_items": "Einträge",
+      "tab_notes": "Notizen",
       "progress": "Fortschritt",
       "progress_value": "{done} von {total} erledigt",
       "next": "Nächste Schritte",
@@ -7866,6 +7867,14 @@
       "milestones": "Meilensteine",
       "conversations": "Unterhaltungen",
       "reports": "Artefakte"
+    },
+    "notes": {
+      "filter": "Notizen filtern",
+      "empty": "Noch keine Notizen. Notizen sind die Vault-Seiten, aus denen die Einträge dieses Projekts stammen.",
+      "count": "{count} Notizen",
+      "back": "Zurück zu den Notizen",
+      "open_item": "Eintrag öffnen",
+      "failed": "Diese Notiz konnte nicht aus dem Vault gelesen werden."
     },
     "item": {
       "suggested": "vorgeschlagene Zuordnung"

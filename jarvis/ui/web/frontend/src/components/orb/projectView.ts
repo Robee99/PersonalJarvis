@@ -14,6 +14,7 @@ import {
   HEALTH_COLOURS,
   HEALTH_HEX,
   type BranchKind,
+  type Entity,
   type Project,
   type ProjectThread,
   type StatusColour,
@@ -235,4 +236,33 @@ export function pathTo(branches: ThreadBranch[], id: string): ThreadBranch[] {
     if (below.length) return [b, ...below];
   }
   return [];
+}
+
+/** A Markdown page of the vault that an item of a project came from. */
+export interface ProjectNote {
+  /** The page's slug: its file name without `.md`, as `/api/wiki/page/{slug}` reads it. */
+  slug: string;
+  title: string;
+  locator: string;
+  entity_id: string;
+  last_activity_ms: number;
+}
+
+/**
+ * A project's notes: one row per vault page its items were read from,
+ * newest first. Items that do not come from a `.md` page (a mission, an IDE
+ * chat) have no note to open and are left out.
+ */
+export function projectNotes(entities: Entity[]): ProjectNote[] {
+  const byLocator = new Map<string, ProjectNote>();
+  for (const e of entities) {
+    const locator = e.source.locator.replace(/\\/g, "/");
+    if (!/\.md$/i.test(locator)) continue;
+    const prev = byLocator.get(locator);
+    if (prev && prev.last_activity_ms >= e.last_activity_ms) continue;
+    const name = locator.slice(locator.lastIndexOf("/") + 1);
+    const slug = name.slice(0, -3);
+    byLocator.set(locator, { slug, title: e.title || slug, locator, entity_id: e.id, last_activity_ms: e.last_activity_ms });
+  }
+  return [...byLocator.values()].sort((a, b) => b.last_activity_ms - a.last_activity_ms || a.title.localeCompare(b.title));
 }

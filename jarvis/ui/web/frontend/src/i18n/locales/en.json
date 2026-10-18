@@ -7849,6 +7849,7 @@
       "tab_overview": "Overview",
       "tab_thread": "Thread",
       "tab_items": "Items",
+      "tab_notes": "Notes",
       "progress": "Progress",
       "progress_value": "{done} of {total} done",
       "next": "Next actions",
@@ -7866,6 +7867,14 @@
       "milestones": "Milestones",
       "conversations": "Conversations",
       "reports": "Artifacts"
+    },
+    "notes": {
+      "filter": "Filter notes",
+      "empty": "No notes yet. Notes are the vault pages this project's items come from.",
+      "count": "{count} notes",
+      "back": "Back to notes",
+      "open_item": "Open item",
+      "failed": "This note could not be read from the vault."
     },
     "item": {
       "suggested": "suggested link"
