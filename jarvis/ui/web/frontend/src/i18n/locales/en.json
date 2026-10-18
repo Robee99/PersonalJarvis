@@ -8026,5 +8026,94 @@
       "map_title": "Memory map",
       "map_close": "Back to the HUD"
     }
+  },
+  "tool_catalog": {
+    "title": "Tool catalog",
+    "subtitle": "Every MCP server, skill, plugin, app, CLI and toolset once, with where it runs.",
+    "search_placeholder": "Search tools, servers, skills, licenses…",
+    "search_label": "Search the tool catalog",
+    "filter_label": "Type",
+    "all": "All",
+    "loading": "Reading the tool catalog…",
+    "error": "Could not read the tool catalog.",
+    "empty": "Nothing matches.",
+    "show_more": "Show {n} more",
+    "active_brain": "Active brain: {brain}",
+    "active_brain_unknown": "Active brain: unknown",
+    "sources_error": "Some sources could not be read: {list}",
+    "states_label": "States",
+    "state_yes": "{state}: yes",
+    "state_no": "{state}: no",
+    "state_unknown": "{state}: unknown",
+    "tools": "{n} tools",
+    "tools_unknown": "tool count unknown",
+    "needs_key": "needs key",
+    "license_unknown": "license unknown",
+    "upstream": "Upstream",
+    "duplicate_of": "overlaps {id}",
+    "invalid": "Broken entry",
+    "not_verified": "Not verified by a real tool call",
+    "connected_unverified": "Connected, but no real tool call has succeeded yet",
+    "verified_ok": "Verified {when}",
+    "verified_fail": "Last check failed {when}",
+    "latency": "{ms} ms",
+    "working": "Working…",
+    "action_done": "{item} updated.",
+    "action_failed": "Could not change {item}: {error}",
+    "restart_hermes": "Restart Hermes to load it.",
+    "type": {
+      "mcp": "MCP",
+      "app": "App",
+      "cli": "CLI",
+      "skill": "Skill",
+      "plugin": "Plugin",
+      "toolset": "Toolset"
+    },
+    "state": {
+      "available": "available",
+      "installed": "installed",
+      "enabled": "enabled",
+      "connected": "connected",
+      "visible": "visible to brain",
+      "verified": "verified"
+    },
+    "runtime": {
+      "jarvis": "Jarvis",
+      "hermes": "Hermes"
+    },
+    "role": {
+      "canonical": "canonical route",
+      "primary": "primary route",
+      "secondary": "secondary route"
+    },
+    "source": {
+      "known": "Known upstream",
+      "local": "Local",
+      "marketplace": "Marketplace",
+      "cli_catalog": "CLI catalog",
+      "hermes": "Hermes built-in",
+      "hermes_hub": "Hermes skill hub",
+      "hermes_plugin": "Hermes plugin",
+      "jarvis": "Jarvis built-in",
+      "unknown": "Unknown source"
+    },
+    "binding": {
+      "on": "on",
+      "off": "off",
+      "connected": "connected",
+      "not_connected": "not connected",
+      "visible": "visible",
+      "hidden": "not visible",
+      "visible_unknown": "visibility unknown",
+      "verified": "verified",
+      "check_failed": "check failed",
+      "not_installed": "not installed"
+    },
+    "action": {
+      "enable": "Enable",
+      "disable": "Disable",
+      "install": "Install",
+      "open": "Open"
+    }
   }
 }

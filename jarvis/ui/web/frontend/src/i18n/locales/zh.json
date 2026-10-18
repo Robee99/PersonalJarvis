@@ -8026,5 +8026,94 @@
       "map_title": "记忆地图",
       "map_close": "返回 HUD"
     }
+  },
+  "tool_catalog": {
+    "title": "工具目录",
+    "subtitle": "每个 MCP 服务器、技能、插件、应用、CLI 和工具集只列一次，并显示它在哪里运行。",
+    "search_placeholder": "搜索工具、服务器、技能、许可证…",
+    "search_label": "搜索工具目录",
+    "filter_label": "类型",
+    "all": "全部",
+    "loading": "正在读取工具目录…",
+    "error": "无法读取工具目录。",
+    "empty": "没有匹配项。",
+    "show_more": "再显示 {n} 项",
+    "active_brain": "当前大脑：{brain}",
+    "active_brain_unknown": "当前大脑：未知",
+    "sources_error": "部分来源无法读取：{list}",
+    "states_label": "状态",
+    "state_yes": "{state}：是",
+    "state_no": "{state}：否",
+    "state_unknown": "{state}：未知",
+    "tools": "{n} 个工具",
+    "tools_unknown": "工具数量未知",
+    "needs_key": "需要密钥",
+    "license_unknown": "许可证未知",
+    "upstream": "上游",
+    "duplicate_of": "与 {id} 重叠",
+    "invalid": "损坏的条目",
+    "not_verified": "尚未通过真实工具调用验证",
+    "connected_unverified": "已连接，但还没有成功的真实工具调用",
+    "verified_ok": "已于 {when} 验证",
+    "verified_fail": "上次检查失败 {when}",
+    "latency": "{ms} 毫秒",
+    "working": "处理中…",
+    "action_done": "{item} 已更新。",
+    "action_failed": "无法更改 {item}：{error}",
+    "restart_hermes": "重启 Hermes 以加载。",
+    "type": {
+      "mcp": "MCP",
+      "app": "应用",
+      "cli": "CLI",
+      "skill": "技能",
+      "plugin": "插件",
+      "toolset": "工具集"
+    },
+    "state": {
+      "available": "可用",
+      "installed": "已安装",
+      "enabled": "已启用",
+      "connected": "已连接",
+      "visible": "大脑可见",
+      "verified": "已验证"
+    },
+    "runtime": {
+      "jarvis": "Jarvis",
+      "hermes": "Hermes"
+    },
+    "role": {
+      "canonical": "首选路径",
+      "primary": "主要路径",
+      "secondary": "次要路径"
+    },
+    "source": {
+      "known": "已知上游",
+      "local": "本地",
+      "marketplace": "应用市场",
+      "cli_catalog": "CLI 目录",
+      "hermes": "Hermes 内置",
+      "hermes_hub": "Hermes 技能中心",
+      "hermes_plugin": "Hermes 插件",
+      "jarvis": "Jarvis 内置",
+      "unknown": "来源未知"
+    },
+    "binding": {
+      "on": "开",
+      "off": "关",
+      "connected": "已连接",
+      "not_connected": "未连接",
+      "visible": "可见",
+      "hidden": "不可见",
+      "visible_unknown": "可见性未知",
+      "verified": "已验证",
+      "check_failed": "检查失败",
+      "not_installed": "未安装"
+    },
+    "action": {
+      "enable": "启用",
+      "disable": "停用",
+      "install": "安装",
+      "open": "打开"
+    }
   }
 }

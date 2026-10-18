@@ -573,6 +573,7 @@ class WebServer:
         from .sub_agents_routes import router as sub_agents_router
         from .tasks_routes import router as tasks_router
         from .telephony_routes import router as telephony_router
+        from .tool_catalog_routes import router as tool_catalog_router
         from .tool_model_routes import router as tool_model_router
         from .tools_routes import router as tools_router
         from .update_routes import router as update_router
@@ -597,6 +598,7 @@ class WebServer:
         app.include_router(agent_mcp_router)
         app.include_router(tools_router)
         app.include_router(hermes_inventory_router)
+        app.include_router(tool_catalog_router)
         app.include_router(local_server_router)
         app.include_router(acceptance_router)
         app.include_router(tool_model_router)
