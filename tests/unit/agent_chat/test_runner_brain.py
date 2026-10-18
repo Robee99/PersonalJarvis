@@ -18,6 +18,7 @@ from jarvis.agent_chat import runner_api, runner_brain
 from jarvis.agent_chat.events import make_event
 from jarvis.agent_chat.service import AgentChatService
 from jarvis.agent_chat.store import AgentChatStore
+from jarvis.agent_chat.tool_catalog import ToolChoice
 from jarvis.core.bus import EventBus
 from jarvis.core.protocols import BrainDelta
 from tests.fakes.fake_brain_manager import FakeBrainManager
@@ -50,6 +51,30 @@ def _jarvis_session(svc: AgentChatService, tmp_path: Path, **over: Any):
     }
     kwargs.update(over)
     return svc.create_session(**kwargs)
+
+
+def test_explicit_mcp_request_selects_the_matching_operation() -> None:
+    class _Tool:
+        def __init__(self, description: str) -> None:
+            self.description = description
+
+    choices = [ToolChoice(
+        id="mcp:time", label="Time", description="Time utilities", category="mcp",
+        group="time", tool_names=("time/get_current_time", "time/convert_time"),
+    )]
+    tools = {
+        "time/get_current_time": _Tool("Get the current time in a timezone"),
+        "time/convert_time": _Tool("Convert a time between timezones"),
+    }
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time in Asia/Kolkata", choices, tools
+    ) == "time/get_current_time"
+    assert runner_brain._explicit_selected_mcp_tool(
+        "What is the current time?", choices, tools
+    ) == ""
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time", choices * 2, tools
+    ) == ""
 
 
 @pytest.fixture

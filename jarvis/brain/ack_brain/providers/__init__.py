@@ -18,6 +18,7 @@ from __future__ import annotations
 from jarvis.brain.ack_brain.providers.base import AbstractAckProvider
 from jarvis.brain.ack_brain.providers.gemini import GeminiFlashAck
 from jarvis.brain.ack_brain.providers.grok import GrokFlashAck
+from jarvis.brain.ack_brain.providers.local_openai import LocalOpenAIFlashAck
 from jarvis.brain.ack_brain.providers.ollama import OllamaFlashAck
 from jarvis.brain.ack_brain.providers.openai import OpenAIMiniAck
 
@@ -26,6 +27,7 @@ REGISTRY: dict[str, type[AbstractAckProvider]] = {
     "grok": GrokFlashAck,
     "openai": OpenAIMiniAck,
     "ollama": OllamaFlashAck,
+    "local-openai": LocalOpenAIFlashAck,
 }
 
 __all__ = [
@@ -35,4 +37,5 @@ __all__ = [
     "GrokFlashAck",
     "OpenAIMiniAck",
     "OllamaFlashAck",
+    "LocalOpenAIFlashAck",
 ]

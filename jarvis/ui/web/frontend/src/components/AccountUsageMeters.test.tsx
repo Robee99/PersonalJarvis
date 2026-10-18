@@ -12,13 +12,14 @@
  * * a limit this build has no name for must still be drawn, not hidden;
  * * a seat with no login must not repeat what the row above already says.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 import { AccountUsageMeters } from "./AccountUsageMeters";
 import type { AccountUsage, UsageWindow } from "@/lib/agentAccountsApi";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 const NOW = Date.UTC(2026, 7, 13, 11, 0, 0);
 
@@ -50,6 +51,42 @@ function usage(overrides: Partial<AccountUsage> = {}): AccountUsage {
 }
 
 describe("AccountUsageMeters", () => {
+  it("does not draw a provider trend from points older than one day", () => {
+    const recent = Date.now() - 25 * 60 * 60 * 1000;
+    localStorage.setItem(
+      "jarvis:agent-account-usage:v1:claude%3Aseat:weekly:::10080",
+      JSON.stringify([
+        { at: recent, percent: 41 },
+        { at: recent + 16 * 60 * 1000, percent: 48 },
+      ]),
+    );
+
+    render(
+      <AccountUsageMeters
+        now={Date.now()}
+        usage={usage({ source: "cached", as_of: null })}
+      />,
+    );
+
+    expect(screen.queryByRole("img", { name: /recent live usage trend/i })).toBeNull();
+  });
+
+  it("keeps a trend when two recent live readings are available", () => {
+    const first = Date.now() - 30 * 60 * 1000;
+    const liveUsage = (asOf: number, percent: number) =>
+      usage({
+        as_of: asOf / 1000,
+        windows: [window_({ percent })],
+      });
+    const { rerender } = render(
+      <AccountUsageMeters now={first} usage={liveUsage(first, 41)} />,
+    );
+    const second = first + 16 * 60 * 1000;
+    rerender(<AccountUsageMeters now={second} usage={liveUsage(second, 48)} />);
+
+    expect(screen.getByRole("img", { name: /recent live usage trend/i })).toBeTruthy();
+  });
+
   it("distinguishes 46 percent used from 54 percent remaining", () => {
     render(<AccountUsageMeters now={NOW} usage={usage({ windows: [window_({ percent: 46 })] })} />);
     expect(screen.getByText("46% used")).toBeTruthy();

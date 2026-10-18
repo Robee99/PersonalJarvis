@@ -188,6 +188,16 @@ def test_local_openai_empty_model_list_is_model_unavailable() -> None:
     assert classify_provider_error(msg) == "model_unavailable"
 
 
+def test_local_model_ram_gate_is_model_unavailable_not_unreachable() -> None:
+    # Live JARVIS 2026-10-17: the local proxy answered, but refused to load
+    # Qwen3-VL because the host was 121 MiB below the required free-RAM floor.
+    msg = (
+        "InternalServerError: Error code: 503 - Qwen3-VL needs 6144 MiB free RAM; "
+        "only about 6023 MiB would be free. The active model keeps the turn."
+    )
+    assert classify_provider_error(msg) == "model_unavailable"
+
+
 def test_local_openai_missing_base_url_is_not_configured() -> None:
     """No server URL on the card = the local analogue of "no key set" — an
     actionable amber, never a red integration error."""

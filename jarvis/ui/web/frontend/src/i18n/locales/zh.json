@@ -7916,7 +7916,7 @@
       "from_jarvis": "{name}",
       "unreadable": "无法读取",
       "unavailable": "不可用",
-      "search_placeholder": "查找笔记、技能、工具或应用",
+      "search_placeholder": "查找笔记、对话、社区、技能、工具或应用",
       "search_label": "搜索记忆球",
       "matches": "{count} 个匹配",
       "no_matches": "地图上没有匹配项",
@@ -7929,8 +7929,13 @@
         "skills": "技能",
         "tools": "工具",
         "apps": "已连接的应用",
-        "mcp": "MCP 服务器"
-      }
+        "mcp": "MCP 服务器",
+        "conversations": "对话",
+        "communities": "GraphRAG 社区"
+      },
+      "cognee_indexed": "已被 Cognee 索引 · 来源 {source}",
+      "source_notes": "已索引的来源笔记",
+      "no_source_links": "此索引报告中没有有效的来源链接。"
     },
     "hands": {
       "toggle": "手势",

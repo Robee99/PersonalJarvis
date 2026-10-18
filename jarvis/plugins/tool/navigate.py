@@ -76,6 +76,8 @@ KNOWN: frozenset[str] = frozenset(
         "orb",
         # The tool armory: every app the assistant can reach, as cards.
         "armory",
+        # God's Eye View: the globe with public geospatial feeds.
+        "world-intelligence",
     }
 )
 
@@ -270,6 +272,9 @@ _ALIASES: dict[str, str] = {
     "tool armory": "armory",
     "armory": "armory",
     "armoury": "armory",
+    "world intelligence": "world-intelligence",
+    "god's eye view": "world-intelligence",
+    "gods eye view": "world-intelligence",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",

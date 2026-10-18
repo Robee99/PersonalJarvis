@@ -198,6 +198,13 @@ def classify_provider_error(message: str | None) -> str:
         return NO_CREDITS if _has_billing(msg) else RATE_LIMITED
     if code == 404:
         return MODEL_UNAVAILABLE if "model" in msg else ERROR
+    if "free ram" in msg and any(
+        marker in msg for marker in ("needs ", "not enough", "insufficient")
+    ):
+        # A local inference server can be reachable while refusing to load the
+        # configured model because the host lacks its minimum RAM budget. This
+        # is a model/resource availability state, not a network outage.
+        return MODEL_UNAVAILABLE
     if code is not None and 500 <= code <= 599:
         # Provider-side outage — not the user's key.
         return UNREACHABLE

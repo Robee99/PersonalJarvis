@@ -2091,8 +2091,13 @@ class ModelCatalog:
         if provider not in _ENDPOINTS:
             raise ValueError(f"Unsupported provider: {provider}")
         ep = _ENDPOINTS[provider]
-        url = self._resolve_catalog_url(provider, ep)
-        key = cfg.resolve_provider_endpoint(provider).credential
+        url = await asyncio.to_thread(self._resolve_catalog_url, provider, ep)
+        # Windows Credential Manager is synchronous and can block when the
+        # desktop credential prompt/session is unavailable. This method is
+        # async, so never perform that read on the shared application loop.
+        key = await asyncio.to_thread(
+            lambda: cfg.resolve_provider_endpoint(provider).credential
+        )
         # A server on this machine (a local gateway) is listed without a key;
         # a remote catalog that requires one still refuses honestly.
         needs_key = ep.auth in ("x-api-key", "bearer", "query")
@@ -2115,7 +2120,11 @@ class ModelCatalog:
         elif auth == "none" and (key or ep.secret_slot is not None):
             # Keyless local server with an OPTIONAL stored key (e.g. vLLM
             # --api-key): attach it when present, stay anonymous otherwise.
-            optional = key or (cfg.get_secret(*ep.secret_slot) if ep.secret_slot else None)
+            optional = key or (
+                await asyncio.to_thread(cfg.get_secret, *ep.secret_slot)
+                if ep.secret_slot
+                else None
+            )
             if optional:
                 headers = {"Authorization": f"Bearer {optional}"}
 

@@ -7916,7 +7916,7 @@
       "from_jarvis": "{name}",
       "unreadable": "Couldn't be read",
       "unavailable": "unavailable",
-      "search_placeholder": "Find a note, skill, tool or app",
+      "search_placeholder": "Find a note, conversation, community, skill, tool or app",
       "search_label": "Search the memory orb",
       "matches": "{count} matches",
       "no_matches": "No matches on the map",
@@ -7929,8 +7929,13 @@
         "skills": "Skills",
         "tools": "Tools",
         "apps": "Connected apps",
-        "mcp": "MCP servers"
-      }
+        "mcp": "MCP servers",
+        "conversations": "Conversations",
+        "communities": "GraphRAG communities"
+      },
+      "cognee_indexed": "Cognee indexed · source {source}",
+      "source_notes": "Indexed source notes",
+      "no_source_links": "No active source links in this indexed report."
     },
     "hands": {
       "toggle": "Hands",

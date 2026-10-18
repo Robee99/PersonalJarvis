@@ -211,7 +211,7 @@ async def _save_with_retries(
     last: Exception | None = None
     for attempt in range(attempts):
         try:
-            if not _save_if_current(store, plugin_id, expected, tokens):
+            if not await asyncio.to_thread(_save_if_current, store, plugin_id, expected, tokens):
                 return False
             if attempt:
                 log.info(
@@ -318,7 +318,7 @@ async def _refresh_plugin_token_locked(
     reauth_retry_seconds: int | None = None,
 ) -> RefreshAttempt:
     try:
-        tokens = store.load(plugin_id)
+        tokens = await asyncio.to_thread(store.load, plugin_id)
     except Exception as exc:  # noqa: BLE001 - isolate one plugin's storage
         log.warning("plugin %s token load failed: %s", plugin_id, exc)
         return RefreshAttempt(FAILED)
@@ -337,10 +337,10 @@ async def _refresh_plugin_token_locked(
         # a dead plugin would otherwise hammer the provider forever.
         stamped = dataclasses.replace(tokens, reauth_retry_at=datetime.now(UTC))
         try:
-            if not _save_if_current(store, plugin_id, tokens, stamped):
-                return _reload_before_refresh_commit(plugin_id, store, tokens.to_json())[
-                    1
-                ] or RefreshAttempt(FAILED)
+            if not await asyncio.to_thread(_save_if_current, store, plugin_id, tokens, stamped):
+                return (
+                await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, tokens.to_json())
+            )[1] or RefreshAttempt(FAILED)
         except Exception as exc:  # noqa: BLE001 - isolate one plugin's storage
             log.warning(
                 "plugin %s self-heal stamp failed, skipping this cycle: %s",
@@ -356,11 +356,11 @@ async def _refresh_plugin_token_locked(
     if not tokens.refresh:
         if tokens.expires_at is not None and tokens.expires_at <= datetime.now(UTC):
             marked = flag_for_reauth(tokens, REAUTH_REFRESH_MISSING)
-            if _save_if_current(store, plugin_id, tokens, marked):
+            if await asyncio.to_thread(_save_if_current, store, plugin_id, tokens, marked):
                 return RefreshAttempt(REVOKED)
-            return _reload_before_refresh_commit(plugin_id, store, tokens.to_json())[
-                1
-            ] or RefreshAttempt(FAILED)
+            return (
+                await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, tokens.to_json())
+            )[1] or RefreshAttempt(FAILED)
         return RefreshAttempt(SKIPPED, usable=not force)
 
     # A self-heal probe is due by definition -- its access token expired long
@@ -375,7 +375,7 @@ async def _refresh_plugin_token_locked(
     original_state = tokens.to_json()
 
     try:
-        handler = build_handler(plugin_id)
+        handler = await asyncio.to_thread(build_handler, plugin_id)
     except Exception as exc:  # noqa: BLE001 - configuration must not break the loop
         log.warning("plugin %s refresh handler failed to build: %s", plugin_id, exc)
         return RefreshAttempt(FAILED)
@@ -389,7 +389,7 @@ async def _refresh_plugin_token_locked(
     except Exception as exc:  # noqa: BLE001 - provider failures are isolated
         reason = reauth_reason_for(str(exc))
         if reason is None:
-            _current, superseded = _reload_before_refresh_commit(plugin_id, store, original_state)
+            _current, superseded = await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, original_state)
             if superseded is not None:
                 return superseded
             log.warning(
@@ -399,16 +399,16 @@ async def _refresh_plugin_token_locked(
             )
             return RefreshAttempt(FAILED)
 
-        current, superseded = _reload_before_refresh_commit(plugin_id, store, original_state)
+        current, superseded = await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, original_state)
         if superseded is not None:
             return superseded
         assert current is not None
 
         try:
-            if not _save_if_current(store, plugin_id, current, flag_for_reauth(current, reason)):
-                return _reload_before_refresh_commit(plugin_id, store, original_state)[
-                    1
-                ] or RefreshAttempt(FAILED)
+            if not await asyncio.to_thread(_save_if_current, store, plugin_id, current, flag_for_reauth(current, reason)):
+                return (
+                await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, original_state)
+            )[1] or RefreshAttempt(FAILED)
         except Exception as save_exc:  # noqa: BLE001 - isolate storage failure
             log.warning(
                 "plugin %s needs_reauth save failed, will retry: %s",
@@ -424,7 +424,7 @@ async def _refresh_plugin_token_locked(
         )
         return RefreshAttempt(REVOKED)
 
-    current, superseded = _reload_before_refresh_commit(plugin_id, store, original_state)
+    current, superseded = await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, original_state)
     if superseded is not None:
         return superseded
     assert current is not None
@@ -457,9 +457,9 @@ async def _refresh_plugin_token_locked(
             expected=current,
         )
         if not committed:
-            return _reload_before_refresh_commit(plugin_id, store, original_state)[
-                1
-            ] or RefreshAttempt(FAILED)
+            return (
+                await asyncio.to_thread(_reload_before_refresh_commit, plugin_id, store, original_state)
+            )[1] or RefreshAttempt(FAILED)
     except Exception as exc:  # noqa: BLE001 - isolate storage failure
         if not rotated:
             # The provider did not rotate, so the stored refresh token is
@@ -471,7 +471,7 @@ async def _refresh_plugin_token_locked(
                 exc,
             )
             return RefreshAttempt(FAILED)
-        return _handle_lost_rotation(plugin_id, store, current, exc)
+        return await asyncio.to_thread(_handle_lost_rotation, plugin_id, store, current, exc)
     if current.needs_reauth:
         log.info(
             "plugin %s: self-heal succeeded, connection is live again (was flagged %s)",
@@ -552,8 +552,11 @@ class RefreshScheduler:
         self._stopping = False
 
     async def run_once(self) -> dict[str, str]:
+        # plugin_ids_fn normally walks OS keyring entries. On Windows each
+        # Credential Manager read is synchronous and froze the ASGI loop.
+        plugin_ids = await asyncio.to_thread(self._plugin_ids_fn)
         return await refresh_due_tokens(
-            self._plugin_ids_fn(),
+            plugin_ids,
             self._store,
             self._build_handler,
             threshold_seconds=self._threshold,

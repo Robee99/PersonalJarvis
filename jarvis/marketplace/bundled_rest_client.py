@@ -32,7 +32,10 @@ class BundledRestMcpClient:
             await self._current_client()
 
     async def _current_client(self) -> ConnectedRestClient:
-        tokens = self._token_provider()
+        # The provider normally reads the OS keyring. Credential Manager is a
+        # synchronous API and can block during profile unlock or recovery; this
+        # runs on every tool operation, so never call it on the ASGI event loop.
+        tokens = await asyncio.to_thread(self._token_provider)
         if tokens is None or tokens.needs_reauth:
             raise RuntimeError("Plugin disconnected or authorization expired; reconnect in Plugins")
         if self._rest is None or tokens.access != self._access:

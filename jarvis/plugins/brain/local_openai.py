@@ -107,9 +107,16 @@ def thinking_extra_body(effort: str | None) -> dict[str, Any] | None:
 
 class LocalOpenAIBrain:
     name: str = "local-openai"
-    # Conservative floor — the real window depends on the served model; the
-    # manager treats this as a budget hint, not a hard cap.
-    context_window: int = 32_768
+    # llama.cpp's common default n_ctx is 8192. A 32k guess made the manager
+    # send requests a local server could not accept (the server returned its
+    # actual limit only after paying the full prompt-build cost). Installations
+    # with a larger window can set [brain.providers."local-openai"].context_window.
+    context_window: int = 8_192
+    # llama.cpp's JSON-Schema grammar can reject very large aggregate tool
+    # surfaces before generation starts. Keep the local OpenAI-compatible
+    # surface below that parser ceiling; users can raise it for servers that
+    # have been verified with a larger tool set.
+    max_tools: int = 48
     supports_tools: bool = True
     supports_vision: bool = False
     # Set per selected model from the catalog: the server takes
@@ -121,6 +128,16 @@ class LocalOpenAIBrain:
         self._client: Any = None
         self._server_root: str | None = None
         self._credential: str | None = None
+        try:
+            provider_cfg = cfg.load_config().brain.providers.get("local-openai")
+            configured_window = getattr(provider_cfg, "context_window", None)
+            if configured_window is not None:
+                self.context_window = int(configured_window)
+            configured_max_tools = getattr(provider_cfg, "max_tools", None)
+            if configured_max_tools is not None:
+                self.max_tools = max(0, int(configured_max_tools))
+        except Exception:  # noqa: BLE001 — context sizing must never break startup
+            log.debug("local-openai: context-window hint unavailable", exc_info=True)
         self.supports_vision = _declared_vision_support(self._model)
         self.supports_thinking_switch = _declared_thinking_switch(self._model)
 

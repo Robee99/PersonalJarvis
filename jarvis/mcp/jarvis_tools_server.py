@@ -55,6 +55,10 @@ CHAT_ORIGIN: Final[str] = "agent-chat"
 #: spoken-consent gate instead.
 CHAT_SESSION_REF: ContextVar[str | None] = ContextVar("jarvis.mcp.chat_session_ref", default=None)
 
+# A named, individually revocable credential for an outside MCP client. The
+# token is carried in the request context and filters both discovery and calls.
+TOOLS_TOKEN: ContextVar[Any | None] = ContextVar("jarvis.mcp.tools_token", default=None)
+
 #: How long the chat's card may stay open for a gate reached over MCP.
 CHAT_APPROVAL_TIMEOUT_S: Final[float] = 600.0
 
@@ -171,7 +175,21 @@ async def _session_wire_catalog() -> dict[str, Any]:
         return {}
     if task_scope is not None:
         entries = [entry for entry in entries if entry.name in task_scope.names]
+    token = TOOLS_TOKEN.get()
+    if token is not None:
+        entries = _tools_token_filter(entries, token)
     return _wire_catalog(entries)
+
+
+def _tools_token_filter(entries: list[Any], token: Any) -> list[Any]:
+    """Apply a tools-surface credential's exact names and risk-tier limits."""
+    from jarvis.mcp.agents.tokens import allows_jarvis_tool
+
+    return [
+        entry
+        for entry in entries
+        if allows_jarvis_tool(token, str(entry.name), str(entry.risk_tier))
+    ]
 
 
 def _gateway() -> Any | None:

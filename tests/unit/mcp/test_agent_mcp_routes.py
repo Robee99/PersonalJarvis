@@ -240,8 +240,8 @@ def test_a_revoked_token_is_dead_at_once(token_store, keyed: str) -> None:
     assert answer.status_code == 401
 
 
-def test_a_token_does_not_open_the_tools_surface(token_store, keyed: str) -> None:
-    """A scoped token is for the ecosystem; Jarvis' own hands need the key."""
+def test_an_agent_token_does_not_open_the_tools_surface(token_store, keyed: str) -> None:
+    """Agent tokens cannot be replayed as credentials for Jarvis' hands."""
     _token, secret = token_store.issue(name="Anything", scope="full")
 
     with TestClient(_mounted_app()) as client:
@@ -252,6 +252,55 @@ def test_a_token_does_not_open_the_tools_surface(token_store, keyed: str) -> Non
         )
 
     assert answer.status_code == 401
+
+
+def test_a_tools_token_lists_only_its_allowlisted_safe_and_monitor_tools(
+    token_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.mcp import jarvis_tools_server
+
+    token, secret = token_store.issue(
+        name="Hermes local Gemma",
+        scope="tools",
+        allowed_tools=["inspect_pointer", "click", "ask_tool"],
+    )
+
+    class Gateway:
+        def catalog(self):
+            return [
+                type("Entry", (), {
+                    "name": name,
+                    "description": name,
+                    "input_schema": {"type": "object", "properties": {}},
+                    "risk_tier": tier,
+                    "is_action_tool": tier == "monitor",
+                })()
+                for name, tier in (
+                    ("inspect_pointer", "safe"),
+                    ("click", "monitor"),
+                    ("hidden_tool", "monitor"),
+                    ("ask_tool", "ask"),
+                    ("block_tool", "block"),
+                )
+            ]
+
+    catalog = jarvis_tools_server._tools_token_filter(Gateway().catalog(), token)
+    names = {entry.name for entry in catalog}
+
+    assert names == {"inspect_pointer", "click"}
+    assert token.allowed_tools == ["ask_tool", "click", "inspect_pointer"]
+    assert token_store.verify(secret) is not None
+
+
+def test_a_tools_token_cannot_open_the_agent_surface(token_store, keyed: str) -> None:
+    from jarvis.ui.web.mcp_server_routes import _AGENTS_SURFACE, _TOOLS_SURFACE, _authorized
+
+    _token, secret = token_store.issue(
+        name="Hermes local Gemma", scope="tools", allowed_tools=["click"]
+    )
+    scope = {"headers": [(b"authorization", f"Bearer {secret}".encode())]}
+    assert _authorized(scope, _TOOLS_SURFACE)
+    assert not _authorized(scope, _AGENTS_SURFACE)
 
 
 # --------------------------------------------------------- the pairing flow
@@ -297,6 +346,48 @@ def test_pair_for_another_machine_uses_that_address(connect_app: FastAPI, token_
     assert entry["headers"]["Authorization"] == f"Bearer {body['secret']}"
 
 
+def test_pair_can_create_a_loopback_only_tools_token_for_hermes(
+    token_store
+) -> None:
+    from jarvis.ui.web.agent_mcp_routes import PairBody, agent_mcp_pair
+
+    body = agent_mcp_pair(
+        PairBody(
+            name="Hermes local Gemma",
+            client="hermes",
+            scope="tools",
+            surface="tools",
+            transport="http",
+            allowed_tools=["click", "inspect_pointer"],
+        )
+    )
+
+    entry = body["config"]["mcpServers"]["jarvis"]
+    assert body["surface"] == "tools"
+    assert entry["url"].endswith("/api/control/mcp")
+    assert entry["headers"]["Authorization"] == f"Bearer {body['secret']}"
+    assert token_store.verify(body["secret"]).allowed_tools == ["click", "inspect_pointer"]
+
+
+def test_pair_rejects_a_remote_tools_surface(token_store) -> None:
+    from fastapi import HTTPException
+
+    from jarvis.ui.web.agent_mcp_routes import PairBody, agent_mcp_pair
+
+    with pytest.raises(HTTPException) as exc:
+        agent_mcp_pair(
+            PairBody(
+                name="Remote Hermes",
+                scope="tools",
+                surface="tools",
+                transport="http",
+                base_url="http://192.168.1.50:47821",
+                allowed_tools=["click"],
+            )
+        )
+    assert exc.value.status_code == 422
+
+
 def test_paired_clients_are_listed_and_revocable(connect_app: FastAPI, token_store) -> None:
     with TestClient(connect_app) as client:
         first = client.post("/api/agent-mcp/pair", json={"name": "One"}).json()
@@ -305,7 +396,7 @@ def test_paired_clients_are_listed_and_revocable(connect_app: FastAPI, token_sto
         listed = client.get("/api/agent-mcp/tokens").json()
         assert {t["name"] for t in listed["tokens"]} == {"One", "Two"}
         assert all("secret" not in t for t in listed["tokens"])
-        assert listed["scopes"] == ["read", "work", "full"]
+        assert listed["scopes"] == ["read", "work", "full", "tools"]
 
         token_id = first["token"]["token_id"]
         gone = client.request("DELETE", f"/api/agent-mcp/tokens/{token_id}").json()

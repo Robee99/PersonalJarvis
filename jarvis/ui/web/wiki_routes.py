@@ -28,6 +28,7 @@ Tests can override the path by setting that attribute directly before the
 TestClient context, or by passing a config object whose ``wiki_integration``
 section already points at a temporary directory.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -389,6 +390,14 @@ async def get_graph(request: Request) -> dict[str, Any]:
 
     nodes: list[dict[str, Any]] = []
     known_slugs: set[str] = set()
+    paths_by_slug = {
+        item.page.slug: item.relative_path.as_posix()
+        for item in visible
+        if not (
+            len(item.relative_path.parts) > 1
+            and item.relative_path.parts[0].casefold() in TEMPLATE_DIRS
+        )
+    }
     for page in pages:
         slug = page.slug
         if slug in known_slugs:
@@ -399,6 +408,7 @@ async def get_graph(request: Request) -> dict[str, Any]:
                 "id": slug,
                 "kind": kind_of(page),
                 "title": display_title(page),
+                "path": paths_by_slug.get(slug, f"{slug}.md"),
             }
         )
 
@@ -471,6 +481,59 @@ async def get_orb_tree(request: Request) -> dict[str, Any]:
         unavailable.append("work")
     tree = await asyncio.to_thread(build_tree, notes=notes, entities=entities, edges=edges)
     return {"ok": True, **tree, "unavailable": unavailable}
+
+
+@router.get("/semantic-index")
+async def get_semantic_index(request: Request) -> dict[str, Any]:
+    """Expose source identifiers for current, authorized Cognee memory sources."""
+    vault_root = _resolve_vault_root(request)
+    config = getattr(request.app.state, "config", None)
+    cognee_config = getattr(getattr(config, "memory", None), "cognee", None)
+    if vault_root is None or cognee_config is None or not cognee_config.enabled:
+        return {"ok": True, "enabled": False, "sources": []}
+
+    from jarvis.memory.cognee_adapter import CogneeMemoryAdapter
+
+    adapter = CogneeMemoryAdapter(vault_root=vault_root, config=cognee_config)
+    try:
+        sources = await asyncio.to_thread(adapter.list_active_sources)
+        conversation_sources = await asyncio.to_thread(adapter.list_conversation_sources)
+    except Exception as exc:  # noqa: BLE001 - an unavailable index must not blank the wiki
+        log.warning("wiki_route_failed route=/semantic-index error=%s", exc)
+        return {
+            "ok": True,
+            "enabled": True,
+            "sources": [],
+            "conversation_sources": [],
+            "available": False,
+        }
+    return {
+        "ok": True,
+        "enabled": True,
+        "sources": sources,
+        "conversation_sources": conversation_sources,
+        "available": True,
+    }
+
+
+@router.get("/graphrag-communities")
+async def get_graphrag_communities(request: Request) -> dict[str, Any]:
+    """Return bounded community reports from the current authorized wiki index."""
+    vault_root = _resolve_vault_root(request)
+    config = getattr(request.app.state, "config", None)
+    graph_config = getattr(getattr(config, "memory", None), "graphrag", None)
+    if vault_root is None or graph_config is None or not graph_config.enabled:
+        return {"ok": True, "enabled": False, "available": False, "communities": []}
+
+    from jarvis.memory.graphrag_adapter import GraphRagMemoryAdapter
+
+    adapter = GraphRagMemoryAdapter(vault_root=vault_root, config=graph_config)
+    try:
+        result = await adapter.communities()
+    except Exception as exc:  # noqa: BLE001 - unavailable graph must not blank the orb
+        log.warning("wiki_route_failed route=/graphrag-communities error=%s", exc)
+        return {"ok": True, "enabled": True, "available": False, "communities": []}
+    return {"ok": True, "enabled": True, "available": True, **result}
 
 
 @router.get("/backlinks/{slug}")
@@ -576,9 +639,7 @@ async def ingest_wiki(payload: WikiIngestRequest) -> WikiIngestResponse:
                 "code": outcome.error_code or "wiki-ingest-failed",
                 "message": outcome.error or "nothing was stored",
                 "source": outcome.source,
-                "skipped_due_to_recent_edit": len(
-                    outcome.skipped_due_to_recent_edit
-                ),
+                "skipped_due_to_recent_edit": len(outcome.skipped_due_to_recent_edit),
                 "failed_validation": len(outcome.failed_validation),
                 "blocked_sensitive_content": len(outcome.blocked_pii),
             },
@@ -690,8 +751,7 @@ async def backfill_wiki(
         int(attempted_final.get(decision, 0))
         + max(
             0,
-            int(preexisting_final.get(decision, 0))
-            - int(preexisting_before.get(decision, 0)),
+            int(preexisting_final.get(decision, 0)) - int(preexisting_before.get(decision, 0)),
         )
         for decision in write_decisions
     )
@@ -810,7 +870,7 @@ def _link_context(body: str, link_target: str, fallback_slug: str) -> str:
     end = min(len(body), idx + _BACKLINK_SNIPPET_RADIUS)
     raw = body[start:end].replace("\n", " ").strip()
     if len(raw) > _BACKLINK_SNIPPET_MAX:
-        raw = raw[: _BACKLINK_SNIPPET_MAX].rsplit(" ", 1)[0] + "…"
+        raw = raw[:_BACKLINK_SNIPPET_MAX].rsplit(" ", 1)[0] + "…"
     if start > 0:
         raw = "…" + raw
     if end < len(body):
@@ -877,10 +937,7 @@ def _visible_markdown_count(vault_root: Path) -> int:
     return sum(
         1
         for path in vault_root.rglob("*.md")
-        if not any(
-            part.startswith(".")
-            for part in path.relative_to(vault_root).parts[:-1]
-        )
+        if not any(part.startswith(".") for part in path.relative_to(vault_root).parts[:-1])
     )
 
 
@@ -1135,8 +1192,7 @@ async def wiki_health(request: Request) -> dict[str, Any]:
             try:
                 state["journal_backlog"] = int(
                     conn.execute(
-                        "SELECT COUNT(*) FROM wiki_candidate_journal "
-                        "WHERE status = 'pending'"
+                        "SELECT COUNT(*) FROM wiki_candidate_journal WHERE status = 'pending'"
                     ).fetchone()[0]
                 )
                 row = conn.execute(
@@ -1185,10 +1241,7 @@ async def wiki_health(request: Request) -> dict[str, Any]:
                     state["capture_funnel"] = {
                         **capture_funnel,
                         "window_hours": 24,
-                        **{
-                            key: int(value or 0)
-                            for key, value in zip(keys, audit, strict=True)
-                        },
+                        **{key: int(value or 0) for key, value in zip(keys, audit, strict=True)},
                     }
                 decisions = conn.execute(
                     """
@@ -1248,8 +1301,7 @@ async def wiki_health(request: Request) -> dict[str, Any]:
         isinstance(last_index, dict)
         and last_index.get("ok") is False
         and snapshot.get("index_state") != "ok"
-        and float(last_index.get("ts") or 0.0)
-        >= float(snapshot.get("last_index_at") or 0.0)
+        and float(last_index.get("ts") or 0.0) >= float(snapshot.get("last_index_at") or 0.0)
     ):
         reasons = list(snapshot.get("index_state_reasons") or [])
         if "index_update_failed" not in reasons:

@@ -17,7 +17,7 @@
  * map is testable without a canvas.
  */
 
-export type OrbGroup = "wiki" | "concepts" | "skills" | "tools" | "apps" | "mcp";
+export type OrbGroup = "wiki" | "concepts" | "conversations" | "communities" | "skills" | "tools" | "apps" | "mcp";
 
 export interface OrbNode {
   id: string;
@@ -27,9 +27,17 @@ export interface OrbNode {
   live: boolean;
   detail: string;
   /** Where "Open" leads. */
-  section?: "memory" | "skills" | "plugins" | "mcps" | "armory";
+  section?: "memory" | "chats" | "skills" | "plugins" | "mcps" | "armory";
   /** The wiki slug, for notes: "Open" shows that page. */
   slug?: string;
+  /** Stable source identity from the authorized semantic index. */
+  sourceId?: string;
+  semanticIndexed?: boolean;
+  /** Original conversation record for indexed conversation memories. */
+  threadId?: string;
+  conversationKind?: "text" | "voice";
+  /** Exact wiki sources linked through the GraphRAG export ID chain. */
+  sourceLinks?: { sourceId: string; sourcePath: string; slug?: string }[];
 }
 
 export interface OrbLink {
@@ -60,8 +68,27 @@ export interface OrbItem {
 /** `undefined` = the catalog could not be read; `[]` = it is empty. */
 export interface OrbSources {
   wiki?: {
-    nodes: { id: string; kind: string; title?: string }[];
+    nodes: { id: string; kind: string; title?: string; path?: string }[];
     edges: { source: string; target: string }[];
+  };
+  semanticIndex?: {
+    enabled: boolean;
+    sources: { source_id: string; source_path: string }[];
+    conversation_sources?: { source_id: string; source_path: string; thread_id: string }[];
+  };
+  conversations?: { kind: "text" | "voice"; id: string; title?: string; updated_ms?: number }[];
+  graphrag?: {
+    enabled: boolean;
+    available: boolean;
+    communities: {
+      id: string;
+      title: string;
+      summary?: string;
+      level: number;
+      rank: number;
+      size: number;
+      sources?: { source_id: string; source_path: string }[];
+    }[];
   };
   skills?: OrbItem[];
   tools?: OrbItem[];
@@ -73,6 +100,8 @@ export interface OrbSources {
 export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
   wiki: "#5bd4a4",
   concepts: "#ffb84d",
+  conversations: "#f5a35c",
+  communities: "#df8cff",
   skills: "#b48cf2",
   tools: "#f47fa4",
   apps: "#6aa9ff",
@@ -82,6 +111,8 @@ export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
 export const ORB_GROUP_LABEL: Record<OrbGroup, string> = {
   wiki: "Notes",
   concepts: "Concepts",
+  conversations: "Conversations",
+  communities: "GraphRAG communities",
   skills: "Skills",
   tools: "Tools",
   apps: "Connected apps",
@@ -206,7 +237,7 @@ export function connectedApps(apps: MarketplaceApp[] | undefined): OrbItem[] | u
 // The graph
 // ---------------------------------------------------------------------------
 
-const SECTION: Record<Exclude<OrbGroup, "wiki" | "concepts">, OrbNode["section"]> = {
+const SECTION: Record<Exclude<OrbGroup, "wiki" | "concepts" | "conversations" | "communities">, OrbNode["section"]> = {
   skills: "skills",
   // The Jarvis actions page was retired upstream; the tools live on the
   // armory (AGENTS › Tools) now.
@@ -219,7 +250,16 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
   const nodes: OrbNode[] = [];
   const links: OrbLink[] = [];
   const seen = new Set<string>();
-  const counts: Record<OrbGroup, number> = { wiki: 0, concepts: 0, skills: 0, tools: 0, apps: 0, mcp: 0 };
+  const counts: Record<OrbGroup, number> = {
+    wiki: 0,
+    concepts: 0,
+    conversations: 0,
+    communities: 0,
+    skills: 0,
+    tools: 0,
+    apps: 0,
+    mcp: 0,
+  };
   const unavailable: OrbGroup[] = [];
 
   const add = (node: OrbNode) => {
@@ -233,7 +273,15 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
   if (!wiki || !Array.isArray(wiki.nodes)) {
     unavailable.push("wiki", "concepts");
   } else {
+    const semanticByPath = new Map(
+      (src.semanticIndex?.sources ?? []).map((source) => [
+        source.source_path.replaceAll("\\", "/").toLowerCase(),
+        source.source_id,
+      ]),
+    );
     for (const page of wiki.nodes) {
+      const sourcePath = (page.path || `${page.id}.md`).replaceAll("\\", "/").toLowerCase();
+      const sourceId = semanticByPath.get(sourcePath);
       add({
         id: `wiki:${page.id}`,
         label: page.title?.replace(/^"|"$/g, "") || page.id,
@@ -242,6 +290,8 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
         detail: `${titleCase(page.kind)} page in memory`,
         section: "memory",
         slug: page.id,
+        sourceId,
+        semanticIndexed: Boolean(sourceId),
       });
     }
     const linked = new Set<string>();
@@ -254,6 +304,45 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
         links.push({ source: a, target: b });
       }
     }
+  }
+
+  // Only conversation records present in both the active Cognee source
+  // registry and the canonical chat archive are drawn, so each node traces to
+  // a real source and deleted or stale records stay off the map.
+  const conversationsById = new Map((src.conversations ?? []).map((item) => [item.id, item]));
+  for (const source of src.semanticIndex?.conversation_sources ?? []) {
+    const conversation = conversationsById.get(source.thread_id);
+    if (!conversation) continue;
+    const title = conversation.title?.trim() || `${conversation.kind} conversation`;
+    add({
+      id: `conversation:${conversation.kind}:${conversation.id}`,
+      label: title.length > 48 ? `${title.slice(0, 47)}…` : title,
+      group: "conversations",
+      live: true,
+      detail: `Cognee semantic memory · ${conversation.kind} source`,
+      section: "chats",
+      sourceId: source.source_id,
+      semanticIndexed: true,
+      threadId: conversation.id,
+      conversationKind: conversation.kind,
+    });
+  }
+
+  // GraphRAG community reports are real corpus outputs. Their schema does not
+  // name the exact source of each claim, so no source edges are invented.
+  for (const community of src.graphrag?.available ? src.graphrag.communities : []) {
+    add({
+      id: `community:${community.id}`,
+      label: community.title,
+      group: "communities",
+      live: true,
+      detail: `Level ${community.level} · ${community.size} members · ${oneLine(community.summary, 320)}`,
+      sourceLinks: (community.sources ?? []).map((source) => {
+        const leaf = source.source_path.split(/[\\/]/).pop() ?? "";
+        const slug = leaf.toLowerCase().endsWith(".md") ? leaf.slice(0, -3) : undefined;
+        return { sourceId: source.source_id, sourcePath: source.source_path, slug };
+      }),
+    });
   }
 
   for (const group of ["skills", "tools", "apps", "mcp"] as const) {

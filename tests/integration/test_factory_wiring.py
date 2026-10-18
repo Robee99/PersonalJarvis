@@ -15,13 +15,28 @@ from __future__ import annotations
 
 import os
 
-import pytest
-
 from jarvis.brain.factory import ROUTER_TOOLS, build_default_brain
 
 
 def test_router_tools_has_spawn_worker() -> None:
     assert "spawn-worker" in ROUTER_TOOLS
+
+
+def test_build_default_brain_forwards_authoritative_runtime_config(monkeypatch) -> None:
+    import jarvis.brain.factory as factory
+
+    monkeypatch.delenv("JARVIS_BRAIN", raising=False)
+    runtime_config = object()
+    captured: dict[str, object] = {}
+
+    def build_phase2(**kwargs):
+        captured.update(kwargs)
+        return "brain"
+
+    monkeypatch.setattr(factory, "_phase2_full_brain", build_phase2)
+
+    assert factory.build_default_brain(config=runtime_config) == "brain"
+    assert captured["config"] is runtime_config
 
 
 def test_build_default_brain_router_tier() -> None:

@@ -25,13 +25,16 @@ from jarvis.brain.manager import (
     _DEAD_LIST_KINDS,
     _PROVIDER_DOWN_CAUSE_PHRASES,
     BrainManager,
+    _approx_history_tokens,
     _classify_provider_error,
+    _compact_history_for_local_context,
     _fit_tools_to_context_window,
     _format_provider_chain_error,
     _primary_provider_down_cause,
     _provider_down_phrase,
     _tool_surface_tokens,
 )
+from jarvis.core.protocols import BrainMessage
 
 # The exact server refusal from the live log (Ollama over the OpenAI route).
 _LIVE_OLLAMA_400 = (
@@ -188,6 +191,19 @@ class TestFitOnTheManager:
         assert {"search_web", "run-skill"} <= set(fitted)
         assert "github/x" not in fitted
 
+    def test_small_local_window_keeps_the_gated_computer_use_tool(self) -> None:
+        m = self._mgr()
+        tools = {
+            "small": _tool("small"),
+            "computer_use": _tool("computer_use", size=10),
+            "mcp/large": _tool("mcp/large", size=200, mcp=True),
+        }
+        fitted = m._fit_tools_to_brain(
+            tools, _FakeBrain(8_192), system_prompt="x" * 12_000, history=None
+        )
+        assert "computer_use" in fitted
+        assert len(fitted) < len(tools)
+
     def test_undeclared_window_is_left_alone(self) -> None:
         m = self._mgr()
 
@@ -196,6 +212,35 @@ class TestFitOnTheManager:
 
         tools = {"a": _tool("a", size=60)}
         assert m._fit_tools_to_brain(tools, _Windowless(), system_prompt="", history=None) is tools
+
+
+class TestLocalHistoryCompaction:
+    def test_compacts_old_history_without_mutating_the_saved_messages(self) -> None:
+        original = [
+            BrainMessage(role="user" if index % 2 == 0 else "assistant",
+                         content=f"turn-{index} " + ("detail " * 500))
+            for index in range(60)
+        ]
+
+        compacted = _compact_history_for_local_context(original, 8_192)
+
+        assert compacted
+        assert _approx_history_tokens(compacted) <= 1_024
+        assert "turn-59" in str(compacted[-1].content)
+        assert any("compact excerpt" in str(item.content) for item in compacted)
+        assert len(original) == 60
+        assert len(str(original[0].content)) > 2_000
+
+    def test_preserves_small_history_and_marks_omitted_old_images(self) -> None:
+        small = [BrainMessage(role="user", content="hello")]
+        assert _compact_history_for_local_context(small, 8_192) == tuple(small)
+
+        history = [
+            BrainMessage(role="user", content=[{"type": "image", "data": "x" * 10_000}]),
+            BrainMessage(role="assistant", content="recent answer"),
+        ]
+        compacted = _compact_history_for_local_context(history, 8_192)
+        assert "Earlier image omitted" in str(compacted[0].content)
 
 
 # ---------------------------------------------------------- the cause

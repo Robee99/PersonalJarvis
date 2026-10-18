@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -37,6 +38,31 @@ def _tokens(expires_in_seconds: int | None, refresh: str | None = "r0") -> Token
         else None
     )
     return Tokens(access="a0", refresh=refresh, expires_at=exp)
+
+
+@pytest.mark.asyncio
+async def test_blocking_plugin_id_scan_does_not_block_event_loop() -> None:
+    """A synchronous keyring scan must not freeze the web event loop."""
+    scan_started = threading.Event()
+    release_scan = threading.Event()
+
+    def scan_ids() -> list[str]:
+        scan_started.set()
+        release_scan.wait(timeout=3)
+        return []
+
+    scheduler = RefreshScheduler(
+        plugin_ids_fn=scan_ids,
+        store=_store(),
+        build_handler=lambda _plugin_id: None,
+    )
+    cycle = asyncio.create_task(scheduler.run_once())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(scan_started.wait, 1), timeout=2)
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.5)
+    finally:
+        release_scan.set()
+    assert await asyncio.wait_for(cycle, timeout=2) == {}
 
 
 class _FakeHandler:

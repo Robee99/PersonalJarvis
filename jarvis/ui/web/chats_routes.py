@@ -103,6 +103,12 @@ class NewChatRequest(BaseModel):
     title: str = "New Chat"
 
 
+class IndexedConversationIds(BaseModel):
+    """Bounded IDs for metadata-only summaries of selected memory sources."""
+
+    ids: list[str] = Field(default_factory=list, max_length=1000)
+
+
 class ResumeResponse(BaseModel):
     kind: ConversationKind
     id: str
@@ -457,6 +463,56 @@ def list_conversations(
 
     items.sort(key=lambda c: c.updated_ms, reverse=True)
     return items[:limit]
+
+
+@router.post("/indexed-summaries", response_model=list[ConversationSummary])
+def indexed_conversation_summaries(
+    body: IndexedConversationIds, request: Request
+) -> list[ConversationSummary]:
+    """Resolve selected old memory sources without returning their transcripts.
+
+    The normal history endpoint is intentionally capped at 1000 newest items.
+    This metadata-only path lets the Memory Orb link an explicitly indexed
+    older thread directly, without downloading its messages or widening chat
+    history pagination for every client.
+    """
+    requested = list(dict.fromkeys(item.strip() for item in body.ids if item.strip()))
+    if not requested:
+        return []
+
+    chat_store = _require_chat_store(request)
+    session_store = _optional_session_store(request)
+    threads = {
+        str(item["thread_id"]): item
+        for item in chat_store.list_threads(include_empty=False)
+    }
+    text = {
+        thread_id: _text_thread_to_summary(threads[thread_id])
+        for thread_id in requested
+        if thread_id in threads
+    }
+
+    sessions: dict[str, Any] = {}
+    if session_store is not None:
+        for thread_id in requested:
+            if thread_id in text:
+                continue
+            try:
+                session = session_store.get_session(thread_id)
+            except Exception as exc:  # noqa: BLE001 - one missing archive must not hide the others
+                log.debug("indexed voice summary unavailable for %s: %s", thread_id, exc)
+                continue
+            if session is not None:
+                sessions[thread_id] = session
+    summaries: list[ConversationSummary] = []
+    for thread_id in requested:
+        if thread_id in text:
+            summaries.append(text[thread_id])
+        elif thread_id in sessions:
+            # Do not invoke the voice title generator for a metadata-only map
+            # refresh; its brain call is unnecessary to resolve an indexed ID.
+            summaries.append(_voice_session_to_summary(sessions[thread_id]))
+    return summaries
 
 
 @router.post("", response_model=NewChatResponse)

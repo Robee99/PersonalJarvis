@@ -107,6 +107,20 @@ def test_hoist_reads_the_canonical_pick_fresh_per_call():
     assert mgr._hoist_tool_model(list(_CHAIN))[0][0] == "grok"
 
 
+def test_explicit_tool_model_precedes_general_worker_selection():
+    mgr = _manager("local-openai")
+    mgr._config.brain.worker = BrainTierConfig(provider="nous")
+
+    assert mgr._tool_model_provider() == "local-openai"
+
+
+def test_worker_selection_remains_fallback_when_tool_model_is_unset():
+    mgr = _manager(None)
+    mgr._config.brain.worker = BrainTierConfig(provider="nous")
+
+    assert mgr._tool_model_provider() == "nous"
+
+
 def test_candidate_status_rejects_missing_credential(monkeypatch):
     mgr = _manager("gemini")
     monkeypatch.setattr(mgr._registry, "available", lambda: ["gemini"])

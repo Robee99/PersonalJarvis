@@ -77,8 +77,15 @@ class WikiRecallTool:
         {"query": "Personal Jarvis architecture"},
     ]
 
-    def __init__(self, search: VaultSearch) -> None:
+    def __init__(
+        self,
+        search: VaultSearch,
+        cognee: Any | None = None,
+        graphrag: Any | None = None,
+    ) -> None:
         self._search = search
+        self._cognee = cognee
+        self._graphrag = graphrag
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
         """Run the vault search and return a compact markdown block.
@@ -118,6 +125,35 @@ class WikiRecallTool:
                 error="vault unavailable",
             )
 
+        hits = None
+        if self._graphrag is not None and self._graphrag.enabled:
+            try:
+                graph_hits = await self._graphrag.search(query, k=k)
+                if graph_hits:
+                    lines = [f'## GraphRAG wiki hits for "{query}"']
+                    for hit in graph_hits:
+                        lines.append(
+                            f"- {hit['text']} (source: {hit['source_path']}; "
+                            f"id: {hit['source_id']})"
+                        )
+                    log.info("wiki-recall: %d GraphRAG hit(s)", len(graph_hits))
+                    return ToolResult(success=True, output="\n".join(lines))
+            except Exception as exc:  # noqa: BLE001 - native FTS is the safe fallback
+                log.warning("wiki-recall: GraphRAG unavailable; using native FTS: %s", exc)
+        if self._cognee is not None and self._cognee.enabled:
+            try:
+                semantic = await self._cognee.search(query, k=k)
+                if semantic:
+                    lines = [f'## Semantic wiki hits for "{query}"']
+                    for hit in semantic:
+                        lines.append(
+                            f"- {hit['text']} (source: {hit['source_path']}; "
+                            f"id: {hit['source_id']})"
+                        )
+                    log.info("wiki-recall: %d Cognee semantic hit(s)", len(semantic))
+                    return ToolResult(success=True, output="\n".join(lines))
+            except Exception as exc:  # noqa: BLE001 - native FTS is the safe fallback
+                log.warning("wiki-recall: Cognee unavailable; using native FTS: %s", exc)
         hits = self._search.search(query, k=k)
 
         log.info("wiki-recall: %d hit(s) for query (k=%d)", len(hits), k)

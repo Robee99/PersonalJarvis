@@ -20,6 +20,7 @@ import pytest
 from jarvis.brain.factory import ROUTER_TOOLS
 from jarvis.plugins.tool.wiki_ingest import WikiIngestTool
 from jarvis.plugins.tool.wiki_page_read import WikiPageReadTool
+from jarvis.plugins.tool.wiki_recall import WikiRecallTool
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -251,6 +252,80 @@ async def test_wiki_ingest_delegates_to_curator_with_default_source() -> None:
     assert source == "tool:wiki-ingest"
     assert "applied: 1" in result.output
     assert "joy.md" in result.output
+
+
+@pytest.mark.asyncio
+async def test_wiki_ingest_indexes_applied_pages_with_enabled_graph_memory(vault: Path) -> None:
+    class GraphMemory:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.paths: list[Path] = []
+
+        async def index_paths(self, paths: list[Path]) -> dict[str, int]:
+            self.paths.extend(paths)
+            return {"indexed": len(paths)}
+
+    page = vault / "people" / "joy.md"
+    graph = GraphMemory()
+    curator = _FakeCurator(result=_FakeWriteResult(applied=[page]))
+    tool = WikiIngestTool(curator_resolver=lambda: curator, graphrag_adapter=graph)
+
+    result = await tool.execute({"text": "Joy likes astronomy."}, ctx=None)
+
+    assert result.success is True
+    assert graph.paths == [page]
+    assert "GraphRAG sources indexed: 1/1" in result.output
+
+
+@pytest.mark.asyncio
+async def test_wiki_recall_prefers_graph_results_with_source_provenance(vault: Path) -> None:
+    class Search:
+        _root = vault
+
+        def search(self, query: str, *, k: int) -> list[object]:
+            raise AssertionError("native search should not run when graph hits exist")
+
+    class GraphMemory:
+        enabled = True
+
+        async def search(self, query: str, *, k: int) -> list[dict[str, str]]:
+            return [{
+                "text": "Joy enjoys astronomy.",
+                "source_path": "people/joy.md",
+                "source_id": "wiki:people/joy.md",
+            }]
+
+    result = await WikiRecallTool(Search(), graphrag=GraphMemory()).execute(
+        {"query": "Joy interests"}, ctx=None
+    )
+
+    assert result.success is True
+    assert "Joy enjoys astronomy." in result.output
+    assert "people/joy.md" in result.output
+    assert "wiki:people/joy.md" in result.output
+
+
+@pytest.mark.asyncio
+async def test_wiki_recall_falls_back_to_native_search_on_graph_error(vault: Path) -> None:
+    class Search:
+        _root = vault
+
+        def search(self, query: str, *, k: int) -> list[object]:
+            return []
+
+    class GraphMemory:
+        enabled = True
+
+        async def search(self, query: str, *, k: int) -> list[dict[str, str]]:
+            raise RuntimeError("isolated worker unavailable")
+
+    result = await WikiRecallTool(Search(), graphrag=GraphMemory()).execute(
+        {"query": "Joy interests"}, ctx=None
+    )
+
+    assert result.success is True
+    assert 'No wiki matches found for "Joy interests".' in result.output
 
 
 @pytest.mark.asyncio

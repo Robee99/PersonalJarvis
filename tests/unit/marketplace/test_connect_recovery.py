@@ -70,7 +70,7 @@ async def test_reauth_mark_is_atomic_with_concurrent_credential_rotation():
     store.save("notion", original)
     registry = PluginToolRegistry(token_store=store)
     try:
-        registry._maybe_mark_needs_reauth("notion", "HTTP 401", expected_tokens=original)
+        await registry._maybe_mark_needs_reauth("notion", "HTTP 401", expected_tokens=original)
         assert store.load("notion") == replacement
     finally:
         await registry.stop()
@@ -84,7 +84,7 @@ async def test_stale_auth_refusal_does_not_flag_a_reconnected_static_token():
     store.save("notion", replacement)
     registry = PluginToolRegistry(token_store=store)
     try:
-        registry._maybe_mark_needs_reauth("notion", "HTTP 401", expected_tokens=original)
+        await registry._maybe_mark_needs_reauth("notion", "HTTP 401", expected_tokens=original)
         assert store.load("notion") == replacement
     finally:
         await registry.stop()

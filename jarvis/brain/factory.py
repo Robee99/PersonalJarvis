@@ -164,6 +164,8 @@ ROUTER_TOOLS = frozenset({
     # The brain calls this when the user asks "what do we know about X" or
     # references a past project, person, or decision by name.
     "wiki-recall",
+    # Optional read-only external archive search, disabled until a vault path is configured.
+    "kept-archive-search",
     # Phase B5 follow-up: full-page reader for the wiki vault. Used after
     # wiki-recall when the brain has narrowed to one page and needs the
     # complete content, not the 240-char snippet.
@@ -186,6 +188,7 @@ ROUTER_TOOLS = frozenset({
     # explicitly store a fact ("merk dir: …") rather than relying on the
     # VoiceFactBridge acknowledgement heuristic.
     "wiki-ingest",
+    "cognee-source",
     # CLI-Integration (2026-05-24): virtual loader that expands to one
     # ``cli_<name>`` tool per connected & usable CLI (gcloud, gh, docker, …).
     # This is the MCP/plugin model for command-line tools: only connected
@@ -575,6 +578,11 @@ def _load_tools_for_tier(
                 )
             elif ep.name == "whoami":
                 inst = cls(profile=user_profile, people=people)
+            elif ep.name == "kept-archive-search":
+                # Kept is an explicit, read-only external archive. Its default
+                # unset path keeps the capability disabled until configured.
+                integration = getattr(config, "wiki_integration", None)
+                inst = cls(archive_root=getattr(integration, "kept_archive_root", None))
             elif ep.name == "wiki-recall":
                 # Phase B5: build VaultSearch with the configured vault root.
                 # The search instance is created once per brain build and
@@ -585,7 +593,19 @@ def _load_tools_for_tier(
                 # default so the tool surface stays stable).
                 from jarvis.plugins.tool.wiki_recall import _build_search_instance
 
-                inst = cls(search=_build_search_instance())
+                search_instance = _build_search_instance()
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
+
+                inst = cls(
+                    search=search_instance,
+                    cognee=build_cognee_adapter(search_instance._root),
+                    graphrag=build_graphrag_adapter(search_instance._root),
+                )
+            elif ep.name == "cognee-source":
+                from jarvis.plugins.tool.cognee_source import build_cognee_source_tool
+
+                inst = build_cognee_source_tool()
             elif ep.name == "wiki-page-read":
                 # Phase B5 follow-up: same vault-root resolution as wiki-recall.
                 from jarvis.plugins.tool.wiki_page_read import _build_page_read_tool
@@ -608,10 +628,17 @@ def _load_tools_for_tier(
                 # constructed by ``bootstrap_wiki_integration`` after the brain
                 # is built, so the tool must defer the lookup to execute time.
                 # Mirrors the spawn-worker lazy-resolver pattern.
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
                 from jarvis.memory.wiki.integration import get_running_curator
+                from jarvis.memory.wiki.vault_root import resolve_vault_root
                 from jarvis.plugins.tool.wiki_ingest import WikiIngestTool
 
-                inst = WikiIngestTool(curator_resolver=get_running_curator)
+                inst = WikiIngestTool(
+                    curator_resolver=get_running_curator,
+                    cognee_adapter=build_cognee_adapter(resolve_vault_root(None).path),
+                    graphrag_adapter=build_graphrag_adapter(resolve_vault_root(None).path),
+                )
             elif ep.name == "create-skill":
                 # Skill authoring by voice/chat: the tool resolves the live
                 # SkillRegistry (skill_context) and the live BrainManager
@@ -935,6 +962,7 @@ def _register_runtime_manager(manager: Any) -> None:
 def _phase2_full_brain(
     tier: Literal["router"] = "router",
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Build the BrainManager in router tier.
 
@@ -961,7 +989,10 @@ def _phase2_full_brain(
     from jarvis.memory.curator import Curator
     from jarvis.safety import ApprovalWorkflow, RiskTierEvaluator, ToolExecutor
 
-    config = cfg.load_config()
+    # The web/desktop runtime owns the authoritative config object. Reusing it
+    # keeps the brain resolver and provider UI in sync and avoids a second disk
+    # read racing a settings update during deferred startup.
+    config = config if config is not None else cfg.load_config()
     if bus is None:
         bus = EventBus()
 
@@ -1611,6 +1642,7 @@ def build_default_brain(
     tier: Literal["router"] = "router",
     allow_phase2: bool = True,
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Return a brain callback (async (str)->str) according to the fallback chain.
 
@@ -1624,6 +1656,8 @@ def build_default_brain(
         allow_phase2: When ``False``, skips BrainManager and falls back
             immediately to the Phase-1 Gemini fallback. Intended for tests.
         bus: Optional ``EventBus``. ``None`` = own bus (voice-pipeline default).
+        config: Optional runtime config to share with BrainManager. When
+            supplied, this is the same authoritative object used by the UI.
 
     Control via ENV:
     - `JARVIS_BRAIN=echo`    → pure echo (no LLM)
@@ -1737,7 +1771,7 @@ def build_default_brain(
     # fallback in the production path: if the manager cannot be built, the UI
     # should show a genuine error state.
     try:
-        brain = _phase2_full_brain(tier=tier, bus=bus)
+        brain = _phase2_full_brain(tier=tier, bus=bus, config=config)
         log.info(
             "Brain stack: BrainManager tier=%s active — provider=%s, tools=%d",
             tier,
@@ -1906,7 +1940,9 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
             sorted(REGISTRY.keys()),
         )
         return None
-    provider_cfg = getattr(ack_cfg.providers, provider_name)
+    # Provider ids can contain hyphens while Pydantic config fields use
+    # underscores (for example ``local-openai`` -> ``local_openai``).
+    provider_cfg = getattr(ack_cfg.providers, provider_name.replace("-", "_"))
     return provider_cls(provider_cfg)
 
 

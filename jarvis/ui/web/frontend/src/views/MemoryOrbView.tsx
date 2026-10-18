@@ -24,6 +24,7 @@ import { graphHandController } from "@/components/orb/hands/graphController";
 import { useHandTracking, type HandController, type HandDeps } from "@/components/orb/hands/useHandTracking";
 import { ProjectsOrb } from "@/components/orb/ProjectsOrb";
 import { fill, useT } from "@/i18n";
+import { useConversations } from "@/hooks/useConversations";
 import { sendChatMessage } from "@/lib/chat";
 import {
   ORB_GROUP_COLOUR,
@@ -81,13 +82,58 @@ async function getJson<T>(url: string): Promise<T | undefined> {
   }
 }
 
+async function postJson<T>(url: string, body: unknown): Promise<T | undefined> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok ? ((await res.json()) as T) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type OrbConversation = NonNullable<OrbSources["conversations"]>[number];
+
+/** Cognee sources, the conversations they index, and GraphRAG communities. */
+async function fetchSemanticSources(): Promise<Pick<OrbSources, "semanticIndex" | "conversations" | "graphrag">> {
+  const [semanticIndex, conversations, graphrag] = await Promise.all([
+    getJson<OrbSources["semanticIndex"]>("/api/wiki/semantic-index"),
+    getJson<OrbConversation[]>("/api/chats?limit=1000"),
+    getJson<OrbSources["graphrag"]>("/api/wiki/graphrag-communities"),
+  ]);
+  const indexedIds = (semanticIndex?.conversation_sources ?? [])
+    .map((source) => source.thread_id)
+    .filter(Boolean)
+    .slice(0, 1000);
+  const indexed = indexedIds.length
+    ? await postJson<OrbConversation[]>("/api/chats/indexed-summaries", { ids: indexedIds })
+    : [];
+  const byKey = new Map<string, OrbConversation>();
+  for (const item of [...(indexed ?? []), ...(Array.isArray(conversations) ? conversations : [])]) {
+    byKey.set(`${item.kind}:${item.id}`, item);
+  }
+  return {
+    semanticIndex: semanticIndex?.enabled ? semanticIndex : undefined,
+    conversations: [...byKey.values()],
+    graphrag,
+  };
+}
+
 export async function fetchOrbSources(): Promise<OrbSources> {
-  const [wiki, hermes, apps] = await Promise.all([
+  const [wiki, hermes, apps, semantic] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
     getJson<HermesCatalogs>("/api/hermes/inventory"),
     getJson<{ plugins: MarketplaceApp[] }>("/api/marketplace/plugins"),
+    fetchSemanticSources(),
   ]);
-  const base = { wiki: Array.isArray(wiki?.nodes) ? wiki : undefined, apps: connectedApps(apps?.plugins) };
+  const base = {
+    wiki: Array.isArray(wiki?.nodes) ? wiki : undefined,
+    apps: connectedApps(apps?.plugins),
+    ...semantic,
+  };
   if (hermes?.available) {
     return { ...base, ...itemsFromHermes(hermes), capabilitySource: "hermes" };
   }
@@ -183,6 +229,7 @@ export function MemoryOrbView({
   const messages = useEventStore((s) => (sentAt === null ? null : s.messages));
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const requestWikiPage = useEventStore((s) => s.requestWikiPage);
+  const { openConversation } = useConversations();
 
   const { data: sources, isLoading } = useQuery({
     queryKey: ["orb", "sources"],
@@ -265,7 +312,10 @@ export function MemoryOrbView({
 
   const open = (node: OrbNode) => {
     if (node.slug) requestWikiPage(node.slug);
-    else if (node.section) setActiveSection(node.section);
+    else if (node.group === "conversations" && node.threadId && node.conversationKind) {
+      setActiveSection("chats");
+      void openConversation(node.conversationKind, node.threadId);
+    } else if (node.section) setActiveSection(node.section);
   };
   const focusNodeRef = useRef(focusNode);
   focusNodeRef.current = focusNode;
@@ -316,6 +366,14 @@ export function MemoryOrbView({
     } else {
       ctx.lineWidth = 1.2 / Math.max(scale, 0.5);
       ctx.strokeStyle = colour;
+      ctx.stroke();
+    }
+    // A green ring: this note or conversation is in Cognee's source registry.
+    if (node.semanticIndexed) {
+      ctx.beginPath();
+      ctx.arc(x, y, r + 2 / Math.max(scale, 0.6), 0, 2 * Math.PI);
+      ctx.strokeStyle = "rgba(52,211,153,0.9)";
+      ctx.lineWidth = 1.5 / Math.max(scale, 0.6);
       ctx.stroke();
     }
     const showLabel = focus || (isHit && hitIds.size <= 40) || scale > 2.4;
@@ -573,6 +631,42 @@ export function MemoryOrbView({
                 </p>
                 <p className="mt-0.5 text-slate-500">{groupLabel(node.group)}</p>
                 {node.detail && <p className="mt-1 leading-5 text-slate-400">{node.detail}</p>}
+                {node.semanticIndexed && (
+                  <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
+                    {fill(t("orb2.memory.cognee_indexed"), { source: node.sourceId?.slice(0, 12) ?? "" })}
+                  </p>
+                )}
+                {node.group === "communities" && (
+                  <div className="mt-3 border-t border-white/10 pt-2">
+                    <p className="mb-1 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                      {t("orb2.memory.source_notes")}
+                    </p>
+                    {node.sourceLinks?.length ? (
+                      <ul className="space-y-1">
+                        {node.sourceLinks.map((source) => (
+                          <li key={source.sourceId}>
+                            {source.slug ? (
+                              <button
+                                type="button"
+                                onClick={() => requestWikiPage(source.slug!)}
+                                className="w-full truncate text-left text-cyan-200 hover:text-cyan-100"
+                                title={source.sourcePath}
+                              >
+                                {source.sourcePath}
+                              </button>
+                            ) : (
+                              <span className="block truncate text-slate-400" title={source.sourcePath}>
+                                {source.sourcePath}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-slate-500">{t("orb2.memory.no_source_links")}</p>
+                    )}
+                  </div>
+                )}
                 {picked && (node.slug || node.section) && (
                   <button
                     type="button"

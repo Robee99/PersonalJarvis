@@ -145,6 +145,7 @@ def build_override(
     ref: str,
     kit_tools: Mapping[str, Tool] | None = None,
     system_extra: str = "",
+    required_tool_name: str = "",
 ) -> TurnOverride:
     """The pick for this turn: the session's provider / model / effort, the
     surface's hands (its kit's tools, else the folder's), and the tool context
@@ -170,6 +171,7 @@ def build_override(
         ),
         credential_scope=kit.credential_scope,
         system_extra=system_extra,
+        required_tool_name=required_tool_name,
         tool_context={
             # A typed answer is read, not heard: no spoken two-liners.
             "delivery": "written",
@@ -264,6 +266,41 @@ def _default_model(brain: Any, provider: str) -> str | None:
         except Exception:  # noqa: BLE001 — the provider's own default then
             return None
     return None
+
+
+def _explicit_selected_mcp_tool(
+    text: str, choices: list[ToolChoice], tools: Mapping[str, Tool]
+) -> str:
+    """Return the best selected MCP operation only for a clear use/call request.
+
+    A server chip normally makes tools available. When the user's text also
+    explicitly asks Jarvis to use that server, rank its operations against the
+    request so the evidence gate can require the specific read/action asked for.
+    """
+    if len(choices) != 1 or choices[0].category != "mcp":
+        return ""
+    if not re.search(r"\b(use|call|query|check|fetch|open|read|search|navigate)\b", text, re.I):
+        return ""
+
+    stop = {
+        "about", "after", "also", "and", "any", "are", "for", "from", "get", "give",
+        "have", "into", "just", "please", "report", "return", "then", "that", "the",
+        "this", "with", "would", "you", "your", "mcp", "server", "tool", "use",
+        "call", "query", "check", "fetch", "open", "read", "search", "navigate",
+    }
+    query = {word for word in re.findall(r"[a-z0-9]+", text.casefold()) if len(word) > 2} - stop
+    best_name = ""
+    best_score = 0
+    for name in choices[0].tool_names:
+        tool = tools.get(name)
+        if tool is None:
+            continue
+        operation = f"{name.replace('/', ' ').replace('_', ' ')} {tool.description}".casefold()
+        tokens = set(re.findall(r"[a-z0-9]+", operation))
+        score = len(query & tokens)
+        if score > best_score:
+            best_name, best_score = name, score
+    return best_name
 
 
 # ------------------------------------------------------------- step mirror
@@ -448,6 +485,7 @@ async def run_brain_turn(
     cwd = Path(session.cwd or Path.home())
     stance = handle.stance or "ask"
     kit_tools, system_extra = await kit_payload(session, brain)
+    required_tool_name = ""
     if tool_choices:
         from jarvis.agent_chat.tool_catalog import (
             live_catalog,
@@ -465,6 +503,7 @@ async def run_brain_turn(
             extra.update(selection_tools(choices, base))
             kit_tools = extra
             system_extra += selection_briefing(choices)
+            required_tool_name = _explicit_selected_mcp_tool(text, choices, extra)
         except ValueError as exc:
             await finish("error", {}, str(exc))
             return
@@ -476,6 +515,7 @@ async def run_brain_turn(
         ref=ref,
         kit_tools=kit_tools,
         system_extra=system_extra,
+        required_tool_name=required_tool_name,
     )
     _note_skill_trigger(brain, text)
 

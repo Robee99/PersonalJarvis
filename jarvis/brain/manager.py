@@ -3357,7 +3357,14 @@ class BrainManager:
         """Return the canonical Tool Model provider or its legacy fallback."""
         from jarvis.core.model_selection import operation_model, worker_selection
 
-        selection = operation_model.get() or worker_selection(self._config)
+        # An operation-scoped model is the narrowest selection and remains
+        # authoritative for the duration of that operation. Otherwise the
+        # explicit global Tool Model must win over the general worker model:
+        # the latter configures delegated workers, while Tool Model configures
+        # tool-bearing turns and computer use. Letting worker selection win
+        # here made the Tool Model UI report (for example) Nous even after the
+        # user had explicitly pinned a local vision/tool model.
+        selection = operation_model.get()
         if selection is not None:
             return selection.provider
         try:
@@ -3367,9 +3374,15 @@ class BrainManager:
             if provider:
                 return provider
             legacy = getattr(brain_cfg, "computer_use", None)
-            return (getattr(legacy, "provider", None) or "").strip()
+            provider = (getattr(legacy, "provider", None) or "").strip()
+            if provider:
+                return provider
         except Exception:  # noqa: BLE001 -- config failure must not block dispatch
-            return ""
+            pass
+        # Preserve the previous worker preference as a fallback for installs
+        # that have not configured either the canonical or legacy Tool Model.
+        selection = worker_selection(self._config)
+        return selection.provider if selection is not None else ""
 
     def _tool_model_source(self) -> str:
         """Identify whether the selection came from canonical or legacy config."""
@@ -3784,6 +3797,7 @@ class BrainManager:
         brain: Brain,
         *,
         tools_override: dict[str, Tool] | None = None,
+        history_override: Sequence[BrainMessage] | None = None,
         max_turns: int | None = None,
         deadline_s: float | None = None,
         reasoning_effort: ReasoningEffort | None = None,
@@ -3825,10 +3839,22 @@ class BrainManager:
         ``_cu_context_lines`` reads).
         """
         tools = tools_override if tools_override is not None else self._tools
-        system_prompt = self._build_system_prompt()
-        history = _TURN_HISTORY_OVERRIDE.get()
+        try:
+            context_window = int(getattr(brain, "context_window", 0) or 0)
+        except (TypeError, ValueError):
+            context_window = 0
+        compact_prompt = 0 < context_window <= 16_384
+        system_prompt = (
+            self._build_system_prompt(compact=True)
+            if compact_prompt else self._build_system_prompt()
+        )
+        history = history_override
+        if history is None:
+            history = _TURN_HISTORY_OVERRIDE.get()
         if history is None:
             history = tuple(getattr(self, "_history", None) or ())
+        if compact_prompt:
+            history = _compact_history_for_local_context(history, context_window)
         tools = self._fit_tools_to_brain(
             tools, brain, system_prompt=system_prompt, history=history
         )
@@ -4368,7 +4394,7 @@ class BrainManager:
             return target_prefix + raw_output[len(de_prefix):]
         return raw_output
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(self, *, compact: bool = False) -> str:
         """Builds the system prompt with Jarvis-Agent-style workspace injection.
 
         Layer order (Jarvis-Agent priority map):
@@ -4424,7 +4450,7 @@ class BrainManager:
         # is set in Settings (data/custom_system_prompt.md), else the packaged
         # default. Read fresh each turn, so an edit/reset applies on the next turn
         # without a restart. Empty string when nothing is available — no crash.
-        persona_block = load_effective_persona_prompt()
+        persona_block = load_effective_persona_prompt(compact=compact)
         if persona_block:
             parts.append(persona_block)
 
@@ -4565,7 +4591,22 @@ class BrainManager:
 
             _skill_ctx = try_get_skill_context()
             if _skill_ctx is not None:
-                _skills_section = render_available_skills_section(_skill_ctx.registry)
+                if compact:
+                    active = _skill_ctx.registry.list_active()
+                    names = [
+                        str(skill.name)
+                        for skill in active
+                        if getattr(skill, "frontmatter", None) is not None
+                    ]
+                    _skills_section = (
+                        "## AVAILABLE SKILLS\n"
+                        "Use a relevant installed skill first. Its full instructions "
+                        "are inserted when the task matches. Available names: "
+                        + ", ".join(f"`{name}`" for name in names)
+                        if names else None
+                    )
+                else:
+                    _skills_section = render_available_skills_section(_skill_ctx.registry)
                 if _skills_section:
                     parts.append(_skills_section)
             elif not self._skills_omit_warned:
@@ -4592,7 +4633,16 @@ class BrainManager:
 
             _cli_reg = get_active_registry()
             if _cli_reg is not None:
-                _cli_section = render_connected_clis_section(_cli_reg)
+                if compact:
+                    active_names = sorted(
+                        str(tool.name) for tool in _cli_reg.active_tools()
+                    )
+                    _cli_section = (
+                        "CONNECTED CLIS: " + ", ".join(active_names)
+                        if active_names else ""
+                    )
+                else:
+                    _cli_section = render_connected_clis_section(_cli_reg)
                 if _cli_section:
                     parts.append(_cli_section)
         except Exception:  # noqa: BLE001
@@ -4629,7 +4679,10 @@ class BrainManager:
             parts.append(self._self_control_directive)
 
         if self._system_prompt_extra:
-            parts.append(self._system_prompt_extra)
+            compact_extra = getattr(self, "_system_prompt_extra_compact", "")
+            parts.append(
+                compact_extra if compact and compact_extra else self._system_prompt_extra
+            )
 
         # Per-turn addendum (TurnOverride.system_extra): a surface's own
         # briefing for THIS turn only; empty on every other turn.
@@ -4667,7 +4720,15 @@ class BrainManager:
         # factory seeds the CapabilityRegistry on every brain build, so the
         # render was always truthy and the routing rules never reached a single
         # prompt. See _TOOL_ROUTING_RULES for the full rationale.
-        parts.append(_TOOL_ROUTING_RULES)
+        parts.append(
+            (
+                "For research or current information, use search_web. For actions "
+                "on connected services, use their supplied tools; for desktop "
+                "interaction, use computer_use. Do not use action tools for a "
+                "question merely about a topic."
+            )
+            if compact else _TOOL_ROUTING_RULES
+        )
 
         # The honest tool list (PR-05). This used to render the
         # CapabilityRegistry under the header "REGISTRIERTE WERKZEUGE
@@ -4684,7 +4745,11 @@ class BrainManager:
         #       about exactly this drift.
         # The live surface is the only honest source, and it is the same one
         # ``_check_unsupported_intent`` already trusts.
-        tool_list_block = self._render_live_tool_block()
+        tool_list_block = (
+            "Use only the tools supplied to this turn; never invent a tool or "
+            "claim an action without its result."
+            if compact else self._render_live_tool_block()
+        )
         if tool_list_block:
             parts.append(tool_list_block)
 
@@ -6907,15 +6972,26 @@ class BrainManager:
             max_tools = 0
         if window <= 0 and max_tools <= 0:
             return tools
-        used = (
-            _approx_tokens(system_prompt)
-            + _approx_history_tokens(history)
-            + _CONTEXT_FIT_RESERVE_TOKENS
-        )
+        prompt_tokens = _approx_tokens(system_prompt) + _approx_history_tokens(history)
+        if 0 < window <= 16_384:
+            # Local OpenAI-compatible servers frequently use llama.cpp's 8k
+            # default. Keep a smaller, proportional completion/tool-round
+            # reserve and account for tokenizer variance seen on Qwen prompts;
+            # the old fixed 4096 reserve plus a 32k guess could either hide all
+            # tools or let a 20k-token request reach an 8k server.
+            used = int(prompt_tokens * 1.25) + max(768, window // 10)
+        else:
+            used = prompt_tokens + _CONTEXT_FIT_RESERVE_TOKENS
         keep: set[str] = set()
         mandated = getattr(self, "_evidence_required_tool", None)
         if mandated:
             keep.add(str(mandated))
+        # The desktop action gate already removed this tool on turns without
+        # an actionable UI request. Keep its schema when it survives that
+        # gate, or a small local context could silently remove the user's
+        # requested computer-use capability while fitting unrelated tools.
+        if "computer_use" in tools:
+            keep.add("computer_use")
         if getattr(self, "_skill_turn_match", None) is not None:
             keep.add("run-skill")
         fitted, dropped = _fit_tools_to_context_window(
@@ -12039,6 +12115,26 @@ class BrainManager:
             self._evidence_required_is_write = False
             self._evidence_required_domain = ""
 
+        # A typed chat may explicitly select one MCP and ask Jarvis to use it.
+        # Agent-owned turns normally stand down from the generic CLI evidence
+        # gate above, but this per-turn user selection is narrower and must
+        # still be executed (or reported honestly). The existing dispatcher
+        # and post-turn evidence guard enforce it; no permission is granted.
+        selected_tool = getattr(_TURN_OVERRIDE.get(), "required_tool_name", "")
+        if selected_tool and (
+            selected_tool in (getattr(self, "_tools", None) or {})
+            or selected_tool in (getattr(_TURN_OVERRIDE.get(), "tools_extra", {}) or {})
+        ):
+            self._evidence_directive = (
+                f"MANDATORY THIS TURN: call the selected tool {selected_tool!r} to carry out "
+                "the user's explicit request. Do not answer from memory or claim a result "
+                "without the tool result. If execution fails or is denied, say so plainly."
+            )
+            self._evidence_required_tool = selected_tool
+            self._evidence_required_is_write = False
+            self._evidence_required_domain = "selected MCP"
+            log.info("Explicit chat MCP selection — mandating %s", selected_tool)
+
         # Phase 5 / ADR-0006: pre-call budget gate. Block rather than request
         # when cooldown is active or the task/daily budget is exhausted.
         trace_uuid = turn_trace_id
@@ -12594,8 +12690,19 @@ class BrainManager:
                 # A screenshot a tool takes mid-turn must not reach a cloud
                 # model the user has not allowed to see images.
                 _disp_kwargs["tool_images"] = False
+            try:
+                context_window = int(getattr(brain, "context_window", 0) or 0)
+            except (TypeError, ValueError):
+                context_window = 0
+            dispatch_history = (
+                _compact_history_for_local_context(history, context_window)
+                if 0 < context_window <= 16_384 else history
+            )
             disp = self._build_dispatcher(
-                brain, tools_override=_turn_tools, **_disp_kwargs
+                brain,
+                tools_override=_turn_tools,
+                history_override=dispatch_history,
+                **_disp_kwargs,
             )
             # Intelligent router: the router LEAD must NOT stream its conversational
             # text to TTS. On the streaming path (generate_stream) text_consumer
@@ -12631,7 +12738,7 @@ class BrainManager:
                     agg = await disp.dispatch(
                         user_text,
                         images=images,
-                        history=history,
+                        history=dispatch_history,
                         # The turn's own id, so tool events correlate with it.
                         trace_id=trace_uuid,
                         intent_level=decision.level,
@@ -14430,6 +14537,80 @@ def _approx_history_tokens(history: Sequence[BrainMessage] | None) -> int:
         except (TypeError, ValueError):
             total += _approx_tokens(str(content))
     return total
+
+
+def _compact_history_for_local_context(
+    history: Sequence[BrainMessage] | None,
+    context_window: int,
+) -> tuple[BrainMessage, ...]:
+    """Return a bounded, recent conversation view without mutating saved history.
+
+    Small local context windows cannot carry the manager's 400-message archive
+    on every turn. Preserve the newest exchanges in full where possible, then
+    retain short, role-labelled excerpts from earlier messages. The complete
+    history remains in the chat/session store; this is only the request view.
+    Old image payloads are represented by a note instead of being re-sent.
+    """
+    if not history or context_window <= 0:
+        return tuple(history or ())
+    budget = max(512, min(2_048, context_window // 8))
+    if _approx_history_tokens(history) <= budget:
+        return tuple(history)
+
+    kept: list[BrainMessage] = []
+    used = 0
+    for reverse_index, message in enumerate(reversed(history)):
+        role = str(getattr(message, "role", "user") or "user")
+        if role not in {"user", "assistant", "system"}:
+            continue
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, (list, tuple)):
+            text_parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") in {"text", "input_text"}:
+                        value = block.get("text")
+                        if value:
+                            text_parts.append(str(value))
+                    elif block.get("type") in {"image", "image_url", "input_image"}:
+                        text_parts.append("[Earlier image omitted from compact context]")
+                elif block:
+                    text_parts.append(str(block))
+            text = " ".join(text_parts)
+        else:
+            text = str(content or "")
+        if not text.strip():
+            continue
+
+        remaining = budget - used - 4  # role/message framing overhead
+        if remaining <= 8:
+            break
+        # Keep the most recent two exchanges more intact. Older turns still
+        # contribute excerpts, so references do not abruptly lose continuity.
+        char_cap = 2_400 if reverse_index < 4 else 360
+        char_cap = min(char_cap, remaining * _CONTEXT_FIT_CHARS_PER_TOKEN)
+        excerpt = text[:char_cap].strip()
+        if len(excerpt) < len(text):
+            excerpt = excerpt.rstrip() + " … [compact excerpt]"
+        item_cost = _approx_tokens(excerpt) + 4
+        while item_cost > remaining and excerpt:
+            excerpt = excerpt[: max(0, (remaining - 4) * _CONTEXT_FIT_CHARS_PER_TOKEN - 24)]
+            excerpt = excerpt.rstrip() + " … [compact excerpt]"
+            item_cost = _approx_tokens(excerpt) + 4
+        if not excerpt:
+            break
+        kept.append(BrainMessage(role=role, content=excerpt))
+        used += item_cost
+    compacted = tuple(reversed(kept))
+    log.info(
+        "Local model context compacted chat history: %d -> %d messages, "
+        "about %d -> %d tokens (saved history remains intact)",
+        len(history), len(compacted), _approx_history_tokens(history),
+        _approx_history_tokens(compacted),
+    )
+    return compacted
 
 
 def _tool_surface_tokens(name: str, tool: Any) -> int:

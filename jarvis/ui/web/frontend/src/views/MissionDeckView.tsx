@@ -33,6 +33,7 @@ import { HudMemoryPanel, type FullMapRequest } from "@/components/deck/HudMemory
 import { HudChatPanel } from "@/components/deck/HudChatPanel";
 import { bindVoiceChat } from "@/lib/agentChatApi";
 import { useAgentChatStore } from "@/store/agentChat";
+import { MissionProgressCard } from "@/components/deck/MissionProgressCard";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
 import { useAssistantStatus } from "@/hooks/useAssistantStatus";
 import { formatAssistantStatus } from "@/lib/assistantStatus";
@@ -476,11 +477,12 @@ export function MissionDeckView({
                   reveal={revealBoard}
                   className={cn("order-5 min-h-[8rem] xl:order-none xl:min-h-0 xl:min-w-0 xl:flex-[3.2]", flatSlot("centre-bottom").className)}
                   style={flatSlot("centre-bottom").style}
-                  bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-3"
+                  bodyClassName="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
                 >
                   <TurnCard className="min-h-0" />
                   <ApiStatsCard className="min-h-0" />
                   <VitalsCard className="min-h-0" />
+                  <MissionProgressCard steps={thinkingSteps} className="min-h-0" />
                 </DeckReveal>
 
                 {/* Outputs and runs. Between 1280 and 1536 px the row has no

@@ -36,6 +36,7 @@ SUPPORTED_PROVIDERS: tuple[str, ...] = (
     "grok",
     "openai",
     "ollama",
+    "local-openai",
 )
 
 
@@ -89,6 +90,17 @@ class OllamaAckProviderConfig(_ProviderBase):
         return server_root().rstrip("/")
 
 
+class LocalOpenAIAckProviderConfig(_ProviderBase):
+    """OpenAI-compatible local server used by the selected local brain.
+
+    An empty model inherits ``[brain.providers."local-openai"].model`` and an
+    empty endpoint inherits that provider card's configured base URL.
+    """
+
+    model: str = Field(default="", description="Empty inherits the local brain model")
+    endpoint: str = Field(default="", description="Empty inherits the local brain endpoint")
+
+
 class _ProvidersBundle(BaseModel):
     """Container for all provider-specific sub-configs."""
 
@@ -116,6 +128,9 @@ class _ProvidersBundle(BaseModel):
     )
     ollama: OllamaAckProviderConfig = Field(
         default_factory=lambda: OllamaAckProviderConfig(model="qwen3.5:4b")
+    )
+    local_openai: LocalOpenAIAckProviderConfig = Field(
+        default_factory=LocalOpenAIAckProviderConfig
     )
 
 

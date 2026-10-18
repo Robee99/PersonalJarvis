@@ -1684,6 +1684,15 @@ async def _tier_section_health(
     # installed. So ask the disk (a cheap file check, no model load) before
     # calling the tier healthy.
     if getattr(spec, "auth_mode", None) == "none":
+        # The generic OpenAI-compatible brain is a user-configured server, not
+        # an on-device model bundle. ``local_status`` covers speech assets and
+        # returns None for this provider, so treating that as healthy made a
+        # stopped llama.cpp server (or one with no model loaded) show green.
+        # Probe only its local, read-only status endpoints: no generation and no
+        # paid-provider call. Keep this inside the health path so every UI that
+        # consumes the shared provider verdict sees the same truthful result.
+        if spec.id == "local-openai":
+            return await _local_openai_section_health(cfg, spec)
         local_state = await asyncio.to_thread(_local_runtime_payload, spec)
         if local_state is not None and not local_state["ready"]:
             return SectionHealth(
@@ -1754,6 +1763,93 @@ async def _tier_section_health(
         detail=_outcome_detail(spec.label, outcome),
         subject_id=spec.id,
     )
+
+
+async def _local_openai_section_health(cfg: Any, spec: ProviderSpec) -> SectionHealth:
+    """Passively check a configured OpenAI-compatible server without inference.
+
+    ``GET /health`` is an optional llama.cpp-style readiness signal. When it
+    reports ``loaded: false`` we can say the server is up but the model is not
+    ready. Other compatible servers may not implement that endpoint; in that
+    case ``GET /v1/models`` proves reachability but cannot prove a model can
+    generate, so the verdict stays ``unknown`` until a real provider call.
+    """
+    subject = spec.id
+    try:
+        endpoint = cfg_mod.resolve_provider_endpoint(
+            spec.id,
+            vendor_default_base_url=spec.default_base_url,
+            config=cfg if hasattr(cfg, "brain") else None,
+        )
+        base_url = (endpoint.base_url or "").strip().rstrip("/")
+        if not base_url:
+            return SectionHealth(
+                status=_section_health.NEEDS_SETUP,
+                reason="server_url_missing",
+                detail=f"{spec.label}: set the local server URL",
+                subject_id=subject,
+            )
+
+        import httpx
+
+        from jarvis.plugins.brain.ollama import normalize_server_root
+
+        root = normalize_server_root(base_url)
+        headers = (
+            {"Authorization": f"Bearer {endpoint.credential}"} if endpoint.credential else {}
+        )
+        timeout = httpx.Timeout(2.0, connect=1.0)
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            try:
+                health = await client.get(f"{root}/health", headers=headers)
+                if health.status_code < 500:
+                    try:
+                        body = health.json()
+                    except (ValueError, TypeError):
+                        body = None
+                    if isinstance(body, dict) and body.get("loaded") is False:
+                        return SectionHealth(
+                            status=_section_health.NEEDS_SETUP,
+                            reason="model_not_loaded",
+                            detail=f"{spec.label}: server is running, but no model is loaded",
+                            subject_id=subject,
+                        )
+                    if isinstance(body, dict) and body.get("loaded") is True:
+                        return SectionHealth(
+                            status=_section_health.OK,
+                            reason="ready",
+                            detail=f"{spec.label}: server reports a model is loaded",
+                            subject_id=subject,
+                        )
+            except httpx.HTTPError:
+                # /health is optional; the OpenAI-compatible model listing below
+                # remains the generic reachability check.
+                pass
+
+            response = await client.get(f"{root}/v1/models", headers=headers)
+            if response.is_success:
+                return SectionHealth(
+                    status=_section_health.UNKNOWN,
+                    reason="reachable_unverified",
+                detail=(
+                    f"{spec.label}: server responds; model readiness is not reported"
+                ),
+                    subject_id=subject,
+                )
+            return SectionHealth(
+                status=_section_health.NEEDS_SETUP,
+                reason="server_unavailable",
+                detail=f"{spec.label}: server returned HTTP {response.status_code}",
+                subject_id=subject,
+            )
+    except Exception as exc:  # noqa: BLE001 — health display must degrade safely
+        log.debug("Local OpenAI-compatible health check failed: %s", type(exc).__name__)
+        return SectionHealth(
+            status=_section_health.NEEDS_SETUP,
+            reason="server_unreachable",
+            detail=f"{spec.label}: local server is not reachable",
+            subject_id=subject,
+        )
 
 
 async def provider_health(cfg: Any, provider_id: str) -> SectionHealth:

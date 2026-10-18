@@ -38,7 +38,13 @@ INTERNAL_ONLY: dict[str, str] = {
     # Attached by the router only when a turn is about the screen
     # (jarvis/brain/vision_gate.py), so it is not a static ROUTER_TOOLS member.
     "screenshot": "gated per-turn by the vision gate",
-    "live-screen-snapshot": "added as screen_snapshot by the live ToolGateway",
+    # The standalone plugin entry point is not the active path. The live
+    # screen tool is constructed by jarvis/brain/tool_gateway.py and is only
+    # attached to a turn through the screen-context/vision gate; admitting the
+    # entry point to ROUTER_TOOLS would create a second, ungated capture route.
+    "live-screen-snapshot": (
+        "screen_snapshot is provided through the per-turn vision-gated tool gateway"
+    ),
 }
 
 

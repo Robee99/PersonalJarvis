@@ -25,7 +25,7 @@ const jarvis = itemsFromJarvis({
 const sources: OrbSources = {
   wiki: {
     nodes: [
-      { id: "user", kind: "entity", title: "User" },
+      { id: "user", kind: "entity", title: "User", path: "entities/user.md" },
       { id: "log", kind: "meta", title: "Log" },
     ],
     edges: [
@@ -39,6 +39,10 @@ const sources: OrbSources = {
     { id: "github", display_name: "GitHub", category: "Developer", status: "connected" },
     { id: "notion", display_name: "Notion", category: "Knowledge", status: "not_connected" },
   ]),
+  semanticIndex: {
+    enabled: true,
+    sources: [{ source_id: "stable-source-1234", source_path: "entities/user.md" }],
+  },
 };
 
 describe("buildOrbGraph", () => {
@@ -50,8 +54,15 @@ describe("buildOrbGraph", () => {
 
   it("counts each real thing once, after duplicates are dropped", () => {
     const graph = buildOrbGraph(sources);
-    expect(graph.counts).toEqual({ wiki: 1, concepts: 1, skills: 2, tools: 1, apps: 1, mcp: 1 });
+    expect(graph.counts).toEqual({ wiki: 1, concepts: 1, conversations: 0, communities: 0, skills: 2, tools: 1, apps: 1, mcp: 1 });
     expect(graph.nodes).toHaveLength(7);
+  });
+
+  it("adds provenance only to the wiki page present in Cognee's source registry", () => {
+    const byId = new Map(buildOrbGraph(sources).nodes.map((n) => [n.id, n]));
+    expect(byId.get("wiki:user")?.semanticIndexed).toBe(true);
+    expect(byId.get("wiki:user")?.sourceId).toBe("stable-source-1234");
+    expect(byId.get("wiki:log")?.semanticIndexed).toBe(false);
   });
 
   it("shows only connected apps, not the marketplace", () => {
@@ -99,6 +110,31 @@ describe("itemsFromHermes", () => {
       toolsets: { available: false },
     });
     expect(items.tools).toBeUndefined();
+  });
+
+  it("preserves GraphRAG source provenance and wiki slugs", () => {
+    const graph = buildOrbGraph({
+      graphrag: {
+        enabled: true,
+        available: true,
+        communities: [{
+          id: "community-id",
+          title: "Local rescue network",
+          level: 0,
+          rank: 2,
+          size: 4,
+          sources: [
+            { source_id: "source-id", source_path: "projects/rescue-network.md" },
+            { source_id: "text-source", source_path: "archive/source.txt" },
+          ],
+        }],
+      },
+    });
+
+    expect(graph.nodes.find((node) => node.id === "community:community-id")?.sourceLinks).toEqual([
+      { sourceId: "source-id", sourcePath: "projects/rescue-network.md", slug: "rescue-network" },
+      { sourceId: "text-source", sourcePath: "archive/source.txt", slug: undefined },
+    ]);
   });
 });
 

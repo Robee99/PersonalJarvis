@@ -1,6 +1,8 @@
 """Public model catalogs stay available when an optional key is stale."""
 from __future__ import annotations
 
+import asyncio
+import threading
 from typing import Any
 
 import httpx
@@ -73,3 +75,31 @@ async def test_required_bearer_does_not_retry_authentication_failure_anonymously
         await catalog._fetch_raw("openai")
 
     assert len(client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_windows_secret_lookup_does_not_block_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Credential Manager reads may block; catalog discovery must keep looping."""
+    release = threading.Event()
+
+    def slow_secret(_provider: str) -> str:
+        if not release.wait(timeout=1):
+            raise AssertionError("secret lookup blocked the asyncio loop")
+        return "test-key"
+
+    client = _SequenceClient([
+        _response(200, {"data": [{"id": "openai/gpt-5.5", "name": "GPT-5.5"}]}),
+    ])
+    monkeypatch.setattr(catalog_module.cfg, "get_provider_secret", slow_secret)
+    catalog = ModelCatalog(
+        cache_path=tmp_path / "catalog.json", http_client_factory=lambda: client
+    )
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.02, release.set)
+
+    models = await catalog._fetch_raw("openrouter")
+
+    assert [model.id for model in models] == ["openai/gpt-5.5"]

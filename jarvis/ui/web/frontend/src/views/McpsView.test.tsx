@@ -60,7 +60,7 @@ const SERVERS = {
   registry_ready: true,
 };
 
-function installFetchMock(): Call[] {
+function installFetchMock(payload = SERVERS): Call[] {
   const calls: Call[] = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -73,7 +73,7 @@ function installFetchMock(): Call[] {
         json: async () => body,
         text: async () => JSON.stringify(body),
       }) as Response;
-    if (method === "GET" && url === "/api/mcps") return respond(SERVERS);
+    if (method === "GET" && url === "/api/mcps") return respond(payload);
     if (method === "GET" && url.endsWith("/files")) {
       return respond({
         config_path: "/tmp/mcp.json",
@@ -139,6 +139,48 @@ describe("McpsView — table", () => {
       expect(
         calls.some((c) => c.method === "POST" && c.url.endsWith("/api/mcps/notebooklm-mcp/disable")),
       ).toBe(true);
+    });
+  });
+
+  it("switches browser providers exclusively before enabling the selected one", async () => {
+    const calls = installFetchMock({
+      ...SERVERS,
+      servers: [
+        { ...SERVERS.servers[0], name: "playwright", display: "Playwright", enabled: true },
+        { ...SERVERS.servers[1], name: "agent-browser", display: "Agent Browser", enabled: false },
+      ],
+    });
+    renderView();
+
+    await screen.findByRole("row", { name: "agent-browser" });
+    fireEvent.click(screen.getAllByRole("switch")[1]);
+
+    await waitFor(() => {
+      const disabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/playwright/disable"));
+      const enabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/agent-browser/enable"));
+      expect(disabled).toBeGreaterThan(-1);
+      expect(enabled).toBeGreaterThan(disabled);
+    });
+  });
+
+  it("switches desktop controllers exclusively before enabling the selected one", async () => {
+    const calls = installFetchMock({
+      ...SERVERS,
+      servers: [
+        { ...SERVERS.servers[0], name: "windows-desktop", display: "Windows Desktop", enabled: true },
+        { ...SERVERS.servers[1], name: "desktop-commander", display: "Desktop Commander", enabled: false },
+      ],
+    });
+    renderView();
+
+    await screen.findByRole("row", { name: "desktop-commander" });
+    fireEvent.click(screen.getAllByRole("switch")[1]);
+
+    await waitFor(() => {
+      const enabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/desktop-commander/enable"));
+      const disabled = calls.findIndex((c) => c.method === "POST" && c.url.endsWith("/api/mcps/windows-desktop/disable"));
+      expect(disabled).toBeGreaterThan(-1);
+      expect(enabled).toBeGreaterThan(disabled);
     });
   });
 });

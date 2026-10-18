@@ -113,6 +113,8 @@ export type SectionId =
   // plugins and skills — browsable and installable in one place instead of
   // scattered across unrelated sections.
   | "marketplace"
+  // God's Eye View: the connected local geospatial command surface.
+  | "world-intelligence"
   // The HUD: the mission deck as a section of its own (it left the front
   // page on 2026-08-23) — the orb, the log, the memory map and the vitals.
   | "deck"
@@ -161,6 +163,7 @@ export const SECTION_IDS = [
   "chat-workspace",
   "agentic-ide-classic",
   "marketplace",
+  "world-intelligence",
   "deck",
   "orb",
   "armory",
@@ -263,6 +266,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   "chat-workspace": "Chat",
   "agentic-ide-classic": "Terminal grid",
   marketplace: "Marketplace",
+  "world-intelligence": "World Intelligence",
 };
 
 export interface EventItem {

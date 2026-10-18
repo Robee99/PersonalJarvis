@@ -77,6 +77,58 @@ def test_a_token_passes_the_guard_without_an_origin(guarded) -> None:
     assert answer.json()["result"]["serverInfo"]["name"] == "jarvis-agents"
 
 
+def test_a_tools_token_passes_the_guard_on_the_tools_surface(guarded) -> None:
+    client, store = guarded
+    _token, secret = store.issue(
+        name="Hermes local Gemma",
+        scope="tools",
+        allowed_tools=["describe-app-settings"],
+    )
+
+    answer = client.post(
+        "/api/control/mcp/",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {secret}"},
+        json={
+            **_INIT,
+            "params": {
+                **_INIT["params"],
+                "protocolVersion": "2025-03-26",
+            },
+        },
+    )
+
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["result"]["serverInfo"]["name"] == "jarvis"
+
+
+def test_mcp_tokens_only_open_the_matching_surface(guarded) -> None:
+    client, store = guarded
+    _tools_token, tools_secret = store.issue(
+        name="Tools client", scope="tools", allowed_tools=["describe-app-settings"]
+    )
+    _agents_token, agents_secret = store.issue(name="Agents client", scope="work")
+
+    tools_on_agents = client.post(
+        "/api/control/mcp/agents",
+        headers={**_MCP_HEADERS, "Authorization": f"Bearer {tools_secret}"},
+        json=_INIT,
+    )
+    agents_on_tools = client.post(
+        "/api/control/mcp/",
+        headers={"Accept": "application/json", "Authorization": f"Bearer {agents_secret}"},
+        json={**_INIT, "params": {**_INIT["params"], "protocolVersion": "2025-06-18"}},
+    )
+    settings = client.post(
+        "/api/settings/danger",
+        headers={"Authorization": f"Bearer {tools_secret}"},
+        json={},
+    )
+
+    assert tools_on_agents.status_code in (401, 403)
+    assert agents_on_tools.status_code in (401, 403)
+    assert settings.status_code in (401, 403)
+
+
 def test_a_token_opens_nothing_but_the_mcp_path(guarded) -> None:
     """The narrow part of the fix: UI routes rely on this guard, not on a key."""
     client, store = guarded

@@ -156,6 +156,30 @@ export function McpsView() {
   const toggle = useMutation({
     mutationFn: async ({ name, enable }: { name: string; enable: boolean }) => {
       setCheckingName(name);
+      // Keep only one provider active for each surface so the brain does not
+      // receive competing browser or desktop controls.
+      const exclusivePeer =
+        name === "playwright"
+          ? "agent-browser"
+          : name === "agent-browser"
+            ? "playwright"
+            : name === "windows-desktop"
+              ? "desktop-commander"
+              : name === "desktop-commander"
+                ? "windows-desktop"
+                : null;
+      if (
+        enable &&
+        exclusivePeer &&
+        data?.servers.some((server) => server.name === exclusivePeer && server.enabled)
+      ) {
+        const disabled = await postJson<{ ok: boolean; error?: string }>(
+          `/api/mcps/${exclusivePeer}/disable`,
+        );
+        if (!disabled.ok) {
+          throw new Error(disabled.error ?? `Could not disable ${exclusivePeer}`);
+        }
+      }
       const action = enable ? "enable" : "disable";
       return postJson<{ ok: boolean; error?: string; enabled: boolean }>(
         `/api/mcps/${name}/${action}`,
