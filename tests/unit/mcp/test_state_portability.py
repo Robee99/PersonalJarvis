@@ -128,3 +128,19 @@ async def test_config_info_reports_the_active_mcp_file(
 
     assert result["path"] == str(active)
     assert '"fetch"' in result["content"]
+
+
+def test_data_dir_without_a_config_keeps_the_existing_user_config(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """The frozen build sets JARVIS_DATA_DIR; an upgrade must not drop the user's servers."""
+    user_config = tmp_path / "user-data" / "Jarvis" / "mcp.json"
+    user_config.parent.mkdir(parents=True)
+    user_config.write_text(json.dumps({"mcpServers": {"fetch": {"enabled": True}}}), "utf-8")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "user-data"))
+    monkeypatch.setenv("JARVIS_DATA_DIR", str(tmp_path / "user-data" / "Jarvis" / "data"))
+    monkeypatch.delenv("JARVIS_MCP_CONFIG", raising=False)
+
+    assert state._active_mcp_json_path() == user_config
+    assert state.load_config()["mcpServers"]["fetch"]["enabled"] is True

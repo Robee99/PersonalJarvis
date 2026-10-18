@@ -9,6 +9,7 @@ from jarvis.memory.wiki.import_formats import (
     conversation_of,
     conversation_pages,
     parse_conversation_markers,
+    parse_legacy_conversation_page,
 )
 
 CHATGPT = {
@@ -129,3 +130,36 @@ def test_marker_values_cannot_break_out_of_the_comment() -> None:
     assert conv is not None
     assert conv.conversation_id == "x--scriptalert1script"
     assert ">" not in conv.conversation_id and '"' not in conv.conversation_id
+
+
+_LEGACY_PAGE = """# Stable Video Infinity error
+
+_Conversation imported from `conversations-023.json`, started 2025-10-19 09:26 UTC_
+
+**You:**
+
+It fails with:
+**Note:**
+conda is not recognized
+
+**ChatGPT:**
+
+Install Miniconda first.
+"""
+
+
+def test_legacy_page_without_markers_reads_as_one_conversation() -> None:
+    turns = parse_legacy_conversation_page(_LEGACY_PAGE, "page-1")
+    assert [(t.role, t.text, t.message_id) for t in turns] == [
+        ("You", "It fails with:\n**Note:**\nconda is not recognized", "page-1-0"),
+        ("ChatGPT", "Install Miniconda first.", "page-1-1"),
+    ]
+    assert turns[0].title == "Stable Video Infinity error"
+    assert turns[0].conversation_created_ms == 1_760_865_960_000
+
+
+def test_legacy_parser_leaves_marked_and_plain_pages_alone(tmp_path: Path) -> None:
+    pages = conversation_pages(tmp_path / "conversations.json", json.dumps([CHATGPT]).encode())
+    assert pages is not None
+    assert parse_legacy_conversation_page(pages[0].body, "x") == []
+    assert parse_legacy_conversation_page("# ads\n\n_Imported from `ads.json`_\n", "x") == []

@@ -365,7 +365,11 @@ class BrainMapIndexer:
             ]
             if len(path_projects) == 1:
                 return path_projects[0].project_id
-            return self._ensure_project(conn, f"name:{wanted}", rec.title, rec.locator, state)
+            # A page that defines the project names it; a member only joins it.
+            title, locator = (
+                (rec.title, rec.locator) if rec.defines_project else (rec.project_name, "")
+            )
+            return self._ensure_project(conn, f"name:{wanted}", title, locator, state)
         return ""
 
     def _apply(self, conn: sqlite3.Connection, rec: Record, state: _RunState) -> None:

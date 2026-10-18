@@ -86,6 +86,12 @@ def _user_mcp_json_path() -> Path:
 def _active_mcp_json_path() -> Path:
     """Resolve one durable MCP config path without probing at import time."""
     explicit = _explicit_mcp_json_path()
+    if explicit is not None and not os.environ.get("JARVIS_MCP_CONFIG", "").strip():
+        # Only the data dir pointed here (the frozen build always sets it). A
+        # data dir without its own mcp.json yet must not hide the servers the
+        # person already set up in the per-user config; that file stays theirs.
+        if not explicit.exists() and (user_path := _user_mcp_json_path()).exists():
+            return user_path
     if explicit is not None:
         return explicit
     user_path = _user_mcp_json_path()

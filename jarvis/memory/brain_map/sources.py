@@ -22,6 +22,7 @@ into the indexer, and its absence never deletes what an earlier run derived
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -808,10 +809,17 @@ class WikiProjectReader:
         return batch
 
 
+#: The project every imported chat belongs to: an export has no projects of
+#: its own, and a conversation outside every project never reaches the map.
+IMPORTED_CHATS_PROJECT = "Imported chats"
+
+
 class WikiImportReader:
     """Conversations imported from ChatGPT / Claude exports (``W/importer.py``).
 
-    One record per conversation, keyed ``<page path>#<conversation id>``. A
+    One record per conversation, keyed ``<page path>#<conversation id>``. Pages
+    written before the importer added markers are read as one conversation
+    each, keyed by their path. A
     page whose size and mtime did not change is not opened again; a changed
     page is parsed in full and the indexer's content hashes decide which turns
     actually changed.
@@ -823,7 +831,10 @@ class WikiImportReader:
         self.vault_root = vault_root
 
     def read(self, ctx: ReadContext) -> SourceBatch:
-        from jarvis.memory.wiki.import_formats import parse_conversation_markers
+        from jarvis.memory.wiki.import_formats import (
+            parse_conversation_markers,
+            parse_legacy_conversation_page,
+        )
 
         batch = SourceBatch()
         folder = self.vault_root / "imports"
@@ -856,7 +867,9 @@ class WikiImportReader:
                 batch.errors += 1
                 present |= previous
                 continue
-            turns = parse_conversation_markers(text)
+            turns = parse_conversation_markers(text) or parse_legacy_conversation_page(
+                text, "page-" + hashlib.sha256(rel.encode("utf-8")).hexdigest()[:12]
+            )
             grouped: dict[str, list[Any]] = {}
             for turn in turns:
                 grouped.setdefault(turn.conversation_id, []).append(turn)
@@ -888,6 +901,7 @@ class WikiImportReader:
                         last_activity_ms=last,
                         version=version,
                         locator=rel,
+                        project_name=IMPORTED_CHATS_PROJECT,
                         messages=messages,
                         full_messages=True,
                         cursor=str(len(messages)),

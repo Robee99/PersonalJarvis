@@ -421,6 +421,64 @@ def parse_conversation_markers(page_text: str) -> list[ParsedTurn]:
     return out
 
 
+#: Speaker labels the importer wrote before the markers existed. Only these
+#: start a turn, so a bold "**Note:**" line inside a message stays text.
+_LEGACY_ROLES: Final[frozenset[str]] = frozenset(
+    {
+        "you", "user", "human", "chatgpt", "assistant", "claude",
+        "gemini", "ai", "model", "system", "tool",
+    }
+)
+_LEGACY_META_RE = re.compile(
+    r"^_Conversation imported from `[^`]*`"
+    r"(?:, started (?P<started>\d{4}-\d{2}-\d{2} \d{2}:\d{2}) UTC)?_\s*$",
+    re.MULTILINE,
+)
+_LEGACY_ROLE_RE = re.compile(r"^\*\*(?P<role>[^*\n]{1,40}):\*\*[ \t]*$", re.MULTILINE)
+
+
+def parse_legacy_conversation_page(page_text: str, conversation_id: str) -> list[ParsedTurn]:
+    """Turns of a one-conversation page written before the markers existed.
+
+    Those pages carry the same "_Conversation imported from ..._" line and
+    "**You:**" / "**ChatGPT:**" speaker lines as today's, just no ids or
+    timestamps. The caller supplies a stable ``conversation_id`` (the page path
+    is the only identity such a page has). Anything else yields nothing.
+    """
+    meta = _LEGACY_META_RE.search(page_text)
+    if meta is None or _MARKER_RE.search(page_text):
+        return []
+    head = page_text[: meta.start()].rstrip().splitlines()
+    title = head[-1].lstrip("# ").strip() if head and head[-1].startswith("# ") else ""
+    created: int | None = None
+    if meta.group("started"):
+        started = datetime.strptime(meta.group("started"), "%Y-%m-%d %H:%M").replace(tzinfo=UTC)
+        created = int(started.timestamp() * 1000)
+    roles = [
+        m for m in _LEGACY_ROLE_RE.finditer(page_text, meta.end())
+        if m.group("role").strip().lower() in _LEGACY_ROLES
+    ]
+    out: list[ParsedTurn] = []
+    for pos, match in enumerate(roles):
+        end = roles[pos + 1].start() if pos + 1 < len(roles) else len(page_text)
+        text = page_text[match.end() : end].strip()
+        if not text:
+            continue
+        out.append(
+            ParsedTurn(
+                conversation_id=conversation_id,
+                conversation_created_ms=created,
+                title=title,
+                index=len(out),
+                role=match.group("role").strip(),
+                text=text,
+                message_id=f"{conversation_id}-{len(out)}",
+                ts_ms=None,
+            )
+        )
+    return out
+
+
 def _unique(names: Iterable[str]) -> Iterator[str]:
     used: dict[str, int] = {}
     for name in names:

@@ -324,3 +324,24 @@ def test_imported_conversation_is_a_source_with_ids_and_timestamps(env) -> None:
     page.write_text(page.read_text().replace("Great, noted.", "Great, noted twice."), "utf-8")
     stats = env.indexer.run(trigger="test")
     assert (stats.segments_seen, stats.segments_processed) == (2, 1)
+
+
+def test_imported_chats_land_in_one_project_including_pre_marker_pages(env) -> None:
+    _write_import(env.vault, _EXPORT)
+    legacy = env.vault / "imports" / "ai-data-d81b09" / "conversations-023" / "Old chat.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        "# Old chat\n\n_Conversation imported from `conversations-023.json`,"
+        " started 2025-10-19 09:26 UTC_\n\n**You:**\n\nhello\n\n**ChatGPT:**\n\nhi there\n",
+        encoding="utf-8",
+    )
+    env.indexer.run(trigger="test")
+    (project,) = _by_kind(env.store, "PROJECT")
+    assert project["title"] == "Imported chats"
+    conversations = _by_kind(env.store, "CONVERSATION")
+    assert sorted(c["title"] for c in conversations) == ["Launch plan", "Old chat"]
+    from jarvis.memory.brain_map.engine import projects_of
+
+    with env.store.read() as conn:
+        for conversation in conversations:
+            assert projects_of(conn, conversation["entity_id"]) == {project["entity_id"]}
