@@ -28,14 +28,20 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("""CREATE TABLE IF NOT EXISTS sources (
         source_id TEXT PRIMARY KEY, source_path TEXT NOT NULL, data_id TEXT NOT NULL,
         content_hash TEXT NOT NULL, status TEXT NOT NULL,
+        source_type TEXT NOT NULL DEFAULT 'wiki', source_ref TEXT NOT NULL DEFAULT '',
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+    if "source_type" not in columns:
+        conn.execute("ALTER TABLE sources ADD COLUMN source_type TEXT NOT NULL DEFAULT 'wiki'")
+    if "source_ref" not in columns:
+        conn.execute("ALTER TABLE sources ADD COLUMN source_ref TEXT NOT NULL DEFAULT ''")
     conn.commit()
 
 
 def _source_row(conn: sqlite3.Connection, source_id: str):
     return conn.execute(
-        "SELECT source_id,source_path,data_id,content_hash,status FROM sources WHERE source_id=?",
+        "SELECT * FROM sources WHERE source_id=?",
         (source_id,),
     ).fetchone()
 
@@ -77,16 +83,39 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
     async def forget(row: sqlite3.Row) -> None:
         await cognee.forget(data_id=uuid.UUID(row["data_id"]), dataset=dataset)
 
-    async def index(source_id: str, source_path: str, content: str) -> dict[str, Any]:
+    async def index(
+        source_id: str,
+        source_path: str,
+        content: str,
+        source_type: str = "wiki",
+        source_ref: str = "",
+    ) -> dict[str, Any]:
         rel = Path(source_path)
-        if rel.is_absolute() or ".." in rel.parts or rel.suffix.lower() != ".md":
-            raise ValueError("source must be a vault-relative Markdown path")
-        full = await asyncio.to_thread((vault / rel).resolve)
-        if not full.is_relative_to(vault):
-            raise ValueError("source is outside the authorized wiki vault")
+        if source_type == "wiki":
+            if rel.is_absolute() or ".." in rel.parts or rel.suffix.lower() != ".md":
+                raise ValueError("source must be a vault-relative Markdown path")
+            full = await asyncio.to_thread((vault / rel).resolve)
+            if not full.is_relative_to(vault):
+                raise ValueError("source is outside the authorized wiki vault")
+        elif source_type == "conversation":
+            if (
+                rel.is_absolute()
+                or ".." in rel.parts
+                or rel.parts[0:1] != ("conversations",)
+                or rel.suffix.lower() != ".md"
+                or not source_ref
+            ):
+                raise ValueError("conversation source identity is invalid")
+        else:
+            raise ValueError("unsupported Cognee source type")
         content_hash = _hash(content)
         previous = _source_row(conn, source_id)
-        if previous and previous["status"] == "active" and previous["content_hash"] == content_hash:
+        if (
+            previous and previous["status"] == "active"
+            and previous["content_hash"] == content_hash
+            and previous["source_type"] == source_type
+            and previous["source_ref"] == source_ref
+        ):
             # Idempotency is verified against Cognee search, not just a cache hit.
             return {
                 "indexed": False,
@@ -102,11 +131,14 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
         # Persist a tombstone before destructive replacement. A crash or failed
         # forget can never cause search to authorize the old derived record.
         conn.execute(
-            """INSERT INTO sources(source_id,source_path,data_id,content_hash,status)
-            VALUES(?,?,?,?, 'tombstone') ON CONFLICT(source_id) DO UPDATE SET
+            """INSERT INTO sources(
+                source_id,source_path,data_id,content_hash,status,source_type,source_ref)
+            VALUES(?,?,?,?, 'tombstone',?,?) ON CONFLICT(source_id) DO UPDATE SET
             source_path=excluded.source_path,data_id=excluded.data_id,
-            content_hash=excluded.content_hash,status='tombstone',updated_at=CURRENT_TIMESTAMP""",
-            (source_id, source_path, data_id, content_hash),
+            content_hash=excluded.content_hash,status='tombstone',
+            source_type=excluded.source_type,source_ref=excluded.source_ref,
+            updated_at=CURRENT_TIMESTAMP""",
+            (source_id, source_path, data_id, content_hash, source_type, source_ref),
         )
         conn.commit()
         if previous:
@@ -126,7 +158,9 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
                 "source_id": source_id,
                 "source_path": source_path,
                 "content_hash": content_hash,
-                "source_system": "jarvis-wiki",
+                "source_system": "jarvis-wiki" if source_type == "wiki" else "jarvis-conversation",
+                "source_type": source_type,
+                "source_ref": source_ref,
             },
             data_id=uuid.UUID(data_id),
             literal_text=True,
@@ -152,12 +186,16 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
             "unchanged": False,
             "source_id": source_id,
             "source_path": source_path,
+            "source_type": source_type,
+            "source_ref": source_ref,
             "content_hash": content_hash,
             "data_id": data_id,
         }
 
     async def reconcile(denied_source_ids: set[str]) -> None:
-        rows = conn.execute("SELECT * FROM sources WHERE status='active'").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM sources WHERE status='active' AND source_type='wiki'"
+        ).fetchall()
         for row in rows:
             source = await asyncio.to_thread((vault / row["source_path"]).resolve)
             source_exists = await asyncio.to_thread(source.is_file)
@@ -188,7 +226,11 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
     try:
         if op == "index":
             result = await index(
-                str(request["source_id"]), str(request["source_path"]), str(request["content"])
+                str(request["source_id"]),
+                str(request["source_path"]),
+                str(request["content"]),
+                str(request.get("source_type", "wiki")),
+                str(request.get("source_ref", "")),
             )
         elif op == "forget":
             source_id = str(request["source_id"])
@@ -205,9 +247,18 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
                 "forgotten": True,
                 "source_id": source_id,
                 "source_path": str(request["source_path"]),
+                "source_type": str(request.get("source_type", "wiki")),
             }
         elif op == "search":
-            await reconcile({str(source_id) for source_id in request.get("deny_source_ids", [])})
+            source_types = {
+                str(value) for value in request.get("source_types", ["wiki"])
+            }
+            # Conversation retrieval must not read or reindex wiki files: only
+            # the wiki adapter supplies the source-content safety denylist.
+            if "wiki" in source_types:
+                await reconcile(
+                    {str(source_id) for source_id in request.get("deny_source_ids", [])}
+                )
             results = await cognee.search(
                 str(request["query"]),
                 query_type=SearchType.CHUNKS,
@@ -218,6 +269,7 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
             active = {
                 row["data_id"]: row
                 for row in conn.execute("SELECT * FROM sources WHERE status='active'").fetchall()
+                if row["source_type"] in source_types
             }
             output = []
             # CHUNKS is a non-generative Cognee retriever: the public search
@@ -266,6 +318,8 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
                             "text": str(text),
                             "source_id": matched["source_id"],
                             "source_path": matched["source_path"],
+                            "source_type": matched["source_type"],
+                            "source_ref": matched["source_ref"],
                             "content_hash": matched["content_hash"],
                             "data_id": matched["data_id"],
                         }
