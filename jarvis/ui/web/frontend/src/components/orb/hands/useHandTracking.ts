@@ -20,7 +20,15 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { GestureEngine, dedupeHands, type GestureAction, type HandCursor, type HandLandmarks } from "./gestures";
+import {
+  GestureEngine,
+  dedupeHands,
+  type GestureAction,
+  type GestureId,
+  type HandCursor,
+  type HandLandmarks,
+  type LiveGesture,
+} from "./gestures";
 
 export const VENDOR = "/holo/vendor";
 
@@ -165,10 +173,44 @@ export function cameraStatus(error: unknown): HandStatus {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** A gesture that just did something, for the indicator to name. */
+export interface FiredGesture {
+  id: GestureId;
+  step?: 1 | -1;
+  /** Counts up with every firing, so the same gesture twice still re-renders. */
+  seq: number;
+}
+
+/** The action a gesture fired, or null for continuous ones (hover, pan, zoom). */
+export function firedGesture(action: GestureAction): Omit<FiredGesture, "seq"> | null {
+  switch (action.type) {
+    case "select":
+      return { id: "select" };
+    case "open":
+      return { id: "open" };
+    case "confirm":
+      return { id: "confirm" };
+    case "section":
+      return { id: "swipe", step: action.step };
+    case "reset":
+      return { id: "reset" };
+    default:
+      return null;
+  }
+}
+
+const sameGesture = (a: LiveGesture | null, b: LiveGesture | null) =>
+  a === b ||
+  (!!a && !!b && a.id === b.id && Math.round((a.progress ?? -1) * 20) === Math.round((b.progress ?? -1) * 20));
+
 export interface HandTracking {
   status: HandStatus;
   detail: string;
   cursors: HandCursor[];
+  /** The gesture the engine recognises right now. */
+  gesture: LiveGesture | null;
+  /** The last gesture that fired an action. */
+  fired: FiredGesture | null;
   stream: MediaStream | null;
   /** Start tracking; `install` also downloads missing tracking files first. */
   start(options?: { install?: boolean }): void;
@@ -179,6 +221,9 @@ export function useHandTracking(controller: HandController, deps: HandDeps = bro
   const [status, setStatus] = useState<HandStatus>("off");
   const [detail, setDetail] = useState("");
   const [cursors, setCursors] = useState<HandCursor[]>([]);
+  const [gesture, setGesture] = useState<LiveGesture | null>(null);
+  const [fired, setFired] = useState<FiredGesture | null>(null);
+  const firedSeq = useRef(0);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const controllerRef = useRef(controller);
   controllerRef.current = controller;
@@ -200,6 +245,8 @@ export function useHandTracking(controller: HandController, deps: HandDeps = bro
     generation.current += 1;
     teardown();
     setCursors([]);
+    setGesture(null);
+    setFired(null);
     setStream(null);
     setDetail("");
     setStatus("off");
@@ -218,6 +265,8 @@ export function useHandTracking(controller: HandController, deps: HandDeps = bro
       };
       void (async () => {
         setDetail("");
+        setGesture(null);
+        setFired(null);
         if (!deps.supported()) return fail("unsupported");
         setStatus("checking");
         let ready = false;
@@ -279,7 +328,16 @@ export function useHandTracking(controller: HandController, deps: HandDeps = bro
             lastTime = video.currentTime;
             const now = performance.now();
             const frame = engine.update(detector.detect(video, now), now);
-            for (const action of frame.actions) controllerRef.current.onAction(action);
+            let last: Omit<FiredGesture, "seq"> | null = null;
+            for (const action of frame.actions) {
+              controllerRef.current.onAction(action);
+              last = firedGesture(action) ?? last;
+            }
+            if (last) {
+              firedSeq.current += 1;
+              setFired({ ...last, seq: firedSeq.current });
+            }
+            setGesture((prev) => (sameGesture(prev, frame.gesture) ? prev : frame.gesture));
             setCursors((prev) => (prev.length === 0 && frame.cursors.length === 0 ? prev : frame.cursors));
           }
           live.current.raf = requestAnimationFrame(tick);
@@ -299,5 +357,5 @@ export function useHandTracking(controller: HandController, deps: HandDeps = bro
     [teardown],
   );
 
-  return { status, detail, cursors, stream, start, stop };
+  return { status, detail, cursors, gesture, fired, stream, start, stop };
 }

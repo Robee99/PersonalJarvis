@@ -1,6 +1,8 @@
 /**
  * The memory orb's map in space: shaded spheres for every memory, family
- * cores with their names, thin links, and a slow turn.
+ * cores and section branch points with their names, thin links, and a slow
+ * turn. Cores and branch points are neutral; each memory has its own colour
+ * (`lib/orbSections.ts`).
  *
  * Every node object is built once per data generation and then changed in
  * place (colour, size, label), so hovering, picking or searching never makes
@@ -37,7 +39,8 @@ import SpriteText from "three-spritetext";
 
 import { useGraphAwake, type GraphEngineApi } from "@/hooks/useGraphAwake";
 import { useWebglSurface } from "@/hooks/useWebglSurface";
-import { ORB_GROUP_COLOUR, type OrbGroup, type OrbLink, type OrbNode } from "@/lib/orbGraph";
+import type { OrbGroup, OrbLink, OrbNode } from "@/lib/orbGraph";
+import { SECTION_LABEL, SECTION_NEUTRAL, sectionFrameIds, type OrbSections } from "@/lib/orbSections";
 import {
   buildSceneGraph,
   labelledHubs,
@@ -57,6 +60,10 @@ export interface MemoryGraph3DHandle {
 export interface MemoryGraph3DProps {
   nodes: OrbNode[];
   links: OrbLink[];
+  /** The sections of `nodes` and each memory's colour. */
+  sections: OrbSections;
+  /** The section last jumped to; its branch point is lit. */
+  activeSectionId: string | null;
   width: number;
   height: number;
   hitIds: ReadonlySet<string>;
@@ -66,6 +73,8 @@ export interface MemoryGraph3DProps {
   groupLabel: (group: OrbGroup) => string;
   onHover: (node: OrbNode | null) => void;
   onPick: (node: OrbNode | null) => void;
+  /** A section's branch point was clicked (the map has already framed it). */
+  onSection?: (id: string) => void;
 }
 
 type Node3D = NodeObject<SceneNode> & SceneNode;
@@ -83,7 +92,8 @@ const FOG = 0x070a10;
 const DIM = new Color("#1a212c");
 const LINK_NOTE = "rgba(91, 212, 164, 0.42)";
 const LINK_SOURCE = "rgba(223, 140, 255, 0.4)";
-const LINK_FAMILY = "rgba(91, 212, 164, 0.16)";
+const LINK_FAMILY = "rgba(160, 172, 190, 0.14)";
+const LINK_SECTION = "rgba(160, 172, 190, 0.3)";
 const LINK_HOVER = "rgba(158, 236, 205, 0.9)";
 const LINK_FADED = "rgba(91, 212, 164, 0.03)";
 /** Degrees per second at the OrbitControls' speed of 1 is 6; this is ~2.4. */
@@ -106,8 +116,41 @@ function makeLabel(text: string, colour: string, height: number, weight = "500")
   return sprite;
 }
 
+/** Neutral for a core or a branch point; the memory's own colour otherwise. */
+function colourOf(node: SceneNode, sections: OrbSections): string {
+  if (node.core || node.branch) return SECTION_NEUTRAL;
+  return sections.colourOf.get(node.id) ?? SECTION_NEUTRAL;
+}
+
+/** Space between a sphere and the name under it. */
+function labelGap(node: SceneNode): number {
+  return node.core ? 5 : node.branch ? 4 : 3;
+}
+
+const LINK_COLOUR: Record<SceneLink["kind"], string> = {
+  note: LINK_NOTE,
+  source: LINK_SOURCE,
+  family: LINK_FAMILY,
+  section: LINK_SECTION,
+};
+
 export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>(function MemoryGraph3D(
-  { nodes, links, width, height, hitIds, searching, hoverId, pickedId, groupLabel, onHover, onPick },
+  {
+    nodes,
+    links,
+    sections,
+    activeSectionId,
+    width,
+    height,
+    hitIds,
+    searching,
+    hoverId,
+    pickedId,
+    groupLabel,
+    onHover,
+    onPick,
+    onSection,
+  },
   ref,
 ) {
   const graphRef = useRef<ForceGraphMethods<SceneNode, SceneLink> | undefined>(undefined);
@@ -120,7 +163,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     [],
   );
 
-  const data = useMemo(() => buildSceneGraph(nodes, links), [nodes, links]);
+  const data = useMemo(() => buildSceneGraph(nodes, links, Math.random, sections), [nodes, links, sections]);
   const radius = familyRadius(nodes.length);
   const parts = useRef(new Map<string, NodeParts>());
   const hubs = useMemo(() => labelledHubs(data.nodes), [data]);
@@ -145,13 +188,14 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
 
   const nodeObject = useCallback((raw: NodeObject<SceneNode>) => {
     const node = raw as Node3D;
-    const colour = ORB_GROUP_COLOUR[node.group];
+    const colour = colourOf(node, sections);
     const r = sphereRadius(node);
+    const marker = node.core || node.branch;
     const material = new MeshPhongMaterial({
       color: colour,
-      shininess: node.core ? 70 : 45,
+      shininess: marker ? 70 : 45,
       specular: new Color("#3a4656"),
-      emissive: new Color(colour).multiplyScalar(node.core ? 0.28 : 0.12),
+      emissive: new Color(colour).multiplyScalar(marker ? 0.22 : 0.12),
       transparent: true,
       opacity: 1,
     });
@@ -161,17 +205,20 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     holder.add(mesh);
     let label: SpriteText | null = null;
     if (node.core) {
-      label = makeLabel(groupLabelRef.current(node.group), colour, 4.2, "700");
+      label = makeLabel(groupLabelRef.current(node.group), SECTION_LABEL, 4.2, "700");
+    } else if (node.branch) {
+      const title = sections.byId.get(node.id)?.title ?? groupLabelRef.current(node.group);
+      label = makeLabel(title, SECTION_LABEL, 3, "600");
     } else if (hubs.has(node.id) && node.node) {
       label = makeLabel(node.node.label, "#a3adbd", 2.6);
     }
     if (label) {
-      label.position.set(0, -(r + (node.core ? 5 : 3)), 0);
+      label.position.set(0, -(r + labelGap(node)), 0);
       holder.add(label);
     }
     parts.current.set(node.id, { mesh, holder, label, extra: null });
     return holder;
-  }, [hubs]);
+  }, [hubs, sections]);
 
   // Colour, size and labels follow hover, pick and search without a rebuild.
   useEffect(() => {
@@ -181,18 +228,23 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       const own = node.node;
       const isHit = own ? hitIds.has(own.id) : false;
       const dim = searching && hitIds.size > 0 && !isHit;
-      const focus = own !== undefined && (own.id === hoverId || own.id === pickedId);
-      const base = new Color(ORB_GROUP_COLOUR[node.group]);
+      const active = node.branch === true && node.id === activeSectionId;
+      const focus = (own !== undefined && (own.id === hoverId || own.id === pickedId)) || active;
+      const base = new Color(colourOf(node, sections));
       const off = own !== undefined && !own.live;
       p.mesh.material.color.copy(dim ? DIM : base);
-      p.mesh.material.emissive.copy(base).multiplyScalar(dim ? 0 : focus ? 0.55 : node.core ? 0.28 : 0.12);
+      const glow = node.core || node.branch ? 0.22 : 0.12;
+      p.mesh.material.emissive.copy(base).multiplyScalar(dim ? 0 : focus ? 0.55 : glow);
       // Off (a disabled skill, a server that is off) is half there.
       p.mesh.material.opacity = dim ? 0.35 : off ? 0.45 : 1;
-      const r = sphereRadius(node) * (focus ? 1.6 : isHit ? 1.3 : 1);
+      const r = sphereRadius(node) * (active ? 1.3 : focus ? 1.6 : isHit ? 1.3 : 1);
       p.mesh.scale.setScalar(r);
       if (p.label) {
         p.label.visible = !dim;
-        p.label.position.y = -(r + (node.core ? 5 : 3));
+        // A new colour redraws the label's texture, so only on a change.
+        const ink = active ? "#ffffff" : node.core || node.branch ? SECTION_LABEL : "#a3adbd";
+        if (p.label.color !== ink) p.label.color = ink;
+        p.label.position.y = -(r + labelGap(node));
       }
       const wantExtra = own !== undefined && !p.label && (focus || (isHit && hitIds.size <= 40));
       if (wantExtra && !p.extra && own) {
@@ -202,7 +254,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       if (p.extra) p.extra.position.set(0, -(r + 3.5), 0);
       if (p.extra) p.extra.visible = wantExtra;
     }
-  }, [data, hitIds, searching, hoverId, pickedId, generation]);
+  }, [data, sections, activeSectionId, hitIds, searching, hoverId, pickedId, generation]);
 
   const linkColor = useCallback(
     (link: SceneLink) => {
@@ -210,7 +262,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       const t = endpoint(link.target);
       if (hoverId !== null && (s === hoverId || t === hoverId)) return LINK_HOVER;
       if (searching && hitIds.size > 0 && !hitIds.has(s) && !hitIds.has(t)) return LINK_FADED;
-      return link.kind === "family" ? LINK_FAMILY : link.kind === "source" ? LINK_SOURCE : LINK_NOTE;
+      return LINK_COLOUR[link.kind];
     },
     [hitIds, hoverId, searching],
   );
@@ -234,13 +286,21 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     const link = graph.d3Force("link") as
       | { distance?: (f: (l: SceneLink) => number) => void; strength?: (f: (l: SceneLink) => number) => void }
       | undefined;
-    link?.distance?.((l) => (l.kind === "family" ? 18 + radius * 0.1 : l.kind === "source" ? 26 : 22));
-    // A member with no link of its own hangs close to its core; one that is
-    // linked lets its links decide where it sits.
-    const degree = new Map(data.nodes.map((n) => [n.id, n.degree]));
-    link?.strength?.((l) =>
-      l.kind === "family" ? ((degree.get(endpoint(l.source)) ?? 0) > 0 ? 0.08 : 0.6) : 0.45,
+    link?.distance?.((l) =>
+      l.kind === "family" ? 18 + radius * 0.1 : l.kind === "section" ? 9 + radius * 0.05 : l.kind === "source" ? 26 : 22,
     );
+    // A member with no link of its own hangs close to its core or branch
+    // point; one that is linked lets its links pull it, but a section keeps
+    // a firmer hold than a family, and a link into another section pulls
+    // only lightly (it is still drawn), so each section stays one cluster.
+    const degree = new Map(data.nodes.map((n) => [n.id, n.degree]));
+    const sectionOf = new Map(data.nodes.map((n) => [n.id, n.section]));
+    link?.strength?.((l) => {
+      const linked = (degree.get(endpoint(l.source)) ?? 0) > 0;
+      if (l.kind === "family") return linked ? 0.25 : 0.6;
+      if (l.kind === "section") return linked ? 0.6 : 0.9;
+      return sectionOf.get(endpoint(l.source)) === sectionOf.get(endpoint(l.target)) ? 0.4 : 0.02;
+    });
     const controls = graph.controls() as { autoRotate?: boolean; autoRotateSpeed?: number };
     controls.autoRotate = !reduced;
     controls.autoRotateSpeed = TURN_SPEED;
@@ -357,6 +417,12 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
           const n = node as Node3D;
           if (n.core) {
             fit(new Set(data.nodes.filter((m) => m.group === n.group).map((m) => m.id)));
+            return;
+          }
+          const section = n.branch ? sections.byId.get(n.id) : undefined;
+          if (section) {
+            fit(sectionFrameIds(section));
+            onSection?.(section.id);
             return;
           }
           if (n.node) {

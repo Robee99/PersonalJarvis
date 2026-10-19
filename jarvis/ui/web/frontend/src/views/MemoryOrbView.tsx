@@ -9,7 +9,12 @@
 //
 // Only real things and real links are drawn (`lib/orbGraph.ts`): notes linked
 // as the vault links them, and each family (notes, skills, tools, connected
-// apps, MCP servers) as a labelled region. Capabilities come from Hermes Agent
+// apps, MCP servers) as a labelled region. Inside a family, memories branch
+// off by section (`lib/orbSections.ts`): a vault area, or a link or topic
+// community of a large one. Families and sections are neutral; each memory
+// has its own colour, its section's hue shifted by its own id. The section
+// bar and the [ and ] keys jump from section to section and frame it.
+// Capabilities come from Hermes Agent
 // when it is reachable, the same list the Tool Armory shows. A catalog that
 // could not be read is marked unavailable, never shown as zero. Typing in the
 // ask bar sends a normal chat turn (`lib/chat.ts`).
@@ -17,10 +22,11 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQuery } from "@tanstack/react-query";
 import ForceGraph2D from "react-force-graph-2d";
 import type { ForceGraphMethods, NodeObject } from "react-force-graph-2d";
-import { Box, Crosshair, Network, Orbit, Search, Send, Square, X } from "lucide-react";
+import { Box, ChevronLeft, ChevronRight, Crosshair, ListTree, Network, Orbit, Search, Send, Square, X } from "lucide-react";
 
 import { HandOverlay, HandToggle } from "@/components/orb/hands/HandControls";
-import { graphHandController } from "@/components/orb/hands/graphController";
+import { GESTURES, type GestureId } from "@/components/orb/hands/gestures";
+import { graphHandController, handMapController, sceneBridge } from "@/components/orb/hands/graphController";
 import { useHandTracking, type HandController, type HandDeps } from "@/components/orb/hands/useHandTracking";
 import type { MemoryGraph3DHandle } from "@/components/orb/MemoryGraph3D";
 import { ProjectsOrb } from "@/components/orb/ProjectsOrb";
@@ -29,7 +35,6 @@ import { useConversations } from "@/hooks/useConversations";
 import { sendChatMessage } from "@/lib/chat";
 import { useWebglSupported } from "@/lib/graphDimension";
 import {
-  ORB_GROUP_COLOUR,
   ORB_GROUPS,
   buildOrbGraph,
   connectedApps,
@@ -43,15 +48,29 @@ import {
   type JarvisCatalogs,
   type MarketplaceApp,
   type OrbGroup,
+  type OrbLink,
   type OrbNode,
+  type OrbNoteGroups,
   type OrbSources,
 } from "@/lib/orbGraph";
+import {
+  SECTION_LABEL,
+  SECTION_NEUTRAL,
+  buildSections,
+  sectionFrameIds,
+  stepSection,
+  type OrbSection,
+} from "@/lib/orbSections";
+import { isTextEntryTarget } from "@/lib/shortcutOverlayTrigger";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
 
 import { MemoryOrbImport } from "./MemoryOrbImport";
 
-type DrawNode = NodeObject<OrbNode> & OrbNode;
+/** A memory, or a section's branch point (a label on the map, never a memory). */
+type FlatNode = OrbNode & { branch?: boolean };
+type DrawNode = NodeObject<FlatNode> & FlatNode;
+type FlatLink = OrbLink & { kind?: "section" };
 
 const NODE_RADIUS = 3.2;
 const REGION_RADIUS = 260;
@@ -141,15 +160,21 @@ async function fetchSemanticSources(): Promise<Pick<OrbSources, "semanticIndex" 
 }
 
 export async function fetchOrbSources(): Promise<OrbSources> {
-  const [wiki, hermes, apps, semantic] = await Promise.all([
+  const [wiki, hermes, apps, semantic, tree] = await Promise.all([
     getJson<OrbSources["wiki"]>("/api/wiki/graph"),
     getJson<HermesCatalogs>("/api/hermes/inventory"),
     getJson<{ plugins: MarketplaceApp[] }>("/api/marketplace/plugins"),
     fetchSemanticSources(),
+    // The note communities that sections follow; without them, vault folders.
+    getJson<Partial<OrbNoteGroups>>("/api/wiki/orb-tree"),
   ]);
   const base = {
     wiki: Array.isArray(wiki?.nodes) ? wiki : undefined,
     apps: connectedApps(apps?.plugins),
+    noteGroups:
+      Array.isArray(tree?.communities) && Array.isArray(tree?.leaves)
+        ? { communities: tree.communities, leaves: tree.leaves }
+        : undefined,
     ...semantic,
   };
   if (hermes?.available) {
@@ -271,15 +296,25 @@ export function MemoryOrbView({
 
   const full = useMemo(() => buildOrbGraph(sources ?? {}), [sources]);
   const filtered = useMemo(() => filterOrbGraph(full, hidden), [full, hidden]);
+  const sections = useMemo(() => buildSections(filtered.nodes, sources?.noteGroups), [filtered, sources]);
+  const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+  const [sectionListOpen, setSectionListOpen] = useState(false);
+  const activeSection = activeSectionId ? (sections.byId.get(activeSectionId) ?? null) : null;
+  const sectionTitle = (section: OrbSection) => section.title ?? groupLabel(section.group);
+  const colourOf = (node: OrbNode) => sections.colourOf.get(node.id) ?? SECTION_NEUTRAL;
   // The force engine mutates the objects it is given, so it gets fresh copies
-  // whenever what is shown changes and keeps them otherwise.
-  const shown = useMemo(
-    () => ({
-      nodes: filtered.nodes.map((n) => ({ ...n })) as DrawNode[],
-      links: filtered.links.map((l) => ({ ...l })),
-    }),
-    [filtered],
-  );
+  // whenever what is shown changes and keeps them otherwise. A family with
+  // several sections gets a branch point per section, its members tied to it.
+  const shown = useMemo(() => {
+    const nodes = filtered.nodes.map((n) => ({ ...n })) as DrawNode[];
+    const links: FlatLink[] = filtered.links.map((l) => ({ ...l }));
+    for (const section of sections.list) {
+      if (!section.branch) continue;
+      nodes.push({ id: section.id, label: section.title ?? "", group: section.group, live: true, detail: "", branch: true });
+      for (const id of section.memberIds) links.push({ source: id, target: section.id, kind: "section" });
+    }
+    return { nodes, links };
+  }, [filtered, sections]);
   const shownKey = `${full.nodes.length}|${[...hidden].sort().join(",")}`;
   const presentGroups = useMemo(
     () => ORB_GROUPS.filter((g) => filtered.nodes.some((n) => n.group === g)),
@@ -301,10 +336,19 @@ export function MemoryOrbView({
     const fg = graphRef.current;
     if (in3d || !fg) return;
     fg.d3Force("charge")?.strength(-28);
-    fg.d3Force("link")?.distance(28);
+    // Members sit close round their section's branch point; wikilinks reach
+    // further, and one into another section pulls only lightly, so each
+    // section stays one cluster.
+    const end = (e: unknown) => String(typeof e === "object" && e !== null ? (e as { id?: unknown }).id : e);
+    const sectionOf = (e: unknown) => sections.ofNode.get(end(e))?.id;
+    fg.d3Force("link")
+      ?.distance((l: FlatLink) => (l.kind === "section" ? 14 : 28))
+      .strength((l: FlatLink) =>
+        l.kind === "section" ? 0.6 : sectionOf(l.source) === sectionOf(l.target) ? 0.4 : 0.04,
+      );
     fg.d3Force("region", createRegionForce(anchors, 0.06) as never);
     fg.d3ReheatSimulation();
-  }, [shown, anchors, in3d]);
+  }, [shown, anchors, in3d, sections]);
 
   const frame = (onlyHits: boolean) => {
     if (in3d) {
@@ -321,6 +365,10 @@ export function MemoryOrbView({
   useEffect(() => {
     if (picked && !filtered.nodes.some((n) => n.id === picked.id)) setPicked(null);
   }, [filtered, picked]);
+  // Nor is a section whose family was filtered off.
+  useEffect(() => {
+    if (activeSectionId && !sections.byId.has(activeSectionId)) setActiveSectionId(null);
+  }, [sections, activeSectionId]);
 
   // Search focuses the map on what it found.
   useEffect(() => {
@@ -335,6 +383,44 @@ export function MemoryOrbView({
       else next.add(group);
       return next;
     });
+
+  /** Frame a section on the map and make it the one the steppers move from. */
+  // The section jumped to, ahead of the render that shows it, so presses of
+  // [ or ] that land before that render still step one section each.
+  const activeSectionRef = useRef(activeSectionId);
+  activeSectionRef.current = activeSectionId;
+  const jumpToSection = (section: OrbSection) => {
+    activeSectionRef.current = section.id;
+    setActiveSectionId(section.id);
+    setSectionListOpen(false);
+    const ids = sectionFrameIds(section);
+    if (in3d) {
+      graph3dRef.current?.fit(ids);
+      return;
+    }
+    graphRef.current?.zoomToFit(600, FIT_PADDING, (n) => ids.has(String(n.id)));
+  };
+  /** The next or previous section from the one jumped to last, or from the picked memory's. */
+  const stepSections = (delta: number) => {
+    const from = activeSectionRef.current ?? (picked ? (sections.ofNode.get(picked.id)?.id ?? null) : null);
+    const next = stepSection(sections.list, from, delta);
+    if (next) jumpToSection(next);
+  };
+  const stepSectionsRef = useRef(stepSections);
+  stepSectionsRef.current = stepSections;
+  // [ and ] step through the sections wherever the focus is, except in a text field.
+  useEffect(() => {
+    if (mode !== "memory") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "[" && e.key !== "]") return;
+      // Ctrl+Alt is AltGr, which types the brackets on many layouts.
+      if (e.metaKey || (e.ctrlKey && !e.altKey) || isTextEntryTarget(e.target)) return;
+      e.preventDefault();
+      stepSectionsRef.current(e.key === "]" ? 1 : -1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode]);
 
   const focusNode = (node: OrbNode) => {
     setPicked(node);
@@ -356,30 +442,69 @@ export function MemoryOrbView({
       void openConversation(node.conversationKind, node.threadId);
     } else if (node.section) setActiveSection(node.section);
   };
-  const focusNodeRef = useRef(focusNode);
-  focusNodeRef.current = focusNode;
   const openRef = useRef(open);
   openRef.current = open;
 
-  // Hands on the memory map: the same hover, click and open as the mouse.
-  const latest = useRef({ shown, width, height, picked });
-  latest.current = { shown, width, height, picked };
+  // Hands on the memory map: the same hover, pick and open as the mouse, the
+  // section steppers, and a reset that frames the whole map again. A hand's
+  // pick only marks the memory (no fly-in), so it stays under the hand for
+  // the pinch that opens it.
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+  const latest = useRef({ shown, width, height, picked, hover });
+  latest.current = { shown, width, height, picked, hover };
   useEffect(() => {
-    // Hand gestures steer the flat map; the 3D map takes the mouse and keys.
-    if (mode !== "memory" || in3d) return;
-    registerHands(
-      graphHandController<DrawNode>({
-        graph: () => graphRef.current as never,
-        size: () => ({ width: latest.current.width, height: latest.current.height }),
-        nodes: () => latest.current.shown.nodes,
-        picked: () => latest.current.shown.nodes.find((n) => n.id === latest.current.picked?.id) ?? null,
-        hover: (node) => setHover(node),
-        pick: (node) => (node ? focusNodeRef.current(node) : setPicked(null)),
-        open: (node) => openRef.current(node),
-      }),
-    );
+    if (mode !== "memory") return;
+    const shared = {
+      pick: (node: OrbNode | null) => setPicked(node),
+      open: (node: OrbNode) => openRef.current(node),
+      section: (step: 1 | -1) => stepSectionsRef.current(step),
+      reset: () => {
+        setActiveSectionId(null);
+        frameRef.current(false);
+      },
+    };
+    if (in3d) {
+      // The 3D map hovers through its own picking: the hand moves its pointer
+      // and zooms through its wheel, and reads back what it hovers.
+      const scene = sceneBridge(
+        () => wrapRef.current?.querySelector<HTMLCanvasElement>("[data-testid='memory-orb-3d'] canvas") ?? null,
+      );
+      registerHands(
+        handMapController<OrbNode>({
+          ...shared,
+          nodeAt: (point) => {
+            scene.move(point);
+            return latest.current.hover;
+          },
+          picked: () => latest.current.picked,
+          hover: (node) => setHover(node),
+          zoom: (scale) => {
+            scene.zoom(scale);
+          },
+        }),
+      );
+    } else {
+      registerHands(
+        graphHandController<DrawNode>({
+          ...shared,
+          graph: () => graphRef.current as never,
+          size: () => ({ width: latest.current.width, height: latest.current.height }),
+          // Branch points are labels, not memories: hands pick memories only.
+          nodes: () => latest.current.shown.nodes.filter((n) => !n.branch),
+          picked: () => latest.current.shown.nodes.find((n) => n.id === latest.current.picked?.id) ?? null,
+          hover: (node) => setHover(node),
+        }),
+      );
+    }
     return () => registerHands(null);
   }, [mode, registerHands, in3d]);
+  // What hands can do on the map shown: the 3D map orbits by itself and has
+  // no pan, the projects map has no sections.
+  const handGestures = useMemo<readonly GestureId[]>(
+    () => GESTURES.filter((id) => (mode === "projects" ? id !== "swipe" : !(in3d && id === "pan"))),
+    [mode, in3d],
+  );
 
   const submit = async () => {
     const text = ask.trim();
@@ -388,8 +513,36 @@ export function MemoryOrbView({
     if (await sendChatMessage(text)) setAsk("");
   };
 
+  // A section's branch point: a neutral ring with the section's name.
+  const drawBranch = (node: DrawNode, ctx: CanvasRenderingContext2D, scale: number) => {
+    const active = node.id === activeSectionId;
+    const x = node.x ?? 0;
+    const y = node.y ?? 0;
+    const r = NODE_RADIUS * (active ? 2.2 : 1.7);
+    ctx.globalAlpha = searching && hitIds.size ? 0.35 : 1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, 2 * Math.PI);
+    ctx.fillStyle = "rgba(5,7,11,0.85)";
+    ctx.fill();
+    ctx.lineWidth = (active ? 2 : 1.3) / Math.max(scale, 0.5);
+    ctx.strokeStyle = active ? "#ffffff" : SECTION_NEUTRAL;
+    ctx.stroke();
+    const size = Math.max(11 / scale, 3);
+    ctx.font = `600 ${size}px ui-sans-serif, system-ui`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = active ? "#ffffff" : SECTION_LABEL;
+    const name = node.label || groupLabel(node.group);
+    ctx.fillText(name.length > 40 ? `${name.slice(0, 39)}…` : name, x, y + r + 2 / scale);
+    ctx.globalAlpha = 1;
+  };
+
   const drawNode = (node: DrawNode, ctx: CanvasRenderingContext2D, scale: number) => {
-    const colour = ORB_GROUP_COLOUR[node.group];
+    if (node.branch) {
+      drawBranch(node, ctx, scale);
+      return;
+    }
+    const colour = colourOf(node);
     const isHit = hitIds.has(node.id);
     const focus = hover?.id === node.id || picked?.id === node.id;
     const r = focus || isHit ? NODE_RADIUS * 1.6 : NODE_RADIUS;
@@ -446,7 +599,7 @@ export function MemoryOrbView({
       let top = Infinity;
       for (const node of shown.nodes) if (node.group === group && node.y !== undefined) top = Math.min(top, node.y);
       ctx.globalAlpha = 0.75;
-      ctx.fillStyle = ORB_GROUP_COLOUR[group];
+      ctx.fillStyle = SECTION_LABEL;
       ctx.fillText(groupLabel(group), centre.x / centre.n, top - size * 1.2);
     }
     ctx.globalAlpha = 1;
@@ -486,6 +639,9 @@ export function MemoryOrbView({
                 ref={graph3dRef}
                 nodes={filtered.nodes}
                 links={filtered.links}
+                sections={sections}
+                activeSectionId={activeSectionId}
+                onSection={setActiveSectionId}
                 width={width}
                 height={height}
                 hitIds={hitIds}
@@ -515,7 +671,7 @@ export function MemoryOrbView({
                 ctx.fill();
               }}
               onRenderFramePost={drawRegions}
-              linkColor={() => "rgba(91,212,164,0.35)"}
+              linkColor={(l: FlatLink) => (l.kind === "section" ? "rgba(160,172,190,0.3)" : "rgba(91,212,164,0.35)")}
               linkWidth={0.8}
               cooldownTicks={200}
               onEngineStop={() => {
@@ -523,8 +679,16 @@ export function MemoryOrbView({
                 framedFor.current = shownKey;
                 frame(searching);
               }}
-              onNodeHover={(node) => setHover((node as DrawNode | null) ?? null)}
-              onNodeClick={(node) => focusNode(node as DrawNode)}
+              onNodeHover={(node) => {
+                const drawn = node as DrawNode | null;
+                setHover(drawn && !drawn.branch ? drawn : null);
+              }}
+              onNodeClick={(node) => {
+                const drawn = node as DrawNode;
+                const section = drawn.branch ? sections.byId.get(drawn.id) : undefined;
+                if (section) jumpToSection(section);
+                else if (!drawn.branch) focusNode(drawn);
+              }}
               onBackgroundClick={() => setPicked(null)}
             />
           )}
@@ -605,7 +769,7 @@ export function MemoryOrbView({
                         (hidden.has(group) || missing) && "opacity-40",
                       )}
                     >
-                      <span className="h-2 w-2 rounded-full" style={{ background: ORB_GROUP_COLOUR[group] }} />
+                      <span aria-hidden className="h-2 w-2 rounded-full border border-slate-400/70" />
                       <span className="text-slate-200">{groupLabel(group)}</span>
                       <span className="font-mono text-slate-500">
                         {missing ? t("orb2.memory.unavailable") : full.counts[group]}
@@ -615,6 +779,22 @@ export function MemoryOrbView({
                 })}
               </div>
               <p className="mt-1.5 text-[10px] text-slate-500">{fill(t("orb2.memory.legend"), { from })}</p>
+              <p className="mt-0.5 text-[10px] text-slate-500" data-testid="memory-orb-colour-legend">
+                {t("orb2.memory.colour_legend")}
+              </p>
+              {sections.list.length > 0 && (
+                <SectionBar
+                  sections={sections.list}
+                  active={activeSection}
+                  open={sectionListOpen}
+                  title={sectionTitle}
+                  groupLabel={groupLabel}
+                  onToggle={() => setSectionListOpen((v) => !v)}
+                  onClose={() => setSectionListOpen(false)}
+                  onStep={stepSections}
+                  onJump={jumpToSection}
+                />
+              )}
             </>
           )}
         </div>
@@ -655,7 +835,7 @@ export function MemoryOrbView({
                       onClick={() => focusNode(node)}
                       className="flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-white/5"
                     >
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: ORB_GROUP_COLOUR[node.group] }} />
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colourOf(node) }} />
                       <span className="truncate text-slate-200">{node.label}</span>
                       <span className="ml-auto shrink-0 text-slate-500">{groupLabel(node.group)}</span>
                     </button>
@@ -701,7 +881,7 @@ export function MemoryOrbView({
             </div>
           </>
         )}
-        <HandToggle tracking={tracking} className={mode === "memory" ? undefined : "ml-auto"} />
+        <HandToggle tracking={tracking} gestures={handGestures} className={mode === "memory" ? undefined : "ml-auto"} />
       </div>
 
       {/* Detail of the hovered or picked node. */}
@@ -712,10 +892,16 @@ export function MemoryOrbView({
             return (
               <>
                 <p className="flex items-center gap-2 font-semibold text-slate-100">
-                  <span className="h-2 w-2 rounded-full" style={{ background: ORB_GROUP_COLOUR[node.group] }} />
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colourOf(node) }} />
                   {node.label}
                 </p>
-                <p className="mt-0.5 text-slate-500">{groupLabel(node.group)}</p>
+                <p className="mt-0.5 text-slate-500">
+                  {groupLabel(node.group)}
+                  {(() => {
+                    const section = sections.ofNode.get(node.id);
+                    return section?.title ? ` · ${section.title}` : "";
+                  })()}
+                </p>
                 {node.detail && <p className="mt-1 leading-5 text-slate-400">{node.detail}</p>}
                 {node.semanticIndexed && (
                   <p className="mt-2 font-mono text-[10px] uppercase tracking-wider text-emerald-300">
@@ -802,6 +988,134 @@ export function MemoryOrbView({
           </button>
         </form>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The section bar: step to the previous or next section (also [ and ]), or
+ * open the list of every section, family by family, and jump to one. A row's
+ * swatch is the hue its memories' colours start from, so the list is the
+ * legend of the map's colours as well.
+ */
+function SectionBar({
+  sections,
+  active,
+  open,
+  title,
+  groupLabel,
+  onToggle,
+  onClose,
+  onStep,
+  onJump,
+}: {
+  sections: OrbSection[];
+  active: OrbSection | null;
+  open: boolean;
+  title: (section: OrbSection) => string;
+  groupLabel: (group: OrbGroup) => string;
+  onToggle: () => void;
+  onClose: () => void;
+  onStep: (delta: number) => void;
+  onJump: (section: OrbSection) => void;
+}) {
+  const t = useT();
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  const families = ORB_GROUPS.filter((g) => sections.some((s) => s.group === g));
+  const stepClass =
+    "flex h-full w-7 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-white/5 hover:text-slate-100";
+  return (
+    <div className="relative mt-2 w-fit max-w-[34rem]" data-testid="memory-orb-sections">
+      <div className="flex h-8 items-center rounded-full border border-white/10 bg-black/50 p-0.5 backdrop-blur">
+        <button
+          type="button"
+          data-testid="memory-orb-section-prev"
+          aria-label={t("orb2.memory.section_prev")}
+          title={t("orb2.memory.section_prev")}
+          onClick={() => onStep(-1)}
+          className={stepClass}
+        >
+          <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+        </button>
+        <button
+          type="button"
+          data-testid="memory-orb-section-current"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          title={t("orb2.memory.section_list")}
+          onClick={onToggle}
+          className="flex h-full min-w-0 items-center gap-1.5 rounded-full px-2 text-[11px] hover:bg-white/5"
+        >
+          <ListTree className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden />
+          {active ? (
+            <>
+              <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: active.colour }} />
+              <span className="max-w-[14rem] truncate text-slate-100">{title(active)}</span>
+              <span className="shrink-0 font-mono text-slate-500">
+                {sections.indexOf(active) + 1}/{sections.length}
+              </span>
+            </>
+          ) : (
+            <span className="text-slate-300">{fill(t("orb2.memory.sections"), { count: sections.length })}</span>
+          )}
+        </button>
+        <button
+          type="button"
+          data-testid="memory-orb-section-next"
+          aria-label={t("orb2.memory.section_next")}
+          title={t("orb2.memory.section_next")}
+          onClick={() => onStep(1)}
+          className={stepClass}
+        >
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </div>
+      {open && (
+        <div
+          role="listbox"
+          aria-label={t("orb2.memory.section_list")}
+          data-testid="memory-orb-section-list"
+          className="absolute left-0 top-full z-30 mt-1.5 max-h-72 w-80 overflow-y-auto rounded-xl border border-white/10 bg-black/80 p-1.5 text-xs backdrop-blur"
+        >
+          {families.map((group) => (
+            <div key={group}>
+              <p className="px-1.5 pb-0.5 pt-1.5 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                {groupLabel(group)}
+              </p>
+              {sections
+                .filter((s) => s.group === group)
+                .map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    role="option"
+                    aria-selected={active?.id === s.id}
+                    data-testid="memory-orb-section-option"
+                    onClick={() => onJump(s)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-1.5 py-1 text-left hover:bg-white/5",
+                      active?.id === s.id && "bg-white/10",
+                    )}
+                  >
+                    <span aria-hidden className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.colour }} />
+                    <span className="min-w-0 flex-1 truncate text-slate-200">
+                      {title(s)}
+                      {s.within && <span className="text-slate-500"> · {s.within}</span>}
+                    </span>
+                    <span className="shrink-0 font-mono text-slate-500">{s.memberIds.length}</span>
+                  </button>
+                ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

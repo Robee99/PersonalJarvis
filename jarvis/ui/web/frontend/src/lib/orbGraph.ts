@@ -6,7 +6,9 @@
  * one. Families (notes, skills, tools, apps, MCP servers) are shown as regions
  * of the flat map, pulled together by `createRegionForce`, never as invented
  * memories. The 3D map names each family with a core instead
- * (`lib/orbGraph3d.ts`), which is a label, never a memory.
+ * (`lib/orbGraph3d.ts`), which is a label, never a memory. Inside a family,
+ * memories are grouped into sections and coloured one by one
+ * (`lib/orbSections.ts`); a family or a section itself carries no colour.
  *
  * Capabilities come from Hermes Agent when its inventory is readable (the
  * brain that actually uses them, and the same list the Tool Armory shows);
@@ -31,6 +33,9 @@ export interface OrbNode {
   section?: "memory" | "chats" | "skills" | "plugins" | "mcps" | "armory";
   /** The wiki slug, for notes: "Open" shows that page. */
   slug?: string;
+  /** A note's vault path and page kind: where its section comes from (`lib/orbSections.ts`). */
+  path?: string;
+  kind?: string;
   /** Stable source identity from the authorized semantic index. */
   sourceId?: string;
   semanticIndexed?: boolean;
@@ -91,6 +96,12 @@ export interface OrbSources {
       sources?: { source_id: string; source_path: string }[];
     }[];
   };
+  /**
+   * The vault's note communities (`/api/wiki/orb-tree`): vault areas and the
+   * link and topic communities inside a large one. Notes are put in sections
+   * by these; without them, by the folder in their path.
+   */
+  noteGroups?: OrbNoteGroups;
   skills?: OrbItem[];
   tools?: OrbItem[];
   apps?: OrbItem[];
@@ -98,16 +109,12 @@ export interface OrbSources {
   capabilitySource?: CapabilitySource;
 }
 
-export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
-  wiki: "#5b8def",
-  concepts: "#ffb84d",
-  conversations: "#f5a35c",
-  communities: "#df8cff",
-  skills: "#b48cf2",
-  tools: "#f47fa4",
-  apps: "#5bd4a4",
-  mcp: "#4fd1e8",
-};
+/** The part of `/api/wiki/orb-tree` the map reads: which community each note is in. */
+export interface OrbNoteGroups {
+  communities: { id: string; title: string; level: number; parent: string | null }[];
+  /** A note leaf's id is `note:<slug>`; work leaves (`entity:…`) are not read. */
+  leaves: { id: string; community: string }[];
+}
 
 export const ORB_GROUP_LABEL: Record<OrbGroup, string> = {
   wiki: "Notes",
@@ -122,7 +129,7 @@ export const ORB_GROUP_LABEL: Record<OrbGroup, string> = {
 
 export const ORB_GROUPS = Object.keys(ORB_GROUP_LABEL) as OrbGroup[];
 
-/** Wiki kinds that read as ideas rather than notes get their own colour. */
+/** Wiki kinds that read as ideas rather than notes are a family of their own. */
 const CONCEPT_KINDS = new Set(["concept", "project", "entity"]);
 
 const RISK_LABEL: Record<string, string> = {
@@ -291,6 +298,8 @@ export function buildOrbGraph(src: OrbSources): OrbGraph {
         detail: `${titleCase(page.kind)} page in memory`,
         section: "memory",
         slug: page.id,
+        path: page.path,
+        kind: page.kind,
         sourceId,
         semanticIndexed: Boolean(sourceId),
       });

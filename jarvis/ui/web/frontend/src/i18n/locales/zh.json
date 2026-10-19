@@ -7952,7 +7952,12 @@
       "view_label": "地图视图",
       "view_3d": "3D",
       "view_2d": "2D",
-      "view_no_webgl": "3D 需要 WebGL，此设备无法提供。"
+      "view_no_webgl": "3D 需要 WebGL，此设备无法提供。",
+      "colour_legend": "每条记忆都有自己的颜色；同一分区的记忆共用一个色调。类别和分区显示为灰色。",
+      "sections": "{count} 个分区",
+      "section_prev": "上一个分区（[）",
+      "section_next": "下一个分区（]）",
+      "section_list": "跳转到分区"
     },
     "hands": {
       "toggle": "手势",
@@ -7964,10 +7969,6 @@
       "turn_off": "关闭手势",
       "fallback": "鼠标、键盘和触控仍然可用。",
       "privacy": "摄像头画面只在此窗口中读取，绝不会离开这台设备。",
-      "gesture_point": "指向：悬停",
-      "gesture_pinch": "捏合：选择；再次捏合：打开",
-      "gesture_palm": "张开手掌并移动：移动地图",
-      "gesture_zoom": "双手捏合并分开或靠拢：缩放",
       "status": {
         "off": "手势已关闭",
         "checking": "正在检查追踪文件…",
@@ -7993,6 +7994,63 @@
         "camera-busy": "另一个应用正在使用摄像头。请关闭它后重试。",
         "camera-failed": "无法启动摄像头。",
         "unsupported": "此窗口无法使用摄像头。"
+      },
+      "guide_title": "手势",
+      "guide_unavailable": "此地图不支持",
+      "guide": {
+        "hover": {
+          "pose": "伸出食指指向",
+          "action": "移动光标，自动吸附到最近的条目"
+        },
+        "select": {
+          "pose": "捏合后松开",
+          "action": "选中；在已选条目上则打开；在空白处则取消选择"
+        },
+        "open": {
+          "pose": "捏合并保持不动",
+          "action": "打开光标下的条目"
+        },
+        "confirm": {
+          "pose": "竖起大拇指并保持",
+          "action": "打开已选中的条目"
+        },
+        "pan": {
+          "pose": "握拳或捏合后移动",
+          "action": "随手移动地图"
+        },
+        "zoom": {
+          "pose": "双手捏合，分开或靠拢",
+          "action": "放大或缩小"
+        },
+        "swipe": {
+          "pose": "张开手掌向左或向右挥动",
+          "action": "上一个或下一个分区"
+        },
+        "reset": {
+          "pose": "比出剪刀手，或双手张开并保持",
+          "action": "重置视图"
+        }
+      },
+      "indicator_label": "识别到的手势",
+      "live": {
+        "none": "请将手对准摄像头",
+        "hover": "指向：正在移动光标",
+        "pinch": "捏合：松开即选中，保持即打开",
+        "select": "捏合：选中",
+        "open": "保持捏合：打开",
+        "confirm": "竖起大拇指：保持即打开已选条目",
+        "pan": "抓取：正在移动地图",
+        "zoom": "双手捏合：正在缩放",
+        "swipe": "张开手掌：左右挥动切换分区",
+        "reset": "保持即重置视图"
+      },
+      "fired": {
+        "select": "已选中",
+        "open": "正在打开",
+        "confirm": "已确认",
+        "swipe_next": "下一个分区",
+        "swipe_prev": "上一个分区",
+        "reset": "视图已重置"
       }
     }
   },
@@ -8147,7 +8205,17 @@
       "window": "窗口",
       "trim": "压缩",
       "limit": "上限",
-      "none_short": "无本地模型"
+      "none_short": "无本地模型",
+      "slider": "上下文大小",
+      "apply": "应用",
+      "reload": "重新加载模型",
+      "restarting": "正在重启模型…",
+      "changed": "模型已以 {size} 上下文重启。",
+      "reloaded": "模型已重新加载（{size} 上下文）。",
+      "change_failed": "模型未能重启。",
+      "hint_fast": "此大小下屏幕读取在 GPU 上运行（快）。",
+      "hint_slow_vision": "此大小下屏幕读取在 CPU 上运行（较慢）。",
+      "hint_big": "超过 64k 时部分层移到 CPU：回复更慢，占用更多内存。"
     },
     "status": {
       "title": "系统状态",

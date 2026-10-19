@@ -7952,7 +7952,12 @@
       "view_label": "Map view",
       "view_3d": "3D",
       "view_2d": "2D",
-      "view_no_webgl": "3D needs WebGL, which this machine cannot provide."
+      "view_no_webgl": "3D needs WebGL, which this machine cannot provide.",
+      "colour_legend": "Each memory has its own colour; memories in one section share a hue. Families and sections are grey.",
+      "sections": "{count} sections",
+      "section_prev": "Previous section ([)",
+      "section_next": "Next section (])",
+      "section_list": "Jump to a section"
     },
     "hands": {
       "toggle": "Hands",
@@ -7964,10 +7969,6 @@
       "turn_off": "Turn hands off",
       "fallback": "Mouse, keyboard and touch keep working.",
       "privacy": "Camera frames are read in this window and never leave this device.",
-      "gesture_point": "Point: hover",
-      "gesture_pinch": "Pinch: select; pinch again: open",
-      "gesture_palm": "Open palm, moved: move the map",
-      "gesture_zoom": "Pinch with both hands, apart or together: zoom",
       "status": {
         "off": "Hands off",
         "checking": "Checking tracking files…",
@@ -7993,6 +7994,63 @@
         "camera-busy": "Another app is using the camera. Close it, then try again.",
         "camera-failed": "The camera could not be started.",
         "unsupported": "This window cannot use a camera."
+      },
+      "guide_title": "Gestures",
+      "guide_unavailable": "Not on this map",
+      "guide": {
+        "hover": {
+          "pose": "Point with the index finger",
+          "action": "Moves the cursor; it snaps to the nearest item"
+        },
+        "select": {
+          "pose": "Pinch and let go",
+          "action": "Selects; on the selected item, opens it; on empty space, clears"
+        },
+        "open": {
+          "pose": "Pinch and hold still",
+          "action": "Opens the item under the cursor"
+        },
+        "confirm": {
+          "pose": "Thumbs up, held",
+          "action": "Opens the selected item"
+        },
+        "pan": {
+          "pose": "Fist or pinch, then move",
+          "action": "Moves the map with the hand"
+        },
+        "zoom": {
+          "pose": "Pinch with both hands, apart or together",
+          "action": "Zooms in or out"
+        },
+        "swipe": {
+          "pose": "Open palm, swiped left or right",
+          "action": "Previous or next section"
+        },
+        "reset": {
+          "pose": "Peace sign, or both palms open, held",
+          "action": "Resets the view"
+        }
+      },
+      "indicator_label": "Recognised gesture",
+      "live": {
+        "none": "Show a hand to the camera",
+        "hover": "Pointing: moving the cursor",
+        "pinch": "Pinch: let go to select, hold to open",
+        "select": "Pinch: select",
+        "open": "Pinch held: open",
+        "confirm": "Thumbs up: hold to open the selected item",
+        "pan": "Grabbing: moving the map",
+        "zoom": "Two-hand pinch: zooming",
+        "swipe": "Open palm: swipe left or right for sections",
+        "reset": "Hold to reset the view"
+      },
+      "fired": {
+        "select": "Selected",
+        "open": "Opening",
+        "confirm": "Confirmed",
+        "swipe_next": "Next section",
+        "swipe_prev": "Previous section",
+        "reset": "View reset"
       }
     }
   },
@@ -8147,7 +8205,17 @@
       "window": "window",
       "trim": "Trim",
       "limit": "Limit",
-      "none_short": "No local model"
+      "none_short": "No local model",
+      "slider": "Context size",
+      "apply": "Apply",
+      "reload": "Reload the model",
+      "restarting": "Restarting the model…",
+      "changed": "Model restarted with {size} context.",
+      "reloaded": "Model reloaded ({size} context).",
+      "change_failed": "The model did not restart.",
+      "hint_fast": "Screen reading runs on the GPU at this size (fast).",
+      "hint_slow_vision": "Screen reading runs on the CPU at this size (slower).",
+      "hint_big": "Above 64k some layers move to the CPU: slower replies, more RAM."
     },
     "status": {
       "title": "System status",

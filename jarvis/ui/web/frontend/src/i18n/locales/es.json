@@ -7947,7 +7947,12 @@
       "view_label": "Vista del mapa",
       "view_3d": "3D",
       "view_2d": "2D",
-      "view_no_webgl": "3D necesita WebGL, que este equipo no puede ofrecer."
+      "view_no_webgl": "3D necesita WebGL, que este equipo no puede ofrecer.",
+      "colour_legend": "Cada recuerdo tiene su propio color; los recuerdos de una sección comparten un tono. Las familias y las secciones son grises.",
+      "sections": "{count} secciones",
+      "section_prev": "Sección anterior ([)",
+      "section_next": "Sección siguiente (])",
+      "section_list": "Ir a una sección"
     },
     "hands": {
       "toggle": "Manos",
@@ -7959,10 +7964,6 @@
       "turn_off": "Desactivar manos",
       "fallback": "El ratón, el teclado y la pantalla táctil siguen funcionando.",
       "privacy": "Las imágenes de la cámara se leen en esta ventana y nunca salen de este equipo.",
-      "gesture_point": "Señalar: resaltar",
-      "gesture_pinch": "Pellizcar: seleccionar; otra vez: abrir",
-      "gesture_palm": "Mano abierta en movimiento: mover el mapa",
-      "gesture_zoom": "Pellizcar con las dos manos, separándolas o juntándolas: zoom",
       "status": {
         "off": "Manos desactivadas",
         "checking": "Comprobando archivos de seguimiento…",
@@ -7988,6 +7989,63 @@
         "camera-busy": "Otra app está usando la cámara. Ciérrala y vuelve a intentarlo.",
         "camera-failed": "No se pudo iniciar la cámara.",
         "unsupported": "Esta ventana no puede usar una cámara."
+      },
+      "guide_title": "Gestos",
+      "guide_unavailable": "No disponible en este mapa",
+      "guide": {
+        "hover": {
+          "pose": "Señalar con el índice",
+          "action": "Mueve el cursor; se ajusta al elemento más cercano"
+        },
+        "select": {
+          "pose": "Pellizcar y soltar",
+          "action": "Selecciona; sobre el elemento seleccionado, lo abre; en un espacio vacío, quita la selección"
+        },
+        "open": {
+          "pose": "Pellizcar y mantener quieto",
+          "action": "Abre el elemento bajo el cursor"
+        },
+        "confirm": {
+          "pose": "Pulgar arriba, mantenido",
+          "action": "Abre el elemento seleccionado"
+        },
+        "pan": {
+          "pose": "Puño o pellizco, y mover",
+          "action": "Mueve el mapa con la mano"
+        },
+        "zoom": {
+          "pose": "Pellizcar con ambas manos, separando o juntando",
+          "action": "Acerca o aleja"
+        },
+        "swipe": {
+          "pose": "Palma abierta, deslizar a la izquierda o a la derecha",
+          "action": "Sección anterior o siguiente"
+        },
+        "reset": {
+          "pose": "Señal de la paz, o ambas palmas abiertas, mantenidas",
+          "action": "Restablece la vista"
+        }
+      },
+      "indicator_label": "Gesto reconocido",
+      "live": {
+        "none": "Muestra una mano a la cámara",
+        "hover": "Señalando: moviendo el cursor",
+        "pinch": "Pellizco: suelta para seleccionar, mantén para abrir",
+        "select": "Pellizco: seleccionar",
+        "open": "Pellizco mantenido: abrir",
+        "confirm": "Pulgar arriba: mantén para abrir el elemento seleccionado",
+        "pan": "Agarrando: moviendo el mapa",
+        "zoom": "Pellizco con dos manos: zoom",
+        "swipe": "Palma abierta: desliza a la izquierda o a la derecha para cambiar de sección",
+        "reset": "Mantén para restablecer la vista"
+      },
+      "fired": {
+        "select": "Seleccionado",
+        "open": "Abriendo",
+        "confirm": "Confirmado",
+        "swipe_next": "Sección siguiente",
+        "swipe_prev": "Sección anterior",
+        "reset": "Vista restablecida"
       }
     }
   },
@@ -8053,7 +8111,17 @@
       "window": "ventana",
       "trim": "Recorte",
       "limit": "Límite",
-      "none_short": "Sin modelo local"
+      "none_short": "Sin modelo local",
+      "slider": "Tamaño del contexto",
+      "apply": "Aplicar",
+      "reload": "Recargar el modelo",
+      "restarting": "Reiniciando el modelo…",
+      "changed": "Modelo reiniciado con {size} de contexto.",
+      "reloaded": "Modelo recargado ({size} de contexto).",
+      "change_failed": "El modelo no se reinició.",
+      "hint_fast": "La lectura de pantalla va en la GPU con este tamaño (rápida).",
+      "hint_slow_vision": "La lectura de pantalla va en la CPU con este tamaño (más lenta).",
+      "hint_big": "Por encima de 64k algunas capas pasan a la CPU: respuestas más lentas, más RAM."
     },
     "status": {
       "title": "Estado del sistema",

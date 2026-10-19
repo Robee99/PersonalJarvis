@@ -7947,7 +7947,12 @@
       "view_label": "Kartenansicht",
       "view_3d": "3D",
       "view_2d": "2D",
-      "view_no_webgl": "3D braucht WebGL, das dieser Rechner nicht bereitstellen kann."
+      "view_no_webgl": "3D braucht WebGL, das dieser Rechner nicht bereitstellen kann.",
+      "colour_legend": "Jede Erinnerung hat ihre eigene Farbe; Erinnerungen eines Abschnitts teilen einen Farbton. Familien und Abschnitte sind grau.",
+      "sections": "{count} Abschnitte",
+      "section_prev": "Vorheriger Abschnitt ([)",
+      "section_next": "Nächster Abschnitt (])",
+      "section_list": "Zu einem Abschnitt springen"
     },
     "hands": {
       "toggle": "Hände",
@@ -7959,10 +7964,6 @@
       "turn_off": "Hände ausschalten",
       "fallback": "Maus, Tastatur und Touch funktionieren weiter.",
       "privacy": "Kamerabilder werden in diesem Fenster gelesen und verlassen nie dieses Gerät.",
-      "gesture_point": "Zeigen: hervorheben",
-      "gesture_pinch": "Zusammendrücken: auswählen; erneut: öffnen",
-      "gesture_palm": "Offene Hand bewegen: Karte verschieben",
-      "gesture_zoom": "Mit beiden Händen zusammendrücken, auseinander oder zusammen: zoomen",
       "status": {
         "off": "Hände aus",
         "checking": "Tracking-Dateien werden geprüft…",
@@ -7988,6 +7989,63 @@
         "camera-busy": "Eine andere App verwendet die Kamera. Schließe sie und versuche es erneut.",
         "camera-failed": "Die Kamera konnte nicht gestartet werden.",
         "unsupported": "Dieses Fenster kann keine Kamera verwenden."
+      },
+      "guide_title": "Gesten",
+      "guide_unavailable": "Auf dieser Karte nicht verfügbar",
+      "guide": {
+        "hover": {
+          "pose": "Mit dem Zeigefinger zeigen",
+          "action": "Bewegt den Zeiger; er rastet am nächsten Eintrag ein"
+        },
+        "select": {
+          "pose": "Kurz zusammenkneifen",
+          "action": "Wählt aus; auf dem ausgewählten Eintrag öffnet es ihn; auf leerer Fläche hebt es die Auswahl auf"
+        },
+        "open": {
+          "pose": "Zusammenkneifen und ruhig halten",
+          "action": "Öffnet den Eintrag unter dem Zeiger"
+        },
+        "confirm": {
+          "pose": "Daumen hoch, halten",
+          "action": "Öffnet den ausgewählten Eintrag"
+        },
+        "pan": {
+          "pose": "Faust oder Zusammenkneifen, dann bewegen",
+          "action": "Verschiebt die Karte mit der Hand"
+        },
+        "zoom": {
+          "pose": "Mit beiden Händen zusammenkneifen, auseinander oder zueinander",
+          "action": "Vergrößert oder verkleinert"
+        },
+        "swipe": {
+          "pose": "Offene Hand nach links oder rechts wischen",
+          "action": "Vorheriger oder nächster Abschnitt"
+        },
+        "reset": {
+          "pose": "Victory-Zeichen oder beide Hände offen, halten",
+          "action": "Setzt die Ansicht zurück"
+        }
+      },
+      "indicator_label": "Erkannte Geste",
+      "live": {
+        "none": "Zeige der Kamera eine Hand",
+        "hover": "Zeigen: Zeiger bewegt sich",
+        "pinch": "Zusammengekniffen: loslassen wählt aus, halten öffnet",
+        "select": "Zusammenkneifen: auswählen",
+        "open": "Gehalten: öffnen",
+        "confirm": "Daumen hoch: halten öffnet den ausgewählten Eintrag",
+        "pan": "Gegriffen: Karte wird verschoben",
+        "zoom": "Beidhändig: zoomen",
+        "swipe": "Offene Hand: nach links oder rechts wischen für Abschnitte",
+        "reset": "Halten setzt die Ansicht zurück"
+      },
+      "fired": {
+        "select": "Ausgewählt",
+        "open": "Wird geöffnet",
+        "confirm": "Bestätigt",
+        "swipe_next": "Nächster Abschnitt",
+        "swipe_prev": "Vorheriger Abschnitt",
+        "reset": "Ansicht zurückgesetzt"
       }
     }
   },
@@ -8053,7 +8111,17 @@
       "window": "Fenster",
       "trim": "Kürzen",
       "limit": "Grenze",
-      "none_short": "Kein lokales Modell"
+      "none_short": "Kein lokales Modell",
+      "slider": "Kontextgröße",
+      "apply": "Anwenden",
+      "reload": "Modell neu laden",
+      "restarting": "Modell wird neu gestartet…",
+      "changed": "Modell mit {size} Kontext neu gestartet.",
+      "reloaded": "Modell neu geladen ({size} Kontext).",
+      "change_failed": "Das Modell wurde nicht neu gestartet.",
+      "hint_fast": "Bildschirmlesen läuft bei dieser Größe auf der GPU (schnell).",
+      "hint_slow_vision": "Bildschirmlesen läuft bei dieser Größe auf der CPU (langsamer).",
+      "hint_big": "Über 64k wandern Schichten auf die CPU: langsamere Antworten, mehr RAM."
     },
     "status": {
       "title": "Systemstatus",
