@@ -38,6 +38,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from starlette.routing import Match, Mount
+
 log = logging.getLogger(__name__)
 
 _UNAUTHORIZED_BODY = b'{"error":"Invalid or missing Jarvis Control API key."}'
@@ -45,6 +47,25 @@ _NOT_A_SURFACE_BODY = (
     b'{"error":"No Jarvis MCP surface at this path. '
     b'Use /api/control/mcp or /api/control/mcp/agents."}'
 )
+
+
+class MCPMount(Mount):
+    """Match the canonical MCP root before a later SPA catch-all route.
+
+    Starlette's ordinary mount requires a trailing slash and only redirects
+    after checking every route. A final SPA route therefore captures the
+    slashless root first, returning HTML or HTTP 405 to an MCP client.
+    """
+
+    def matches(self, scope: dict[str, Any]) -> tuple[Match, dict[str, Any]]:
+        match, child_scope = super().matches(scope)
+        if match is Match.NONE and scope["type"] == "http":
+            # Match using the slash form, while retaining the original request
+            # path. Mount supplies its normal root_path, so both surface
+            # dispatch and nested parent mounts keep their existing semantics.
+            candidate = {**scope, "path": scope["path"] + "/"}
+            return super().matches(candidate)
+        return match, child_scope
 
 
 class _Surface:
@@ -339,4 +360,4 @@ def build_mcp_asgi_app() -> Any:
     return app
 
 
-__all__ = ["build_mcp_asgi_app", "session_ref", "surface_suffix"]
+__all__ = ["MCPMount", "build_mcp_asgi_app", "session_ref", "surface_suffix"]

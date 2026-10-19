@@ -385,11 +385,11 @@ class WebServer:
         from .holo_routes import api_router as holo_api_router
         from .holo_routes import router as holo_router
         from .live_routes import router as live_router
-        from .local_voice_routes import router as local_voice_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
         )
         from .local_models_routes import router as local_models_router
+        from .local_voice_routes import router as local_voice_router
         from .marketplace_publish_routes import router as marketplace_publish_router
         from .marketplace_routes import router as marketplace_router
         from .mcp_routes import router as mcp_router
@@ -453,13 +453,15 @@ class WebServer:
         # Jarvis' OWN tools, offered outwards over MCP so an agent-chat session
         # drives Jarvis instead of a bare workspace. Key-gated like the rest of
         # the Control API; mounted raw because the transport streams.
-        from jarvis.ui.web.mcp_server_routes import build_mcp_asgi_app
+        from jarvis.ui.web.mcp_server_routes import MCPMount, build_mcp_asgi_app
 
         # ONE mount, two surfaces, dispatched inside on the rest of the path:
         # "" is Jarvis' own tools, "/agents" is the agent ecosystem. A second
         # Starlette mount on the longer path would never match a request
         # without a trailing slash — see mcp_server_routes._surface_for.
-        app.mount("/api/control/mcp", build_mcp_asgi_app())
+        app.router.routes.append(
+            MCPMount("/api/control/mcp", app=build_mcp_asgi_app())
+        )
         # Event-loop diagnostics (read-only) — names the owner of an AP-20
         # cancellation busy-loop from inside the loop; see diagnostics_routes.
         app.include_router(diagnostics_router)
