@@ -92,7 +92,7 @@ export function StarkShell({
       data-testid={testId}
       data-screen={screen}
     >
-      <StarkRail screen={screen} onMemory={() => setFullMap({ mode: "memory" })} />
+      <StarkRail screen={screen} memoryOpen={fullMap !== null} onMemory={() => setFullMap({ mode: "memory" })} />
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <StarkHeader subtitle={subtitle} aside={aside} badge={badge} />
         <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
@@ -102,7 +102,7 @@ export function StarkShell({
   );
 }
 
-function StarkRail({ screen, onMemory }: { screen: StarkScreen; onMemory: () => void }) {
+function StarkRail({ screen, memoryOpen, onMemory }: { screen: StarkScreen; memoryOpen: boolean; onMemory: () => void }) {
   const t = useT();
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const go = (item: RailItem) => {
@@ -118,7 +118,8 @@ function StarkRail({ screen, onMemory }: { screen: StarkScreen; onMemory: () => 
     >
       <span aria-hidden className="hidden h-2 w-2 rotate-45 border border-primary/50 lg:mb-4 lg:block" />
       {RAIL.map((item) => {
-        const current = item.screen === screen;
+        // The memory map opens over the screen; while it is up, it is current.
+        const current = memoryOpen ? item.action === "memory" : item.screen === screen;
         const Icon = item.icon;
         return (
           <button

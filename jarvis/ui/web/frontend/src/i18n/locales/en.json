@@ -7948,7 +7948,11 @@
       },
       "cognee_indexed": "Cognee indexed · source {source}",
       "source_notes": "Indexed source notes",
-      "no_source_links": "No active source links in this indexed report."
+      "no_source_links": "No active source links in this indexed report.",
+      "view_label": "Map view",
+      "view_3d": "3D",
+      "view_2d": "2D",
+      "view_no_webgl": "3D needs WebGL, which this machine cannot provide."
     },
     "hands": {
       "toggle": "Hands",

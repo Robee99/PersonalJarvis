@@ -4,8 +4,9 @@
  * Only real things and real relationships are drawn. Notes are linked the way
  * the vault links them; nothing else gets an edge, because nothing else has
  * one. Families (notes, skills, tools, apps, MCP servers) are shown as regions
- * of the map, pulled together by `createRegionForce`, never as invented hub
- * nodes with spokes.
+ * of the flat map, pulled together by `createRegionForce`, never as invented
+ * memories. The 3D map names each family with a core instead
+ * (`lib/orbGraph3d.ts`), which is a label, never a memory.
  *
  * Capabilities come from Hermes Agent when its inventory is readable (the
  * brain that actually uses them, and the same list the Tool Armory shows);
@@ -98,13 +99,13 @@ export interface OrbSources {
 }
 
 export const ORB_GROUP_COLOUR: Record<OrbGroup, string> = {
-  wiki: "#5bd4a4",
+  wiki: "#5b8def",
   concepts: "#ffb84d",
   conversations: "#f5a35c",
   communities: "#df8cff",
   skills: "#b48cf2",
   tools: "#f47fa4",
-  apps: "#6aa9ff",
+  apps: "#5bd4a4",
   mcp: "#4fd1e8",
 };
 

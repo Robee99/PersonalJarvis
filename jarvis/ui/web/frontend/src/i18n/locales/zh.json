@@ -7948,7 +7948,11 @@
       },
       "cognee_indexed": "已被 Cognee 索引 · 来源 {source}",
       "source_notes": "已索引的来源笔记",
-      "no_source_links": "此索引报告中没有有效的来源链接。"
+      "no_source_links": "此索引报告中没有有效的来源链接。",
+      "view_label": "地图视图",
+      "view_3d": "3D",
+      "view_2d": "2D",
+      "view_no_webgl": "3D 需要 WebGL，此设备无法提供。"
     },
     "hands": {
       "toggle": "手势",

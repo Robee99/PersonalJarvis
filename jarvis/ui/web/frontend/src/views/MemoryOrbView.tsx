@@ -13,19 +13,21 @@
 // when it is reachable, the same list the Tool Armory shows. A catalog that
 // could not be read is marked unavailable, never shown as zero. Typing in the
 // ask bar sends a normal chat turn (`lib/chat.ts`).
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ForceGraph2D from "react-force-graph-2d";
 import type { ForceGraphMethods, NodeObject } from "react-force-graph-2d";
-import { Crosshair, Network, Orbit, Search, Send, X } from "lucide-react";
+import { Box, Crosshair, Network, Orbit, Search, Send, Square, X } from "lucide-react";
 
 import { HandOverlay, HandToggle } from "@/components/orb/hands/HandControls";
 import { graphHandController } from "@/components/orb/hands/graphController";
 import { useHandTracking, type HandController, type HandDeps } from "@/components/orb/hands/useHandTracking";
+import type { MemoryGraph3DHandle } from "@/components/orb/MemoryGraph3D";
 import { ProjectsOrb } from "@/components/orb/ProjectsOrb";
 import { fill, useT } from "@/i18n";
 import { useConversations } from "@/hooks/useConversations";
 import { sendChatMessage } from "@/lib/chat";
+import { useWebglSupported } from "@/lib/graphDimension";
 import {
   ORB_GROUP_COLOUR,
   ORB_GROUPS,
@@ -57,8 +59,24 @@ const MAX_LISTED_HITS = 8;
 /** Room around a framed map for the title, the legend and the ask bar. */
 const FIT_PADDING = 140;
 const MODE_KEY = "orb2.mode";
+const DIMENSION_KEY = "orb2.dimension";
+
+// The WebGL scene is the largest dependency in the app; it is only fetched
+// when the memory map is shown in 3D.
+const MemoryGraph3D = lazy(() => import("@/components/orb/MemoryGraph3D"));
 
 export type OrbMode = "projects" | "memory";
+export type OrbDimension = "2d" | "3d";
+
+/** The memory map opens in 3D unless the person chose the flat map. */
+function savedDimension(): OrbDimension {
+  try {
+    return window.localStorage.getItem(DIMENSION_KEY) === "2d" ? "2d" : "3d";
+  } catch {
+    // Storage can be blocked; 3D is the default.
+    return "3d";
+  }
+}
 
 function savedMode(): OrbMode {
   try {
@@ -209,6 +227,19 @@ export function MemoryOrbView({
   const tracking = useHandTracking(handController, handDeps);
   const wrapRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphMethods<DrawNode> | undefined>(undefined);
+  const graph3dRef = useRef<MemoryGraph3DHandle | null>(null);
+  const [dimension, setDimensionState] = useState<OrbDimension>(savedDimension);
+  const setDimension = (next: OrbDimension) => {
+    setDimensionState(next);
+    try {
+      window.localStorage.setItem(DIMENSION_KEY, next);
+    } catch {
+      // Remembering the view is a convenience; without storage it resets.
+    }
+  };
+  // No WebGL (a VM, a locked-down WebView, a lost context): the flat map.
+  const webgl = useWebglSupported();
+  const in3d = dimension === "3d" && webgl;
   const { width, height } = useSize(wrapRef, mode === "memory");
   const groupLabel = (group: OrbGroup) => t(`orb2.memory.group.${group}`);
   const [hidden, setHidden] = useState<Set<OrbGroup>>(new Set());
@@ -268,14 +299,18 @@ export function MemoryOrbView({
 
   useEffect(() => {
     const fg = graphRef.current;
-    if (!fg) return;
+    if (in3d || !fg) return;
     fg.d3Force("charge")?.strength(-28);
     fg.d3Force("link")?.distance(28);
     fg.d3Force("region", createRegionForce(anchors, 0.06) as never);
     fg.d3ReheatSimulation();
-  }, [shown, anchors]);
+  }, [shown, anchors, in3d]);
 
   const frame = (onlyHits: boolean) => {
+    if (in3d) {
+      graph3dRef.current?.fit(onlyHits && hitIds.size ? hitIds : undefined);
+      return;
+    }
     const fg = graphRef.current;
     if (!fg || !shown.nodes.length) return;
     if (onlyHits && hitIds.size) fg.zoomToFit(600, FIT_PADDING, (n) => hitIds.has(String(n.id)));
@@ -303,6 +338,10 @@ export function MemoryOrbView({
 
   const focusNode = (node: OrbNode) => {
     setPicked(node);
+    if (in3d) {
+      graph3dRef.current?.focus(node.id);
+      return;
+    }
     const drawn = shown.nodes.find((n) => n.id === node.id);
     if (drawn?.x !== undefined) {
       graphRef.current?.centerAt(drawn.x, drawn.y, 600);
@@ -326,7 +365,8 @@ export function MemoryOrbView({
   const latest = useRef({ shown, width, height, picked });
   latest.current = { shown, width, height, picked };
   useEffect(() => {
-    if (mode !== "memory") return;
+    // Hand gestures steer the flat map; the 3D map takes the mouse and keys.
+    if (mode !== "memory" || in3d) return;
     registerHands(
       graphHandController<DrawNode>({
         graph: () => graphRef.current as never,
@@ -339,7 +379,7 @@ export function MemoryOrbView({
       }),
     );
     return () => registerHands(null);
-  }, [mode, registerHands]);
+  }, [mode, registerHands, in3d]);
 
   const submit = async () => {
     const text = ask.trim();
@@ -430,7 +470,7 @@ export function MemoryOrbView({
       className="relative h-full w-full overflow-hidden bg-[#05070b]"
     >
       {/* HUD backdrop: a faint radial glow and two thin rings behind the map. */}
-      <div aria-hidden className="pointer-events-none absolute inset-0">
+      <div aria-hidden className={cn("pointer-events-none absolute inset-0", mode === "memory" && in3d && "hidden")}>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(79,209,232,0.07),transparent_60%)]" />
         <div className="absolute left-1/2 top-1/2 h-[70vmin] w-[70vmin] -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/[0.06]" />
         <div className="absolute left-1/2 top-1/2 h-[46vmin] w-[46vmin] -translate-x-1/2 -translate-y-1/2 rounded-full border border-dashed border-amber-300/[0.05]" />
@@ -440,7 +480,25 @@ export function MemoryOrbView({
         <ProjectsOrb registerHands={registerHands} />
       ) : (
         <div ref={wrapRef} className="absolute inset-0">
-          {width > 0 && (
+          {width > 0 && in3d && (
+            <Suspense fallback={null}>
+              <MemoryGraph3D
+                ref={graph3dRef}
+                nodes={filtered.nodes}
+                links={filtered.links}
+                width={width}
+                height={height}
+                hitIds={hitIds}
+                searching={searching}
+                hoverId={hover?.id ?? null}
+                pickedId={picked?.id ?? null}
+                groupLabel={groupLabel}
+                onHover={setHover}
+                onPick={setPicked}
+              />
+            </Suspense>
+          )}
+          {width > 0 && !in3d && (
             <ForceGraph2D
               ref={graphRef}
               graphData={shown}
@@ -613,6 +671,34 @@ export function MemoryOrbView({
             >
               <Crosshair className="h-3.5 w-3.5" aria-hidden /> {t("orb2.memory.fit")}
             </button>
+            <div
+              role="group"
+              aria-label={t("orb2.memory.view_label")}
+              className="pointer-events-auto flex h-9 items-center rounded-full border border-cyan-400/20 bg-black/50 p-0.5 backdrop-blur"
+            >
+              {(["3d", "2d"] as const).map((id) => {
+                const Icon = id === "3d" ? Box : Square;
+                const blocked = id === "3d" && !webgl;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    aria-pressed={(id === "3d") === in3d}
+                    disabled={blocked}
+                    title={blocked ? t("orb2.memory.view_no_webgl") : undefined}
+                    data-testid={`memory-orb-view-${id}`}
+                    onClick={() => setDimension(id)}
+                    className={cn(
+                      "flex h-full items-center gap-1 rounded-full px-2.5 font-mono text-[10px] uppercase tracking-[0.18em] transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+                      (id === "3d") === in3d ? "bg-cyan-400/15 text-cyan-100" : "text-slate-400 hover:text-slate-200",
+                    )}
+                  >
+                    <Icon className="h-3 w-3" aria-hidden />
+                    {t(`orb2.memory.view_${id}`)}
+                  </button>
+                );
+              })}
+            </div>
           </>
         )}
         <HandToggle tracking={tracking} className={mode === "memory" ? undefined : "ml-auto"} />

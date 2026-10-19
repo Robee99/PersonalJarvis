@@ -7943,7 +7943,11 @@
         "tools": "Werkzeuge",
         "apps": "Verbundene Apps",
         "mcp": "MCP-Server"
-      }
+      },
+      "view_label": "Kartenansicht",
+      "view_3d": "3D",
+      "view_2d": "2D",
+      "view_no_webgl": "3D braucht WebGL, das dieser Rechner nicht bereitstellen kann."
     },
     "hands": {
       "toggle": "Hände",
