@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, ExternalLink, Grid2x2, LayoutGrid, Maximize2, Pause, Play, Square } from "lucide-react";
+import { ExternalLink, Grid2x2, Maximize2 } from "lucide-react";
 import { StarkLamp, StarkPanel } from "@/components/stark/StarkPanel";
 import { fill, useT } from "@/i18n";
 import { embedUrl, isPlayerError, playsChannel, useLiveCatalog, useNowPlaying, YOUTUBE_ORIGIN, type LiveStream } from "@/lib/live";
@@ -7,32 +7,12 @@ import { cn } from "@/lib/utils";
 import { useIntelStore } from "@/store/intel";
 
 /**
- * The Live screen's video: news channels (one large, or four at once) and a
- * grid of public city cameras by region. Both play in YouTube's embedded
- * player and start muted. The assistant can switch either one
- * (`world_globe` "watch").
+ * The Live screen's video: news channels, one large or four at once, in
+ * YouTube's embedded player, muted at start. The assistant can switch the
+ * channel (`world_globe` "watch"). City cameras live on the Ghost screen.
  */
 
-const CAMS_PER_PAGE = 4;
 const WALL_SIZE = 4;
-const PLAY_ALL_KEY = "world.live.playAll";
-
-function savedPlayAll(): boolean {
-  try {
-    return window.localStorage.getItem(PLAY_ALL_KEY) === "1";
-  } catch {
-    // Storage can be blocked; cameras then wait for a click, the cheaper default.
-    return false;
-  }
-}
-
-function savePlayAll(on: boolean) {
-  try {
-    window.localStorage.setItem(PLAY_ALL_KEY, on ? "1" : "0");
-  } catch {
-    // Storage can be blocked; the choice then lasts until the screen closes.
-  }
-}
 
 /** One YouTube player that notices when its stream cannot play. */
 export function YouTubeFrame({ stream, autoplay, className }: { stream: LiveStream; autoplay: boolean; className?: string }) {
@@ -231,110 +211,6 @@ export function LiveNews({ className }: { className?: string }) {
               <ExternalLink className="h-2.5 w-2.5" aria-hidden />
             </a>
           </p>
-        </>
-      )}
-    </StarkPanel>
-  );
-}
-
-/** LIVE CAMERAS: public city cameras by region, as a grid or one at a time. */
-export function LiveCameras({ className }: { className?: string }) {
-  const t = useT();
-  const q = useLiveCatalog();
-  const groups = q.data?.groups ?? [];
-  const cams = (q.data?.streams ?? []).filter((s) => s.kind === "camera");
-  const [group, setGroup] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
-  const [single, setSingle] = useState<string | null>(null);
-  const [playAll, setPlayAll] = useState(savedPlayAll);
-  const watch = useIntelStore((s) => s.watch);
-
-  useEffect(() => {
-    const cam = watch ? cams.find((s) => s.key === watch.key) : undefined;
-    if (cam) {
-      setGroup(cam.group);
-      setSingle(cam.key);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watch?.seq, q.data]);
-
-  const groupId = group ?? groups[0]?.id ?? "";
-  const inGroup = cams.filter((s) => s.group === groupId);
-  const pages = Math.max(1, Math.ceil(inGroup.length / CAMS_PER_PAGE));
-  const shown = inGroup.slice((page % pages) * CAMS_PER_PAGE, (page % pages) * CAMS_PER_PAGE + CAMS_PER_PAGE);
-  const big = single ? cams.find((s) => s.key === single) : undefined;
-
-  const togglePlayAll = () => {
-    setPlayAll((on) => {
-      savePlayAll(!on);
-      return !on;
-    });
-  };
-
-  return (
-    <StarkPanel
-      title={t("stark.live.cameras")}
-      meta={inGroup.length ? fill(t(inGroup.length === 1 ? "stark.live.cam_count_one" : "stark.live.cam_count"), { count: inGroup.length }) : undefined}
-      action={
-        <div className="flex items-center gap-1">
-          {!big && (
-            <IconButton label={t(playAll ? "stark.live.stop_all" : "stark.live.play_all")} onClick={togglePlayAll} active={playAll} testId="stark-live-play-all">
-              {playAll ? <Pause className="h-3 w-3" aria-hidden /> : <Play className="h-3 w-3" aria-hidden />}
-            </IconButton>
-          )}
-          <IconButton label={t("stark.live.grid")} onClick={() => setSingle(null)} active={!big} testId="stark-live-grid">
-            <LayoutGrid className="h-3 w-3" aria-hidden />
-          </IconButton>
-          <IconButton label={t("stark.live.single")} onClick={() => setSingle(big?.key ?? shown[0]?.key ?? null)} active={!!big} testId="stark-live-single">
-            <Square className="h-3 w-3" aria-hidden />
-          </IconButton>
-        </div>
-      }
-      className={className}
-      bodyClassName="flex flex-col gap-2"
-      testId="stark-live-cameras"
-    >
-      {!groups.length ? (
-        <p className="text-xs text-muted-foreground">{t(q.isError ? "stark.live.error" : "stark.live.loading")}</p>
-      ) : (
-        <>
-          <div className="flex items-center gap-1 overflow-x-auto pb-0.5" role="group" aria-label={t("stark.live.groups")}>
-            {groups.map((g) => (
-              <Chip
-                key={g.id}
-                active={g.id === groupId}
-                testId={`stark-live-group-${g.id}`}
-                onClick={() => {
-                  setGroup(g.id);
-                  setPage(0);
-                  setSingle(null);
-                }}
-              >
-                {t(`stark.live.group_${g.id.replace("-", "_")}`)}
-              </Chip>
-            ))}
-            {!big && pages > 1 && (
-              <button type="button" onClick={() => setPage((p) => p + 1)} className="ml-auto flex shrink-0 items-center gap-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-primary hover:underline" data-testid="stark-live-next">
-                {(page % pages) + 1}/{pages}
-                <ChevronRight className="h-3 w-3" aria-hidden />
-              </button>
-            )}
-          </div>
-          {big ? (
-            <div className="relative flex min-h-0 flex-1 flex-col">
-              <YouTubeFrame stream={big} autoplay className="flex-1" />
-              <CamLabel stream={big} />
-            </div>
-          ) : (
-            <div className={cn("grid min-h-0 flex-1 gap-1", shown.length > 1 && "grid-cols-2", shown.length > 2 && "grid-rows-2")}>
-              {shown.map((cam) => (
-                <div key={cam.key} className="relative min-h-0">
-                  <YouTubeFrame stream={cam} autoplay={playAll} className="h-full" />
-                  <CamLabel stream={cam} onExpand={() => setSingle(cam.key)} />
-                </div>
-              ))}
-            </div>
-          )}
         </>
       )}
     </StarkPanel>

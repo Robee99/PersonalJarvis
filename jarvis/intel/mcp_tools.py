@@ -94,9 +94,9 @@ TOOLS: tuple[IntelTool, ...] = (
         "Change what the World screen shows: action 'focus' selects an incident (id) and flies "
         "the globe to it, 'filter' applies the given filters to the panel and globe, 'reset' "
         "returns to the whole world with no filter (these open the World screen). 'watch' "
-        "plays a live news channel or city camera on the Live screen (stream: a channel or "
-        "city name, e.g. 'Al Jazeera', 'BBC', 'NDTV', 'India Today', 'Tokyo', 'space "
-        "station'). Changes only the view.",
+        "plays a live news channel on the Live screen, or opens a city camera large on the "
+        "Ghost screen (stream: a channel or city name, e.g. 'Al Jazeera', 'BBC', 'NDTV', "
+        "'India Today', 'Tokyo', 'space station'). Changes only the view.",
         {
             "type": "object",
             "properties": {
@@ -321,6 +321,9 @@ async def _globe(
         return "action must be focus, filter, reset or watch.", True
     command: WorldIntelCommand
     summary: str
+    # A news channel plays on the Live screen and a city camera on the Ghost
+    # screen's camera wall; everything else is the World globe.
+    section = "world-intelligence"
     if action == "focus":
         event_id = args.get("id")
         event = service.store.get(event_id) if isinstance(event_id, str) else None
@@ -362,16 +365,17 @@ async def _globe(
         command = WorldIntelCommand(
             action="watch", stream=stream.key, source_layer="intel.world_globe"
         )
-        what = "news channel" if stream.kind == "news" else "camera"
+        if stream.kind == "news":
+            section, where, what = "live-feeds", "the Live screen", "news channel"
+        else:
+            section, where, what = "ghost", "the Ghost screen's camera wall", "camera"
         summary = (
-            f"Playing the {stream.name} live {what} on the Live screen (YouTube's player, "
+            f"Playing the {stream.name} live {what} on {where} (YouTube's player, "
             "muted until the person unmutes it)."
         )
     else:
         command = WorldIntelCommand(action="reset", source_layer="intel.world_globe")
         summary = "Returned the World screen to the whole globe with no filter."
-    # A stream plays on the Live screen; everything else is the World globe.
-    section = "live-feeds" if action == "watch" else "world-intelligence"
     delivered = await publish(
         [NavigateSidebar(section=section, source_layer="intel.world_globe"), command]
     )

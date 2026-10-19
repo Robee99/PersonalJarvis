@@ -1,8 +1,9 @@
 """Public traffic and city cameras, as God's Eye View lists them.
 
 God's Eye View (GEV) keeps a catalog of public cameras run by road and city
-authorities (about 3,000: TxDOT, Caltrans, Transport for London, DriveBC and
-others) and serves each one's latest frame at ``/api/cctv/frame/<id>``. JARVIS
+authorities (thousands, in camera packs: TxDOT, Caltrans, Transport for
+London, DriveBC, Hong Kong's Transport Department and others) and serves each
+one's latest frame at ``/api/cctv/frame/<id>``. JARVIS
 does not keep a second catalog: it reads GEV's list from the local GEV server,
 keeps the fields a camera wall needs, and the page loads each frame straight
 from GEV. When GEV is not running the list is empty and says why.
@@ -31,10 +32,36 @@ SOURCES_TTL_S = 10 * 60
 #: After GEV failed to answer, ask again this soon.
 RETRY_S = 30.0
 HEALTH_TTL_S = 30.0
-SOURCES_LIMIT = 30_000_000
+#: GEV lists about 44,000 cameras (~24 MB of JSON) since its worldwide packs.
+SOURCES_LIMIT = 80_000_000
+HEALTH_LIMIT = 40_000_000
 _LOOPBACK = {"127.0.0.1", "localhost", "[::1]", "::1"}
 
-_POOL = HttpClientPool(timeout_s=10.0, client_kwargs={"follow_redirects": False})
+#: The country of each GEV camera pack, for sources listed without one.
+PACK_COUNTRY: dict[str, tuple[str, str]] = {
+    "austin": ("United States", "US"),
+    "caltrans": ("United States", "US"),
+    "txdot": ("United States", "US"),
+    "deldot": ("United States", "US"),
+    "tfl": ("United Kingdom", "GB"),
+    "fintraffic": ("Finland", "FI"),
+    "drivebc": ("Canada", "CA"),
+    "calgary": ("Canada", "CA"),
+    "ontario": ("Canada", "CA"),
+    "tallinn": ("Estonia", "EE"),
+    "tarktee": ("Estonia", "EE"),
+    "warendorf": ("Germany", "DE"),
+    "nsw": ("Australia", "AU"),
+    "hongkong": ("Hong Kong", "HK"),
+    "dgt": ("Spain", "ES"),
+    "nzta": ("New Zealand", "NZ"),
+    "lithuania": ("Lithuania", "LT"),
+    "iceland": ("Iceland", "IS"),
+    "singapore": ("Singapore", "SG"),
+}
+_CODE_COUNTRY = {code: name for name, code in PACK_COUNTRY.values()}
+
+_POOL = HttpClientPool(timeout_s=45.0, client_kwargs={"follow_redirects": False})
 _sources: tuple[float, dict[str, Any]] | None = None
 _health: tuple[float, dict[str, int]] | None = None
 
@@ -61,7 +88,8 @@ async def _fetch_json(url: str, limit: int) -> Any:
                     raise ValueError(f"{url} sent more than {limit} bytes")
         return json.loads(bytes(body))
 
-    return await asyncio.wait_for(fetch(), timeout=20.0)
+    # GEV loads every pack on its first request after a start (20-40 s).
+    return await asyncio.wait_for(fetch(), timeout=60.0)
 
 
 async def fetch_json(url: str, limit: int) -> Any:
@@ -77,6 +105,23 @@ def _number(value: Any) -> float | None:
     return number if number == number and abs(number) != float("inf") else None
 
 
+def country_of(raw: dict[str, Any]) -> tuple[str, str]:
+    """A source's country name and ISO 3166-1 alpha-2 code, ``("", "")`` if unknown.
+
+    GEV names the country on each source; an older GEV does not, and then the
+    camera pack it came from says where it is.
+    """
+    name = str(raw.get("country") or "").strip()[:80]
+    code = str(raw.get("countryCode") or "").strip().upper()
+    code = code if len(code) == 2 and code.isalpha() else ""
+    if name and code:
+        return name, code
+    by_pack = PACK_COUNTRY.get(str(raw.get("pack") or "").strip().lower())
+    if by_pack is not None:
+        return name or by_pack[0], code or by_pack[1]
+    return name or _CODE_COUNTRY.get(code, code), code
+
+
 def slim(raw: Any) -> dict[str, Any] | None:
     """One camera with the fields the wall shows, or ``None`` if unplaceable."""
     if not isinstance(raw, dict):
@@ -87,21 +132,24 @@ def slim(raw: Any) -> dict[str, Any] | None:
         return None
     feed = str(raw.get("feedType") or "image").lower()
     city = str(raw.get("city") or "").strip()
+    country, country_code = country_of(raw)
     return {
         "id": cam_id[:120],
         "name": str(raw.get("name") or cam_id).strip()[:160],
         "city": city[:80],
         "city_id": str(raw.get("cityId") or city.lower() or "other")[:80],
+        "country": country,
+        "country_code": country_code,
         "provider": str(raw.get("provider") or "").strip()[:120],
         "lat": round(lat, 5),
         "lon": round(lon, 5),
-        "feed": "video" if feed in {"hls", "mp4", "video", "mjpeg", "dash"} else "image",
+        "feed": "video" if feed in {"hls", "mp4", "webm", "video", "mjpeg", "dash"} else "image",
         "heading": _number(raw.get("headingDeg")),
     }
 
 
 def cities(cameras: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Cameras grouped by city, largest first, with a centre point."""
+    """Cameras grouped by city, largest first, with a centre point and country."""
     groups: dict[str, dict[str, Any]] = {}
     for cam in cameras:
         group = groups.setdefault(
@@ -113,6 +161,8 @@ def cities(cameras: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "video": 0,
                 "lat": 0.0,
                 "lon": 0.0,
+                "country": cam["country"],
+                "country_code": cam["country_code"],
                 "providers": set(),
             },
         )
@@ -120,6 +170,8 @@ def cities(cameras: list[dict[str, Any]]) -> list[dict[str, Any]]:
         group["video"] += cam["feed"] == "video"
         group["lat"] += cam["lat"]
         group["lon"] += cam["lon"]
+        if not group["country"] and cam["country"]:
+            group["country"], group["country_code"] = cam["country"], cam["country_code"]
         if cam["provider"]:
             group["providers"].add(cam["provider"])
     out = []
@@ -194,7 +246,7 @@ async def health(*, now: float | None = None) -> dict[str, int]:
     base = gev_base()
     if base is not None:
         try:
-            raw = await fetch_json(f"{base}/api/cctv/health", 5_000_000)
+            raw = await fetch_json(f"{base}/api/cctv/health", HEALTH_LIMIT)
         except Exception as exc:  # noqa: BLE001 - an unreachable GEV leaves every count at zero
             log.info("cctv: God's Eye View health unavailable: %s", exc)
         else:

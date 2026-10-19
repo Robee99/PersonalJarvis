@@ -2,7 +2,7 @@ import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveCameras, LiveNews } from "@/components/stark/LivePanels";
+import { LiveNews } from "@/components/stark/LivePanels";
 import { useI18nStore } from "@/i18n";
 import { embedUrl, isPlayerError, type LiveStream } from "@/lib/live";
 import { useIntelStore } from "@/store/intel";
@@ -69,7 +69,6 @@ describe("live video panels", () => {
       }),
     );
     try {
-      window.localStorage.removeItem("world.live.playAll");
     } catch {
       // jsdom always has storage; nothing to clear otherwise.
     }
@@ -159,35 +158,4 @@ describe("live video panels", () => {
     expect(screen.getByTestId("stark-live-offline").querySelector("a")?.getAttribute("href")).toBe("https://www.youtube.com/channel/UCopenai/live");
   });
 
-  it("shows four cameras of a region at a time and pages through the rest", async () => {
-    render(<LiveCameras />);
-    await waitFor(() => expect(frames()).toHaveLength(2));
-    expect(frames().map((f) => f.dataset.stream)).toEqual(["jerusalem", "istanbul"]);
-    expect(frames()[0].src).toContain("autoplay=0");
-    fireEvent.click(screen.getByTestId("stark-live-group-asia"));
-    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["hk", "tokyo", "seoul", "taipei"]));
-    fireEvent.click(screen.getByTestId("stark-live-next"));
-    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["singapore"]));
-  });
-
-  it("plays every camera on request and remembers it", async () => {
-    render(<LiveCameras />);
-    await waitFor(() => expect(frames()).toHaveLength(2));
-    fireEvent.click(screen.getByTestId("stark-live-play-all"));
-    expect(frames().every((f) => f.src.includes("autoplay=1"))).toBe(true);
-    expect(window.localStorage.getItem("world.live.playAll")).toBe("1");
-  });
-
-  it("opens one camera large, by click or by the assistant", async () => {
-    render(<LiveCameras />);
-    await waitFor(() => expect(frames()).toHaveLength(2));
-    fireEvent.click(screen.getByTestId("stark-live-expand-istanbul"));
-    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["istanbul"]));
-    expect(frames()[0].src).toContain("autoplay=1");
-    fireEvent.click(screen.getByTestId("stark-live-grid"));
-    await waitFor(() => expect(frames()).toHaveLength(2));
-    act(() => useIntelStore.getState().applyCommand({ action: "watch", stream: "iss" }));
-    expect(frames().map((f) => f.dataset.stream)).toEqual(["iss"]);
-    expect(screen.getByTestId("stark-live-group-space").getAttribute("aria-pressed")).toBe("true");
-  });
 });

@@ -146,6 +146,8 @@ async def test_globe_watch_plays_a_named_stream(service: _Loaded) -> None:
     assert screen.events[-1].action == "watch" and screen.events[-1].stream == "aljazeera"
     await _call(service, "world_globe", {"action": "watch", "stream": "the space station"}, screen)
     assert screen.events[-1].stream == "iss"
+    # A city camera opens on the Ghost screen's camera wall, not the Live screen.
+    assert screen.events[-2].section == "ghost"
     text, err = await _call(
         service, "world_globe", {"action": "watch", "stream": "Fox News"}, screen
     )

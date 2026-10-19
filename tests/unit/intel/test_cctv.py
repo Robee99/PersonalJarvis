@@ -114,3 +114,42 @@ def test_health_counts_each_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(cctv, "fetch_json", fake)
     assert asyncio.run(cctv.health(now=0.0)) == {"ok": 2, "degraded": 1, "error": 0, "unknown": 1}
+
+
+def test_each_camera_names_its_country() -> None:
+    named = cctv.slim(
+        {"id": "hk-1", "lat": 22.3, "lon": 114.2, "country": "Hong Kong", "countryCode": "hk"}
+    )
+    assert named is not None
+    assert (named["country"], named["country_code"]) == ("Hong Kong", "HK")
+    by_pack = cctv.slim({"id": "dgt-9", "lat": 40.4, "lon": -3.7, "pack": "DGT"})
+    assert by_pack is not None
+    assert (by_pack["country"], by_pack["country_code"]) == ("Spain", "ES")
+    code_only = cctv.slim({"id": "x", "lat": 1.3, "lon": 103.8, "countryCode": "SG"})
+    assert code_only is not None and code_only["country"] == "Singapore"
+    unknown = cctv.slim({"id": "y", "lat": 0, "lon": 0, "pack": "nowhere", "countryCode": "1x"})
+    assert unknown is not None
+    assert (unknown["country"], unknown["country_code"]) == ("", "")
+
+
+def test_every_existing_pack_has_a_country() -> None:
+    for pack in ("austin", "caltrans", "txdot", "deldot", "tfl", "fintraffic", "drivebc"):
+        assert cctv.PACK_COUNTRY[pack][1] in {"US", "GB", "FI", "CA"}
+    assert cctv.PACK_COUNTRY["nzta"] == ("New Zealand", "NZ")
+
+
+def test_cities_carry_their_country(monkeypatch: pytest.MonkeyPatch) -> None:
+    sources = [
+        {**cam, "pack": "austin" if cam.get("cityId") == "austin" else "tfl"}
+        for cam in _SOURCES["sources"]
+    ]
+
+    async def fake(url: str, limit: int) -> Any:
+        return {"sources": sources}
+
+    monkeypatch.setattr(cctv, "fetch_json", fake)
+    body = asyncio.run(cctv.catalog(now=0.0))
+    assert body["cameras"][0]["country"] == "United States"
+    by_id = {c["id"]: c for c in body["cities"]}
+    assert (by_id["austin"]["country"], by_id["austin"]["country_code"]) == ("United States", "US")
+    assert by_id["london"]["country"] == "United Kingdom"

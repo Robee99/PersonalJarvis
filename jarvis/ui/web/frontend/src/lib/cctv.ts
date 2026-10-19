@@ -11,6 +11,9 @@ export interface CctvCamera {
   name: string;
   city: string;
   city_id: string;
+  /** English country name and ISO 3166-1 alpha-2 code; "" when GEV did not say. Older servers leave them out. */
+  country?: string;
+  country_code?: string;
   provider: string;
   lat: number;
   lon: number;
@@ -26,6 +29,8 @@ export interface CctvCity {
   video: number;
   lat: number;
   lon: number;
+  country?: string;
+  country_code?: string;
   providers: string[];
 }
 
