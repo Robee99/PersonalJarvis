@@ -288,6 +288,7 @@ class IntelService:
                 TimeoutError,
                 zipfile.BadZipFile,
             ) as exc:
+                # An expected feed failure: _failed logs it, marks the source stale and backs off.
                 self._failed(source_id, state, info, exc)
                 return
             except Exception as exc:  # a parser bug degrades this one source; logged with its trace
@@ -333,8 +334,8 @@ class IntelService:
             return
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=wait_s)
-        except TimeoutError:
-            return  # still running: the reader gets what is there now
+        except TimeoutError:  # the refresh keeps running; this reader answers from the store now
+            return
 
     # -- reading -----------------------------------------------------------
 
