@@ -206,3 +206,165 @@ def test_news_merges_feeds_newest_first_and_names_the_failed_ones(
     assert [i["title"] for i in body["items"]] == ["Newer story", "Older story"]
     assert body["failed"] == ["Al Jazeera", "NPR World"]
     assert body["sources"] == ["BBC World", "Al Jazeera", "NPR World"]
+
+
+# ---------------------------------------------------------------------------
+# HUD to-do list
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def todo_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    path = tmp_path / "hud" / "todos.json"
+    monkeypatch.setattr(deck_routes, "todos_path", lambda: path)
+    return path
+
+
+def _clock(monkeypatch: pytest.MonkeyPatch, start_ms: int = 1_000) -> list[int]:
+    """A fake wall clock: every ``_now_ms()`` call advances it by one second."""
+    now = [start_ms]
+
+    def tick() -> int:
+        now[0] += 1_000
+        return now[0]
+
+    monkeypatch.setattr(deck_routes, "_now_ms", tick)
+    return now
+
+
+def test_todos_start_empty_without_a_file(client: TestClient, todo_file: Path):
+    assert client.get("/api/deck/todos").json() == {"todos": []}
+    assert not todo_file.exists()
+
+
+def test_create_strips_the_title_and_persists(client: TestClient, todo_file: Path):
+    res = client.post("/api/deck/todos", json={"title": "  Water the plants  "})
+    assert res.status_code == 201
+    todo = res.json()["todo"]
+    assert todo["title"] == "Water the plants"
+    assert todo["done"] is False
+    assert todo["done_ms"] is None
+    assert isinstance(todo["created_ms"], int)
+    assert len(todo["id"]) == 32 and int(todo["id"], 16) >= 0
+    import json
+
+    stored = json.loads(todo_file.read_text(encoding="utf-8"))
+    assert stored["todos"] == [todo]
+    # No temp file is left beside the real one.
+    assert sorted(p.name for p in todo_file.parent.iterdir()) == ["todos.json"]
+
+
+def test_list_orders_open_newest_first_then_done_newest_done_first(
+    client: TestClient, todo_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _clock(monkeypatch)
+    ids = {
+        name: client.post("/api/deck/todos", json={"title": name}).json()["todo"]["id"]
+        for name in ("a", "b", "c", "d")
+    }
+    client.patch(f"/api/deck/todos/{ids['b']}", json={"done": True})
+    client.patch(f"/api/deck/todos/{ids['a']}", json={"done": True})
+
+    titles = [t["title"] for t in client.get("/api/deck/todos").json()["todos"]]
+    assert titles == ["d", "c", "a", "b"]
+
+
+def test_complete_uncomplete_and_rename(
+    client: TestClient, todo_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    now = _clock(monkeypatch)
+    todo_id = client.post("/api/deck/todos", json={"title": "Draft"}).json()["todo"]["id"]
+
+    done = client.patch(f"/api/deck/todos/{todo_id}", json={"done": True}).json()["todo"]
+    assert done["done"] is True
+    assert done["done_ms"] == now[0]
+
+    renamed = client.patch(f"/api/deck/todos/{todo_id}", json={"title": " Final "}).json()["todo"]
+    assert renamed["title"] == "Final"
+    assert renamed["done"] is True  # an omitted field is left alone
+
+    reopened = client.patch(f"/api/deck/todos/{todo_id}", json={"done": False}).json()["todo"]
+    assert reopened["done"] is False
+    assert reopened["done_ms"] is None
+    assert client.get("/api/deck/todos").json()["todos"] == [reopened]
+
+
+def test_delete_and_unknown_ids_are_404(client: TestClient, todo_file: Path):
+    todo_id = client.post("/api/deck/todos", json={"title": "Gone soon"}).json()["todo"]["id"]
+    assert client.delete(f"/api/deck/todos/{todo_id}").json() == {"ok": True}
+    assert client.get("/api/deck/todos").json() == {"todos": []}
+
+    assert client.delete(f"/api/deck/todos/{todo_id}").status_code == 404
+    assert client.patch("/api/deck/todos/nope", json={"done": True}).status_code == 404
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"title": ""},
+        {"title": "   "},
+        {"title": "x" * 201},
+        {"title": 5},
+        {},
+        {"title": "ok", "extra": 1},
+    ],
+)
+def test_create_rejects_bad_bodies_with_422(client: TestClient, todo_file: Path, body: dict):
+    assert client.post("/api/deck/todos", json=body).status_code == 422
+    assert not todo_file.exists()
+
+
+def test_patch_rejects_bad_bodies_with_422(client: TestClient, todo_file: Path):
+    todo_id = client.post("/api/deck/todos", json={"title": "Keep"}).json()["todo"]["id"]
+    for body in ({"title": " "}, {"done": "yes"}, {"colour": "red"}):
+        assert client.patch(f"/api/deck/todos/{todo_id}", json=body).status_code == 422
+    assert client.post("/api/deck/todos", json={"title": "x" * 200}).status_code == 201
+
+
+def test_a_full_list_refuses_with_409(
+    client: TestClient, todo_file: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(deck_routes, "TODO_MAX_ITEMS", 3)
+    for n in range(3):
+        assert client.post("/api/deck/todos", json={"title": f"t{n}"}).status_code == 201
+    res = client.post("/api/deck/todos", json={"title": "one too many"})
+    assert res.status_code == 409
+    assert "full" in res.json()["detail"]
+    assert len(client.get("/api/deck/todos").json()["todos"]) == 3
+
+
+def test_a_corrupt_file_reads_empty_and_is_moved_aside_on_write(
+    client: TestClient, todo_file: Path, caplog: pytest.LogCaptureFixture
+):
+    todo_file.parent.mkdir(parents=True)
+    todo_file.write_text("{not json", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger=deck_routes.log.name):
+        assert client.get("/api/deck/todos").json() == {"todos": []}
+    assert "not valid JSON" in caplog.text
+
+    assert client.post("/api/deck/todos", json={"title": "Fresh"}).status_code == 201
+    assert [t["title"] for t in client.get("/api/deck/todos").json()["todos"]] == ["Fresh"]
+    (aside,) = todo_file.parent.glob("todos.json.corrupt-*")
+    assert aside.read_text(encoding="utf-8") == "{not json"
+
+
+def test_malformed_rows_are_skipped(client: TestClient, todo_file: Path):
+    import json
+
+    good = {"id": "a" * 32, "title": "Good", "done": False, "created_ms": 5, "done_ms": None}
+    todo_file.parent.mkdir(parents=True)
+    todo_file.write_text(
+        json.dumps(
+            {
+                "todos": [
+                    good,
+                    {"id": "b", "title": "No created"},
+                    "not a row",
+                    {"id": "c", "title": "Bad done", "done": "yes", "created_ms": 1},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert client.get("/api/deck/todos").json() == {"todos": [good]}

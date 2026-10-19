@@ -553,6 +553,7 @@ class WebServer:
         from .preview_routes import router as preview_router
         from .profile_routes import router as profile_router
         from .provider_routes import router as provider_router
+        from .public_data_routes import router as public_data_router
         from .review_routes import router as review_router
         from .routine_hooks_routes import router as routine_hooks_router
         from .runtime_gateway_routes import router as runtime_gateway_router
@@ -755,6 +756,9 @@ class WebServer:
         # The mission deck's pictures: the last Screen-Context capture (one
         # frame, in memory, TTL) and Computer-Use frames by content hash.
         app.include_router(deck_router)
+        # The HUD's public-data panels: quakes, natural events, space weather,
+        # the ISS and station orbits, from free keyless sources, cached.
+        app.include_router(public_data_router)
         # The HOLO hand-gesture deck (MIT page) with orbs from the wiki vault.
         app.include_router(holo_router)
         app.include_router(holo_api_router)

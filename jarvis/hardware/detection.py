@@ -8,6 +8,7 @@ All checks are read-only; nothing is installed or modified.
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import platform
@@ -847,21 +848,120 @@ def gpu_vitals(run: Callable[..., str] = _run) -> list[dict[str, object]]:
     return gpus
 
 
-def live_vitals(ps: Any = None, run: Callable[..., str] = _run) -> dict[str, object]:
+_WINDOWS_CPU_KEY = r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+
+
+def _clean_cpu_name(raw: object) -> str | None:
+    """Strip and collapse whitespace; an empty or non-text value is ``None``."""
+    if not isinstance(raw, str):
+        return None
+    name = " ".join(raw.split())
+    return name or None
+
+
+def _windows_cpu_name() -> str | None:
+    """``ProcessorNameString`` from the registry, the name Task Manager shows."""
+    try:
+        import winreg  # noqa: PLC0415 - Windows-only, lazy by construction
+    except ImportError:  # pragma: no cover - not Windows; the caller tries the next source
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _WINDOWS_CPU_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "ProcessorNameString")
+    except OSError:
+        log.debug("hardware: CPU name not in the registry", exc_info=True)
+        return None
+    return _clean_cpu_name(value)
+
+
+def _linux_cpu_name(cpuinfo: Path = Path("/proc/cpuinfo")) -> str | None:
+    """The first ``model name`` line of ``/proc/cpuinfo``."""
+    try:
+        text = cpuinfo.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log.debug("hardware: %s unreadable", cpuinfo, exc_info=True)
+        return None
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and key.strip().lower() == "model name":
+            return _clean_cpu_name(value)
+    return None
+
+
+def cpu_marketing_name(
+    platform_name: str | None = None,
+    *,
+    windows: Callable[[], str | None] = _windows_cpu_name,
+    linux: Callable[[], str | None] = _linux_cpu_name,
+    processor: Callable[[], str] = platform.processor,
+) -> str | None:
+    """The CPU's marketing name ("AMD Ryzen 7 7840HS ..."), or ``None``.
+
+    Windows reads the registry, Linux ``/proc/cpuinfo``; anything else (and a
+    miss on either) falls back to ``platform.processor()`` when it says
+    something. Uncached; :func:`cached_cpu_name` is what live callers use.
+    """
+    system = sys.platform if platform_name is None else platform_name
+    name: str | None = None
+    if system == "win32":
+        name = windows()
+    elif system.startswith("linux"):
+        name = linux()
+    return name or _clean_cpu_name(processor())
+
+
+@functools.lru_cache(maxsize=1)
+def cached_cpu_name() -> str | None:
+    """:func:`cpu_marketing_name`, read once per process (it never changes)."""
+    return cpu_marketing_name()
+
+
+def _mhz(value: object) -> float | None:
+    """A psutil frequency in whole MHz; missing or 0 means unknown (``None``)."""
+    try:
+        mhz = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):  # no reading is None, never an invented 0
+        return None
+    return float(round(mhz)) if mhz > 0 else None
+
+
+def _cpu_frequency(ps: Any) -> tuple[float | None, float | None]:
+    """``(current, max)`` MHz from ``psutil.cpu_freq()``, each ``None`` if unknown."""
+    try:
+        freq = ps.cpu_freq() if hasattr(ps, "cpu_freq") else None
+    except (OSError, RuntimeError, NotImplementedError):
+        log.debug("hardware: psutil.cpu_freq() failed", exc_info=True)
+        return None, None
+    if freq is None:
+        return None, None
+    return _mhz(getattr(freq, "current", None)), _mhz(getattr(freq, "max", None))
+
+
+def live_vitals(
+    ps: Any = None,
+    run: Callable[..., str] = _run,
+    cpu_name: Callable[[], str | None] | None = None,
+) -> dict[str, object]:
     """CPU, memory, battery and GPU load right now, for the deck's vitals card.
 
     Blocks for a fifth of a second to measure CPU load over a real interval
     (psutil's first instant reading is always 0), so callers run it off the
     event loop. CPU temperature is left out: psutil has no reading for it on
-    Windows, and an estimate would be invented.
+    Windows, and an estimate would be invented. The CPU's name, physical core
+    count and clock are ``None`` wherever the OS does not report them.
     """
     if ps is None:
         import psutil as ps  # noqa: PLC0415 - lazy (AP-26)
     memory = ps.virtual_memory()
     battery = ps.sensors_battery() if hasattr(ps, "sensors_battery") else None
+    cpu_mhz, cpu_max_mhz = _cpu_frequency(ps)
     return {
         "cpu_percent": round(float(ps.cpu_percent(interval=0.2)), 1),
         "cpu_logical": ps.cpu_count(logical=True),
+        "cpu_name": (cpu_name or cached_cpu_name)(),
+        "cpu_physical": ps.cpu_count(logical=False),
+        "cpu_mhz": cpu_mhz,
+        "cpu_max_mhz": cpu_max_mhz,
         "ram_used_gb": round((memory.total - memory.available) / 2**30, 1),
         "ram_total_gb": round(memory.total / 2**30, 1),
         "battery": (

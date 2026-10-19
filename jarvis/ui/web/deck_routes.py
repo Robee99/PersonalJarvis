@@ -12,6 +12,11 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
                                       on the newest agent turn (model_swap.py).
     GET  /api/deck/news             → world headlines from free public RSS
                                       feeds, for the World screen's broadcast.
+    GET    /api/deck/todos          → the owner's HUD to-do list ("Current
+                                      tasks"): open first, then done.
+    POST   /api/deck/todos          → add one ``{"title"}`` (201).
+    PATCH  /api/deck/todos/{id}     → tick, untick or rename one.
+    DELETE /api/deck/todos/{id}     → remove one.
 
 Two producers, two shapes, one reason: the deck shows the user what Jarvis
 just looked at.
@@ -27,21 +32,31 @@ just looked at.
   as 64 hex characters, joined onto the fixed blob directory — is how the
   route stays traversal-proof without ever accepting a path.
 
-Every response is ``Cache-Control: no-store``: a picture of the screen must
-not outlive its budget in a browser cache either.
+Every picture response is ``Cache-Control: no-store``: a picture of the
+screen must not outlive its budget in a browser cache either.
+
+The to-do list is one small JSON file under the user data dir
+(``hud/todos.json``), written atomically and guarded by one lock; it is the
+only copy, so a corrupt file is moved aside before anything overwrites it.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
+import tempfile
+import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Response
+from pydantic import BaseModel, ConfigDict, StrictBool, StringConstraints
 
 from jarvis.screen_context.last_frame import get_last_frame_mirror
 
@@ -162,6 +177,7 @@ async def context() -> dict[str, Any]:
             res.raise_for_status()
             status = res.json()
     except (httpx.HTTPError, ValueError):
+        log.debug("deck: model swapper status unavailable", exc_info=True)
         return {"available": False}
     ctx = status.get("context") if isinstance(status, dict) else None
     if not isinstance(ctx, dict) or not isinstance(ctx.get("used"), int):
@@ -200,6 +216,7 @@ def parse_rss(source: str, raw: bytes, limit: int = 15) -> list[dict[str, Any]]:
     try:
         root = ET.fromstring(raw)  # noqa: S314 - DOCTYPE/ENTITY refused above
     except ET.ParseError:
+        log.debug("deck: %s feed is not well-formed XML", source, exc_info=True)
         return []
     items: list[dict[str, Any]] = []
     for node in root.iter("item"):
@@ -212,7 +229,7 @@ def parse_rss(source: str, raw: bytes, limit: int = 15) -> list[dict[str, Any]]:
         if stamp:
             try:
                 published = parsedate_to_datetime(stamp).timestamp()
-            except (TypeError, ValueError):
+            except (TypeError, ValueError):  # unparseable date: unknown, never invented
                 published = None
         items.append({"title": title, "link": link, "source": source, "published": published})
         if len(items) >= limit:
@@ -239,7 +256,8 @@ async def news() -> dict[str, Any]:
                 res = await http.get(url, headers={"User-Agent": "Jarvis-HUD/1.0"})
                 res.raise_for_status()
                 got = parse_rss(source, res.content[:_NEWS_MAX_BYTES])
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                log.info("deck: news feed %s failed: %s", source, exc)
                 got = []
             if got:
                 items += got
@@ -291,4 +309,199 @@ def _power_mode() -> str | None:
         return None
 
 
-__all__ = ["router", "CU_BLOB_DIR"]
+# ---------------------------------------------------------------------------
+# HUD to-do list
+# ---------------------------------------------------------------------------
+
+TODO_MAX_ITEMS = 200
+TODO_TITLE_MAX = 200
+_todo_lock = threading.Lock()
+
+
+def todos_path() -> Path:
+    """Where the to-do list lives; tests monkeypatch this function."""
+    from jarvis.core.paths import user_data_dir  # noqa: PLC0415 - lazy (AP-26)
+
+    return user_data_dir() / "hud" / "todos.json"
+
+
+_Title = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=TODO_TITLE_MAX)
+]
+
+
+class TodoCreate(BaseModel):
+    """Body of ``POST /api/deck/todos``."""
+
+    model_config = ConfigDict(extra="forbid")
+    title: _Title
+
+
+class TodoPatch(BaseModel):
+    """Body of ``PATCH /api/deck/todos/{id}``; an omitted field is left as is."""
+
+    model_config = ConfigDict(extra="forbid")
+    done: StrictBool | None = None
+    title: _Title | None = None
+
+
+def _clean_todo(raw: object) -> dict[str, Any] | None:
+    """One stored row in the API's shape, or ``None`` when it is malformed."""
+    if not isinstance(raw, dict):
+        return None
+    todo_id, title, done = raw.get("id"), raw.get("title"), raw.get("done")
+    created, done_ms = raw.get("created_ms"), raw.get("done_ms")
+    if not isinstance(todo_id, str) or not todo_id or not isinstance(title, str):
+        return None
+    if not isinstance(done, bool) or type(created) is not int:
+        return None
+    if done_ms is not None and type(done_ms) is not int:
+        return None
+    return {
+        "id": todo_id,
+        "title": title,
+        "done": done,
+        "created_ms": created,
+        "done_ms": done_ms if done else None,
+    }
+
+
+def _read_todos(path: Path) -> tuple[list[dict[str, Any]], bool]:
+    """``(todos, corrupt)``. A missing file is an empty list; so is a corrupt
+    one, with ``corrupt`` set so a writer can move it aside first."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:  # no list saved yet: an empty list is the truth
+        return [], False
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        log.warning("deck: to-do file %s is not valid JSON; reading it as empty", path)
+        return [], True
+    rows = data.get("todos") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        log.warning("deck: to-do file %s has no todos list; reading it as empty", path)
+        return [], True
+    todos = [todo for todo in map(_clean_todo, rows) if todo is not None]
+    if len(todos) != len(rows):
+        log.warning("deck: skipped %d malformed row(s) in %s", len(rows) - len(todos), path)
+    return todos, False
+
+
+def _write_todos(path: Path, todos: list[dict[str, Any]]) -> None:
+    """Atomic write: a temp file in the same directory, then ``os.replace``.
+
+    Local on purpose: ``config_writer``'s helper is private to ``jarvis.toml``
+    and importing that module would pull its whole weight into this route.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "todos": todos}, handle, ensure_ascii=False, indent=1)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
+def _ordered(todos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Open first (newest created first), then done (newest done first)."""
+    open_ = sorted((t for t in todos if not t["done"]), key=lambda t: -t["created_ms"])
+    done = sorted((t for t in todos if t["done"]), key=lambda t: -(t["done_ms"] or 0))
+    return open_ + done
+
+
+def _mutate_todos(change: Any) -> Any:
+    """Read, apply ``change(todos)`` (which edits the list in place and
+    returns the response), write — all under the one lock."""
+    path = todos_path()
+    with _todo_lock:
+        todos, corrupt = _read_todos(path)
+        result = change(todos)
+        if corrupt:
+            aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+            os.replace(path, aside)
+            log.warning("deck: moved the unreadable to-do file aside to %s", aside)
+        try:
+            _write_todos(path, todos)
+        except OSError as exc:
+            log.error("deck: could not save the to-do list to %s: %s", path, exc)
+            raise HTTPException(status_code=503, detail="todo_store_unwritable") from exc
+        return result
+
+
+def _find(todos: list[dict[str, Any]], todo_id: str) -> dict[str, Any]:
+    for todo in todos:
+        if todo["id"] == todo_id:
+            return todo
+    raise HTTPException(status_code=404, detail="todo_not_found")
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+@router.get("/todos", summary="The HUD to-do list")
+def list_todos() -> dict[str, Any]:
+    """Every to-do, open ones first (newest first), then done (newest done first)."""
+    path = todos_path()
+    with _todo_lock:
+        todos, _corrupt = _read_todos(path)
+    return {"todos": _ordered(todos)}
+
+
+@router.post("/todos", status_code=201, summary="Add a to-do")
+def create_todo(body: TodoCreate) -> dict[str, Any]:
+    """Add one open to-do. 409 once the list holds ``TODO_MAX_ITEMS``."""
+
+    def change(todos: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(todos) >= TODO_MAX_ITEMS:
+            raise HTTPException(
+                status_code=409,
+                detail=f"The to-do list is full ({TODO_MAX_ITEMS} items); delete some first.",
+            )
+        todo = {
+            "id": uuid.uuid4().hex,
+            "title": body.title,
+            "done": False,
+            "created_ms": _now_ms(),
+            "done_ms": None,
+        }
+        todos.append(todo)
+        return {"todo": todo}
+
+    return _mutate_todos(change)
+
+
+@router.patch("/todos/{todo_id}", summary="Tick, untick or rename a to-do")
+def update_todo(todo_id: str, body: TodoPatch) -> dict[str, Any]:
+    """``done: true`` stamps ``done_ms``; ``done: false`` clears it."""
+
+    def change(todos: list[dict[str, Any]]) -> dict[str, Any]:
+        todo = _find(todos, todo_id)
+        if body.title is not None:
+            todo["title"] = body.title
+        if body.done is True and not todo["done"]:
+            todo["done"], todo["done_ms"] = True, _now_ms()
+        elif body.done is False:
+            todo["done"], todo["done_ms"] = False, None
+        return {"todo": dict(todo)}
+
+    return _mutate_todos(change)
+
+
+@router.delete("/todos/{todo_id}", summary="Delete a to-do")
+def delete_todo(todo_id: str) -> dict[str, Any]:
+    """Remove one to-do; 404 when no such id exists."""
+
+    def change(todos: list[dict[str, Any]]) -> dict[str, Any]:
+        todos.remove(_find(todos, todo_id))
+        return {"ok": True}
+
+    return _mutate_todos(change)
+
+
+__all__ = ["router", "CU_BLOB_DIR", "todos_path"]

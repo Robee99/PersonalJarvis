@@ -78,6 +78,10 @@ KNOWN: frozenset[str] = frozenset(
         "armory",
         # God's Eye View: the globe with public geospatial feeds.
         "world-intelligence",
+        # The HUD's Intelligence screen: public world events on one map.
+        "intelligence",
+        # The HUD's Orbital screen: the ISS, stations, space weather, NEOs.
+        "orbital",
     }
 )
 
@@ -275,6 +279,14 @@ _ALIASES: dict[str, str] = {
     "world intelligence": "world-intelligence",
     "god's eye view": "world-intelligence",
     "gods eye view": "world-intelligence",
+    "intelligence": "intelligence",
+    "world events": "intelligence",
+    "event map": "intelligence",
+    "orbital": "orbital",
+    "orbit": "orbital",
+    "space weather": "orbital",
+    "iss": "orbital",
+    "space station": "orbital",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",
