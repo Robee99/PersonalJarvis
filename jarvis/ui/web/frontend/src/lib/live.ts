@@ -18,6 +18,8 @@ export interface LiveStream {
   embed: string;
   /** The stream's page on YouTube. */
   page: string;
+  /** Live only at times (shows, keynotes): when off air the panel says so. */
+  occasional?: boolean;
 }
 
 export interface LiveGroup {
@@ -29,7 +31,7 @@ export interface LiveCatalog {
   streams: LiveStream[];
   /** Camera regions. */
   groups: LiveGroup[];
-  /** News groups ("world", "india"). */
+  /** News groups ("world", "india", "finance", "ai"). */
   news_groups?: LiveGroup[];
 }
 

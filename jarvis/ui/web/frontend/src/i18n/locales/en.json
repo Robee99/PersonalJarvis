@@ -8591,7 +8591,9 @@
       "news_group_world": "World",
       "news_group_india": "India",
       "news_wall": "Four channels at once",
-      "one_channel": "One channel"
+      "one_channel": "One channel",
+      "news_group_finance": "Finance",
+      "news_group_ai": "AI & Tech"
     },
     "livescreen": {
       "subtitle": "// Live feeds",

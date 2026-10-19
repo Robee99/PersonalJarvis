@@ -45,24 +45,65 @@ def test_find_accepts_spoken_names() -> None:
     assert key("NDTV") == "ndtv"
     assert key("India Today") == "india-today"
     assert key("fox") is None
+    assert key("Bloomberg") == "bloomberg"
+    assert key("Yahoo Finance") == "yahoo-finance"
+    assert key("CNBC Awaaz") == "cnbc-awaaz"
+    assert key("NVIDIA") == "nvidia"
 
 
 def test_catalog_lists_streams_and_groups() -> None:
     body = live.catalog_json()
     assert {g["id"] for g in body["groups"]} == {gid for gid, _ in live.CAMERA_GROUPS}
-    assert {g["id"] for g in body["news_groups"]} == {"world", "india"}
+    assert [g["id"] for g in body["news_groups"]] == ["world", "india", "finance", "ai"]
     assert all(
-        set(s) == {"key", "name", "short", "kind", "group", "place", "embed", "page"}
+        set(s) == {"key", "name", "short", "kind", "group", "place", "embed", "page", "occasional"}
         for s in body["streams"]
     )
+    news = [s for s in body["streams"] if s["kind"] == "news"]
+    assert {s["group"] for s in news} == {"world", "india", "finance", "ai"}
+    # AI channels stream only at times; the round-the-clock groups never are.
+    assert all(s["occasional"] for s in news if s["group"] == "ai")
+    assert not any(s["occasional"] for s in news if s["group"] != "ai")
     assert {s["group"] for s in body["streams"] if s["kind"] == "camera"} == {
         gid for gid, _ in live.CAMERA_GROUPS
     }
 
 
-_LIVE_PAGE = (
-    '<html><head><link rel="canonical" href="https://www.youtube.com/watch?v=LrdY14IH8Ww">'
-    "</head></html>"
+def _watch_page(video: str, *, live: bool) -> str:
+    """A channel's live page as YouTube serves it, cut to what is read."""
+    state = '"isLive":true,' if live else ""
+    later = "" if live else '"isUpcoming":true,'
+    return (
+        f'<html><head><link rel="canonical" href="https://www.youtube.com/watch?v={video}">'
+        f'</head><script>var r = {{"videoDetails":{{"videoId":"{video}","title":"x",'
+        f'"lengthSeconds":"0",{state}"channelId":"UC0","thumbnail":{{}},{later}'
+        '"author":"x"}, "viewCount":{"isLive":true}};</script></html>'
+    )
+
+
+_LIVE_PAGE = _watch_page("LrdY14IH8Ww", live=True)
+
+
+def _lockup(video: str, title: str, *, live: bool) -> str:
+    badge = '"badgeStyle":"THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE",' if live else ""
+    return (
+        '{"richItemRenderer":{"content":{"lockupViewModel":{"contentImage":{'
+        f'{badge}"x":1}},"metadata":{{"lockupMetadataViewModel":{{"title":{{"content":'
+        f'"{title}"}}}}}},"contentId":"{video}"}}}}}}'
+    )
+
+
+_STREAMS_PAGE = (
+    "<script>var d = ["
+    + ",".join(
+        [
+            _lockup("hHLxrg99pSE", "FRANCE Protest LIVE: Paris erupts", live=True),
+            _lockup("P857H4ej-MQ", "CNBC TV18 LIVE: Sensex \\u0026 Nifty", live=True),
+            _lockup("1_Ih0JYmkjI", "CNBC TV18 24x7 LIVE: Stock Market Updates", live=True),
+            _lockup("yBJqQEDHZCA", "CNBC TV18 24x7 replay", live=False),
+        ]
+    )
+    + "];</script>"
 )
 
 
@@ -101,3 +142,33 @@ def test_now_playing_is_none_when_off_air_or_unreachable(monkeypatch) -> None:
     assert asyncio.run(live.now_playing("bbc", now=0.0)) is None
     monkeypatch.setattr(live, "fetch_page", down)
     assert asyncio.run(live.now_playing("sky", now=0.0)) is None
+
+
+def test_now_playing_skips_a_stream_that_has_not_started(monkeypatch) -> None:
+    import asyncio
+
+    async def scheduled(url: str) -> str:
+        return _watch_page("bX7Q4Mgk-Cg", live=False)
+
+    monkeypatch.setattr(live, "_now", {})
+    monkeypatch.setattr(live, "fetch_page", scheduled)
+    assert asyncio.run(live.now_playing("openai", now=0.0)) is None
+    assert live.live_video(_watch_page("bX7Q4Mgk-Cg", live=True)) == "bX7Q4Mgk-Cg"
+
+
+def test_now_playing_finds_the_hinted_stream_on_the_streams_page(monkeypatch) -> None:
+    import asyncio
+
+    pages: list[str] = []
+
+    async def fake_fetch(url: str) -> str:
+        pages.append(url)
+        return _STREAMS_PAGE
+
+    monkeypatch.setattr(live, "_now", {})
+    monkeypatch.setattr(live, "fetch_page", fake_fetch)
+    assert asyncio.run(live.now_playing("cnbc-tv18", now=0.0)) == "1_Ih0JYmkjI"
+    assert pages == ["https://www.youtube.com/channel/UCmRbHAgG2k2vDUvb3xsEunQ/streams"]
+    # Only a live video counts, and only one whose title has the hint.
+    assert live.hinted_video(_STREAMS_PAGE, "replay") is None
+    assert live.hinted_video(_STREAMS_PAGE, "LIVE TV") is None

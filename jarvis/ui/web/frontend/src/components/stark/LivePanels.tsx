@@ -44,6 +44,9 @@ export function YouTubeFrame({ stream, autoplay, className }: { stream: LiveStre
   // it does not load the channel embed first and then jump.
   const resolving = playsChannel(stream) && now.status === "pending" && now.fetchStatus === "fetching";
   const src = embedUrl(stream, autoplay, window.location.origin, now.data);
+  // A channel that streams only at times is not loaded while it is off air:
+  // YouTube's player would only show its own error card.
+  const offAir = !!stream.occasional && playsChannel(stream) && (now.isError || (now.isSuccess && !now.data));
 
   useEffect(() => {
     setOffline(false);
@@ -61,7 +64,7 @@ export function YouTubeFrame({ stream, autoplay, className }: { stream: LiveStre
 
   return (
     <div className={cn("relative min-h-0 min-w-0 overflow-hidden bg-black", className)}>
-      {!resolving && <iframe
+      {!resolving && !offAir && <iframe
         key={src}
         ref={ref}
         src={src}
@@ -74,7 +77,7 @@ export function YouTubeFrame({ stream, autoplay, className }: { stream: LiveStre
         data-testid="stark-live-frame"
         data-stream={stream.key}
       />}
-      {offline && (
+      {(offline || offAir) && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/90 p-3 text-center" data-testid="stark-live-offline">
           <p className="text-xs text-foreground">{fill(t("stark.live.offline"), { stream: stream.name })}</p>
           <a href={stream.page} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-primary hover:underline">
@@ -122,7 +125,7 @@ export function IconButton({ label, onClick, active, children, testId }: { label
 
 /**
  * LIVE NEWS: one channel large, or a wall of four. Channels come in groups
- * (world, India); picking a channel starts it, and on the wall it takes the
+ * (world, India, finance, AI); picking a channel starts it, and on the wall it takes the
  * place of the oldest pick.
  */
 export function LiveNews({ className }: { className?: string }) {
@@ -189,7 +192,7 @@ export function LiveNews({ className }: { className?: string }) {
       ) : (
         <>
           {groups.length > 1 && (
-            <div className="flex gap-1" role="group" aria-label={t("stark.live.news_groups")}>
+            <div className="flex gap-1 overflow-x-auto pb-0.5" role="group" aria-label={t("stark.live.news_groups")}>
               {groups.map((g) => (
                 <Chip key={g.id} active={g.id === groupId} testId={`stark-live-news-group-${g.id}`} onClick={() => setGroup(g.id)}>
                   {t(`stark.live.news_group_${g.id}`)}

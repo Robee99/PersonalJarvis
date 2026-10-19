@@ -8497,7 +8497,9 @@
       "news_group_world": "Welt",
       "news_group_india": "Indien",
       "news_wall": "Vier Sender gleichzeitig",
-      "one_channel": "Ein Sender"
+      "one_channel": "Ein Sender",
+      "news_group_finance": "Finanzen",
+      "news_group_ai": "KI & Tech"
     },
     "livescreen": {
       "subtitle": "// Live-Feeds",

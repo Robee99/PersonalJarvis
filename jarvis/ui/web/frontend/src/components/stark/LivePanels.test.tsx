@@ -18,6 +18,9 @@ const CATALOG = {
     stream("euronews", "Euronews English", "news", "world", "pykpO5kQJ98"),
     stream("ndtv", "NDTV 24x7", "news", "india"),
     stream("wion", "WION", "news", "india"),
+    stream("yahoo", "Yahoo Finance", "news", "finance"),
+    { ...stream("tbpn", "TBPN", "news", "ai"), occasional: true },
+    { ...stream("openai", "OpenAI", "news", "ai"), occasional: true },
     stream("jerusalem", "Jerusalem", "camera", "middle-east", "LMHUcDktP-w"),
     stream("istanbul", "Istanbul", "camera", "middle-east"),
     stream("hk", "Hong Kong", "camera", "asia"),
@@ -30,6 +33,8 @@ const CATALOG = {
   news_groups: [
     { id: "world", name: "World" },
     { id: "india", name: "India" },
+    { id: "finance", name: "Finance" },
+    { id: "ai", name: "AI & Tech" },
   ],
   groups: [
     { id: "middle-east", name: "Middle East" },
@@ -57,6 +62,8 @@ describe("live video panels", () => {
         if (url === "/api/intel/live") return new Response(JSON.stringify(CATALOG), { status: 200 });
         // Sky runs several streams at once; the backend names the one live now.
         if (url === "/api/intel/live/now/sky") return new Response(JSON.stringify({ key: "sky", video: "SKYvideo123" }), { status: 200 });
+        // A show that is on air now; every other channel is off air.
+        if (url === "/api/intel/live/now/tbpn") return new Response(JSON.stringify({ key: "tbpn", video: "TBPNlive123" }), { status: 200 });
         if (url.startsWith("/api/intel/live/now/")) return new Response(JSON.stringify({ video: null }), { status: 200 });
         return new Response("{}", { status: 404 });
       }),
@@ -135,6 +142,21 @@ describe("live video panels", () => {
     fireEvent.click(screen.getByTestId("stark-live-news-wall"));
     await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["ndtv", "wion"]));
     expect(frames().every((f) => f.src.includes("autoplay=1") && f.src.includes("mute=1"))).toBe(true);
+  });
+
+  it("groups finance and AI channels and says when a show is off air", async () => {
+    render(<LiveNews />);
+    await waitFor(() => expect(frames()).toHaveLength(1));
+    fireEvent.click(screen.getByTestId("stark-live-news-group-finance"));
+    await waitFor(() => expect(frames()[0]?.dataset.stream).toBe("yahoo"));
+    expect(screen.queryByTestId("stark-live-channel-tbpn")).toBeNull();
+    fireEvent.click(screen.getByTestId("stark-live-news-group-ai"));
+    fireEvent.click(screen.getByTestId("stark-live-channel-tbpn"));
+    await waitFor(() => expect(frames()[0]?.src).toContain("/embed/TBPNlive123?"));
+    fireEvent.click(screen.getByTestId("stark-live-channel-openai"));
+    await waitFor(() => expect(screen.getByTestId("stark-live-offline").textContent).toContain("OpenAI is not live right now."));
+    expect(frames()).toHaveLength(0);
+    expect(screen.getByTestId("stark-live-offline").querySelector("a")?.getAttribute("href")).toBe("https://www.youtube.com/channel/UCopenai/live");
   });
 
   it("shows four cameras of a region at a time and pages through the rest", async () => {

@@ -8497,7 +8497,9 @@
       "news_group_world": "Mundo",
       "news_group_india": "India",
       "news_wall": "Cuatro canales a la vez",
-      "one_channel": "Un canal"
+      "one_channel": "Un canal",
+      "news_group_finance": "Finanzas",
+      "news_group_ai": "IA y tecnología"
     },
     "livescreen": {
       "subtitle": "// Señales en vivo",

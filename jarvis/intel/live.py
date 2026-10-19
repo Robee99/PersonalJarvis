@@ -9,6 +9,11 @@ may also pin one video id, checked live and embeddable on 2026-10-19. A stream
 that ends shows YouTube's "unavailable" card; the panel says so and links the
 channel's live page.
 
+News comes in groups: world, India, finance and AI. A channel whose live page
+points at one-off event streams names its main stream by a word in its title
+(``title_hint``). The AI channels stream only at times, so they are marked
+``occasional`` and the panel says when one is off air.
+
 Cameras are fixed views of skylines, landmarks, ports, bridges and airports
 run by their own channels. Re-broadcasts of other people's cameras are left
 out, so what the panel calls a camera is that camera.
@@ -35,7 +40,7 @@ class LiveStream:
     key: str
     name: str
     kind: StreamKind
-    #: News group ("world", "india") or camera group ("middle-east",
+    #: News group ("world", "india", "finance", "ai") or camera group ("middle-east",
     #: "europe", "americas", "asia", "space").
     group: str
     channel_id: str
@@ -45,6 +50,13 @@ class LiveStream:
     place: str = ""
     #: A shorter name for a channel button, when the name is long.
     short: str = ""
+    #: Words in the title of the channel's round-the-clock stream, for a
+    #: channel whose live page points at a different stream (a one-off event)
+    #: while the main one runs beside it.
+    title_hint: str = ""
+    #: Live only at times (daily shows, keynotes, conferences). When it is
+    #: off air the panel says so instead of loading the player.
+    occasional: bool = False
 
     @property
     def embed_path(self) -> str:
@@ -69,12 +81,15 @@ class LiveStream:
             "place": self.place,
             "embed": self.embed_path,
             "page": self.page_url,
+            "occasional": self.occasional,
         }
 
 
 NEWS_GROUPS: tuple[tuple[str, str], ...] = (
     ("world", "World"),
     ("india", "India"),
+    ("finance", "Finance"),
+    ("ai", "AI & Tech"),
 )
 
 CAMERA_GROUPS: tuple[tuple[str, str], ...] = (
@@ -135,14 +150,6 @@ STREAMS: tuple[LiveStream, ...] = (
     ),
     LiveStream("reuters", "Reuters", "news", "world", "UChqUTb7kYRX8-EiaN3XFrSQ"),
     LiveStream(
-        "bloomberg",
-        "Bloomberg Television",
-        "news",
-        "world",
-        "UCIALMKvObZNtJ6AmdCLP7Lg",
-        short="Bloomberg",
-    ),
-    LiveStream(
         "cbs", "CBS News 24/7", "news", "world", "UC8p1vwvWtl6T73JiExfWs1g", short="CBS News"
     ),
     LiveStream(
@@ -176,6 +183,81 @@ STREAMS: tuple[LiveStream, ...] = (
         "india",
         "UCN7B-QD0Qgn2boVH5Q0pOWg",
         short="BBC Hindi",
+    ),
+    # Markets and business. The Indian business channels run their
+    # round-the-clock stream next to one-off event streams, so they name it by
+    # its title.
+    LiveStream(
+        "bloomberg",
+        "Bloomberg Television",
+        "news",
+        "finance",
+        "UCIALMKvObZNtJ6AmdCLP7Lg",
+        short="Bloomberg",
+    ),
+    LiveStream("yahoo-finance", "Yahoo Finance", "news", "finance", "UCEAZeUIeJs0IjQiqTCdVSIg"),
+    LiveStream(
+        "schwab", "Schwab Network", "news", "finance", "UCqoSrYgusd8ZddtMoWhjHYA", short="Schwab"
+    ),
+    LiveStream(
+        "cnbc-tv18", "CNBC-TV18", "news", "finance", "UCmRbHAgG2k2vDUvb3xsEunQ", title_hint="24x7"
+    ),
+    LiveStream(
+        "cnbc-awaaz",
+        "CNBC Awaaz",
+        "news",
+        "finance",
+        "UCQIycDaLsBpMKjOCeaKUYVg",
+        title_hint="24x7",
+    ),
+    LiveStream(
+        "et-now", "ET Now", "news", "finance", "UCI_mwTKUhicNzFrhm33MzBQ", title_hint="live tv"
+    ),
+    LiveStream(
+        "zee-business",
+        "Zee Business",
+        "news",
+        "finance",
+        "UCkXopQ3ubd-rnXnStZqCl2w",
+        title_hint="24x7",
+    ),
+    LiveStream(
+        "ndtv-profit",
+        "NDTV Profit",
+        "news",
+        "finance",
+        "UC3uJIdRFTGgLWrUziaHbzrg",
+        title_hint="live tv",
+    ),
+    # AI and technology. No channel streams this around the clock, so these
+    # are the ones that go live often: a weekday show, then the labs and
+    # conferences when they present.
+    LiveStream("tbpn", "TBPN", "news", "ai", "UC-DRzaGnL_vtBUpCFH5M0tg", occasional=True),
+    LiveStream(
+        "daily-ai-show",
+        "The Daily AI Show",
+        "news",
+        "ai",
+        "UCe-19rSBRgIciETwZz93OFQ",
+        short="Daily AI Show",
+        occasional=True,
+    ),
+    LiveStream(
+        "hugging-face", "Hugging Face", "news", "ai", "UCHlNU7kIZhRgSbhHvFoy72w", occasional=True
+    ),
+    LiveStream(
+        "ai-engineer", "AI Engineer", "news", "ai", "UCLKPca3kwwd-B59HNr-_lvA", occasional=True
+    ),
+    LiveStream("openai", "OpenAI", "news", "ai", "UCXZCJLdBC09xxGZ6gcdrc6A", occasional=True),
+    LiveStream("nvidia", "NVIDIA", "news", "ai", "UCHuiy8bXnmK5nisYHUd1J5g", occasional=True),
+    LiveStream(
+        "google-developers",
+        "Google for Developers",
+        "news",
+        "ai",
+        "UC_x5XG1OV2P6uZZ5FSM9Ttw",
+        short="Google Dev",
+        occasional=True,
     ),
     # Cameras.
     LiveStream(
@@ -354,6 +436,15 @@ PAGE_LIMIT = 3_000_000
 _CANONICAL = re.compile(
     r'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})"'
 )
+#: Where the watch page's own details start. A live video says ``"isLive":true``
+#: there, before its thumbnail; a scheduled one (a channel's live page can point
+#: at a stream that has not started, even years later) does not.
+_DETAILS = '"videoDetails":{"videoId":"'
+#: One video on a channel's streams page.
+_LOCKUP = '"lockupViewModel":'
+_LOCKUP_ID = re.compile(r'"contentId":"([A-Za-z0-9_-]{11})"')
+_LOCKUP_TITLE = re.compile(r'"lockupMetadataViewModel":\{"title":\{"content":"((?:[^"\\]|\\.)*)"')
+_LIVE_BADGE = "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"
 _now: dict[str, tuple[float, str | None]] = {}
 _POOL = HttpClientPool(
     timeout_s=8.0,
@@ -385,11 +476,42 @@ async def fetch_page(url: str) -> str:
     return await _fetch_page(url)
 
 
-async def now_playing(key: str, *, now: float | None = None) -> str | None:
-    """The video a channel's live page points at now, or ``None``.
+def live_video(page: str) -> str | None:
+    """The video a channel's live page shows, if it is live now."""
+    match = _CANONICAL.search(page)
+    if match is None:
+        return None
+    video = match.group(1)
+    at = page.find(_DETAILS + video)
+    if at < 0:
+        return None
+    end = page.find('"thumbnail"', at)
+    details = page[at : end if end > at else at + 4000]
+    return video if '"isLive":true' in details else None
 
+
+def hinted_video(page: str, hint: str) -> str | None:
+    """The first live video on a channel's streams page whose title has ``hint``."""
+    wanted = hint.casefold()
+    for item in page.split(_LOCKUP)[1:]:
+        if _LIVE_BADGE not in item:
+            continue
+        video = _LOCKUP_ID.search(item)
+        title = _LOCKUP_TITLE.search(item)
+        if video and title and wanted in title.group(1).casefold():
+            return video.group(1)
+    return None
+
+
+async def now_playing(key: str, *, now: float | None = None) -> str | None:
+    """The video a channel is streaming live now, or ``None``.
+
+    A channel with a ``title_hint`` is read from its streams page and gives
+    the live video whose title has the hint; any other channel gives the video
+    its live page points at, when that video is live and not only scheduled.
     ``None`` means the channel is not live, or its page could not be read; the
-    panel then falls back to the pinned video or the channel embed.
+    panel then falls back to the pinned video or the channel embed, or, for an
+    occasional channel, says it is not live.
     """
     stream = _BY_KEY.get(key)
     if stream is None:
@@ -398,13 +520,13 @@ async def now_playing(key: str, *, now: float | None = None) -> str | None:
     cached = _now.get(key)
     if cached is not None and cached[0] > clock:
         return cached[1]
+    tab = "streams" if stream.title_hint else "live"
     try:
-        page = await fetch_page(f"https://www.youtube.com/channel/{stream.channel_id}/live")
+        page = await fetch_page(f"https://www.youtube.com/channel/{stream.channel_id}/{tab}")
     except Exception as exc:  # noqa: BLE001 - any network failure means "not known now"
-        log.info("live: could not read %s's live page: %s", stream.key, exc)
+        log.info("live: could not read %s's %s page: %s", stream.key, tab, exc)
         _now[key] = (clock + NOW_RETRY_S, None)
         return None
-    match = _CANONICAL.search(page)
-    video = match.group(1) if match else None
+    video = hinted_video(page, stream.title_hint) if stream.title_hint else live_video(page)
     _now[key] = (clock + (NOW_TTL_S if video else NOW_RETRY_S), video)
     return video

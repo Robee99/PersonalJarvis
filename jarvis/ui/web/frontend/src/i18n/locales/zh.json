@@ -8591,7 +8591,9 @@
       "news_group_world": "国际",
       "news_group_india": "印度",
       "news_wall": "同时看四个频道",
-      "one_channel": "单个频道"
+      "one_channel": "单个频道",
+      "news_group_finance": "财经",
+      "news_group_ai": "AI 与科技"
     },
     "livescreen": {
       "subtitle": "// 实时信号",
