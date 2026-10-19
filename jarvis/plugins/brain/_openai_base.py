@@ -673,7 +673,18 @@ async def stream_complete(
         return
     if stream is None:  # pragma: no cover -- loop always breaks or raises
         raise RuntimeError("openai stream creation retry loop exhausted")
+    prompt_processed = -1
     async for chunk in stream:
+        # Count real work without exposing private reasoning or executing a
+        # half-written tool call. Empty role/ping frames are not progress.
+        emitted = False
+        working = False
+        progress = getattr(chunk, "prompt_progress", None)
+        if isinstance(progress, dict):
+            processed = progress.get("processed")
+            if isinstance(processed, int) and processed > prompt_processed:
+                working = processed > 0
+                prompt_processed = processed
         # Text-Content
         choices = getattr(chunk, "choices", None) or []
         for choice in choices:
@@ -683,23 +694,32 @@ async def stream_complete(
 
             content = getattr(delta, "content", None)
             if content:
+                emitted = True
                 yield BrainDelta(content=content)
+            working = working or bool(
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+            )
 
             tool_calls = getattr(delta, "tool_calls", None) or []
             for tc in tool_calls:
                 idx = getattr(tc, "index", 0) or 0
                 slot = tool_buffer.setdefault(idx, {"id": "", "name": "", "arguments": ""})
                 if getattr(tc, "id", None):
+                    working = True
                     slot["id"] = tc.id
                 fn = getattr(tc, "function", None)
                 if fn is not None:
                     if getattr(fn, "name", None):
+                        working = True
                         slot["name"] = fn.name
                     if getattr(fn, "arguments", None):
+                        working = True
                         slot["arguments"] += fn.arguments
 
             finish = getattr(choice, "finish_reason", None)
             if finish:
+                emitted = True
                 if tool_buffer and finish not in {"tool_calls", "stop"}:
                     # Preserve the stop reason so the caller can retry with a
                     # larger budget; no partial tool arguments may execute.
@@ -744,7 +764,10 @@ async def stream_complete(
             }
             if cached > 0:
                 usage_payload["cache_hit_tokens"] = cached
+            emitted = True
             yield BrainDelta(usage=usage_payload)
+        if working and not emitted:
+            yield BrainDelta()
 
 
 _UNSUPPORTED_ERROR_MARKERS = (

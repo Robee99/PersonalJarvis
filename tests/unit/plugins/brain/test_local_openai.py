@@ -409,3 +409,55 @@ def test_the_window_follows_the_model_swapper(monkeypatch):
     assert brain.context_window == 65536
     swap_context.remember_window("http://127.0.0.1:11440", 32768)
     assert brain.context_window == 32768
+
+
+@pytest.mark.parametrize("owner, expected", [("llamacpp", True), ("other", False)])
+async def test_prompt_progress_is_requested_only_from_a_declaring_server(
+    monkeypatch, owner, expected
+):
+    from types import SimpleNamespace
+
+    import jarvis.plugins.brain.local_openai as mod
+    from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
+
+    probes = []
+    bodies = []
+
+    async def models(**kwargs):
+        probes.append(kwargs)
+        return SimpleNamespace(data=[SimpleNamespace(id="qwen3-vl-8b", owned_by=owner)])
+
+    async def stream(client, model, req, *, extra_body=None, supports_vision=True):
+        bodies.append(extra_body or {})
+        yield BrainDelta(content="Answer")
+
+    monkeypatch.setattr(mod, "stream_complete", stream)
+    brain = LocalOpenAIBrain("qwen3-vl-8b")
+    brain._client = SimpleNamespace(models=SimpleNamespace(list=models))
+    brain.supports_thinking_switch = True
+    req = BrainRequest(messages=(BrainMessage(role="user", content="hi"),), reasoning_effort="none")
+    for _ in range(2):
+        assert [d.content async for d in brain.complete(req)] == ["Answer"]
+    assert len(probes) == 1
+    assert bodies[0].get("return_progress", False) is expected
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+async def test_progress_negotiation_failure_does_not_block_a_local_answer(monkeypatch):
+    from types import SimpleNamespace
+
+    import jarvis.plugins.brain.local_openai as mod
+    from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
+
+    async def models(**kwargs):
+        raise httpx.ConnectError("catalog unavailable")
+
+    async def stream(*args, **kwargs):
+        assert not (kwargs.get("extra_body") or {}).get("return_progress")
+        yield BrainDelta(content="Answer")
+
+    monkeypatch.setattr(mod, "stream_complete", stream)
+    brain = LocalOpenAIBrain("qwen3-vl-8b")
+    brain._client = SimpleNamespace(models=SimpleNamespace(list=models))
+    req = BrainRequest(messages=(BrainMessage(role="user", content="hi"),))
+    assert [d.content async for d in brain.complete(req)] == ["Answer"]

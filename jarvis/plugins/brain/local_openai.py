@@ -225,6 +225,7 @@ class LocalOpenAIBrain:
         self._client: Any = None
         self._server_root: str | None = None
         self._credential: str | None = None
+        self._prompt_progress: bool | None = None
         try:
             provider_cfg = cfg.load_config().brain.providers.get("local-openai")
             configured_window = getattr(provider_cfg, "context_window", None)
@@ -322,6 +323,28 @@ class LocalOpenAIBrain:
         self.supports_thinking_switch = _declared_thinking_switch(self._model)
         return self._model
 
+    async def _supports_prompt_progress(self, client: Any, model: str) -> bool:
+        """Negotiate llama.cpp's prefill events once, outside the boot path.
+
+        Only a server declaring its implementation for the selected model gets
+        this extension. Other OpenAI-compatible servers keep their wire format.
+        A missing catalog never prevents an ordinary completion.
+        """
+        if self._prompt_progress is None:
+            self._prompt_progress = False
+            listing = getattr(getattr(client, "models", None), "list", None)
+            if callable(listing):
+                try:
+                    page = await asyncio.wait_for(listing(timeout=2.0), timeout=2.0)
+                    self._prompt_progress = any(
+                        getattr(entry, "id", None) == model
+                        and getattr(entry, "owned_by", None) == "llamacpp"
+                        for entry in page.data
+                    )
+                except Exception:  # noqa: BLE001 - capability discovery is optional
+                    log.debug("local-openai: prompt-progress discovery unavailable", exc_info=True)
+        return self._prompt_progress
+
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
         client = self._client
         if client is None:
@@ -332,6 +355,8 @@ class LocalOpenAIBrain:
         extra_body = (
             thinking_extra_body(req.reasoning_effort) if self.supports_thinking_switch else None
         )
+        if await self._supports_prompt_progress(client, model):
+            extra_body = {**(extra_body or {}), "return_progress": True}
         attempts = (req, _with_plain_schemas(req), _with_open_schemas(req)) if req.tools else (req,)
         for attempt, request in enumerate(attempts):
             sent = False
@@ -343,7 +368,7 @@ class LocalOpenAIBrain:
                     extra_body=extra_body,
                     supports_vision=self.supports_vision,
                 ):
-                    sent = True
+                    sent = sent or bool(delta.content or delta.tool_call or delta.finish_reason)
                     yield delta
                 return
             except Exception as exc:

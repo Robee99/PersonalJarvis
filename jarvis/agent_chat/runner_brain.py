@@ -591,6 +591,9 @@ async def run_brain_turn(
         elif override.receipt.finish_reason in ("error", "length"):
             status = "error"
             error = "The selected agent did not complete this turn."
+        elif not answer:
+            status = "error"
+            error = "The selected model returned an empty answer. Please try again."
     await finish(status, override.receipt.usage(), error)
 
 

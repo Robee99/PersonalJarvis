@@ -138,3 +138,37 @@ async def test_run_without_on_progress_is_unchanged() -> None:
     result = await loop.run([], user_utterance="zeig mir meine letzten mails")
 
     assert "msg1" in result.text
+
+
+@pytest.mark.asyncio
+async def test_silent_router_round_reports_heartbeat_without_a_text_consumer() -> None:
+    brain = _HeartbeatThenAnswerBrain()
+    loop = ToolUseLoop(brain, {"gmail/list_messages": _NeutralTool()}, _ExecOK())
+    progress = asyncio.Event()
+    task = asyncio.create_task(loop.run([], user_utterance="say hi", on_progress=progress.set))
+    try:
+        await asyncio.wait_for(brain.heartbeat_seen.wait(), timeout=1.0)
+        assert not task.done()
+        assert progress.is_set(), "the routing round must report invisible work before it finishes"
+    finally:
+        brain.release.set()
+        result = await asyncio.wait_for(task, timeout=1.0)
+    assert result.text == "Done."
+
+
+@pytest.mark.asyncio
+async def test_tool_free_dispatch_reports_progress_without_a_text_consumer() -> None:
+    from jarvis.brain.dispatcher import BrainDispatcher
+
+    brain = _HeartbeatThenAnswerBrain()
+    dispatcher = BrainDispatcher(brain)
+    progress = asyncio.Event()
+    task = asyncio.create_task(dispatcher.dispatch("say hi", on_progress=progress.set))
+    try:
+        await asyncio.wait_for(brain.heartbeat_seen.wait(), timeout=1.0)
+        assert not task.done()
+        assert progress.is_set(), "tool-free dispatch must report work before the final reply"
+    finally:
+        brain.release.set()
+        result = await asyncio.wait_for(task, timeout=1.0)
+    assert result.text == "Done."

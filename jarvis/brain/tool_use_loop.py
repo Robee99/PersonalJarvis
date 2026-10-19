@@ -991,14 +991,13 @@ class ToolUseLoop:
                 reasoning_effort=self._reasoning_effort,
             )
             stream = self._brain.complete(req)
-            if text_consumer is not None:
-                agg = await aggregate_with_consumer(
-                    stream,
-                    text_consumer,
-                    delta_consumer=_delta_progress,
-                )
-            else:
-                agg = await aggregate(stream)
+            # Routing rounds suppress spoken text, not liveness: prefill,
+            # reasoning and tool-argument deltas still reset the voice guard.
+            agg = await aggregate_with_consumer(
+                stream,
+                text_consumer,
+                delta_consumer=_delta_progress,
+            )
             # A model round finished — the brain is alive and working. Reset the
             # pipeline's no-progress deadline before the (possibly long) tool
             # execution + next round so a slow-but-working turn is not cut off.

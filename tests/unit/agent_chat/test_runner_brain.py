@@ -440,3 +440,19 @@ def test_step_mirror_ignores_another_turns_events():
         assert rows[0][1]["name"] == "Read"
 
     asyncio.run(scenario())
+
+
+async def test_a_blank_model_reply_is_an_error_not_a_success(tmp_path, monkeypatch):
+    fake = FakeBrainManager(reply="", chunks=())
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(
+        svc, tmp_path, provider="local-openai", model="qwen3-vl-8b", effort=""
+    )
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    result = events[-1]["payload"]
+    assert result["status"] == "error"
+    assert "empty" in result["error"].lower()
+    assert not any(e["kind"] == "assistant_text" for e in events)
