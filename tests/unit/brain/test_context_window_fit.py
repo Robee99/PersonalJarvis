@@ -204,6 +204,63 @@ class TestFitOnTheManager:
         assert "computer_use" in fitted
         assert len(fitted) < len(tools)
 
+    def test_tools_the_request_names_survive_a_tool_cap(self) -> None:
+        # Live 2026-10-19: a 48-tool cap on the local Qwen brain kept 48
+        # built-in settings and hid every connected-server tool, so "fly me
+        # to New York" never reached God's Eye View.
+        m = self._mgr()
+        tools: dict[str, _FakeTool] = {
+            f"setting_{i}": _FakeTool(f"setting_{i}", f"Change the setting number {i}")
+            for i in range(90)
+        }
+        tools["gods-eye-view/fly_to"] = _FakeTool(
+            "gods-eye-view/fly_to",
+            "Fly the globe camera to a city or place. [ACTION-ONLY] Performs "
+            "operations on the connected gods-eye-view server.",
+            is_mcp_tool=True,
+        )
+        tools["agent-browser/open"] = _FakeTool(
+            "agent-browser/open", "Open a web page in the browser.", is_mcp_tool=True
+        )
+        for i in range(40):
+            tools[f"github/op_{i}"] = _FakeTool(
+                f"github/op_{i}",
+                "Performs operations on the connected github server.",
+                is_mcp_tool=True,
+            )
+        brain = _FakeBrain(65_536)
+        brain.max_tools = 48  # type: ignore[attr-defined]
+        fitted = m._fit_tools_to_brain(
+            tools,
+            brain,
+            system_prompt="",
+            history=None,
+            query="Fly me to New York in God's Eye View",
+        )
+        assert len(fitted) == 48
+        assert "gods-eye-view/fly_to" in fitted
+        assert "agent-browser/open" not in fitted
+        assert not any(name.startswith("github/") for name in fitted)
+
+    def test_matches_never_crowd_out_a_tight_window(self) -> None:
+        m = self._mgr()
+        tools = {
+            "small": _tool("small"),
+            "browser/huge": _FakeTool(
+                "browser/huge",
+                "Open the browser.",
+                schema={"type": "object", "properties": {
+                    f"a{i}": {"type": "string", "description": "x" * 40} for i in range(400)
+                }},
+                is_mcp_tool=True,
+            ),
+        }
+        fitted = m._fit_tools_to_brain(
+            tools, _FakeBrain(8_192), system_prompt="x" * 12_000, history=None,
+            query="open the browser",
+        )
+        assert "browser/huge" not in fitted
+
     def test_undeclared_window_is_left_alone(self) -> None:
         m = self._mgr()
 

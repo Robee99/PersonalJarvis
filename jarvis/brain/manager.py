@@ -28,6 +28,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import re
 import time
 from collections.abc import (
@@ -184,6 +185,10 @@ _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
     "jarvis.brain.manager.skill_turn_state",
     default=None,
 )
+
+#: At most this many tools are kept for matching the request's words when a
+#: small model's tool surface is trimmed (``_relevant_tool_names``).
+_RELEVANT_TOOLS_MAX = 16
 
 #: Tools whose whole result is a picture; a blind brain is never offered them.
 _IMAGE_CAPTURE_TOOL_NAMES: frozenset[str] = frozenset({"screenshot", "camera"})
@@ -3805,6 +3810,7 @@ class BrainManager:
         tool_context: dict[str, Any] | None = None,
         loop_control: Any = None,
         tool_images: bool = True,
+        query: str = "",
     ) -> BrainDispatcher:
         """Builds the dispatcher with an optional tool override.
 
@@ -3856,7 +3862,7 @@ class BrainManager:
         if compact_prompt:
             history = _compact_history_for_local_context(history, context_window)
         tools = self._fit_tools_to_brain(
-            tools, brain, system_prompt=system_prompt, history=history
+            tools, brain, system_prompt=system_prompt, history=history, query=query
         )
         # Per-plugin usage guidance for whichever plugins are active this turn
         # (the "MCP + thin skill" reliability layer). Appended last so it sits
@@ -6938,6 +6944,7 @@ class BrainManager:
         *,
         system_prompt: str,
         history: Sequence[BrainMessage] | None,
+        query: str = "",
     ) -> dict[str, Tool]:
         """Size the turn's tool surface to the answering brain's context window.
 
@@ -6953,8 +6960,10 @@ class BrainManager:
         brain without a declared window is left alone as well.
 
         The tool a deterministic gate mandated this turn and ``run-skill`` on
-        a skill match are never dropped. Everything else follows the order in
-        ``_fit_tools_to_context_window``. A tool the model cannot see is one
+        a skill match are never dropped, and neither are the tools that best
+        match the request (``query``, the user's words; up to a third of the
+        tool cap, see ``_relevant_tool_names``). Everything else follows the
+        order in ``_fit_tools_to_context_window``. A tool the model cannot see is one
         capability lost for one turn; a request the server refuses is the
         whole turn lost.
         """
@@ -6994,6 +7003,21 @@ class BrainManager:
             keep.add("computer_use")
         if getattr(self, "_skill_turn_match", None) is not None:
             keep.add("run-skill")
+        relevant_cap = (max_tools if max_tools > 0 else len(tools)) // 3
+        relevant = _relevant_tool_names(tools, query, min(relevant_cap, _RELEVANT_TOOLS_MAX))
+        if window > 0:
+            # Matches never take more than half of the tool budget, so a tight
+            # window still fits the request instead of overflowing it.
+            room = max(window - used, 0) // 2
+            within: list[str] = []
+            for name in relevant:
+                cost = _tool_surface_tokens(name, tools[name])
+                if cost > room:
+                    continue
+                room -= cost
+                within.append(name)
+            relevant = within
+        keep.update(relevant)
         fitted, dropped = _fit_tools_to_context_window(
             tools, context_window=window, used_tokens=used, keep=keep, max_tools=max_tools
         )
@@ -7001,7 +7025,8 @@ class BrainManager:
             log.warning(
                 "Tool surface trimmed for %s: %d of %d tools hidden this turn so "
                 "the request fits the model's %d-token window and %s-tool cap "
-                "(prompt+history ~%d tokens, budget for tools %d). First hidden: %s",
+                "(prompt+history ~%d tokens, budget for tools %d). First hidden: %s. "
+                "Kept for this request: %s",
                 getattr(brain, "name", type(brain).__name__),
                 len(dropped),
                 len(tools),
@@ -7010,6 +7035,7 @@ class BrainManager:
                 used,
                 max(window - used, 0),
                 ", ".join(dropped[:5]),
+                ", ".join(relevant[:8]) or "none matched",
             )
         return fitted
 
@@ -12702,6 +12728,7 @@ class BrainManager:
                 brain,
                 tools_override=_turn_tools,
                 history_override=dispatch_history,
+                query=user_text,
                 **_disp_kwargs,
             )
             # Intelligent router: the router LEAD must NOT stream its conversational
@@ -14626,6 +14653,72 @@ def _tool_surface_tokens(name: str, tool: Any) -> int:
     except (TypeError, ValueError):
         wire = f"{name} {description} {schema}"
     return _approx_tokens(wire)
+
+
+#: Words that say nothing about which tool a request needs.
+_TOOL_QUERY_STOPWORDS: frozenset[str] = frozenset(
+    "the and you can could would will please for with this that what then into "
+    "from your there here have has just some about are was were its not but "
+    "use using tool tools me my it to of on in at is be do".split()
+)
+#: Text the MCP adapter adds to every server tool's description; it would make
+#: every server tool match "use", "action" or "research".
+_MCP_DESCRIPTION_BOILERPLATE = re.compile(
+    r"\[ACTION-ONLY[^\]]*\]|Performs operations on the connected .*$", re.DOTALL
+)
+_TOOL_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _tool_words(text: str) -> set[str]:
+    return {w for w in _TOOL_WORD.findall(text.lower()) if len(w) >= 3}
+
+
+def _relevant_tool_names(tools: dict[str, Tool], query: str, limit: int) -> list[str]:
+    """The tools a request names or describes, best match first.
+
+    A small local model sees at most a few dozen tools, and the fit below
+    drops connected-server tools first. Without this, a request such as "fly
+    me to New York in God's Eye View" or "open YouTube in the browser" never
+    reaches the server that can do it (live 2026-10-19: 48 of 228 tools kept,
+    every one of them a built-in setting). Words are weighted by how few tools
+    share them, so "gods" or "browser" count for more than "open"; a match in
+    the tool's name counts double.
+    """
+    if limit <= 0 or not tools:
+        return []
+    wanted = _tool_words(query) - _TOOL_QUERY_STOPWORDS
+    if not wanted:
+        return []
+    docs: dict[str, tuple[set[str], set[str]]] = {}
+    for name, tool in tools.items():
+        description = _MCP_DESCRIPTION_BOILERPLATE.sub(
+            " ", str(getattr(tool, "description", "") or "")
+        )
+        docs[name] = (_tool_words(name), _tool_words(description[:600]))
+    count = len(docs)
+    df: dict[str, int] = {}
+    for name_words, desc_words in docs.values():
+        for word in name_words | desc_words:
+            df[word] = df.get(word, 0) + 1
+
+    def matches(word: str, words: set[str]) -> bool:
+        if word in words:
+            return True
+        # "browse" finds "browser", "playing" finds "play".
+        stem = word[:5]
+        return len(word) >= 5 and any(w.startswith(stem) for w in words if len(w) >= 5)
+
+    scores: dict[str, float] = {}
+    for word in wanted:
+        hits = [n for n, (nw, dw) in docs.items() if matches(word, nw) or matches(word, dw)]
+        if not hits or len(hits) == count:
+            continue
+        weight = math.log(count / len(hits))
+        for name in hits:
+            bonus = 2.0 if matches(word, docs[name][0]) else 1.0
+            scores[name] = scores.get(name, 0.0) + weight * bonus
+    ranked = sorted(scores, key=lambda n: -scores[n])
+    return ranked[:limit]
 
 
 def _fit_tools_to_context_window(
