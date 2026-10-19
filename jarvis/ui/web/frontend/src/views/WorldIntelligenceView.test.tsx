@@ -1,10 +1,11 @@
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_GEV_EMBED_URL,
   GEV_EMBED_URL,
+  GEV_READY_TIMEOUT_MS,
   resolveGeVEmbedUrl,
   WorldIntelligenceView,
 } from "@/views/WorldIntelligenceView";
@@ -21,6 +22,20 @@ const NEWS = {
   fetched_at: 1_700_000_100,
 };
 
+const META = { available: true, stale: false, fetched_at: 1_700_000_000, source: "Test", source_url: "https://example.org" };
+const PUBLIC: Record<string, unknown> = {
+  "/api/public/quakes": {
+    ...META,
+    items: [{ id: "a", mag: 6.4, place: "off Japan", time_ms: Date.now() - 60_000, lon: 142, lat: 38, depth_km: 20, url: null, alert: null, tsunami: false, sig: 600 }],
+  },
+  "/api/public/events": {
+    ...META,
+    items: [{ id: "v", title: "Etna eruption", category: "Volcanoes", category_id: "volcanoes", lon: 15, lat: 37.7, date_ms: Date.now() - 7_200_000, link: null, magnitude: null, unit: null }],
+  },
+  "/api/public/iss": { ...META, lat: 10, lon: 60, alt_km: 420, vel_kmh: 27_600, time_ms: Date.now() },
+  "/api/public/stations": { ...META, items: [] },
+};
+
 function render(node: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return rtlRender(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
@@ -31,14 +46,18 @@ describe("WorldIntelligenceView", () => {
     useI18nStore.getState().setUi("en", { push: false });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) =>
-        String(input) === "/api/deck/news"
-          ? new Response(JSON.stringify(NEWS), { status: 200 })
-          : new Response("{}", { status: 404 }),
-      ),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/deck/news") return new Response(JSON.stringify(NEWS), { status: 200 });
+        if (url in PUBLIC) return new Response(JSON.stringify(PUBLIC[url]), { status: 200 });
+        return new Response("{}", { status: 404 });
+      }),
     );
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("shows the news broadcast, the feeds that answered and the ticker", async () => {
     render(<WorldIntelligenceView />);
@@ -124,5 +143,60 @@ describe("WorldIntelligenceView", () => {
       );
     });
     expect(screen.getByText(/View applied/)).toBeTruthy();
+  });
+
+  it("hands over to the built-in globe when GEV does not answer, with working layers and controls", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<WorldIntelligenceView />);
+    expect(screen.getByTestId("stark-gev-waiting")).toBeTruthy();
+    expect(screen.queryByTestId("stark-builtin-globe")).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(GEV_READY_TIMEOUT_MS + 10);
+    });
+    expect(screen.getByTestId("stark-gev-status").getAttribute("data-state")).toBe("down");
+    expect(screen.getByTestId("stark-builtin-globe")).toBeTruthy();
+    expect(screen.getByTestId("stark-gev-down-note")).toBeTruthy();
+    // GEV stays mounted (hidden), so it can still connect.
+    expect((screen.getByTitle("God’s Eye View") as HTMLIFrameElement).className).toContain("hidden");
+
+    // Layers: counts from the feeds, and a toggle that takes its points off.
+    await waitFor(() => expect(screen.getByTestId("stark-world-layer-quakes").textContent).toContain("1"));
+    await waitFor(() => expect(screen.getAllByTestId("stark-world-spot").length).toBe(2));
+    fireEvent.click(screen.getByTestId("stark-world-layer-quakes"));
+    expect(screen.getByTestId("stark-world-layer-quakes").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getAllByTestId("stark-world-spot").length).toBe(1);
+    expect(screen.getByTestId("stark-world-spot").textContent).toContain("Etna eruption");
+
+    // Controls: zoom both ways, pause the spin, back home.
+    fireEvent.click(screen.getByTestId("stark-globe-zoom-in"));
+    expect(screen.getByTestId("stark-globe-scale").textContent).toBe("1.2");
+    fireEvent.click(screen.getByTestId("stark-globe-zoom-out"));
+    fireEvent.click(screen.getByTestId("stark-globe-zoom-out"));
+    expect(screen.getByTestId("stark-globe-scale").textContent).toBe("0.8");
+    expect(screen.getByTestId("stark-globe-zoom-out").hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByTestId("stark-globe-spin"));
+    expect(screen.getByTestId("stark-globe-spin").getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(screen.getByTestId("stark-globe-reset"));
+    expect(screen.getByTestId("stark-globe-scale").textContent).toBe("1");
+
+    // Either globe can be picked by hand.
+    fireEvent.click(screen.getByTestId("stark-globe-gev"));
+    expect(screen.queryByTestId("stark-builtin-globe")).toBeNull();
+    expect(screen.getByTestId("stark-gev-waiting").textContent).toContain("did not answer");
+  });
+
+  it("a requested view lands on the built-in globe when GEV is down", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<WorldIntelligenceView />);
+    act(() => {
+      vi.advanceTimersByTime(GEV_READY_TIMEOUT_MS + 10);
+    });
+    const frame = screen.getByTitle("God’s Eye View") as HTMLIFrameElement;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    act(() => {
+      window.dispatchEvent(new CustomEvent("jarvis:gev-view", { detail: { view: { camera: { lat: 35.7, lon: 139.7 } } } }));
+    });
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(screen.getByTestId("stark-builtin-globe")).toBeTruthy();
   });
 });

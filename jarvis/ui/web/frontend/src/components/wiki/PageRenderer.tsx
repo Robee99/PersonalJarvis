@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { useT, useUiLanguage } from "@/i18n";
 
 import { PageHeader } from "./PageHeader";
+import { originalConversations, stripImportMarkers } from "@/lib/importedSources";
 
 interface PageRendererProps {
   slug: string;
@@ -75,7 +76,7 @@ export function PageRenderer({ slug, onWikilinkClick }: PageRendererProps) {
 
   const preprocessedBody = useMemo(() => {
     const raw = pageQuery.data?.body_md ?? "";
-    return preprocessWikilinks(stripLeadingTitle(raw, title));
+    return preprocessWikilinks(stripLeadingTitle(stripImportMarkers(raw), title));
   }, [pageQuery.data?.body_md, title]);
 
   const dateFormat = useMemo(() => {
@@ -236,6 +237,7 @@ export function PageRenderer({ slug, onWikilinkClick }: PageRendererProps) {
         vaultRelPath={vaultRelPath}
         mtime={page.stats?.mtime}
         words={page.stats?.words}
+        originals={originalConversations(page.body_md)}
       />
 
       {/* A wiki page is a document, so it is set at the reading step in full

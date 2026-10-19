@@ -4,8 +4,10 @@
  * the hand-off to Obsidian.
  */
 import { lazy, Suspense } from "react";
+import { ExternalLink } from "lucide-react";
 
-import { useT, useUiLanguage } from "@/i18n";
+import { fill, useT, useUiLanguage } from "@/i18n";
+import type { OriginalConversation } from "@/lib/importedSources";
 import type { WikiKind } from "@/lib/wikiApi";
 import { GROUP_LABEL_KEY, groupOfKind, relativeAge } from "@/lib/wikiModel";
 import { cn } from "@/lib/utils";
@@ -28,7 +30,12 @@ interface PageHeaderProps {
   /** Seconds since the epoch of the file's last change, when known. */
   mtime?: number;
   words?: number;
+  /** Imported ChatGPT / Claude conversations on this page, linked to the original. */
+  originals?: OriginalConversation[];
 }
+
+/** How many original-conversation links the header lists before "+N more". */
+const MAX_ORIGINALS = 4;
 
 const FRIENDLY_LABELS: Record<string, string> = {
   type: "type",
@@ -51,6 +58,7 @@ export function PageHeader({
   vaultRelPath,
   mtime,
   words,
+  originals = [],
 }: PageHeaderProps) {
   const t = useT();
   const language = useUiLanguage();
@@ -112,6 +120,28 @@ export function PageHeader({
       {/* The page kind used to be painted in one of four hardcoded hues. Hue
           belongs to status and selection only, so the frontmatter facts are
           neutral tags and the kind is told by its shape above. */}
+      {originals.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm" data-testid="wiki-page-originals">
+          <span className="text-muted-foreground">{t("wiki_ui.original_label")}</span>
+          {originals.slice(0, MAX_ORIGINALS).map((o) => (
+            <a
+              key={o.id}
+              href={o.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-primary hover:underline"
+              data-testid="wiki-page-original"
+            >
+              {t(`wiki_ui.original_${o.format}`)}
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+            </a>
+          ))}
+          {originals.length > MAX_ORIGINALS && (
+            <span className="text-muted-foreground">{fill(t("wiki_ui.original_more"), { count: originals.length - MAX_ORIGINALS })}</span>
+          )}
+        </div>
+      )}
+
       {pills.length > 0 && (
         <div className="mt-4 flex flex-wrap gap-1.5 text-xs" data-testid="wiki-page-pills">
           {pills.map((p) => (
