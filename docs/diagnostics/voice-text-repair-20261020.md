@@ -86,9 +86,10 @@ new release.
 
 ## Activation and rollback
 
-The running app has an active chat. Its restart route explicitly requires a
-normal interactive desktop action. No restart approval was impersonated and
-no active user process was terminated.
+At staging time the running app had an active chat. Its restart route
+explicitly requires a normal interactive desktop action. The user closed
+JARVIS normally; no restart approval was impersonated and no active user
+process was terminated by the repair.
 
 Both original executables are backed up under:
 
@@ -103,10 +104,42 @@ abort the update. The staging directory is:
 `C:/Users/rober/Documents/Codex/2026-10-12/referenced-chatgpt-conversation-this-is-an/outputs/voice-text-repair-20261020/`
 
 Its `apply-status.json` records whether activation is waiting, applied and
-healthy, or failed. A prepared artifact alone is **not VERIFIED IN THE LIVE
-WINDOWS APPLICATION**. Physical voice and end-to-end model acceptance remain
-pending until the repaired application runs.
+healthy, or failed. A prepared artifact alone was not considered live verification. The applied
+checks below supersede that staging state; physical microphone/speaker
+conversation acceptance remains unverified.
 
 Rollback: after closing JARVIS normally, restore `PersonalJarvis.exe` and
 `jarvis.exe` from the backup directory to the existing install directory and
 open the normal shortcut. Configuration and all user data remain in place.
+
+
+## Applied to the actual Windows application
+
+The user closed the app normally. The one-time updater applied the reviewed
+executables and reopened the same installed path, process 13772.
+
+- Installed GUI and CLI hashes match the prepared repair exactly.
+- The original configuration TOML and HUD `index.html` hashes are unchanged.
+- `/api/health` returns 200, version 3.1.1, default instance.
+- `/api/brain/status` returns `local-openai` / `qwen3-vl-8b`.
+- `/api/voice/status` returns `ready=true`, `detail=listening`.
+- A single authenticated, read-only-plan chat selected local Qwen explicitly
+  and returned the genuine answer `VOICE_TEXT_REPAIR_OK`, status `done`,
+  11,006 input tokens and 7 output tokens. The round trip took 60.81 seconds
+  while other local model work was running; no speedup is claimed. The
+  original new-chat provider selection was restored immediately after
+  creating the clearly labeled verification chat. No paid fallback was
+  permitted by the per-chat provider override.
+- A real offline Piper preview through the app returned HTTP 200 and
+  316,008 bytes of non-silent WAV audio: 6.58 seconds, 24 kHz, mono, 16-bit,
+  generated in 4.33 seconds. It was saved as diagnostic audio, not played
+  through the user's speakers.
+- An unauthenticated write probe was refused with 403. The successful test
+  used the existing control credential without printing or modifying it;
+  no browser-presence or restart protection was bypassed.
+
+Deployment and real text/TTS generation are verified. A physical spoken
+exchange, microphone capture, speaker playback, and acoustic interruption
+are not verified by these checks. The watchdog regression is supported by
+real SDK/SSE integration and focused timing tests, not a claim of having
+heard the user speak.
