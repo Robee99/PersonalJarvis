@@ -82,6 +82,10 @@ KNOWN: frozenset[str] = frozenset(
         "intelligence",
         # The HUD's Orbital screen: the ISS, stations, space weather, NEOs.
         "orbital",
+        # The HUD's Live screen: news channels and every public camera.
+        "live-feeds",
+        # The HUD's Ghost screen: every public sensor on one fusion map.
+        "ghost",
     }
 )
 
@@ -287,6 +291,16 @@ _ALIASES: dict[str, str] = {
     "space weather": "orbital",
     "iss": "orbital",
     "space station": "orbital",
+    "live": "live-feeds",
+    "live feeds": "live-feeds",
+    "live news": "live-feeds",
+    "live tv": "live-feeds",
+    "news channels": "live-feeds",
+    "cctv": "live-feeds",
+    "cameras": "live-feeds",
+    "camera wall": "live-feeds",
+    "ghost": "ghost",
+    "sensor fusion": "ghost",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",

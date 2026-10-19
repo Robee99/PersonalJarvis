@@ -1,18 +1,5 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
-import {
-  Brain,
-  Globe2,
-  Home,
-  Mic,
-  Orbit,
-  PenSquare,
-  Power,
-  Radar,
-  Search,
-  Settings,
-  Workflow,
-  X,
-} from "lucide-react";
+import { Brain, Ghost, Globe2, Home, Mic, Orbit, PenSquare, Power, Radar, Search, Settings, Tv, Workflow, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEventStore, type SectionId } from "@/store/events";
 import { useQuickSwitcher } from "@/store/quickSwitcher";
@@ -36,7 +23,7 @@ const MemoryOrbView = lazy(() =>
   import("@/views/MemoryOrbView").then((m) => ({ default: m.MemoryOrbView })),
 );
 
-export type StarkScreen = "command" | "intelligence" | "orbital" | "world";
+export type StarkScreen = "command" | "intelligence" | "orbital" | "world" | "live" | "ghost";
 
 interface RailItem {
   key: string;
@@ -52,6 +39,8 @@ const RAIL: RailItem[] = [
   { key: "intelligence", icon: Radar, screen: "intelligence", section: "intelligence" },
   { key: "orbital", icon: Orbit, screen: "orbital", section: "orbital" },
   { key: "world", icon: Globe2, screen: "world", section: "world-intelligence" },
+  { key: "live", icon: Tv, screen: "live", section: "live-feeds" },
+  { key: "ghost", icon: Ghost, screen: "ghost", section: "ghost" },
   { key: "memory", icon: Brain, action: "memory" },
   { key: "agents", icon: Workflow, section: "agents" },
   { key: "voice", icon: Mic, action: "voice" },

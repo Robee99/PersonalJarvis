@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ExternalLink, MapPinOff, RotateCcw, X } from "lucide-react";
+import { BrandedSelect } from "@/components/ui/select";
 import { StarkLamp, StarkPanel } from "@/components/stark/StarkPanel";
 import { useNow } from "@/components/stark/StarkShell";
 import { agoMs } from "@/lib/publicData";
@@ -172,33 +173,25 @@ export function IncidentPanel({
               {t(`stark.incidents.evidence_${e}`)}
             </Chip>
           ))}
-          <select
-            aria-label={t("stark.incidents.region")}
+          <BrandedSelect
+            ariaLabel={t("stark.incidents.region")}
             value={filters.region ?? ""}
-            onChange={(ev) => setFilters({ region: ev.target.value || null })}
-            data-testid="incident-region"
-            className="h-6 min-w-0 flex-1 border border-primary/20 bg-background px-1 text-[11px] text-foreground"
-          >
-            <option value="">{t("stark.incidents.region_all")}</option>
-            {regions.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label={t("stark.incidents.severity")}
-            value={filters.minSeverity ?? ""}
-            onChange={(ev) => setFilters({ minSeverity: ev.target.value === "" ? null : Number(ev.target.value) })}
-            data-testid="incident-severity"
-            className="h-6 border border-primary/20 bg-background px-1 text-[11px] text-foreground"
-          >
-            {SEVERITY_FLOORS.map((s) => (
-              <option key={s ?? "any"} value={s ?? ""}>
-                {s == null ? t("stark.incidents.severity_any") : fill(t("stark.incidents.severity_min"), { level: s })}
-              </option>
-            ))}
-          </select>
+            onValueChange={(v) => setFilters({ region: v || null })}
+            testId="incident-region"
+            className="h-6 min-w-0 flex-1 text-[11px]"
+            options={[{ value: "", label: t("stark.incidents.region_all") }, ...regions.map((r) => ({ value: r.id, label: r.name }))]}
+          />
+          <BrandedSelect
+            ariaLabel={t("stark.incidents.severity")}
+            value={filters.minSeverity == null ? "" : String(filters.minSeverity)}
+            onValueChange={(v) => setFilters({ minSeverity: v === "" ? null : Number(v) })}
+            testId="incident-severity"
+            className="h-6 text-[11px]"
+            options={SEVERITY_FLOORS.map((s) => ({
+              value: s == null ? "" : String(s),
+              label: s == null ? t("stark.incidents.severity_any") : fill(t("stark.incidents.severity_min"), { level: s }),
+            }))}
+          />
         </div>
       </div>
 

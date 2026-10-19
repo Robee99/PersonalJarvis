@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { MotionConfig } from "framer-motion";
 import { StarkShell, useNow } from "@/components/stark/StarkShell";
 import { StarkPanel } from "@/components/stark/StarkPanel";
@@ -9,6 +9,7 @@ import { CommandBar } from "@/components/stark/CommandBar";
 import { readCity } from "@/components/stark/WeatherGlobe";
 import { useElementSize } from "@/hooks/useElementSize";
 import { groundTrack, nextPasses, propagate, type Pass } from "@/lib/orbit";
+import { canDrawWebgl, readOrbitalLook, writeOrbitalLook, type OrbitalLook } from "@/lib/spaceMath";
 import { agoMs, feedState, kpLevel, useIss, useSpace, useStations, type FeedState, type Station } from "@/lib/publicData";
 import { useEventStore } from "@/store/events";
 import { fill, useT } from "@/i18n";
@@ -28,6 +29,9 @@ import { cn } from "@/lib/utils";
  * A value a source did not give is "—"; a source that is down says so.
  */
 const ISS_ID = 25544;
+
+/** The realistic Earth carries three.js; it loads only when it is shown. */
+const SpaceEarth = lazy(() => import("@/components/stark/SpaceEarth"));
 
 export function OrbitalView() {
   const t = useT();
@@ -64,6 +68,12 @@ export function OrbitalView() {
   ];
   const mapPaths: MapPath[] = track.map((run, i) => ({ id: `iss-${i}`, points: run, tone: "hot", dashed: true }));
 
+  const [look, setLook] = useState<OrbitalLook>(readOrbitalLook);
+  const [failed, setFailed] = useState(() => !canDrawWebgl());
+  const [follow, setFollow] = useState(false);
+  const shownLook: OrbitalLook = failed ? "hud" : look;
+  const spaceTrack = useMemo(() => track.flat(), [track]);
+
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
   const halo = Math.max(260, Math.min(620, Math.min(stage.width, stage.height) - 8 || 460));
@@ -87,13 +97,46 @@ export function OrbitalView() {
             <PassesPanel el={issEl} city={city} now={now} />
           </div>
 
-          {/* CENTRE: the globe in its halo. */}
-          <div ref={stageRef} className="order-1 flex min-h-[24rem] items-center justify-center lg:order-none lg:min-h-0">
-            <ArcHalo size={halo} voiceState={voiceState} busy={false} context={null} title={t("stark.orbit.halo")}>
-              <div style={{ width: Math.round(halo * 0.74), height: Math.round(halo * 0.74) }}>
-                <OrbitGlobe markers={globeMarkers} facing={iss ? { lat: iss.lat!, lon: iss.lon! } : city} className="h-full w-full" />
+          {/* CENTRE: the Earth from space, or the HUD globe in its halo. */}
+          <div ref={stageRef} className="relative order-1 flex min-h-[24rem] items-center justify-center lg:order-none lg:min-h-0">
+            {shownLook === "realistic" ? (
+              <div className="stark-panel relative h-full min-h-[24rem] w-full overflow-hidden rounded-sm border border-primary/25 bg-[#01030a]">
+                <Suspense fallback={<p className="absolute inset-0 grid place-items-center text-xs uppercase tracking-[0.2em] text-muted-foreground">{t("stark.space.loading")}</p>}>
+                  <SpaceEarth
+                    iss={iss ? { lat: iss.lat!, lon: iss.lon!, alt_km: iss.alt_km ?? 420 } : null}
+                    stations={positions.map((p) => p.at)}
+                    track={spaceTrack}
+                    follow={follow}
+                    issLabel="ISS"
+                    label={t("stark.space.label")}
+                    onFail={(error) => {
+                      console.info("Realistic Earth unavailable; showing the HUD globe.", error);
+                      setFailed(true);
+                    }}
+                    className="absolute inset-0"
+                  />
+                </Suspense>
+                <div className="pointer-events-none absolute bottom-2 left-3 text-[10px] uppercase tracking-[0.18em] text-muted-foreground/80" data-testid="stark-space-note">
+                  {t("stark.orbit.approx")} · {t("stark.space.credit")}
+                </div>
               </div>
-            </ArcHalo>
+            ) : (
+              <ArcHalo size={halo} voiceState={voiceState} busy={false} context={null} title={t("stark.orbit.halo")}>
+                <div style={{ width: Math.round(halo * 0.74), height: Math.round(halo * 0.74) }}>
+                  <OrbitGlobe markers={globeMarkers} facing={iss ? { lat: iss.lat!, lon: iss.lon! } : city} className="h-full w-full" />
+                </div>
+              </ArcHalo>
+            )}
+            <LookSwitch
+              look={shownLook}
+              unavailable={failed}
+              follow={follow}
+              onLook={(next) => {
+                setLook(next);
+                writeOrbitalLook(next);
+              }}
+              onFollow={() => setFollow((f) => !f)}
+            />
           </div>
 
           {/* RIGHT: stations, space weather, near-Earth objects. */}
@@ -116,6 +159,69 @@ export function OrbitalView() {
         </div>
       </StarkShell>
     </MotionConfig>
+  );
+}
+
+/** Realistic / HUD, and following the ISS; sits over the centre of the screen. */
+function LookSwitch({
+  look,
+  unavailable,
+  follow,
+  onLook,
+  onFollow,
+}: {
+  look: OrbitalLook;
+  unavailable: boolean;
+  follow: boolean;
+  onLook: (look: OrbitalLook) => void;
+  onFollow: () => void;
+}) {
+  const t = useT();
+  const button = "px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+  const on = "bg-primary/20 text-primary";
+  const off = "text-muted-foreground hover:text-foreground";
+  return (
+    <div className="absolute right-2 top-2 z-10 flex flex-col items-end gap-1" data-testid="stark-orbital-look">
+      <div className="flex gap-1">
+        <div role="group" aria-label={t("stark.space.look")} className="flex border border-primary/30 bg-background/70 backdrop-blur-sm">
+          <button
+            type="button"
+            className={cn(button, look === "realistic" ? on : off)}
+            aria-pressed={look === "realistic"}
+            disabled={unavailable}
+            onClick={() => onLook("realistic")}
+            data-testid="stark-look-realistic"
+          >
+            {t("stark.space.realistic")}
+          </button>
+          <button
+            type="button"
+            className={cn(button, look === "hud" ? on : off)}
+            aria-pressed={look === "hud"}
+            onClick={() => onLook("hud")}
+            data-testid="stark-look-hud"
+          >
+            {t("stark.space.hud")}
+          </button>
+        </div>
+        {look === "realistic" && (
+          <button
+            type="button"
+            className={cn(button, "border border-primary/30 bg-background/70 backdrop-blur-sm", follow ? on : off)}
+            aria-pressed={follow}
+            onClick={onFollow}
+            data-testid="stark-look-follow"
+          >
+            {t("stark.space.follow")}
+          </button>
+        )}
+      </div>
+      {unavailable && (
+        <p className="max-w-[16rem] bg-background/70 px-2 py-1 text-right text-[10px] text-muted-foreground" data-testid="stark-space-unavailable">
+          {t("stark.space.unavailable")}
+        </p>
+      )}
+    </div>
   );
 }
 

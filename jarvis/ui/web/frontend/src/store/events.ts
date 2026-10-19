@@ -121,6 +121,12 @@ export type SectionId =
   // The HUD's Orbital screen: the ISS, crewed stations, space weather and
   // near-Earth objects, from free keyless feeds.
   | "orbital"
+  // The HUD's Live screen: news channels, city cameras and the public road
+  // cameras God's Eye View lists, all on one screen.
+  | "live-feeds"
+  // The HUD's Ghost screen: every public sensor at once (cameras, stations,
+  // incidents) on one fusion map.
+  | "ghost"
   // The HUD: the mission deck as a section of its own (it left the front
   // page on 2026-08-23) — the orb, the log, the memory map and the vitals.
   | "deck"
@@ -172,6 +178,8 @@ export const SECTION_IDS = [
   "world-intelligence",
   "intelligence",
   "orbital",
+  "live-feeds",
+  "ghost",
   "deck",
   "orb",
   "armory",
@@ -277,6 +285,8 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   "world-intelligence": "World Intelligence",
   intelligence: "Intelligence",
   orbital: "Orbital",
+  "live-feeds": "Live",
+  ghost: "Ghost",
 };
 
 export interface EventItem {

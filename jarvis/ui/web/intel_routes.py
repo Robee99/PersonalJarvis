@@ -9,6 +9,11 @@
     GET /api/intel/sources        → the sources, their terms and their status.
     GET /api/intel/live           → the live news channels and city cameras
                                     (``jarvis.intel.live``); static, no fetch.
+    GET /api/intel/live/now/{key} → the video a channel's live page points at
+                                    now (``live.now_playing``), or null.
+    GET /api/intel/cctv           → the public cameras God's Eye View lists
+                                    (``jarvis.intel.cctv``), by city.
+    GET /api/intel/cctv/health    → how many cameras GEV last served live.
 
 A request starts a refresh of the sources that are due. With nothing loaded
 yet it waits for the first answers (up to a few seconds); otherwise it answers
@@ -22,7 +27,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from jarvis.intel import live, query
+from jarvis.intel import cctv, live, query
 from jarvis.intel.service import shared_service
 
 router = APIRouter(prefix="/api/intel", tags=["intel"])
@@ -81,3 +86,20 @@ async def intel_sources() -> dict[str, Any]:
 @router.get("/live")
 def intel_live() -> dict[str, Any]:
     return live.catalog_json()
+
+
+@router.get("/live/now/{key}")
+async def intel_live_now(key: str) -> dict[str, Any]:
+    if len(key) > ID_MAX or live.by_key(key) is None:
+        raise HTTPException(status_code=404, detail="no such stream")
+    return {"key": key, "video": await live.now_playing(key)}
+
+
+@router.get("/cctv")
+async def intel_cctv() -> dict[str, Any]:
+    return await cctv.catalog()
+
+
+@router.get("/cctv/health")
+async def intel_cctv_health() -> dict[str, int]:
+    return await cctv.health()

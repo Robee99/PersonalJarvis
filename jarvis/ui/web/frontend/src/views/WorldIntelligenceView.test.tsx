@@ -361,9 +361,11 @@ describe("World incidents", () => {
     fireEvent.click(screen.getByTestId("incident-category-unrest"));
     expect(screen.getAllByTestId("incident-row")).toHaveLength(1);
     fireEvent.click(screen.getByTestId("incident-category-all"));
-    fireEvent.change(screen.getByTestId("incident-region"), { target: { value: "south-asia" } });
+    fireEvent.click(screen.getByTestId("incident-region"));
+    fireEvent.click(await screen.findByRole("option", { name: "South Asia" }));
     expect(screen.getAllByTestId("incident-row")).toHaveLength(1);
-    fireEvent.change(screen.getByTestId("incident-region"), { target: { value: "" } });
+    fireEvent.click(screen.getByTestId("incident-region"));
+    fireEvent.click(await screen.findByRole("option", { name: "All regions" }));
     fireEvent.click(screen.getByTestId("incident-evidence-measured"));
     expect(screen.getAllByTestId("incident-row")).toHaveLength(2);
     fireEvent.click(screen.getByTestId("incident-reset"));

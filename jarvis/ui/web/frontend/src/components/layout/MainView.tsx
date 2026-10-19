@@ -141,6 +141,12 @@ const IntelligenceView = lazyView(["intelligence"], () =>
 const OrbitalView = lazyView(["orbital"], () =>
   import("@/views/OrbitalView").then((m) => ({ default: m.OrbitalView })),
 );
+const LiveView = lazyView(["live-feeds"], () =>
+  import("@/views/LiveView").then((m) => ({ default: m.LiveView })),
+);
+const GhostView = lazyView(["ghost"], () =>
+  import("@/views/GhostView").then((m) => ({ default: m.GhostView })),
+);
 
 /** Quiet time before a loading section admits it is loading. */
 export const LOADING_HINT_MS = 400;
@@ -419,6 +425,10 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <IntelligenceView />;
     case "orbital":
       return <OrbitalView />;
+    case "live-feeds":
+      return <LiveView />;
+    case "ghost":
+      return <GhostView />;
     // Deliberately nothing: the coding workspace is rendered by the STICKY
     // branch in `MainView` above, which keeps it mounted across section
     // changes. This switch is not rendered at all while one of those ids is

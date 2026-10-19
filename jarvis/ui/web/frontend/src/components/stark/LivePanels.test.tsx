@@ -13,9 +13,11 @@ function stream(key: string, name: string, kind: "news" | "camera", group = "", 
 
 const CATALOG = {
   streams: [
-    stream("aljazeera", "Al Jazeera English", "news"),
-    stream("sky", "Sky News", "news"),
-    stream("euronews", "Euronews English", "news", "", "pykpO5kQJ98"),
+    stream("aljazeera", "Al Jazeera English", "news", "world"),
+    stream("sky", "Sky News", "news", "world"),
+    stream("euronews", "Euronews English", "news", "world", "pykpO5kQJ98"),
+    stream("ndtv", "NDTV 24x7", "news", "india"),
+    stream("wion", "WION", "news", "india"),
     stream("jerusalem", "Jerusalem", "camera", "middle-east", "LMHUcDktP-w"),
     stream("istanbul", "Istanbul", "camera", "middle-east"),
     stream("hk", "Hong Kong", "camera", "asia"),
@@ -24,6 +26,10 @@ const CATALOG = {
     stream("taipei", "Taipei", "camera", "asia"),
     stream("singapore", "Singapore", "camera", "asia"),
     stream("iss", "International Space Station", "camera", "space", "M3HKLzjvKPc"),
+  ],
+  news_groups: [
+    { id: "world", name: "World" },
+    { id: "india", name: "India" },
   ],
   groups: [
     { id: "middle-east", name: "Middle East" },
@@ -46,9 +52,14 @@ describe("live video panels", () => {
     useI18nStore.getState().setUi("en", { push: false });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) =>
-        String(input) === "/api/intel/live" ? new Response(JSON.stringify(CATALOG), { status: 200 }) : new Response("{}", { status: 404 }),
-      ),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/intel/live") return new Response(JSON.stringify(CATALOG), { status: 200 });
+        // Sky runs several streams at once; the backend names the one live now.
+        if (url === "/api/intel/live/now/sky") return new Response(JSON.stringify({ key: "sky", video: "SKYvideo123" }), { status: 200 });
+        if (url.startsWith("/api/intel/live/now/")) return new Response(JSON.stringify({ video: null }), { status: 200 });
+        return new Response("{}", { status: 404 });
+      }),
     );
     try {
       window.localStorage.removeItem("world.live.playAll");
@@ -84,8 +95,8 @@ describe("live video panels", () => {
     expect(frames()[0].dataset.stream).toBe("aljazeera");
     expect(frames()[0].src).toContain("autoplay=0");
     fireEvent.click(screen.getByTestId("stark-live-channel-sky"));
-    expect(frames()[0].dataset.stream).toBe("sky");
-    expect(frames()[0].src).toContain("autoplay=1");
+    await waitFor(() => expect(frames()[0]?.dataset.stream).toBe("sky"));
+    expect(frames()[0].src).toContain("/embed/SKYvideo123?autoplay=1");
     expect(frames()[0].src).toContain("mute=1");
   });
 
@@ -114,15 +125,27 @@ describe("live video panels", () => {
     expect(offline.querySelector("a")?.getAttribute("href")).toBe("https://www.youtube.com/channel/UCaljazeera/live");
   });
 
+  it("lists news by region and plays four channels at once on the wall", async () => {
+    render(<LiveNews />);
+    await waitFor(() => expect(frames()).toHaveLength(1));
+    expect(screen.queryByTestId("stark-live-channel-ndtv")).toBeNull();
+    fireEvent.click(screen.getByTestId("stark-live-news-group-india"));
+    fireEvent.click(screen.getByTestId("stark-live-channel-ndtv"));
+    await waitFor(() => expect(frames()[0]?.dataset.stream).toBe("ndtv"));
+    fireEvent.click(screen.getByTestId("stark-live-news-wall"));
+    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["ndtv", "wion"]));
+    expect(frames().every((f) => f.src.includes("autoplay=1") && f.src.includes("mute=1"))).toBe(true);
+  });
+
   it("shows four cameras of a region at a time and pages through the rest", async () => {
     render(<LiveCameras />);
     await waitFor(() => expect(frames()).toHaveLength(2));
     expect(frames().map((f) => f.dataset.stream)).toEqual(["jerusalem", "istanbul"]);
     expect(frames()[0].src).toContain("autoplay=0");
     fireEvent.click(screen.getByTestId("stark-live-group-asia"));
-    expect(frames().map((f) => f.dataset.stream)).toEqual(["hk", "tokyo", "seoul", "taipei"]);
+    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["hk", "tokyo", "seoul", "taipei"]));
     fireEvent.click(screen.getByTestId("stark-live-next"));
-    expect(frames().map((f) => f.dataset.stream)).toEqual(["singapore"]);
+    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["singapore"]));
   });
 
   it("plays every camera on request and remembers it", async () => {
@@ -137,10 +160,10 @@ describe("live video panels", () => {
     render(<LiveCameras />);
     await waitFor(() => expect(frames()).toHaveLength(2));
     fireEvent.click(screen.getByTestId("stark-live-expand-istanbul"));
-    expect(frames().map((f) => f.dataset.stream)).toEqual(["istanbul"]);
+    await waitFor(() => expect(frames().map((f) => f.dataset.stream)).toEqual(["istanbul"]));
     expect(frames()[0].src).toContain("autoplay=1");
     fireEvent.click(screen.getByTestId("stark-live-grid"));
-    expect(frames()).toHaveLength(2);
+    await waitFor(() => expect(frames()).toHaveLength(2));
     act(() => useIntelStore.getState().applyCommand({ action: "watch", stream: "iss" }));
     expect(frames().map((f) => f.dataset.stream)).toEqual(["iss"]);
     expect(screen.getByTestId("stark-live-group-space").getAttribute("aria-pressed")).toBe("true");

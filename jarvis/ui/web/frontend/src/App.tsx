@@ -68,7 +68,14 @@ import { HUD_SECTION_IDS } from "@/components/layout/navGroups";
 const NAV_COLLAPSED_KEY = "jarvis.sidebar.collapsed.v1";
 
 /** The HUD's Stark screens: each draws its own rail and its own state line. */
-const STARK_SECTIONS: readonly SectionId[] = [...HUD_SECTION_IDS, "intelligence", "orbital", "world-intelligence"];
+const STARK_SECTIONS: readonly SectionId[] = [
+  ...HUD_SECTION_IDS,
+  "intelligence",
+  "orbital",
+  "world-intelligence",
+  "live-feeds",
+  "ghost",
+];
 
 /** Sections that fill the whole window instead of sitting beside the nav. */
 const FULLSCREEN_SECTIONS: readonly SectionId[] = ["agents", "docs", "memory", ...STARK_SECTIONS];

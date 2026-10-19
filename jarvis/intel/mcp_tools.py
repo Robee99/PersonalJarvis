@@ -93,9 +93,10 @@ TOOLS: tuple[IntelTool, ...] = (
         "world_globe",
         "Change what the World screen shows: action 'focus' selects an incident (id) and flies "
         "the globe to it, 'filter' applies the given filters to the panel and globe, 'reset' "
-        "returns to the whole world with no filter, 'watch' plays a live news channel or city "
-        "camera (stream: a channel or city name, e.g. 'Al Jazeera', 'Sky News', 'Tokyo', "
-        "'space station'). Opens the World screen. Changes only the view.",
+        "returns to the whole world with no filter (these open the World screen). 'watch' "
+        "plays a live news channel or city camera on the Live screen (stream: a channel or "
+        "city name, e.g. 'Al Jazeera', 'BBC', 'NDTV', 'India Today', 'Tokyo', 'space "
+        "station'). Changes only the view.",
         {
             "type": "object",
             "properties": {
@@ -363,14 +364,16 @@ async def _globe(
         )
         what = "news channel" if stream.kind == "news" else "camera"
         summary = (
-            f"Playing the {stream.name} live {what} on the World screen (YouTube's player, "
+            f"Playing the {stream.name} live {what} on the Live screen (YouTube's player, "
             "muted until the person unmutes it)."
         )
     else:
         command = WorldIntelCommand(action="reset", source_layer="intel.world_globe")
         summary = "Returned the World screen to the whole globe with no filter."
+    # A stream plays on the Live screen; everything else is the World globe.
+    section = "live-feeds" if action == "watch" else "world-intelligence"
     delivered = await publish(
-        [NavigateSidebar(section="world-intelligence", source_layer="intel.world_globe"), command]
+        [NavigateSidebar(section=section, source_layer="intel.world_globe"), command]
     )
     if not delivered:
         return "The Jarvis window is not connected, so the screen could not be changed.", True
