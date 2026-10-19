@@ -471,6 +471,27 @@ def _media_offered(taken: set[str]) -> list[Any]:
     return [spec for spec in TOOLS if spec.name not in taken]
 
 
+def _intel_offered(taken: set[str]) -> list[Any]:
+    """The world incident tools (``jarvis/intel/mcp_tools.py``).
+
+    Answered in-process like the brain map: two read the incident store, and
+    ``world_globe`` only changes what the World screen shows (no file, no
+    message, nothing sent anywhere). Offered to the same callers as the brain
+    map: an ordinary chat session and Hermes. A gateway tool of the same name
+    always wins.
+    """
+    from jarvis.core.task_agent import scope_for
+
+    session_id = CHAT_SESSION_REF.get()
+    if session_id and session_id.startswith(("task-", "society:")):
+        return []
+    if session_id and scope_for(session_id) is not None:
+        return []
+    from jarvis.intel.mcp_tools import TOOLS
+
+    return [spec for spec in TOOLS if spec.name not in taken]
+
+
 def build_server() -> Any:
     """A low-level MCP server bound to the live tool gateway.
 
@@ -527,6 +548,19 @@ def build_server() -> Any:
                     ),
                 )
             )
+        for spec in _intel_offered({tool.name for tool in tools}):
+            tools.append(
+                types.Tool(
+                    name=spec.name,
+                    description=spec.description,
+                    inputSchema=spec.input_schema,
+                    annotations=types.ToolAnnotations(
+                        readOnlyHint=spec.name != "world_globe",
+                        destructiveHint=False,
+                        openWorldHint=True,
+                    ),
+                )
+            )
         return tools
 
     @server.call_tool()  # type: ignore[misc, no-untyped-call]
@@ -567,6 +601,21 @@ def build_server() -> Any:
                     )
             except Exception as exc:  # noqa: BLE001 — a media failure is data for the model, not a crash
                 log.warning("jarvis MCP: media tool %s raised", name, exc_info=True)
+                return failed(f"Tool failed: {type(exc).__name__}")
+        from jarvis.intel.mcp_tools import TOOL_NAMES as intel_names
+
+        if name in intel_names:
+            try:
+                taken = set((await _session_wire_catalog()).keys())
+                if any(spec.name == name for spec in _intel_offered(taken)):
+                    from jarvis.intel.mcp_tools import call as intel_call
+
+                    text, is_error = await intel_call(name, arguments)
+                    return types.CallToolResult(
+                        content=[types.TextContent(type="text", text=text)], isError=is_error
+                    )
+            except Exception as exc:  # noqa: BLE001 — a feed failure is data for the model, not a crash
+                log.warning("jarvis MCP: intel tool %s raised", name, exc_info=True)
                 return failed(f"Tool failed: {type(exc).__name__}")
         gateway = _gateway()
         if gateway is None:

@@ -211,6 +211,11 @@ HERMES_JARVIS_TOOLS: tuple[str, ...] = (
     "media-describe-image",
     "media-transcribe-audio",
     "media-understand-video",
+    # World incidents from open public feeds (jarvis/intel): list, open one
+    # with its sources, and point the World screen's globe at it.
+    "world_incidents",
+    "world_incident",
+    "world_globe",
 )
 #: The name of the ``.env`` variable that carries Jarvis's control key.
 CONTROL_KEY_ENV = "JARVIS_CONTROL_KEY"

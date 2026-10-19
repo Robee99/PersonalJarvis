@@ -881,6 +881,34 @@ class NavigateSidebar(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class WorldIntelCommand(Event):
+    """Ask the World screen to change what its incident panel and globe show.
+
+    Published by the ``world_globe`` tool (``jarvis/intel/mcp_tools.py``)
+    right after a ``NavigateSidebar("world-intelligence")``. The frontend
+    (``useWebSocket.ts``) hands it to the shared intel store, so the panel and
+    whichever globe is showing change together.
+
+    ``action`` is ``focus`` (select ``event_id`` and fly to it), ``filter``
+    (replace the filters; empty fields clear theirs) or ``reset`` (no filter,
+    no selection, the whole globe).
+    """
+    action: str = ""
+    event_id: str = ""
+    hours: float = 0.0
+    #: Comma-separated kinds ("earthquake,cyclone"), or "" for all.
+    kinds: str = ""
+    #: "hazard", "unrest" or "".
+    category: str = ""
+    #: A region id from ``jarvis.intel.query.REGIONS``, or "".
+    region: str = ""
+    #: 0..4, or -1 for no minimum.
+    min_severity: int = -1
+    #: Comma-separated evidence classes, or "" for all.
+    evidence: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class DetachedViewOpened(Event):
     """A section now lives in its own detached desktop window.
 
