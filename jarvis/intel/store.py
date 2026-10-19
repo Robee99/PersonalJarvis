@@ -13,6 +13,7 @@ their own evidence, each listing the other under ``related``.
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Iterable
 from typing import Any
@@ -40,11 +41,13 @@ def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _storm_name(event: IntelEvent) -> str | None:
-    words = [w.strip("-,.").lower() for w in event.title.split()]
+    # GDACS appends the season ("CHAMPI-26"); EONET and NHC do not.
+    words = [_SEASON.sub("", w.strip("-,.")).lower() for w in event.title.split()]
     named = [w for w in words if w and w not in _STORM_WORDS and not w.isdigit()]
     return named[-1] if named else None
 
 
+_SEASON = re.compile(r"-\d{2}$")
 _STORM_WORDS = {
     "tropical",
     "storm",

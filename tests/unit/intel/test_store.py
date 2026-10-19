@@ -75,6 +75,24 @@ def test_usgs_and_gdacs_reports_of_one_quake_are_linked_not_merged() -> None:
     assert record["evidence"] == "agency" and record["related"]
 
 
+def test_gdacs_and_eonet_reports_of_one_cyclone_are_linked() -> None:
+    # Real titles from 2026-10-19: GDACS adds the season, EONET does not.
+    store = IntelStore()
+    store.replace_source("gdacs", parsers.parse_gdacs(samples.GDACS))
+    eonet = IntelEvent(
+        id="eonet:EONET_25339",
+        source="eonet",
+        kind=Kind.CYCLONE,
+        title="Super Typhoon Champi",
+        evidence=Evidence.AGENCY,
+        occurred_at=1,
+        lat=14.0,
+        lon=139.2,
+    )
+    store.replace_source("eonet", [eonet])
+    assert store.related("eonet:EONET_25339") == ["gdacs:TC-1001338"]
+
+
 def test_cap_keeps_the_most_severe_then_newest() -> None:
     store = IntelStore(cap=3)
     events = [_quake(1, 4, at=1), _quake(2, None, at=9), _quake(3, 1, at=5), _quake(4, 1, at=7)]
