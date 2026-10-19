@@ -20,7 +20,20 @@ export interface OrbitMarker {
   lat: number;
   lon: number;
   size: number;
-  kind: "iss" | "station" | "track" | "home" | "quake" | "quake_high" | "event";
+  kind:
+    | "iss"
+    | "station"
+    | "track"
+    | "home"
+    | "quake"
+    | "quake_high"
+    | "event"
+    | "incident"
+    | "incident_high"
+    | "incident_media"
+    | "selected";
+  /** Markers with an id can be picked with a click (`onPick`). */
+  id?: string;
 }
 
 const COLOURS: Record<OrbitMarker["kind"], [number, number, number]> = {
@@ -31,6 +44,10 @@ const COLOURS: Record<OrbitMarker["kind"], [number, number, number]> = {
   quake: [1, 0.72, 0.25],
   quake_high: [1, 0.3, 0.25],
   event: [1, 0.85, 0.35],
+  incident: [1, 0.78, 0.3],
+  incident_high: [1, 0.28, 0.22],
+  incident_media: [0.78, 0.58, 1],
+  selected: [1, 1, 1],
 };
 
 /** A point to turn the globe to; a new `seq` turns it again to the same point. */
@@ -50,6 +67,38 @@ export function anglesFor(lat: number, lon: number): { phi: number; theta: numbe
   };
 }
 
+/**
+ * Where a point on the globe is drawn, as fractions of the canvas (0..1 from
+ * the left and top), and whether it is on the near side. The same rotation
+ * and radius the renderer (cobe 2) uses for its markers.
+ */
+export function projectPoint(
+  lat: number,
+  lon: number,
+  phi: number,
+  theta: number,
+  scale: number,
+  elevation: number,
+): { x: number; y: number; visible: boolean } {
+  const la = (lat * Math.PI) / 180;
+  const lo = (lon * Math.PI) / 180 - Math.PI;
+  const r = 0.8 + elevation;
+  const px = -Math.cos(la) * Math.cos(lo) * r;
+  const py = Math.sin(la) * r;
+  const pz = Math.cos(la) * Math.sin(lo) * r;
+  const cp = Math.cos(phi);
+  const sp = Math.sin(phi);
+  const ct = Math.cos(theta);
+  const st = Math.sin(theta);
+  const x = cp * px + sp * pz;
+  const y = sp * st * px + ct * py - cp * st * pz;
+  const depth = -sp * ct * px + st * py + cp * ct * pz;
+  return { x: (x * scale + 1) / 2, y: (-y * scale + 1) / 2, visible: depth >= 0 || x * x + y * y >= 0.64 };
+}
+
+/** How near (in CSS pixels) a click must land to pick a marker. */
+export const PICK_RADIUS_PX = 14;
+
 /** The shortest way round from one turn to another, in (-π, π]. */
 function shortest(from: number, to: number): number {
   const d = (to - from) % (2 * Math.PI);
@@ -65,6 +114,7 @@ export function OrbitGlobe({
   interactive = false,
   elevation = 0.06,
   label,
+  onPick,
   className,
 }: {
   markers: OrbitMarker[];
@@ -79,6 +129,8 @@ export function OrbitGlobe({
   elevation?: number;
   /** What a screen reader hears for an interactive globe. */
   label?: string;
+  /** A click (not a drag) near a marker with an id picks it. */
+  onPick?: (id: string) => void;
   className?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -89,7 +141,7 @@ export function OrbitGlobe({
   const live = useRef({ markers, spin, scale, target });
   live.current = { markers, spin, scale, target };
   // The view itself lives outside React: dragging must not re-render.
-  const view = useRef({ phi: 0, theta: 0.25, goal: null as { phi: number; theta: number } | null, seq: -1, drag: null as { x: number; y: number } | null });
+  const view = useRef({ phi: 0, theta: 0.25, goal: null as { phi: number; theta: number } | null, seq: -1, drag: null as { x: number; y: number } | null, travel: 0 });
   const hasFacing = facing !== null;
 
   useEffect(() => {
@@ -174,6 +226,24 @@ export function OrbitGlobe({
     };
   }, [generation]);
 
+  /** The id of the nearest visible marker under a click, if one is close enough. */
+  const pickAt = (box: DOMRect, cx: number, cy: number): string | null => {
+    const v = view.current;
+    const size = Math.min(box.width, box.height);
+    if (!size) return null;
+    const left = box.left + (box.width - size) / 2;
+    const top = box.top + (box.height - size) / 2;
+    let best: { id: string; d: number } | null = null;
+    for (const m of live.current.markers) {
+      if (!m.id) continue;
+      const p = projectPoint(m.lat, m.lon, v.phi, v.theta, live.current.scale, elevation);
+      if (!p.visible) continue;
+      const d = Math.hypot(left + p.x * size - cx, top + p.y * size - cy);
+      if (d <= PICK_RADIUS_PX && (!best || d < best.d)) best = { id: m.id, d };
+    }
+    return best?.id ?? null;
+  };
+
   const turn = (dPhi: number, dTheta: number) => {
     const v = view.current;
     v.goal = null;
@@ -194,17 +264,24 @@ export function OrbitGlobe({
             tabIndex: 0,
             onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
               view.current.drag = { x: e.clientX, y: e.clientY };
+              view.current.travel = 0;
               view.current.goal = null;
               e.currentTarget.setPointerCapture?.(e.pointerId);
             },
             onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
               const d = view.current.drag;
               if (!d) return;
+              view.current.travel += Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y);
               turn((e.clientX - d.x) * 0.006, (e.clientY - d.y) * 0.006);
               view.current.drag = { x: e.clientX, y: e.clientY };
             },
-            onPointerUp: () => {
+            onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+              const clicked = view.current.drag !== null && view.current.travel < 5;
               view.current.drag = null;
+              if (clicked && onPick) {
+                const id = pickAt(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY);
+                if (id) onPick(id);
+              }
             },
             onPointerCancel: () => {
               view.current.drag = null;

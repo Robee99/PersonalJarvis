@@ -39,6 +39,7 @@ import { announceDictationSettings } from "@/hooks/usePromptMode";
 import { petKeys } from "@/hooks/usePets";
 import { focusChatComposer, startNewTextChat } from "@/lib/newChat";
 import { SPEAKER_MUTE_EVENT } from "@/lib/speakerMute";
+import { useIntelStore } from "@/store/intel";
 
 let singleton: WSClient | null = null;
 
@@ -483,6 +484,13 @@ export function useWebSocket(): void {
               }
             }
           }
+        }
+
+        if (env.event_name === "WorldIntelCommand") {
+          // The assistant pointed the World screen at an incident, a filter
+          // or the whole globe (world_globe tool); the NavigateSidebar that
+          // precedes it has already opened the screen.
+          useIntelStore.getState().applyCommand(env.payload);
         }
 
         if (env.event_name === "NavigateSidebar") {
