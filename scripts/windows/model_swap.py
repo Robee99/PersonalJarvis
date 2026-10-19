@@ -73,6 +73,51 @@ MODEL_ID = {
 }
 #: The context window each profile is started with (its -c / --ctx-size).
 CTX = {GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384}
+#: Windows the main brain may be restarted with from the JARVIS context slider.
+#: Up to 65536 every layer and the KV cache fit in this 8 GB card. Above it
+#: (owner's request 2026-10-19, untested) layers move to the CPU to make room
+#: for the KV cache: prompts get slower and the moved layers need RAM.
+CTX_CHOICES = {QWEN_VL: (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072)}
+#: GPU layers per window above 65536 (Qwen3-VL 8B has 36; ~115 MB each and the
+#: turbo KV is ~34.5 KB per token, so 32k more tokens displace ~10 layers).
+QWEN_VL_NGL = {98304: 26, 131072: 16}
+QWEN_VL_LAYER_MIB = 115
+
+
+def qwen_vl_cpu_layer_mib() -> int:
+    """RAM the layers moved off the GPU take at the current window."""
+    return (36 - QWEN_VL_NGL.get(CTX[QWEN_VL], 36)) * QWEN_VL_LAYER_MIB
+
+
+#: At or below this window the vision encoder (mmproj, ~1.1 GB) fits in VRAM
+#: next to the KV cache, so screenshots are read on the GPU instead of the CPU.
+VISION_GPU_MAX_CTX = 32768
+SETTINGS = Path(r"C:\models\swap-settings.json")
+
+
+def _load_settings() -> None:
+    import json
+
+    if not SETTINGS.is_file():
+        return
+    try:
+        saved = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logging.getLogger("model-swap").warning("swap settings unreadable, using defaults: %s", exc)
+        return
+    for profile, value in (saved.get("ctx") or {}).items():
+        if value in CTX_CHOICES.get(profile, ()):
+            CTX[profile] = int(value)
+
+
+def _save_settings() -> None:
+    import json
+
+    SETTINGS.write_text(
+        json.dumps({"ctx": {p: CTX[p] for p in CTX_CHOICES}}, indent=2), encoding="utf-8"
+    )
+
+
 #: Where a finished completion reports its size: llama-server's timings
 #: (cache_n + prompt_n + predicted_n), or the OpenAI usage block.
 _TIMINGS_RE = re.compile(
@@ -94,6 +139,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger("model-swap")
+_load_settings()
 
 
 class _MemStatus(ctypes.Structure):
@@ -186,6 +232,8 @@ class Swapper:
         self.session: aiohttp.ClientSession | None = None
         #: The newest agent turn's context fill, for the HUD's context meter.
         self.context: dict[str, object] | None = None
+        #: Set when the vision encoder did not fit in VRAM at a small window.
+        self.vision_gpu_failed = False
 
     async def healthy(self, name: str) -> bool:
         assert self.session is not None
@@ -202,6 +250,13 @@ class Swapper:
         while time.monotonic() < deadline:
             if await self.healthy(name):
                 return
+            proc = {
+                GEMMA: self.gemma_proc,
+                QWEN_VL: self.qwen_vl_proc,
+                UI_VENUS: self.ui_venus_proc,
+            }.get(name)
+            if proc is not None and proc.poll() is not None:
+                raise RuntimeError(f"{name} exited with code {proc.returncode} while loading")
             await asyncio.sleep(1.0)
         raise RuntimeError(f"{name} did not become ready in {LOAD_TIMEOUT_S:.0f}s")
 
@@ -298,16 +353,17 @@ class Swapper:
             "--port",
             str(BACK[QWEN_VL]),
             "-c",
-            "65536",
+            str(CTX[QWEN_VL]),
             "-np",
             "1",
             "-fa",
             "on",
-            # All layers + 64k turbo3 KV on the GPU; --fit put layers on the
-            # CPU (36 tok/s prompt). mmproj on CPU keeps the KV in 8 GB VRAM.
+            # All layers + the turbo KV on the GPU; --fit put layers on the
+            # CPU (36 tok/s prompt). Above VISION_GPU_MAX_CTX the mmproj stays on
+            # the CPU so the 64k KV fits in 8 GB VRAM (~22 s per screenshot).
             "-ngl",
-            "99",
-            "--no-mmproj-offload",
+            str(QWEN_VL_NGL.get(CTX[QWEN_VL], 99)),
+            *([] if self.vision_on_gpu() else ["--no-mmproj-offload"]),
             # All layers live in VRAM; without mmap the 4.4 GB file is not
             # kept in RAM after the upload.
             "--no-mmap",
@@ -340,6 +396,9 @@ class Swapper:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+
+    def vision_on_gpu(self) -> bool:
+        return CTX[QWEN_VL] <= VISION_GPU_MAX_CTX and not self.vision_gpu_failed
 
     def stop_qwen_vl(self) -> None:
         if self.qwen_vl_proc and self.qwen_vl_proc.poll() is None:
@@ -498,6 +557,76 @@ class Swapper:
             self.active = name
             log.info("swap done: %s ready in %.1fs", name, time.monotonic() - started)
 
+    async def restart(self, name: str, ctx: int | None = None) -> dict:
+        """Reload ``name`` (optionally with a new window); roll back on failure."""
+        async with self.lock:
+            while any(self.inflight.values()):  # noqa: ASYNC110
+                await asyncio.sleep(0.5)
+            previous = CTX[name]
+            if ctx is not None:
+                CTX[name] = ctx
+            if name == QWEN_VL:
+                # The same RAM guard as a swap, plus RAM for layers moved to the CPU.
+                needed = QWEN_VL_RAM_NEEDED_MIB + qwen_vl_cpu_layer_mib()
+                freed = _working_set_mib(BACK[self.active]) if self.active in BACK else 0
+                projected = available_mib() + freed
+                if projected < needed:
+                    CTX[name] = previous
+                    raise MemoryError(
+                        f"Qwen3-VL at {ctx or previous} tokens needs {needed} MiB free RAM; "
+                        f"only about {projected} MiB would be free. Kept {previous}."
+                    )
+            self.vision_gpu_failed = False
+            attempts = [CTX[name]]
+            if ctx is not None and ctx != previous:
+                attempts.append(previous)
+            last_error: Exception | None = None
+            for window in attempts:
+                CTX[name] = window
+                for _ in range(2):
+                    started = time.monotonic()
+                    log.info(
+                        "restart %s with ctx %s (vision on %s)",
+                        name,
+                        window,
+                        "GPU" if name == QWEN_VL and self.vision_on_gpu() else "CPU",
+                    )
+                    for profile in FRONT:
+                        await asyncio.to_thread(self.stop_profile, profile)
+                    self.active = None
+                    await asyncio.to_thread(self.start_profile, name)
+                    try:
+                        await self.wait_ready(name)
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+                        log.warning("restart %s ctx %s failed: %s", name, window, exc)
+                        await asyncio.to_thread(self.stop_profile, name)
+                        # The vision encoder may not fit in VRAM: retry with it on the CPU.
+                        if name == QWEN_VL and self.vision_on_gpu():
+                            self.vision_gpu_failed = True
+                            continue
+                        break
+                    self.active = name
+                    if self.context and self.context.get("profile") == name:
+                        self.context["window"] = window
+                    _save_settings()
+                    log.info("restart done: %s ready in %.1fs", name, time.monotonic() - started)
+                    return {
+                        "ok": ctx is None or window == ctx,
+                        "profile": name,
+                        "window": window,
+                        "requested": ctx if ctx is not None else window,
+                        "vision_on_gpu": name == QWEN_VL and self.vision_on_gpu(),
+                        "seconds": round(time.monotonic() - started, 1),
+                        **(
+                            {"error": f"{ctx} did not load ({last_error}); kept {window}"}
+                            if ctx is not None and window != ctx
+                            else {}
+                        ),
+                    }
+            CTX[name] = previous
+            raise RuntimeError(f"{name} did not come back: {last_error}")
+
     async def idle_loop(self) -> None:
         tick = 0
         while True:
@@ -630,8 +759,35 @@ def handler_for(name: str):
                     "active": swapper.active,
                     "inflight": swapper.inflight,
                     "context": swapper.context,
+                    "main": MAIN,
+                    "window": CTX[MAIN],
+                    "choices": list(CTX_CHOICES.get(MAIN, ())),
+                    "vision_on_gpu": swapper.vision_on_gpu(),
+                    "vision_gpu_max_ctx": VISION_GPU_MAX_CTX,
                 }
             )
+        if request.method == "POST" and path in ("swap/context", "swap/reload"):
+            try:
+                payload = await request.json() if request.can_read_body else {}
+            except ValueError:
+                return web.json_response({"error": "body must be JSON"}, status=400)
+            ctx = None
+            if path == "swap/context":
+                ctx = payload.get("ctx")
+                if ctx not in CTX_CHOICES.get(MAIN, ()):
+                    return web.json_response(
+                        {"error": f"ctx must be one of {list(CTX_CHOICES.get(MAIN, ()))}"},
+                        status=400,
+                    )
+            try:
+                result = await swapper.restart(MAIN, ctx)
+            except MemoryError as exc:
+                log.warning("restart of %s refused: %s", MAIN, exc)
+                return web.json_response({"ok": False, "error": str(exc)}, status=409)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("restart of %s failed", MAIN)
+                return web.json_response({"ok": False, "error": str(exc)}, status=503)
+            return web.json_response(result, status=200 if result["ok"] else 409)
         try:
             await swapper.ensure(name)
         except MemoryError as exc:

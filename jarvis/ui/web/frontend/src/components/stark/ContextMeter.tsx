@@ -3,8 +3,18 @@ import { StarkPanel } from "@/components/stark/StarkPanel";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
+/** What the context slider offers: the loaded window and the sizes it may pick. */
+export interface DeckContextSettings {
+  loaded: number | null;
+  choices: number[];
+  vision_on_gpu: boolean;
+  vision_gpu_max?: number | null;
+  busy?: boolean;
+}
+
 export interface DeckContext {
   available: boolean;
+  settings?: DeckContextSettings;
   used?: number;
   window?: number;
   model?: string;

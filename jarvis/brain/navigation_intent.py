@@ -85,7 +85,7 @@ _SENTENCE_BREAK = re.compile(r"[.!?;]")
 # Matching *input vocabulary*, not prose.
 _FOREIGN_OWNERS = frozenset(
     {
-        "windows", "system", "pc", "computer", "laptop", "chrome", "browser",
+        "windows", "window", "system", "pc", "computer", "laptop", "chrome", "browser",
         "edge", "firefox", "phone", "device", "bluetooth", "wifi", "display",
         "sound", "network", "camera", "mic", "microphone", "steam", "discord",
         "spotify", "whatsapp", "telegram", "youtube", "instagram", "google",

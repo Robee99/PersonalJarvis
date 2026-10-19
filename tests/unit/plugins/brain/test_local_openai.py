@@ -195,6 +195,28 @@ def test_vision_believes_a_server_that_declares_image_input(monkeypatch) -> None
     assert LocalOpenAIBrain(model="Qwen/Qwen3-VL-8B").supports_vision is True
 
 
+def test_vision_reads_a_vision_model_name_when_the_server_declares_nothing(monkeypatch) -> None:
+    """llama-server lists no modalities, so the model's own name is the only
+    evidence it offers; a released vision family is served with its encoder."""
+    import jarvis.brain.model_catalog as mc
+
+    monkeypatch.setattr(
+        mc, "model_capabilities", lambda provider, model: {"vision": None, "tools": None}
+    )
+    assert LocalOpenAIBrain(model="qwen3-vl-8b").supports_vision is True
+    assert LocalOpenAIBrain(model="gemma-3-12b-it").supports_vision is True
+    assert LocalOpenAIBrain(model="qwen3-8b").supports_vision is False
+
+
+def test_a_server_that_declares_text_only_outranks_the_name(monkeypatch) -> None:
+    import jarvis.brain.model_catalog as mc
+
+    monkeypatch.setattr(
+        mc, "model_capabilities", lambda provider, model: {"vision": False, "tools": True}
+    )
+    assert LocalOpenAIBrain(model="qwen3-vl-8b").supports_vision is False
+
+
 # ── Protocol surface ─────────────────────────────────────────────────────
 def test_capability_flags_and_cost() -> None:
     brain = LocalOpenAIBrain(model="x")
@@ -292,3 +314,98 @@ async def test_no_think_turn_is_sent_only_to_a_declaring_server(monkeypatch) -> 
     assert await _sent_extra_body(monkeypatch, switch=True, effort="none") == off
     assert await _sent_extra_body(monkeypatch, switch=True, effort=None) is None
     assert await _sent_extra_body(monkeypatch, switch=False, effort="none") is None
+
+
+# ── A schema the server cannot turn into a grammar ───────────────────────
+_HOSTILE_TOOL = {
+    "name": "fly_to",
+    "description": "Fly the globe to a place.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "place": {"type": "string", "pattern": "^(?!\\s)[\\p{L} ]+$", "description": "A city"},
+            "url": {"type": "string", "format": "uri"},
+        },
+        "required": ["place"],
+    },
+}
+
+
+async def _run_with_server(monkeypatch, refusals: int) -> tuple[list[Any], list[str]]:
+    import jarvis.plugins.brain.local_openai as mod
+    from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest
+
+    seen: list[Any] = []
+
+    async def fake_stream(client, model, req, *, extra_body=None, supports_vision=True):
+        seen.append(req.tools[0]["input_schema"])
+        if len(seen) <= refusals:
+            raise RuntimeError(
+                "Error code: 400 - {'error': {'code': 400, 'message': 'Failed to "
+                "initialize samplers: failed to parse grammar'}}"
+            )
+        yield BrainDelta(content="ok")
+
+    monkeypatch.setattr(mod, "stream_complete", fake_stream)
+    brain = LocalOpenAIBrain(model="qwen3-vl-8b")
+    brain._client = object()
+    req = BrainRequest(messages=(BrainMessage(role="user", content="hi"),), tools=(_HOSTILE_TOOL,))
+    texts = [d.content async for d in brain.complete(req)]
+    return seen, texts
+
+
+async def test_a_grammar_refusal_is_retried_with_plain_schemas(monkeypatch) -> None:
+    seen, texts = await _run_with_server(monkeypatch, refusals=1)
+    assert texts == ["ok"]
+    assert "pattern" in seen[0]["properties"]["place"]
+    plain = seen[1]["properties"]
+    assert "pattern" not in plain["place"] and "format" not in plain["url"]
+    assert plain["place"]["description"] == "A city"
+    assert seen[1]["required"] == ["place"]
+
+
+async def test_a_second_refusal_sends_open_schemas_with_the_same_argument_names(
+    monkeypatch,
+) -> None:
+    seen, texts = await _run_with_server(monkeypatch, refusals=2)
+    assert texts == ["ok"]
+    assert seen[2] == {
+        "type": "object",
+        "properties": {"place": {"description": "A city"}, "url": {"description": ""}},
+    }
+
+
+async def test_a_refusal_that_is_not_about_the_grammar_is_not_retried(monkeypatch) -> None:
+    import pytest
+
+    import jarvis.plugins.brain.local_openai as mod
+    from jarvis.core.protocols import BrainMessage, BrainRequest
+
+    calls = 0
+
+    async def fake_stream(client, model, req, *, extra_body=None, supports_vision=True):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("Error code: 400 - exceeds the available context size")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(mod, "stream_complete", fake_stream)
+    brain = LocalOpenAIBrain(model="qwen3-vl-8b")
+    brain._client = object()
+    req = BrainRequest(messages=(BrainMessage(role="user", content="hi"),), tools=(_HOSTILE_TOOL,))
+    with pytest.raises(RuntimeError, match="context size"):
+        async for _ in brain.complete(req):
+            pass
+    assert calls == 1
+
+
+def test_the_window_follows_the_model_swapper(monkeypatch):
+    from jarvis.brain import swap_context
+
+    monkeypatch.setattr(swap_context, "_live", {})
+    brain = LocalOpenAIBrain("qwen3-vl-8b")
+    brain.context_window = 65536
+    brain._server_root = "http://127.0.0.1:11440"
+    assert brain.context_window == 65536
+    swap_context.remember_window("http://127.0.0.1:11440", 32768)
+    assert brain.context_window == 32768

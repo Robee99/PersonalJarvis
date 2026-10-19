@@ -36,7 +36,9 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -157,6 +159,13 @@ _ART_TRACK_SUFFIX = " - Topic"
 # seen.
 _CONFIRM_TIMEOUT_S = 3.5
 _CONFIRM_STEP_S = 0.5
+
+
+#: YouTube's public results page: what a person sees when they search without
+#: signing in. Read only when the plugin is not connected, to start one song.
+_PUBLIC_SEARCH = "https://www.youtube.com/results"
+_PUBLIC_VIDEO_ID = re.compile(r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"')
+_PUBLIC_TITLE = re.compile(r'"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"')
 
 
 def song_url(video_id: str) -> str:
@@ -324,7 +333,9 @@ class YouTubeMusicRestTool:
         "like, add_to_playlist, create_playlist, open (show the player), "
         "hide_player, set_volume. Music plays in a background player window "
         "(or the browser, per the Settings), so 'set_volume' works there. "
-        "Requires the YouTube Music plugin to be connected in the Plugins view."
+        "'play' of a song, artist or album works without the plugin too: it "
+        "starts the top YouTube result. Everything else needs the YouTube Music "
+        "plugin connected in the Plugins view."
     )
 
     @property
@@ -1075,7 +1086,58 @@ class YouTubeMusicRestTool:
                 started["note"] = "Started the artist's top song; the radio continues with them."
             return await self._start_playback(started["url"], started)
 
+        if kind in ("song", "artist", "album") and self._bearer() is None:
+            return await self._play_public(query, kind)
         return await self._with_auth_retry(_do)
+
+    async def _play_public(self, query: str, kind: str) -> dict[str, Any]:
+        """Start the top YouTube result for ``query`` without an account.
+
+        "Play X" is the request people make first, usually before connecting
+        anything (live 2026-10-19: "play praise the lord by asap rocky on yt"
+        answered "YouTube Music is not connected"). The public results page
+        names the same videos the Data API would; the song then opens as its
+        own radio like any other. Playlists, likes and the rest still need the
+        plugin, because they are the user's own data.
+        """
+        try:
+            resp = await self._pool.client().get(
+                _PUBLIC_SEARCH,
+                params={"search_query": query},
+                headers={
+                    "Accept-Language": "en-US,en;q=0.8",
+                    "Cookie": "CONSENT=YES+1",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                },
+                follow_redirects=True,
+            )
+            resp.raise_for_status()
+            page = resp.text
+        except Exception as exc:  # noqa: BLE001 — offline or refused: say what is missing
+            log.info("youtube_music: public search for %r failed: %s", query, exc)
+            return {"error": _NOT_CONNECTED}
+        found = _PUBLIC_VIDEO_ID.search(page)
+        if found is None:
+            return {"error": f"YouTube has nothing called {query!r}."}
+        video_id = found.group(1)
+        title_match = _PUBLIC_TITLE.search(page, found.end())
+        try:
+            title = json.loads(f'"{title_match.group(1)}"') if title_match else query
+        except ValueError:
+            title = query
+        started = {
+            "type": "song",
+            "title": _clean(title),
+            "video_id": video_id,
+            "url": song_url(video_id),
+            "note": (
+                "Played the top YouTube result; connect YouTube Music in the "
+                "Plugins view for your playlists and likes."
+            ),
+        }
+        if kind == "artist":
+            started["note"] = "Started the top YouTube result; the radio continues with the artist."
+        return await self._start_playback(started["url"], started)
 
     async def _open_browser_home(self) -> dict[str, Any]:
         opened = self._opener(HOME_URL)

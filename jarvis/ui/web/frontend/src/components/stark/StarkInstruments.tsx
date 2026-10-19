@@ -18,6 +18,7 @@ import type { LucideIcon } from "lucide-react";
 import { fetchVitals, type Vitals } from "@/components/deck/DeckSignalCards";
 import { RingGauge, StarkPanel } from "@/components/stark/StarkPanel";
 import { fmtK, METER_MAX, useDeckContext } from "@/components/stark/ContextMeter";
+import { ContextControls } from "@/components/stark/ContextControls";
 import { useEventStore, type SectionId } from "@/store/events";
 import { useDeckStore } from "@/store/deck";
 import { fill, useT } from "@/i18n";
@@ -344,6 +345,7 @@ function ContextRow() {
           </>
         )}
       </div>
+      {ctx?.settings && <ContextControls settings={ctx.settings} />}
     </div>
   );
 }

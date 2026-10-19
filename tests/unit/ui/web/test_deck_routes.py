@@ -146,6 +146,13 @@ def test_context_meter_reads_the_swapper(client: TestClient, monkeypatch: pytest
         "model": "qwen3-vl-8b",
         "at": 1.0,
         "compress_at": 56000,
+        "settings": {
+            "loaded": None,
+            "choices": [],
+            "vision_on_gpu": False,
+            "vision_gpu_max": None,
+            "busy": False,
+        },
     }
 
 
@@ -162,6 +169,147 @@ def test_context_meter_without_a_swapper_says_so(
         httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(refuse), **kw)
     )
     assert client.get("/api/deck/context").json() == {"available": False}
+
+
+class FakeSwapper:
+    """The model swapper's HTTP surface: status, and restarts that roll back."""
+
+    def __init__(self, *, loads: bool = True) -> None:
+        self.window = 65536
+        self.loads = loads
+        self.posts: list[tuple[str, dict]] = []
+
+    def __call__(self, request):
+        import json as _json
+
+        import httpx
+
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "active": "qwen3-vl",
+                    "inflight": {"qwen3-vl": 0},
+                    "context": None,
+                    "window": self.window,
+                    "choices": [32768, 65536, 131072],
+                    "vision_on_gpu": False,
+                    "vision_gpu_max_ctx": 32768,
+                },
+            )
+        body = _json.loads(request.content or b"{}")
+        self.posts.append((request.url.path, body))
+        wanted = body.get("ctx", self.window)
+        if not self.loads:
+            return httpx.Response(
+                409, json={"ok": False, "window": self.window, "error": f"{wanted} did not load"}
+            )
+        self.window = wanted
+        return httpx.Response(
+            200, json={"ok": True, "window": wanted, "vision_on_gpu": wanted <= 32768}
+        )
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, swapper: FakeSwapper, ran: list[list[str]]) -> None:
+    import httpx
+
+    from jarvis.brain import swap_context
+    from jarvis.cli_ctl import free_voice
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(swapper), **kw)
+    )
+    monkeypatch.setattr(swap_context, "_live", {})
+    monkeypatch.setattr(
+        "jarvis.brain.local_servers.read_hermes_config",
+        lambda: {
+            "providers": {
+                "local-qwen-vl": {
+                    "api": "http://127.0.0.1:11440/v1",
+                    "models": {"qwen3-vl-8b": {"context_length": 65536}},
+                },
+                "local-venus": {
+                    "api": "http://127.0.0.1:11441/v1",
+                    "models": {"ui-venus-2-9b": {"context_length": 16384}},
+                },
+            },
+            "compression": {"enabled": True, "threshold_tokens": 56000},
+        },
+    )
+    monkeypatch.setattr(free_voice, "_local_hermes_argv", lambda: ["hermes"])
+
+    def run(argv: list[str]) -> tuple[int, str]:
+        ran.append(argv)
+        return 0, "ok"
+
+    monkeypatch.setattr(free_voice, "_run", run)
+
+
+def test_context_slider_restarts_the_model_and_hermes_follows(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    from jarvis.brain import swap_context
+
+    swapper = FakeSwapper()
+    ran: list[list[str]] = []
+    _wire(monkeypatch, swapper, ran)
+
+    body = client.post("/api/deck/context", json={"ctx": 32768}).json()
+
+    assert swapper.posts == [("/swap/context", {"ctx": 32768})]
+    assert body["ok"] is True
+    assert body["window"] == 32768
+    assert body["vision_on_gpu"] is True
+    # Only the swapper's own model, and the trim point below the new window.
+    assert ran == [
+        [
+            "hermes",
+            "config",
+            "set",
+            "providers.local-qwen-vl.models.qwen3-vl-8b.context_length",
+            "32768",
+        ],
+        ["hermes", "config", "set", "compression.threshold_tokens", "28000"],
+    ]
+    assert swap_context.live_window("http://127.0.0.1:11440/v1") == 32768
+
+
+def test_context_slider_reports_the_window_kept_after_a_failed_load(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    swapper = FakeSwapper(loads=False)
+    ran: list[list[str]] = []
+    _wire(monkeypatch, swapper, ran)
+
+    body = client.post("/api/deck/context", json={"ctx": 131072}).json()
+
+    assert body["ok"] is False
+    assert body["window"] == 65536
+    assert "131072 did not load" in body["error"]
+    assert ran == []  # Hermes already matches the window that stayed
+
+
+def test_context_slider_refuses_a_window_the_swapper_does_not_offer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    swapper = FakeSwapper()
+    _wire(monkeypatch, swapper, [])
+
+    res = client.post("/api/deck/context", json={"ctx": 40000})
+
+    assert res.status_code == 422
+    assert swapper.posts == []
+
+
+def test_reload_restarts_the_model_as_it_is(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    swapper = FakeSwapper()
+    _wire(monkeypatch, swapper, [])
+
+    body = client.post("/api/deck/context", json={"ctx": None}).json()
+
+    assert swapper.posts == [("/swap/reload", {})]
+    assert body["window"] == 65536
 
 
 RSS = b"""<?xml version="1.0" encoding="UTF-8"?>

@@ -9,7 +9,11 @@ Endpoints (mounted by the WebServer in ``_build_app()``):
     GET  /api/deck/vitals           → CPU, RAM, battery and GPU load now, plus
                                       the Windows power mode where it exists.
     GET  /api/deck/context          → how full the local model's context was
-                                      on the newest agent turn (model_swap.py).
+                                      on the newest agent turn (model_swap.py),
+                                      plus the windows it can be restarted with.
+    POST /api/deck/context          → restart the main local model with
+                                      ``{"ctx": N}`` tokens, or as it is with
+                                      ``{"ctx": null}``; Hermes follows.
     GET  /api/deck/news             → world headlines from free public RSS
                                       feeds, for the World screen's broadcast.
     GET    /api/deck/todos          → the owner's HUD to-do list ("Current
@@ -160,29 +164,39 @@ def vitals() -> dict[str, Any]:
 SWAP_STATUS_URL = "http://127.0.0.1:11440/swap/status"
 
 
+def _swap_settings(status: dict[str, Any]) -> dict[str, Any]:
+    """What the context slider offers: the loaded window and the choices."""
+    choices = [c for c in status.get("choices") or [] if isinstance(c, int)]
+    window = status.get("window")
+    return {
+        "loaded": int(window) if isinstance(window, int) else None,
+        "choices": choices,
+        "vision_on_gpu": bool(status.get("vision_on_gpu")),
+        "vision_gpu_max": status.get("vision_gpu_max_ctx"),
+        "busy": any(n for n in (status.get("inflight") or {}).values() if isinstance(n, int)),
+    }
+
+
 @router.get("/context", summary="The local brain's context fill on its newest turn")
 async def context() -> dict[str, Any]:
     """What the context meter shows: tokens in the newest agent turn, the
-    window the model was started with, and where Hermes compresses.
+    window the model was started with, where Hermes compresses, and the
+    windows the slider may restart the model with.
 
     The swapper reads the numbers from llama-server's own timings, so they are
     the model's count, not an estimate. No swapper (a cloud brain, another
     machine): ``available: false``, and the meter says so.
     """
-    import httpx  # noqa: PLC0415 - lazy (AP-26)
+    from jarvis.brain import swap_context  # noqa: PLC0415 - lazy (AP-26)
 
-    try:
-        async with httpx.AsyncClient(trust_env=False, timeout=1.5) as http:
-            res = await http.get(SWAP_STATUS_URL)
-            res.raise_for_status()
-            status = res.json()
-    except (httpx.HTTPError, ValueError):
-        log.debug("deck: model swapper status unavailable", exc_info=True)
+    status = await swap_context.read_status()
+    if status is None:
         return {"available": False}
-    ctx = status.get("context") if isinstance(status, dict) else None
+    settings = _swap_settings(status)
+    ctx = status.get("context")
     if not isinstance(ctx, dict) or not isinstance(ctx.get("used"), int):
-        return {"available": False, "active": status.get("active")}
-    window = int(ctx.get("window") or 0)
+        return {"available": False, "active": status.get("active"), "settings": settings}
+    window = int(settings["loaded"] or ctx.get("window") or 0)
     return {
         "available": True,
         "used": int(ctx["used"]),
@@ -190,7 +204,65 @@ async def context() -> dict[str, Any]:
         "model": str(ctx.get("model") or ""),
         "at": ctx.get("at"),
         "compress_at": _compress_at(window),
+        "settings": settings,
     }
+
+
+class ContextChange(BaseModel):
+    """``ctx``: the new window in tokens; ``None`` reloads the model as it is."""
+
+    model_config = ConfigDict(extra="forbid")
+    ctx: int | None = None
+
+
+@router.post("/context", summary="Restart the local brain with another context window")
+async def change_context(body: ContextChange) -> dict[str, Any]:
+    """Restart the main local model (``ctx``: new window, ``None``: reload).
+
+    The swapper waits for running turns, restarts the model and rolls back to
+    the previous window when the new one does not load; the answer names the
+    window that is loaded. Hermes's window and trim point are then set to it.
+    """
+    import asyncio  # noqa: PLC0415 - lazy (AP-26)
+
+    from jarvis.brain import local_servers, swap_context  # noqa: PLC0415 - lazy (AP-26)
+
+    status = await swap_context.read_status()
+    if status is None:
+        raise HTTPException(status_code=503, detail="The local model server is not running.")
+    choices = _swap_settings(status)["choices"]
+    if body.ctx is not None and body.ctx not in choices:
+        raise HTTPException(status_code=422, detail=f"Pick one of {choices}.")
+    answer = await swap_context.change(body.ctx)
+    window = answer.get("window")
+    result: dict[str, Any] = {
+        "ok": bool(answer.get("ok")),
+        "window": window if isinstance(window, int) else None,
+        "vision_on_gpu": bool(answer.get("vision_on_gpu")),
+        "seconds": answer.get("seconds"),
+        "error": answer.get("error"),
+        "hermes": None,
+    }
+    if not isinstance(window, int):
+        return result
+    from jarvis.cli_ctl.free_voice import _local_hermes_argv, _run  # noqa: PLC0415 - lazy (AP-26)
+
+    try:
+        hermes_config = await asyncio.to_thread(local_servers.read_hermes_config)
+        if hermes_config:
+            changed = await asyncio.to_thread(
+                swap_context.sync_hermes,
+                window,
+                "",
+                hermes_config=hermes_config,
+                hermes_argv=_local_hermes_argv(),
+                run=_run,
+            )
+            result["hermes"] = {"changed": changed}
+    except RuntimeError as exc:
+        log.warning("deck: Hermes kept its old window: %s", exc)
+        result["hermes"] = {"changed": [], "error": str(exc)}
+    return result
 
 
 #: Free, keyless world-news feeds (the owner's rule: free sources only).

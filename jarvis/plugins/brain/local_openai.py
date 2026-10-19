@@ -29,7 +29,9 @@ looked at is the failure mode worth being conservative about.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -70,10 +72,27 @@ def _declared_vision_support(model: str) -> bool:
     try:
         from jarvis.brain.model_catalog import model_capabilities  # noqa: PLC0415 — lazy (AP-26)
 
-        return model_capabilities("local-openai", model)["vision"] is True
+        declared = model_capabilities("local-openai", model)["vision"]
     except Exception:  # noqa: BLE001 — a probe must never break construction
-        log.debug("local-openai: vision capability probe failed — staying blind")
-        return False
+        log.debug("local-openai: vision capability probe failed — reading the model name")
+        declared = None
+    if declared is not None:
+        return declared is True
+    return _VISION_MODEL_NAME.search(model) is not None
+
+
+#: Model families that are released with an image encoder and are served that
+#: way by llama.cpp (``--mmproj``), LM Studio and vLLM. llama-server's
+#: ``/v1/models`` declares no modalities, so without this a vision model on it
+#: stayed "blind": live 2026-10-19, every Computer-Use step on qwen3-vl-8b was
+#: first refused as screenshot-blind and only reached through the last-resort
+#: rescue. The name is the evidence a generic server offers; a catalog that
+#: declares the modality still wins.
+_VISION_MODEL_NAME = re.compile(
+    r"(?:^|[-_/.:\s])(?:vl|vlm|vision|llava|bakllava|pixtral|minicpm-v|moondream"
+    r"|internvl|ui-venus|gemma-?[34])(?:$|[-_/.:\s\d])|qwen[\d.]*-?vl",
+    re.IGNORECASE,
+)
 
 
 def _declared_thinking_switch(model: str) -> bool:
@@ -105,13 +124,91 @@ def thinking_extra_body(effort: str | None) -> dict[str, Any] | None:
     return {"chat_template_kwargs": {"enable_thinking": effort not in ("none", "minimal")}}
 
 
+#: JSON-Schema keywords llama.cpp's schema-to-grammar converter cannot always
+#: turn into a grammar (regex features in ``pattern``, string formats, schema
+#: logic). Live 2026-10-19: "Failed to initialize samplers: failed to parse
+#: grammar" on a qwen3-vl-8b turn, which then left the local model entirely.
+_GRAMMAR_HOSTILE_KEYS = frozenset(
+    {
+        "pattern",
+        "patternProperties",
+        "format",
+        "propertyNames",
+        "contentEncoding",
+        "contentMediaType",
+        "not",
+        "if",
+        "then",
+        "else",
+        "dependentSchemas",
+        "dependentRequired",
+        "unevaluatedProperties",
+        "contains",
+        "minContains",
+        "maxContains",
+        "uniqueItems",
+        "examples",
+    }
+)
+
+
+def _is_grammar_refusal(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "grammar" in text and ("parse" in text or "sampler" in text)
+
+
+def _plain_schema(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {
+            key: _plain_schema(value)
+            for key, value in node.items()
+            if key not in _GRAMMAR_HOSTILE_KEYS
+        }
+    if isinstance(node, list):
+        return [_plain_schema(item) for item in node]
+    return node
+
+
+def _tool_schema(tool: dict[str, Any]) -> tuple[str, Any]:
+    for key in ("input_schema", "parameters", "schema"):
+        if key in tool:
+            return key, tool[key]
+    return "input_schema", {}
+
+
+def _with_plain_schemas(req: BrainRequest) -> BrainRequest:
+    """``req`` with every tool schema stripped of grammar-hostile keywords."""
+    tools = []
+    for tool in req.tools:
+        key, schema = _tool_schema(tool)
+        tools.append({**tool, key: _plain_schema(schema)})
+    return dataclasses.replace(req, tools=tuple(tools))
+
+
+def _with_open_schemas(req: BrainRequest) -> BrainRequest:
+    """``req`` whose tools keep their names, descriptions and argument names
+    but accept any value: the last resort before the local model is left."""
+    tools = []
+    for tool in req.tools:
+        key, schema = _tool_schema(tool)
+        props = schema.get("properties") if isinstance(schema, dict) else None
+        open_props = {
+            name: {"description": str(spec.get("description", ""))[:300]}
+            if isinstance(spec, dict)
+            else {}
+            for name, spec in (props or {}).items()
+        }
+        tools.append({**tool, key: {"type": "object", "properties": open_props}})
+    return dataclasses.replace(req, tools=tuple(tools))
+
+
 class LocalOpenAIBrain:
     name: str = "local-openai"
     # llama.cpp's common default n_ctx is 8192. A 32k guess made the manager
     # send requests a local server could not accept (the server returned its
     # actual limit only after paying the full prompt-build cost). Installations
     # with a larger window can set [brain.providers."local-openai"].context_window.
-    context_window: int = 8_192
+    _configured_window: int = 8_192
     # llama.cpp's JSON-Schema grammar can reject very large aggregate tool
     # surfaces before generation starts. Keep the local OpenAI-compatible
     # surface below that parser ceiling; users can raise it for servers that
@@ -136,6 +233,10 @@ class LocalOpenAIBrain:
             configured_max_tools = getattr(provider_cfg, "max_tools", None)
             if configured_max_tools is not None:
                 self.max_tools = max(0, int(configured_max_tools))
+            if not self._model:
+                # A chain entry without a model ("local-openai", None) runs the
+                # card's configured model; its capabilities are that model's.
+                self._model = str(getattr(provider_cfg, "model", "") or "").strip()
         except Exception:  # noqa: BLE001 — context sizing must never break startup
             log.debug("local-openai: context-window hint unavailable", exc_info=True)
         self.supports_vision = _declared_vision_support(self._model)
@@ -143,6 +244,25 @@ class LocalOpenAIBrain:
 
     def can_call_tools(self) -> bool:
         return self.supports_tools
+
+    @property
+    def context_window(self) -> int:
+        """The configured window, or the one the owner's model swapper reports.
+
+        The HUD's context slider restarts the model with a new window; the
+        swapper's answer is the server's real limit, so it wins over the card.
+        """
+        if self._server_root is not None:
+            from jarvis.brain.swap_context import live_window  # noqa: PLC0415 - lazy (AP-26)
+
+            live = live_window(self._server_root)
+            if live:
+                return live
+        return self._configured_window
+
+    @context_window.setter
+    def context_window(self, value: int) -> None:
+        self._configured_window = int(value)
 
     def _resolve_root(self) -> str:
         if self._server_root is None:
@@ -198,6 +318,7 @@ class LocalOpenAIBrain:
         self._model = names[0]
         log.info("local-openai: no model configured — using first served: %s", self._model)
         # The capability is per model; with none configured it is only known now.
+        self.supports_vision = _declared_vision_support(self._model)
         self.supports_thinking_switch = _declared_thinking_switch(self._model)
         return self._model
 
@@ -211,10 +332,29 @@ class LocalOpenAIBrain:
         extra_body = (
             thinking_extra_body(req.reasoning_effort) if self.supports_thinking_switch else None
         )
-        async for delta in stream_complete(
-            client, model, req, extra_body=extra_body, supports_vision=self.supports_vision
-        ):
-            yield delta
+        attempts = (req, _with_plain_schemas(req), _with_open_schemas(req)) if req.tools else (req,)
+        for attempt, request in enumerate(attempts):
+            sent = False
+            try:
+                async for delta in stream_complete(
+                    client,
+                    model,
+                    request,
+                    extra_body=extra_body,
+                    supports_vision=self.supports_vision,
+                ):
+                    sent = True
+                    yield delta
+                return
+            except Exception as exc:
+                if sent or attempt == len(attempts) - 1 or not _is_grammar_refusal(exc):
+                    raise
+                log.warning(
+                    "local-openai: the server could not build a grammar from the tool "
+                    "schemas (%s); retrying with %s schemas",
+                    str(exc)[:160],
+                    "simpler" if attempt == 0 else "open",
+                )
 
     def estimate_cost(self, req: BrainRequest) -> float:
         # Local inference has no per-token bill.
