@@ -8,6 +8,7 @@ import {
 } from "@/lib/gevViewBridge";
 import { StarkShell } from "@/components/stark/StarkShell";
 import { StarkPanel } from "@/components/stark/StarkPanel";
+import { LiveCameras, LiveNews } from "@/components/stark/LivePanels";
 import { NewsBroadcast, NewsFeeds, NewsTicker } from "@/components/stark/WorldPanels";
 import { IncidentPanel } from "@/components/stark/IncidentPanel";
 import { OrbitGlobe, type GlobeTarget, type OrbitMarker } from "@/components/stark/OrbitGlobe";
@@ -432,6 +433,10 @@ export function WorldIntelligenceView() {
               </>
             )}
           </div>
+        </div>
+        <div className="grid shrink-0 gap-3 px-4 pb-3 xl:h-[clamp(15rem,32vh,22rem)] xl:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] xl:px-6" data-testid="stark-live-row">
+          <LiveNews className="h-[18rem] xl:h-auto" />
+          <LiveCameras className="h-[18rem] xl:h-auto" />
         </div>
         <div className="shrink-0 px-4 pb-3 xl:px-6">
           <NewsTicker />

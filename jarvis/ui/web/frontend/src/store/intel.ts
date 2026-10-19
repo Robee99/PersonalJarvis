@@ -2,8 +2,8 @@ import { create } from "zustand";
 import { DEFAULT_FILTERS, KINDS, type Category, type Evidence, type IntelFilters } from "@/lib/intel";
 
 /**
- * What the World screen is showing: the incident filters and the selected
- * incident. Shared by the incident panel, God's Eye View and the built-in
+ * What the World screen is showing: the incident filters, the selected
+ * incident and the live stream the assistant asked to play. Shared by the incident panel, God's Eye View and the built-in
  * globe, and changed by the person or by the assistant (`WorldIntelCommand`
  * over the WebSocket), so all of them always agree.
  */
@@ -17,6 +17,8 @@ interface IntelStore {
   flySeq: number;
   /** Bumped by "back to the whole globe". */
   resetSeq: number;
+  /** The live news channel or camera the assistant asked for; `seq` makes a repeat count. */
+  watch: { key: string; seq: number } | null;
   setFilters: (patch: Partial<IntelFilters>) => void;
   select: (id: string, via: SelectVia, fly?: boolean) => void;
   clearSelection: () => void;
@@ -44,6 +46,7 @@ export const useIntelStore = create<IntelStore>((set) => ({
   selectedVia: null,
   flySeq: 0,
   resetSeq: 0,
+  watch: null,
   setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
   select: (id, via, fly = true) =>
     set((s) => ({ selectedId: id, selectedVia: via, flySeq: fly ? s.flySeq + 1 : s.flySeq })),
@@ -74,6 +77,9 @@ export const useIntelStore = create<IntelStore>((set) => ({
       });
     } else if (action === "reset") {
       set((s) => ({ filters: DEFAULT_FILTERS, selectedId: null, selectedVia: null, resetSeq: s.resetSeq + 1 }));
+    } else if (action === "watch") {
+      const key = text(p.stream, 80);
+      if (key) set((s) => ({ watch: { key, seq: (s.watch?.seq ?? 0) + 1 } }));
     }
   },
 }));

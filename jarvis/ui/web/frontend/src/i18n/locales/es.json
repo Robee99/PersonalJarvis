@@ -8398,6 +8398,31 @@
       "kind_protest": "Protesta",
       "kind_violence": "Violencia",
       "kind_other": "Otro"
+    },
+    "live": {
+      "news": "Noticias en directo",
+      "cameras": "Cámaras en directo",
+      "on_air": "En antena",
+      "ready": "Listo",
+      "loading": "Buscando las emisiones en directo…",
+      "error": "No se cargó la lista de emisiones en directo.",
+      "channels": "Canales de noticias",
+      "groups": "Regiones de cámaras",
+      "offline": "{stream} no está en directo ahora.",
+      "open_youtube": "Abrir en YouTube",
+      "muted_note": "Empieza silenciado para que el sonido no llegue al micrófono. Activa el sonido en el reproductor.",
+      "cam_count": "{count} cámaras",
+      "cam_count_one": "1 cámara",
+      "play_all": "Reproducir todas las cámaras",
+      "stop_all": "Detener las cámaras",
+      "grid": "Cuadrícula",
+      "single": "Una cámara",
+      "expand": "Ver {stream} en grande",
+      "group_middle_east": "Oriente Medio",
+      "group_europe": "Europa",
+      "group_americas": "América",
+      "group_asia": "Asia",
+      "group_space": "Espacio"
     }
   }
 }

@@ -8398,6 +8398,31 @@
       "kind_protest": "Protest",
       "kind_violence": "Gewalt",
       "kind_other": "Sonstiges"
+    },
+    "live": {
+      "news": "Live-Nachrichten",
+      "cameras": "Live-Kameras",
+      "on_air": "Auf Sendung",
+      "ready": "Bereit",
+      "loading": "Live-Streams werden gesucht…",
+      "error": "Die Liste der Live-Streams wurde nicht geladen.",
+      "channels": "Nachrichtensender",
+      "groups": "Kameraregionen",
+      "offline": "{stream} ist gerade nicht live.",
+      "open_youtube": "Auf YouTube öffnen",
+      "muted_note": "Startet stumm, damit der Ton nicht ins Mikrofon gelangt. Im Player einschalten.",
+      "cam_count": "{count} Kameras",
+      "cam_count_one": "1 Kamera",
+      "play_all": "Alle Kameras abspielen",
+      "stop_all": "Kameras anhalten",
+      "grid": "Raster",
+      "single": "Eine Kamera",
+      "expand": "{stream} groß zeigen",
+      "group_middle_east": "Naher Osten",
+      "group_europe": "Europa",
+      "group_americas": "Amerika",
+      "group_asia": "Asien",
+      "group_space": "Weltraum"
     }
   }
 }

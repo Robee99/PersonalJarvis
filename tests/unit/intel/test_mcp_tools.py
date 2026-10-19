@@ -136,6 +136,20 @@ async def test_globe_filter_and_reset(service: _Loaded) -> None:
     assert screen.events[-1].action == "reset"
 
 
+async def test_globe_watch_plays_a_named_stream(service: _Loaded) -> None:
+    screen = _Screen()
+    text, err = await _call(
+        service, "world_globe", {"action": "watch", "stream": "Al Jazeera"}, screen
+    )
+    assert not err and "Al Jazeera English" in text
+    assert screen.events[0].section == "world-intelligence"
+    assert screen.events[-1].action == "watch" and screen.events[-1].stream == "aljazeera"
+    await _call(service, "world_globe", {"action": "watch", "stream": "the space station"}, screen)
+    assert screen.events[-1].stream == "iss"
+    text, err = await _call(service, "world_globe", {"action": "watch", "stream": "CNN"}, screen)
+    assert err and "Sky News" in text
+
+
 async def test_globe_reports_when_no_window_is_connected(service: _Loaded) -> None:
     text, err = await _call(service, "world_globe", {"action": "reset"}, _Screen(connected=False))
     assert err and "not connected" in text

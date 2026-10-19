@@ -7,6 +7,8 @@
     GET /api/intel/events/{id}    → one incident with its related reports and
                                     its source's status; 404 when it is gone.
     GET /api/intel/sources        → the sources, their terms and their status.
+    GET /api/intel/live           → the live news channels and city cameras
+                                    (``jarvis.intel.live``); static, no fetch.
 
 A request starts a refresh of the sources that are due. With nothing loaded
 yet it waits for the first answers (up to a few seconds); otherwise it answers
@@ -20,7 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from jarvis.intel import query
+from jarvis.intel import live, query
 from jarvis.intel.service import shared_service
 
 router = APIRouter(prefix="/api/intel", tags=["intel"])
@@ -74,3 +76,8 @@ async def intel_event(event_id: str) -> dict[str, Any]:
 async def intel_sources() -> dict[str, Any]:
     service = await _fresh()
     return {"sources": service.sources_json(), "regions": query.regions_json()}
+
+
+@router.get("/live")
+def intel_live() -> dict[str, Any]:
+    return live.catalog_json()

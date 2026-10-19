@@ -8492,6 +8492,31 @@
       "kind_protest": "抗议",
       "kind_violence": "暴力",
       "kind_other": "其他"
+    },
+    "live": {
+      "news": "直播新闻",
+      "cameras": "实时摄像头",
+      "on_air": "直播中",
+      "ready": "就绪",
+      "loading": "正在查找直播…",
+      "error": "未能加载直播列表。",
+      "channels": "新闻频道",
+      "groups": "摄像头地区",
+      "offline": "{stream} 当前没有直播。",
+      "open_youtube": "在 YouTube 打开",
+      "muted_note": "默认静音，以免声音进入麦克风。可在播放器中取消静音。",
+      "cam_count": "{count} 个摄像头",
+      "cam_count_one": "1 个摄像头",
+      "play_all": "播放全部摄像头",
+      "stop_all": "停止摄像头",
+      "grid": "网格",
+      "single": "单个摄像头",
+      "expand": "放大显示 {stream}",
+      "group_middle_east": "中东",
+      "group_europe": "欧洲",
+      "group_americas": "美洲",
+      "group_asia": "亚洲",
+      "group_space": "太空"
     }
   }
 }

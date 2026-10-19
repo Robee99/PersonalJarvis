@@ -8492,6 +8492,31 @@
       "kind_protest": "Protest",
       "kind_violence": "Violence",
       "kind_other": "Other"
+    },
+    "live": {
+      "news": "Live news",
+      "cameras": "Live cameras",
+      "on_air": "On air",
+      "ready": "Ready",
+      "loading": "Finding the live streams…",
+      "error": "The live stream list did not load.",
+      "channels": "News channels",
+      "groups": "Camera regions",
+      "offline": "{stream} is not live right now.",
+      "open_youtube": "Open on YouTube",
+      "muted_note": "Starts muted so the sound does not reach the microphone. Unmute in the player.",
+      "cam_count": "{count} cameras",
+      "cam_count_one": "1 camera",
+      "play_all": "Play every camera",
+      "stop_all": "Stop the cameras",
+      "grid": "Grid",
+      "single": "One camera",
+      "expand": "Show {stream} large",
+      "group_middle_east": "Middle East",
+      "group_europe": "Europe",
+      "group_americas": "Americas",
+      "group_asia": "Asia",
+      "group_space": "Space"
     }
   }
 }

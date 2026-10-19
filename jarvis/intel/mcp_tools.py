@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from . import query
+from . import live, query
 from .model import Evidence, IntelEvent, Kind
 from .service import SOURCE_BY_ID, IntelService, shared_service
 
@@ -93,13 +93,15 @@ TOOLS: tuple[IntelTool, ...] = (
         "world_globe",
         "Change what the World screen shows: action 'focus' selects an incident (id) and flies "
         "the globe to it, 'filter' applies the given filters to the panel and globe, 'reset' "
-        "returns to the whole world with no filter. Opens the World screen. Changes only the "
-        "view.",
+        "returns to the whole world with no filter, 'watch' plays a live news channel or city "
+        "camera (stream: a channel or city name, e.g. 'Al Jazeera', 'Sky News', 'Tokyo', "
+        "'space station'). Opens the World screen. Changes only the view.",
         {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["focus", "filter", "reset"]},
+                "action": {"type": "string", "enum": ["focus", "filter", "reset", "watch"]},
                 "id": {"type": "string", "maxLength": 200},
+                "stream": {"type": "string", "maxLength": 80},
                 **_FILTER_PROPS,
             },
             "required": ["action"],
@@ -314,8 +316,8 @@ async def _globe(
     from jarvis.core.events import NavigateSidebar, WorldIntelCommand
 
     action = args.get("action")
-    if action not in ("focus", "filter", "reset"):
-        return "action must be focus, filter or reset.", True
+    if action not in ("focus", "filter", "reset", "watch"):
+        return "action must be focus, filter, reset or watch.", True
     command: WorldIntelCommand
     summary: str
     if action == "focus":
@@ -349,6 +351,20 @@ async def _globe(
         summary = (
             f"Filtered the World panel and globe to {_describe_filter(flt)}: "
             f"{len(shown)} incident(s), {placed} on the globe."
+        )
+    elif action == "watch":
+        wanted = args.get("stream")
+        stream = live.find(wanted) if isinstance(wanted, str) else None
+        if stream is None:
+            names = ", ".join(s.name for s in live.STREAMS)
+            return f"No live stream by that name. Available: {names}.", True
+        command = WorldIntelCommand(
+            action="watch", stream=stream.key, source_layer="intel.world_globe"
+        )
+        what = "news channel" if stream.kind == "news" else "camera"
+        summary = (
+            f"Playing the {stream.name} live {what} on the World screen (YouTube's player, "
+            "muted until the person unmutes it)."
         )
     else:
         command = WorldIntelCommand(action="reset", source_layer="intel.world_globe")

@@ -890,8 +890,9 @@ class WorldIntelCommand(Event):
     whichever globe is showing change together.
 
     ``action`` is ``focus`` (select ``event_id`` and fly to it), ``filter``
-    (replace the filters; empty fields clear theirs) or ``reset`` (no filter,
-    no selection, the whole globe).
+    (replace the filters; empty fields clear theirs), ``reset`` (no filter,
+    no selection, the whole globe) or ``watch`` (play the live news channel
+    or camera ``stream``, a key from ``jarvis.intel.live``).
     """
     action: str = ""
     event_id: str = ""
@@ -906,6 +907,8 @@ class WorldIntelCommand(Event):
     min_severity: int = -1
     #: Comma-separated evidence classes, or "" for all.
     evidence: str = ""
+    #: A live stream key for ``watch``.
+    stream: str = ""
 
 
 @dataclass(frozen=True, slots=True)
