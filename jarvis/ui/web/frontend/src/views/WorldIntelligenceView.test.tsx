@@ -399,6 +399,10 @@ describe("World incidents", () => {
     // Only the drawing fields cross the frame: no links, summaries or attrs.
     expect(Object.keys(sent[0]).sort()).toEqual(["category", "evidence", "id", "kind", "lat", "lon", "severity", "source", "time", "title"]);
     for (const call of postMessage.mock.calls) expect(call[1]).toBe(origin);
+    // Opening the screen shows the whole globe, once.
+    const homes = () => postMessage.mock.calls.filter((c) => (c[0] as { type: string }).type === "gev:events-home");
+    expect(homes()).toHaveLength(1);
+    expect(homes()[0][0]).toMatchObject({ v: 1, center: { lat: expect.any(Number), lon: expect.any(Number) } });
 
     // Panel → globe.
     fireEvent.click(screen.getAllByTestId("incident-row")[0]);
@@ -420,6 +424,7 @@ describe("World incidents", () => {
       window.dispatchEvent(new MessageEvent("message", { data: { type: "gev:event-selection-cleared" }, origin, source: target }));
     });
     expect(screen.queryByTestId("incident-detail")).toBeNull();
+    expect(homes()).toHaveLength(1);
   });
 
   it("an older God's Eye View without the incident layer gets no incident messages", async () => {

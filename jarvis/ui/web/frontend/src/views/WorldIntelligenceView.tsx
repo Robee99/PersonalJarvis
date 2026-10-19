@@ -50,6 +50,12 @@ export const GEV_EMBED_URL = resolveGeVEmbedUrl(
 );
 
 type GevState = "connecting" | "ready" | "down";
+
+/** Where "the whole globe" is centred: the person's city, else the Atlantic. */
+function globeCenter(): { lat: number; lon: number } {
+  const city = readCity();
+  return city ? { lat: city.lat, lon: city.lon } : { lat: 20, lon: 0 };
+}
 type GlobeSource = "gev" | "builtin";
 type StatusKey = "connecting" | "connected" | "applying" | "unconfirmed" | "applied" | "not_applied" | "down";
 type SideTab = "incidents" | "news";
@@ -134,6 +140,8 @@ export function WorldIntelligenceView() {
   );
   const onGlobe = useMemo(() => forGlobe(filtered), [filtered]);
   const knownIds = useRef(new Set<string>());
+  // Opening the screen shows the whole globe once, unless a view was asked for.
+  const framed = useRef(false);
   knownIds.current = new Set((snapshot?.events ?? []).map((e) => e.id));
 
   const aim = (point: { lat: number; lon: number }) => {
@@ -160,6 +168,7 @@ export function WorldIntelligenceView() {
     setGev("connecting");
     setGevEvents(false);
     setStatus("connecting");
+    framed.current = queuedView !== null;
     const readyTimer = window.setTimeout(() => {
       if (ready) return;
       setGev("down");
@@ -189,6 +198,7 @@ export function WorldIntelligenceView() {
       }
       const id = `jarvis-gev-${Date.now()}-${++sequence}`;
       activeRequest = id;
+      framed.current = true;
       clearPendingGeVView();
       setStatus("applying");
       target.postMessage({ type: "gev:view", id, view }, origin);
@@ -259,6 +269,10 @@ export function WorldIntelligenceView() {
   useEffect(() => {
     if (gev !== "ready" || !gevEvents) return;
     post({ type: "gev:events-upsert", v: 1, id: `jarvis-events-${Date.now()}`, replace: true, events: onGlobe.map(toGevIncident) });
+    if (!framed.current) {
+      framed.current = true;
+      post({ type: "gev:events-home", v: 1, center: globeCenter() });
+    }
   }, [gev, gevEvents, onGlobe]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A selection in the panel (or from the assistant) is shown on both globes.
@@ -276,9 +290,9 @@ export function WorldIntelligenceView() {
   // "Back to the whole globe".
   useEffect(() => {
     if (!resetSeq) return;
-    if (gev === "ready" && gevEvents) post({ type: "gev:events-home", v: 1 });
-    const city = readCity();
-    aimRef.current(city ?? { lat: 20, lon: 0 });
+    const center = globeCenter();
+    if (gev === "ready" && gevEvents) post({ type: "gev:events-home", v: 1, center });
+    aimRef.current(center);
   }, [resetSeq]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!GEV_EMBED_URL) {
