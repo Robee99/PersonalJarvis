@@ -525,6 +525,7 @@ class WebServer:
         from .holo_routes import api_router as holo_api_router
         from .holo_routes import router as holo_router
         from .ide_skills_routes import router as ide_skills_router
+        from .intel_routes import router as intel_router
         from .jarvisx_routes import router as jarvisx_router
         from .live_routes import router as live_router
         from .local_models_assistant_routes import (
@@ -759,6 +760,9 @@ class WebServer:
         # The HUD's public-data panels: quakes, natural events, space weather,
         # the ISS and station orbits, from free keyless sources, cached.
         app.include_router(public_data_router)
+        # World incidents (jarvis.intel): open feeds, one id per incident,
+        # shared by the World panel, both globes and the agent tools.
+        app.include_router(intel_router)
         # The HOLO hand-gesture deck (MIT page) with orbs from the wiki vault.
         app.include_router(holo_router)
         app.include_router(holo_api_router)
