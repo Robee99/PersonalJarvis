@@ -115,6 +115,12 @@ export type SectionId =
   | "marketplace"
   // God's Eye View: the connected local geospatial command surface.
   | "world-intelligence"
+  // The HUD's Intelligence screen: public world events (earthquakes, natural
+  // events, headlines) on one map, from free keyless feeds.
+  | "intelligence"
+  // The HUD's Orbital screen: the ISS, crewed stations, space weather and
+  // near-Earth objects, from free keyless feeds.
+  | "orbital"
   // The HUD: the mission deck as a section of its own (it left the front
   // page on 2026-08-23) — the orb, the log, the memory map and the vitals.
   | "deck"
@@ -164,6 +170,8 @@ export const SECTION_IDS = [
   "agentic-ide-classic",
   "marketplace",
   "world-intelligence",
+  "intelligence",
+  "orbital",
   "deck",
   "orb",
   "armory",
@@ -267,6 +275,8 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   "agentic-ide-classic": "Terminal grid",
   marketplace: "Marketplace",
   "world-intelligence": "World Intelligence",
+  intelligence: "Intelligence",
+  orbital: "Orbital",
 };
 
 export interface EventItem {

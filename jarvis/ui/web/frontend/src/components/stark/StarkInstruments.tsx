@@ -1,17 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, Brain, Code2, Coins, Globe2, Plug, Settings2, Sparkles } from "lucide-react";
+import {
+  Bot,
+  Brain,
+  Code2,
+  Coins,
+  Cpu,
+  FolderOpen,
+  Globe2,
+  LayoutGrid,
+  MonitorSmartphone,
+  Mic,
+  Sparkles,
+  Type,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { fetchVitals, type Vitals } from "@/components/deck/DeckSignalCards";
-import { RingGauge, StarkLamp, StarkPanel } from "@/components/stark/StarkPanel";
+import { RingGauge, StarkPanel } from "@/components/stark/StarkPanel";
+import { fmtK, METER_MAX, useDeckContext } from "@/components/stark/ContextMeter";
 import { useEventStore, type SectionId } from "@/store/events";
 import { useDeckStore } from "@/store/deck";
-import { useT } from "@/i18n";
+import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
- * 01 — SYSTEM STATUS: the things that have to be true for a voice turn, each
- * as a lamp and a word. Every row reads the event store; nothing is assumed.
+ * SYSTEM STATUS: the things that have to be true for a voice turn, each as a
+ * name, a lamp and a word. Every row reads the event store; nothing is assumed.
  */
 export function SystemStatusPanel({
   brainLabel,
@@ -30,16 +44,36 @@ export function SystemStatusPanel({
   const micMuted = useDeckStore((s) => s.micMuted);
   const words = useDeckStore((s) => s.wordsSession);
   const setActiveSection = useEventStore((s) => s.setActiveSection);
+  const hasBrain = Boolean(brainLabel && brainLabel !== "—");
 
-  const rows: Array<{ key: string; label: string; value: string; lamp: "on" | "warn" | "off"; onClick?: () => void }> = [
+  const rows: Array<{
+    key: string;
+    icon: LucideIcon;
+    label: string;
+    value: string;
+    title?: string;
+    lamp: "on" | "warn" | "off";
+    onClick?: () => void;
+  }> = [
     {
       key: "core",
+      icon: Cpu,
       label: t("stark.status.core"),
       value: t(connected ? "stark.status.online" : "stark.status.offline"),
       lamp: connected ? "on" : "warn",
     },
     {
+      key: "brain",
+      icon: Brain,
+      label: t("stark.status.models"),
+      value: hasBrain ? t("stark.status.ready") : t("stark.status.not_set"),
+      title: [brainLabel, modelLabel].filter(Boolean).join(" · "),
+      lamp: hasBrain ? "on" : "warn",
+      onClick: () => setActiveSection("apikeys"),
+    },
+    {
       key: "voice",
+      icon: Mic,
       label: t("stark.status.voice"),
       value: !voiceReady
         ? t("stark.status.starting")
@@ -49,27 +83,15 @@ export function SystemStatusPanel({
       lamp: !voiceReady ? "warn" : micMuted ? "off" : "on",
     },
     {
-      key: "brain",
-      label: t("stark.status.brain"),
-      value: brainLabel,
-      lamp: brainLabel && brainLabel !== "—" ? "on" : "warn",
-      onClick: () => setActiveSection("apikeys"),
-    },
-    {
-      key: "model",
-      label: t("stark.status.model"),
-      value: modelLabel || "—",
-      lamp: modelLabel ? "on" : "off",
-      onClick: () => setActiveSection("apikeys"),
-    },
-    {
       key: "control",
+      icon: MonitorSmartphone,
       label: t("stark.status.control"),
       value: t(cuActive ? "stark.status.active" : "stark.status.standby"),
       lamp: cuActive ? "on" : "off",
     },
     {
       key: "words",
+      icon: Type,
       label: t("stark.status.words"),
       value: String(words),
       lamp: words > 0 ? "on" : "off",
@@ -77,24 +99,27 @@ export function SystemStatusPanel({
   ];
 
   return (
-    <StarkPanel index="01" title={t("stark.status.title")} className={className} testId="stark-status">
-      <ul className="space-y-1">
+    <StarkPanel title={t("stark.status.title")} className={className} testId="stark-status">
+      <ul className="space-y-2 pt-1">
         {rows.map((row) => {
+          const Icon = row.icon;
           const body = (
             <>
-              <StarkLamp state={row.lamp} />
-              <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-                {row.label}
+              <span className="stark-icon-ring flex h-6 w-6 shrink-0 items-center justify-center rounded-full">
+                <Icon className="h-3 w-3 text-primary" aria-hidden />
               </span>
-              <span aria-hidden className="mx-1 h-px flex-1 border-b border-dotted border-primary/20" />
-              <span
-                className={cn(
-                  "min-w-0 max-w-[60%] truncate font-mono text-xs uppercase tracking-wider",
-                  row.lamp === "warn" ? "text-[hsl(var(--stark-hot))]" : "text-foreground",
-                )}
-                title={row.value}
-              >
-                {row.value}
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground/85">{row.label}</span>
+              <span className="flex w-[44%] min-w-0 items-center gap-2">
+                <StatusDot state={row.lamp} />
+                <span
+                  className={cn(
+                    "min-w-0 truncate text-sm font-semibold",
+                    row.lamp === "warn" ? "text-[hsl(var(--stark-hot))]" : row.lamp === "on" ? "text-primary" : "text-muted-foreground",
+                  )}
+                  title={row.title ?? row.value}
+                >
+                  {row.value}
+                </span>
               </span>
             </>
           );
@@ -104,12 +129,12 @@ export function SystemStatusPanel({
                 <button
                   type="button"
                   onClick={row.onClick}
-                  className="flex w-full items-center gap-2 text-left transition-colors hover:[&>span:last-child]:text-primary"
+                  className="flex w-full items-center gap-3 text-left transition-colors hover:[&>span:nth-child(2)]:text-primary"
                 >
                   {body}
                 </button>
               ) : (
-                <div className="flex items-center gap-2">{body}</div>
+                <div className="flex items-center gap-3">{body}</div>
               )}
             </li>
           );
@@ -119,12 +144,31 @@ export function SystemStatusPanel({
   );
 }
 
+function StatusDot({ state }: { state: "on" | "warn" | "off" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "h-2 w-2 shrink-0 rounded-full",
+        state === "on" && "bg-[hsl(var(--stark-ok))] shadow-[0_0_6px_hsl(var(--stark-ok))]",
+        state === "warn" && "bg-[hsl(var(--stark-hot))] shadow-[0_0_6px_hsl(var(--stark-hot))]",
+        state === "off" && "border border-muted-foreground/60",
+      )}
+    />
+  );
+}
+
+/** How many readings each sparkline keeps (one per five-second poll). */
+const SPARK_POINTS = 36;
+
 /**
- * 02 — VITALS: CPU, GPU, RAM and VRAM as rings, read from
- * `/api/deck/vitals` every five seconds. A sensor that did not answer draws an
- * empty ring that reads "—", never a zero.
+ * SYSTEM RESOURCES: CPU, GPU and RAM as rings with a sparkline of the last
+ * three minutes and the hardware under each, then the brain's context fill.
+ * Read from `/api/deck/vitals` every five seconds. A sensor that did not
+ * answer draws an empty ring that reads "—", never a zero; a detail the
+ * machine did not report is left out.
  */
-export function VitalsPanel({ className }: { className?: string }) {
+export function ResourcesPanel({ className }: { className?: string }) {
   const t = useT();
   const q = useQuery<Vitals>({
     queryKey: ["deck", "vitals"],
@@ -134,64 +178,185 @@ export function VitalsPanel({ className }: { className?: string }) {
   });
   const v = q.data;
   const gpu = v?.gpus[0];
-  const vram =
-    gpu && gpu.vram_used_mb !== null && gpu.vram_total_mb ? gpu.vram_used_mb / gpu.vram_total_mb : null;
+  const history = useHistory(v, q.dataUpdatedAt);
   const pct = (n: number | null | undefined) => (n == null ? "—" : `${Math.round(n)}%`);
+  const gb = (mb: number | null | undefined) => (mb == null ? "—" : (mb / 1024).toFixed(1));
+  const cores = v?.cpu_physical ?? null;
+  const threads = v?.cpu_logical ?? null;
+  const ghz = v?.cpu_mhz ? `${(v.cpu_mhz / 1000).toFixed(1)} GHz` : null;
   return (
-    <StarkPanel
-      index="02"
-      title={t("stark.vitals.title")}
-      meta={gpu ? gpu.name.replace(/^NVIDIA (GeForce )?/, "") : undefined}
-      className={className}
-      testId="stark-vitals"
-    >
+    <StarkPanel title={t("stark.vitals.title")} className={className} testId="stark-vitals">
       {!v ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="py-6 text-center text-sm text-muted-foreground">
           {t(q.isError ? "deck.vitals_error" : "deck.vitals_loading")}
         </p>
       ) : (
-        <div className="grid grid-cols-4 gap-1">
-          <RingGauge value={v.cpu_percent / 100} label="CPU" readout={pct(v.cpu_percent)} size={74} testId="stark-ring-cpu" />
-          <RingGauge
-            value={gpu?.util_percent != null ? gpu.util_percent / 100 : null}
-            label="GPU"
-            readout={pct(gpu?.util_percent)}
-            sub={gpu?.temp_c != null ? `${Math.round(gpu.temp_c)}°C` : undefined}
-            size={74}
-            testId="stark-ring-gpu"
+        <div className="grid grid-cols-3 gap-2 pt-1">
+          <ResourceColumn
+            ring={<RingGauge value={v.cpu_percent / 100} label="CPU" inner readout={pct(v.cpu_percent)} size={92} testId="stark-ring-cpu" />}
+            spark={history.cpu}
+            line1={
+              cores && threads
+                ? fill(t("stark.vitals.cores_threads"), { cores, threads })
+                : threads
+                  ? fill(t("stark.vitals.threads"), { threads })
+                  : null
+            }
+            line2={ghz}
+            title={v.cpu_name ?? undefined}
           />
-          <RingGauge
-            value={v.ram_total_gb > 0 ? v.ram_used_gb / v.ram_total_gb : null}
-            label="RAM"
-            readout={`${v.ram_used_gb.toFixed(1)}`}
-            sub={`/${Math.round(v.ram_total_gb)} GB`}
-            size={74}
-            testId="stark-ring-ram"
+          <ResourceColumn
+            ring={
+              <RingGauge
+                value={gpu?.util_percent != null ? gpu.util_percent / 100 : null}
+                label="GPU"
+                inner
+                readout={pct(gpu?.util_percent)}
+                size={92}
+                testId="stark-ring-gpu"
+              />
+            }
+            spark={history.gpu}
+            line1={gpu ? `${gb(gpu.vram_used_mb)} / ${gb(gpu.vram_total_mb)} GB` : t("stark.vitals.no_gpu")}
+            line2={gpu ? shortGpu(gpu.name) : null}
+            title={gpu?.name}
           />
-          <RingGauge
-            value={vram}
-            label="VRAM"
-            readout={gpu?.vram_used_mb != null ? (gpu.vram_used_mb / 1024).toFixed(1) : "—"}
-            sub={gpu?.vram_total_mb ? `/${Math.round(gpu.vram_total_mb / 1024)} GB` : undefined}
-            size={74}
-            hotAt={0.95}
-            testId="stark-ring-vram"
+          <ResourceColumn
+            ring={
+              <RingGauge
+                value={v.ram_total_gb > 0 ? v.ram_used_gb / v.ram_total_gb : null}
+                label="RAM"
+                inner
+                readout={v.ram_total_gb > 0 ? `${Math.round((v.ram_used_gb / v.ram_total_gb) * 100)}%` : "—"}
+                size={92}
+                testId="stark-ring-ram"
+              />
+            }
+            spark={history.ram}
+            line1={`${v.ram_used_gb.toFixed(1)} / ${Math.round(v.ram_total_gb)} GB`}
+            line2={gpu?.temp_c != null ? `GPU ${Math.round(gpu.temp_c)}°C` : null}
           />
         </div>
       )}
+      <ContextRow />
     </StarkPanel>
   );
 }
 
+function ResourceColumn({
+  ring,
+  spark,
+  line1,
+  line2,
+  title,
+}: {
+  ring: ReactNode;
+  spark: number[];
+  line1: string | null;
+  line2: string | null;
+  title?: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col items-center" title={title}>
+      {ring}
+      <Sparkline values={spark} className="mt-1 h-6 w-[88%]" />
+      {line1 && <span className="mt-1 truncate text-sm font-medium tabular-nums text-foreground">{line1}</span>}
+      {line2 && <span className="truncate text-xs font-medium text-muted-foreground">{line2}</span>}
+    </div>
+  );
+}
+
+/** "NVIDIA GeForce RTX 4060 Laptop GPU" reads "RTX 4060 Laptop". */
+export function shortGpu(name: string): string {
+  return name.replace(/^NVIDIA\s+(GeForce\s+)?/i, "").replace(/\s+GPU$/i, "").trim();
+}
+
+/** The last few readings of each ring, kept for this screen's lifetime. */
+function useHistory(v: Vitals | undefined, at: number) {
+  const ref = useRef<{ at: number; cpu: number[]; gpu: number[]; ram: number[] }>({ at: 0, cpu: [], gpu: [], ram: [] });
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (!v || at === ref.current.at) return;
+    const push = (list: number[], value: number | null | undefined) =>
+      value == null ? list : [...list, Math.max(0, Math.min(1, value))].slice(-SPARK_POINTS);
+    const gpu = v.gpus[0]?.util_percent;
+    ref.current = {
+      at,
+      cpu: push(ref.current.cpu, v.cpu_percent / 100),
+      gpu: push(ref.current.gpu, gpu == null ? null : gpu / 100),
+      ram: push(ref.current.ram, v.ram_total_gb > 0 ? v.ram_used_gb / v.ram_total_gb : null),
+    };
+    bump((n) => n + 1);
+  }, [v, at]);
+  return ref.current;
+}
+
+/** A filled line of the recent readings, 0..1, newest on the right. */
+export function Sparkline({ values, className }: { values: number[]; className?: string }) {
+  if (values.length < 2) {
+    return <div className={cn("border-b border-primary/25", className)} aria-hidden />;
+  }
+  const w = 100;
+  const h = 24;
+  const step = w / (SPARK_POINTS - 1);
+  const x0 = w - (values.length - 1) * step;
+  const pts = values.map((val, i) => `${(x0 + i * step).toFixed(1)},${(h - 1 - val * (h - 3)).toFixed(1)}`);
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className={className} aria-hidden>
+      <polygon points={`${x0},${h} ${pts.join(" ")} ${w},${h}`} fill="hsl(var(--primary) / 0.18)" />
+      <polyline points={pts.join(" ")} fill="none" stroke="hsl(var(--primary))" strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+/**
+ * The brain's context on its newest turn, as one bar under the rings: the
+ * count, the model's window and the 128k scale (the full meter's numbers,
+ * `ContextMeter`). Without a local model reporting one it says so.
+ */
+function ContextRow() {
+  const t = useT();
+  const ctx = useDeckContext().data;
+  const ready = Boolean(ctx?.available && typeof ctx.used === "number" && ctx.window);
+  const used = ready ? (ctx!.used as number) : 0;
+  const window = ready ? (ctx!.window as number) : 0;
+  const max = Math.max(METER_MAX, window);
+  const ofWindow = window ? used / window : 0;
+  return (
+    <div className="mt-3 border-t border-primary/15 pt-2" data-testid="stark-context-row" data-used={ready ? used : ""}>
+      <div className="flex items-baseline justify-between text-xs font-semibold uppercase tracking-[0.18em]">
+        <span className="text-muted-foreground">{t("stark.context.title")}</span>
+        <span className={cn("tabular-nums", ofWindow >= 0.85 ? "text-[hsl(var(--stark-hot))]" : "text-foreground")}>
+          {ready ? `${fmtK(used)} / ${fmtK(window)}` : t("stark.context.none_short")}
+        </span>
+      </div>
+      <div className="relative mt-1.5 h-1.5 bg-primary/10">
+        {ready && (
+          <>
+            <div
+              className={cn(
+                "absolute inset-y-0 left-0",
+                ofWindow >= 0.85 ? "bg-[hsl(var(--stark-hot))]" : "bg-primary shadow-[0_0_8px_hsl(var(--primary))]",
+              )}
+              style={{ width: `${(used / max) * 100}%` }}
+            />
+            <div className="absolute -inset-y-1 w-px bg-[hsl(var(--stark-hot))]" style={{ left: `${(window / max) * 100}%` }} />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const QUICK: Array<{ id: SectionId; icon: LucideIcon; key: string }> = [
+  { id: "visualization", icon: FolderOpen, key: "files" },
+  { id: "armory", icon: LayoutGrid, key: "apps" },
+  { id: "world-intelligence", icon: Globe2, key: "world" },
   { id: "agentic-ide", icon: Code2, key: "code" },
   { id: "memory", icon: Brain, key: "memory" },
-  { id: "world-intelligence", icon: Globe2, key: "world" },
   { id: "agents", icon: Bot, key: "agents" },
   { id: "skills", icon: Sparkles, key: "skills" },
-  { id: "mcps", icon: Plug, key: "tools" },
   { id: "costs", icon: Coins, key: "costs" },
-  { id: "settings", icon: Settings2, key: "settings" },
 ];
 
 /** QUICK ACCESS: the sections people open most, one press away. */
@@ -199,26 +364,28 @@ export function QuickAccess({ className }: { className?: string }) {
   const t = useT();
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   return (
-    <div className={cn("grid grid-cols-4 gap-2 sm:grid-cols-8", className)} data-testid="stark-quick">
-      {QUICK.map(({ id, icon: Icon, key }) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => setActiveSection(id)}
-          className="stark-tile group flex flex-col items-center gap-1 px-1 py-2"
-          data-testid={`stark-quick-${key}`}
-        >
-          <Icon className="h-4 w-4 text-primary transition-transform group-hover:scale-110" aria-hidden />
-          <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-foreground">
-            {t(`stark.quick.${key}`)}
-          </span>
-        </button>
-      ))}
-    </div>
+    <StarkPanel title={t("stark.quick.title")} className={className} testId="stark-quick">
+      <div className="grid grid-cols-4 gap-x-1 gap-y-3 pt-1">
+        {QUICK.map(({ id, icon: Icon, key }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setActiveSection(id)}
+            className="group flex flex-col items-center gap-1.5 rounded py-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            data-testid={`stark-quick-${key}`}
+          >
+            <Icon className="h-6 w-6 text-foreground/85 transition-colors group-hover:text-primary" strokeWidth={1.4} aria-hidden />
+            <span className="text-xs font-semibold text-muted-foreground group-hover:text-foreground">
+              {t(`stark.quick.${key}`)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </StarkPanel>
   );
 }
 
-/** The header clock: local time to the second and the date, in the HUD's type. */
+/** A compact clock: local time to the second and the date, in the HUD's type. */
 export function StarkClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -228,9 +395,10 @@ export function StarkClock() {
   const time = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const date = now.toLocaleDateString(undefined, { weekday: "short", day: "2-digit", month: "short", year: "numeric" });
   return (
-    <div className="flex flex-col items-end leading-none" data-testid="stark-clock">
+    <div className="flex flex-col items-end leading-none" data-testid="stark-clock-compact">
       <span className="font-mono text-lg tabular-nums text-foreground">{time}</span>
       <span className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{date}</span>
     </div>
   );
 }
+

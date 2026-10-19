@@ -354,6 +354,11 @@ export interface Vitals {
   battery: { percent: number; plugged: boolean } | null;
   gpus: GpuVitals[];
   power_mode: string | null;
+  // The processor under the CPU ring; older backends omit these.
+  cpu_name?: string | null;
+  cpu_physical?: number | null;
+  cpu_mhz?: number | null;
+  cpu_max_mhz?: number | null;
 }
 
 export async function fetchVitals(): Promise<Vitals> {

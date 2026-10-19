@@ -135,6 +135,12 @@ const WorldIntelligenceView = lazyView(["world-intelligence"], () =>
     default: m.WorldIntelligenceView,
   })),
 );
+const IntelligenceView = lazyView(["intelligence"], () =>
+  import("@/views/IntelligenceView").then((m) => ({ default: m.IntelligenceView })),
+);
+const OrbitalView = lazyView(["orbital"], () =>
+  import("@/views/OrbitalView").then((m) => ({ default: m.OrbitalView })),
+);
 
 /** Quiet time before a loading section admits it is loading. */
 export const LOADING_HINT_MS = 400;
@@ -408,6 +414,11 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <MarketplaceView />;
     case "world-intelligence":
       return <WorldIntelligenceView />;
+    // The HUD's public-data screens, reached from the Stark rail.
+    case "intelligence":
+      return <IntelligenceView />;
+    case "orbital":
+      return <OrbitalView />;
     // Deliberately nothing: the coding workspace is rendered by the STICKY
     // branch in `MainView` above, which keeps it mounted across section
     // changes. This switch is not rendered at all while one of those ids is

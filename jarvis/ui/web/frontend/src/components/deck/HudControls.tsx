@@ -29,40 +29,13 @@ async function toggleMicMute(): Promise<void> {
 }
 
 /**
- * The HUD's primary controls, under the orb: the state in one large word,
- * then TALK / END as the one big button, and the two mutes beside it.
- *
- *  - TALK / END is the same start/stop path the orb press and every other
- *    voice surface take (`useVoiceCall`), handed in by the view so the orb
- *    and this button can never disagree.
- *  - MIC mutes the microphone FOR the assistant (input only — it finishes
- *    what it is saying). The pipeline owns the flag: the press posts a
- *    toggle, the button mirrors `VoiceMuteChanged` from the deck store.
- *  - VOICE silences the assistant's voice for this session (TTS volume 0,
- *    never persisted), mirrored from `VoiceSpeakerMuteChanged` — the same
- *    contract as the voice bubble's speaker.
+ * The two mutes every HUD control surface offers, in one place: the
+ * microphone (the pipeline owns the flag; the press posts a toggle and the
+ * deck store mirrors `VoiceMuteChanged`) and the assistant's voice (TTS
+ * volume 0 for this session, mirrored from `VoiceSpeakerMuteChanged`).
+ * `micMuted` is null while voice is off or not answered yet.
  */
-export function HudControls({
-  status,
-  statusLabel,
-  callActive,
-  busy,
-  connecting,
-  disabled,
-  onTalk,
-  wakePhrase,
-  className,
-}: {
-  status: AssistantStatus;
-  statusLabel: string;
-  callActive: boolean;
-  busy: boolean;
-  connecting: boolean;
-  disabled: boolean;
-  onTalk: () => void;
-  wakePhrase: string;
-  className?: string;
-}) {
+export function useVoiceToggles() {
   const t = useT();
   const pushToast = useEventStore((s) => s.pushToast);
   const micMuted = useDeckStore((s) => s.micMuted);
@@ -126,6 +99,47 @@ export function HudControls({
       setVoiceBusy(false);
     }
   }, [pushToast, voiceBusy, voiceMuted]);
+
+  return { micMuted, micBusy, pressMic, voiceMuted, voiceBusy, pressVoice };
+}
+
+/**
+ * The HUD's primary controls, under the orb: the state in one large word,
+ * then TALK / END as the one big button, and the two mutes beside it.
+ *
+ *  - TALK / END is the same start/stop path the orb press and every other
+ *    voice surface take (`useVoiceCall`), handed in by the view so the orb
+ *    and this button can never disagree.
+ *  - MIC mutes the microphone FOR the assistant (input only — it finishes
+ *    what it is saying). The pipeline owns the flag: the press posts a
+ *    toggle, the button mirrors `VoiceMuteChanged` from the deck store.
+ *  - VOICE silences the assistant's voice for this session (TTS volume 0,
+ *    never persisted), mirrored from `VoiceSpeakerMuteChanged` — the same
+ *    contract as the voice bubble's speaker.
+ */
+export function HudControls({
+  status,
+  statusLabel,
+  callActive,
+  busy,
+  connecting,
+  disabled,
+  onTalk,
+  wakePhrase,
+  className,
+}: {
+  status: AssistantStatus;
+  statusLabel: string;
+  callActive: boolean;
+  busy: boolean;
+  connecting: boolean;
+  disabled: boolean;
+  onTalk: () => void;
+  wakePhrase: string;
+  className?: string;
+}) {
+  const t = useT();
+  const { micMuted, micBusy, pressMic, voiceMuted, voiceBusy, pressVoice } = useVoiceToggles();
 
   const tone =
     status.tone === "error"

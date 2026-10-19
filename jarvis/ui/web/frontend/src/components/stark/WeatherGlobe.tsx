@@ -178,6 +178,69 @@ export function WeatherGlobe({ className }: { className?: string }) {
   );
 }
 
+/**
+ * The Command screen's corner weather: the globe, the city, the temperature
+ * and the sky in a few words. Same source and same rules as the panel above;
+ * the pin button changes the city.
+ */
+export function WeatherMini({ className }: { className?: string }) {
+  const t = useT();
+  const [city, setCity] = useState<WeatherCity | null>(() => readCity());
+  const [editing, setEditing] = useState(false);
+  const q = useQuery<Forecast>({
+    queryKey: ["stark", "weather", city?.lat, city?.lon],
+    queryFn: () => fetchForecast(city as WeatherCity),
+    enabled: Boolean(city),
+    refetchInterval: 15 * 60_000,
+    staleTime: 10 * 60_000,
+    retry: 1,
+  });
+  const f = q.data;
+  return (
+    <div className={`flex items-center gap-3 ${className ?? ""}`} data-testid="stark-weather">
+      <StarkGlobe pin={city} className="h-[92px] w-[92px] shrink-0" />
+      <div className="min-w-0 font-hud">
+        {!city || editing ? (
+          <CityForm
+            onPick={(c) => {
+              writeCity(c);
+              setCity(c);
+              setEditing(false);
+            }}
+            onCancel={city ? () => setEditing(false) : undefined}
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              title={t("stark.weather.change")}
+              className="flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground hover:text-primary"
+            >
+              {city.name}
+              <MapPin className="h-3 w-3" aria-hidden />
+            </button>
+            {!f ? (
+              <p className="text-xs text-muted-foreground">
+                {t(q.isError ? "stark.weather.error" : "stark.weather.loading")}
+              </p>
+            ) : (
+              <div data-testid="stark-weather-now">
+                <p className="text-2xl font-semibold tabular-nums text-foreground">
+                  {Math.round(f.current.temperature_2m)}°C
+                </p>
+                <p className="text-xs font-medium text-muted-foreground">
+                  {t(`stark.weather.${weatherKey(f.current.weather_code)}`)} · {Math.round(f.current.relative_humidity_2m)}%
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CityForm({ onPick, onCancel }: { onPick: (c: WeatherCity) => void; onCancel?: () => void }) {
   const t = useT();
   const [name, setName] = useState("");

@@ -18,6 +18,10 @@
    the agent card wants it for real. Two weights, same offline rule. */
 @import "@fontsource/pixelify-sans/400.css";
 @import "@fontsource/pixelify-sans/600.css";
+/* The Stark HUD's face (`font-hud`): squared, technical capitals. Offline too. */
+@import "@fontsource/rajdhani/500.css";
+@import "@fontsource/rajdhani/600.css";
+@import "@fontsource/rajdhani/700.css";
 
 @tailwind base;
 @tailwind components;
@@ -3042,19 +3046,20 @@ body {
     --muted-foreground: 196 22% 62%;
     --faint-foreground: 200 15% 45%;
     --foreground-faint: 200 15% 45%;
-    --primary: 188 95% 55%;
+    --primary: 199 100% 61%;
     --primary-foreground: 216 50% 4%;
-    --accent: 188 95% 55%;
+    --accent: 199 100% 61%;
     --accent-foreground: 216 50% 4%;
-    --ring: 188 95% 55%;
-    --accent-rgb: 26 214 240;
+    --ring: 199 100% 61%;
+    --accent-rgb: 56 189 255;
     --stage-bg: 216 50% 4%;
     --stark-hot: 26 100% 58%;
+    --stark-ok: 152 72% 48%;
     position: relative;
     isolation: isolate;
     color: hsl(var(--foreground));
     background:
-      radial-gradient(ellipse 55% 50% at 50% 44%, rgb(26 214 240 / 0.13), transparent 70%),
+      radial-gradient(ellipse 55% 50% at 50% 44%, rgb(56 189 255 / 0.13), transparent 70%),
       radial-gradient(ellipse 90% 60% at 50% 115%, rgb(20 110 240 / 0.12), transparent 65%),
       hsl(216 55% 3.5%);
   }
@@ -3066,8 +3071,8 @@ body {
     z-index: -1;
     pointer-events: none;
     background-image:
-      linear-gradient(rgb(26 214 240 / 0.045) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(26 214 240 / 0.045) 1px, transparent 1px),
+      linear-gradient(rgb(56 189 255 / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(56 189 255 / 0.045) 1px, transparent 1px),
       repeating-linear-gradient(0deg, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
     background-size: 44px 44px, 44px 44px, 100% 3px;
     mask-image: radial-gradient(ellipse 85% 85% at 50% 45%, black 40%, transparent 100%);
@@ -3075,11 +3080,11 @@ body {
 
   .stark-panel {
     position: relative;
-    background: linear-gradient(180deg, rgb(26 214 240 / 0.07), rgb(4 10 18 / 0.78) 38%);
-    border: 1px solid rgb(26 214 240 / 0.22);
+    background: linear-gradient(180deg, rgb(56 189 255 / 0.07), rgb(4 10 18 / 0.78) 38%);
+    border: 1px solid rgb(56 189 255 / 0.22);
     box-shadow:
-      inset 0 1px 0 rgb(26 214 240 / 0.14),
-      inset 0 0 28px rgb(26 214 240 / 0.04),
+      inset 0 1px 0 rgb(56 189 255 / 0.14),
+      inset 0 0 28px rgb(56 189 255 / 0.04),
       0 12px 32px -14px rgb(0 0 0 / 0.75);
     backdrop-filter: blur(6px);
   }
@@ -3106,35 +3111,35 @@ body {
     border-right: 2px solid;
   }
   .stark-rule {
-    background: linear-gradient(90deg, rgb(26 214 240 / 0.45), rgb(26 214 240 / 0.04));
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.45), rgb(56 189 255 / 0.04));
   }
   .stark-tile {
-    border: 1px solid rgb(26 214 240 / 0.2);
-    background: linear-gradient(180deg, rgb(26 214 240 / 0.08), rgb(26 214 240 / 0.02));
+    border: 1px solid rgb(56 189 255 / 0.2);
+    background: linear-gradient(180deg, rgb(56 189 255 / 0.08), rgb(56 189 255 / 0.02));
     clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
     transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
   }
   .stark-tile:hover,
   .stark-tile:focus-visible {
-    border-color: rgb(26 214 240 / 0.6);
-    background: rgb(26 214 240 / 0.14);
-    box-shadow: inset 0 0 18px rgb(26 214 240 / 0.18);
+    border-color: rgb(56 189 255 / 0.6);
+    background: rgb(56 189 255 / 0.14);
+    box-shadow: inset 0 0 18px rgb(56 189 255 / 0.18);
   }
   .stark-seg-beyond {
-    background: repeating-linear-gradient(135deg, rgb(26 214 240 / 0.12) 0 2px, transparent 2px 4px);
+    background: repeating-linear-gradient(135deg, rgb(56 189 255 / 0.12) 0 2px, transparent 2px 4px);
   }
   .stark-gauge-arc {
     transition: stroke-dasharray 0.8s cubic-bezier(0.3, 0, 0.2, 1), stroke 0.3s;
   }
   .stark-title {
     text-shadow:
-      0 0 10px rgb(26 214 240 / 0.7),
-      0 0 28px rgb(26 214 240 / 0.35);
+      0 0 10px rgb(56 189 255 / 0.7),
+      0 0 28px rgb(56 189 255 / 0.35);
   }
   .stark-listen-bar {
-    background: linear-gradient(90deg, transparent, rgb(26 214 240 / 0.1) 20%, rgb(26 214 240 / 0.1) 80%, transparent);
-    border-top: 1px solid rgb(26 214 240 / 0.3);
-    border-bottom: 1px solid rgb(26 214 240 / 0.3);
+    background: linear-gradient(90deg, transparent, rgb(56 189 255 / 0.1) 20%, rgb(56 189 255 / 0.1) 80%, transparent);
+    border-top: 1px solid rgb(56 189 255 / 0.3);
+    border-bottom: 1px solid rgb(56 189 255 / 0.3);
   }
 
   /* The halo's rings: each turns on its own clock around the centre. */
@@ -3172,13 +3177,141 @@ body {
   .stark-halo[data-voice="listening"] svg,
   .stark-halo[data-voice="speaking"] svg,
   .stark-halo[data-busy="true"] svg {
-    filter: drop-shadow(0 0 6px rgb(26 214 240 / 0.55));
+    filter: drop-shadow(0 0 6px rgb(56 189 255 / 0.55));
   }
   .stark-ticker {
     animation: stark-marquee 60s linear infinite;
   }
   .stark-ticker:hover {
     animation-play-state: paused;
+  }
+
+  /* The rail: the Stark screens and the places people go from them. */
+  .stark-rail {
+    background: linear-gradient(90deg, rgb(4 12 22 / 0.95), rgb(6 16 28 / 0.8));
+    border-right: 1px solid rgb(56 189 255 / 0.14);
+    box-shadow: inset -1px 0 0 rgb(56 189 255 / 0.05);
+  }
+  @media (max-width: 1023px) {
+    .stark-rail {
+      border-right: 0;
+      border-bottom: 1px solid rgb(56 189 255 / 0.14);
+    }
+  }
+  .stark-rail-item {
+    color: hsl(var(--muted-foreground));
+    transition: color 0.2s;
+  }
+  .stark-rail-item:hover,
+  .stark-rail-item:focus-visible {
+    color: hsl(var(--foreground));
+    outline: none;
+  }
+  .stark-rail-item:focus-visible .stark-rail-ring {
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+  .stark-rail-ring {
+    border: 1px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+  }
+  .stark-rail-item.is-current {
+    color: hsl(var(--foreground));
+  }
+  .stark-rail-item.is-current .stark-rail-ring {
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary) / 0.8);
+    background: radial-gradient(circle, rgb(56 189 255 / 0.25), rgb(56 189 255 / 0.04) 70%);
+    box-shadow: 0 0 14px rgb(56 189 255 / 0.55), inset 0 0 10px rgb(56 189 255 / 0.35);
+  }
+  @media (min-width: 1024px) {
+    .stark-rail-item.is-current::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 18%;
+      bottom: 18%;
+      width: 3px;
+      background: hsl(var(--primary));
+      box-shadow: 0 0 10px hsl(var(--primary));
+    }
+  }
+  .stark-rail-item.is-asleep .stark-rail-ring {
+    color: hsl(var(--stark-hot));
+    border-color: hsl(var(--stark-hot) / 0.7);
+  }
+
+  /* The header: the name's angular frame and the tool capsule. */
+  .stark-title-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0 4% 10px;
+    z-index: -1;
+    background: radial-gradient(ellipse 70% 90% at 50% 40%, rgb(56 189 255 / 0.1), transparent 70%);
+  }
+  .stark-toolbar {
+    border: 1px solid rgb(56 189 255 / 0.28);
+    background: rgb(6 16 28 / 0.7);
+  }
+  .stark-icon-ring {
+    border: 1px solid rgb(56 189 255 / 0.45);
+    background: rgb(56 189 255 / 0.08);
+  }
+
+  /* The command bar: a glass capsule with the microphone as its jewel. */
+  .stark-pill {
+    border: 1px solid rgb(56 189 255 / 0.35);
+    background: linear-gradient(180deg, rgb(10 26 44 / 0.85), rgb(4 12 22 / 0.92));
+    box-shadow:
+      0 0 0 1px rgb(56 189 255 / 0.06),
+      0 0 28px -6px rgb(56 189 255 / 0.35),
+      inset 0 1px 0 rgb(56 189 255 / 0.18);
+  }
+  .stark-pill::after {
+    content: "";
+    position: absolute;
+    left: 30%;
+    right: 30%;
+    bottom: -1px;
+    height: 2px;
+    background: hsl(var(--primary));
+    box-shadow: 0 0 12px hsl(var(--primary));
+  }
+  .stark-pill:focus-within {
+    border-color: rgb(56 189 255 / 0.65);
+  }
+  .stark-mic {
+    color: hsl(var(--primary));
+    border: 1.5px solid hsl(var(--primary) / 0.85);
+    background: radial-gradient(circle, rgb(56 189 255 / 0.22), rgb(4 12 22 / 0.9) 70%);
+    box-shadow:
+      0 0 0 6px rgb(56 189 255 / 0.07),
+      0 0 22px rgb(56 189 255 / 0.45),
+      inset 0 0 16px rgb(56 189 255 / 0.3);
+    transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+  }
+  .stark-mic:hover:not(:disabled),
+  .stark-mic:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 6px rgb(56 189 255 / 0.14),
+      0 0 30px rgb(56 189 255 / 0.7),
+      inset 0 0 18px rgb(56 189 255 / 0.4);
+  }
+  .stark-mic.is-live {
+    color: hsl(var(--stark-hot));
+    border-color: hsl(var(--stark-hot));
+    box-shadow:
+      0 0 0 6px hsl(var(--stark-hot) / 0.12),
+      0 0 26px hsl(var(--stark-hot) / 0.6);
+  }
+  .stark-caption {
+    border-left: 2px solid hsl(var(--primary) / 0.7);
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.1), transparent 85%);
+  }
+  .stark-caption:hover,
+  .stark-caption:focus-visible {
+    outline: none;
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.18), transparent 90%);
   }
 
   @keyframes stark-spin {

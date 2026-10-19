@@ -21,9 +21,7 @@ import { useAgentChatStore } from "@/store/agentChat";
  * button is ChatStage's own test.
  */
 vi.mock("@/views/MissionDeckView", () => ({
-  MissionDeckView: ({ dock }: { dock?: boolean }) => (
-    <div data-testid="hud" data-dock={dock === false ? "off" : "on"} />
-  ),
+  MissionDeckView: () => <div data-testid="hud" />,
 }));
 vi.mock("@/components/home/VoiceStage", () => ({
   VoiceStage: ({ onExit }: { onExit?: () => void }) => (
@@ -50,9 +48,9 @@ const STORAGE_KEY = "jarvis.home.surface.v2";
 describe("ChatsSurface (the front page)", () => {
   afterEach(cleanup);
 
-  it("is the HUD, with the app's sidebar as its navigation", () => {
+  it("is the HUD", () => {
     render(<ChatsSurface />);
-    expect(screen.getByTestId("hud").getAttribute("data-dock")).toBe("off");
+    expect(screen.getByTestId("hud")).toBeTruthy();
   });
 });
 

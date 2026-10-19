@@ -62,12 +62,16 @@ import { installDictationFocusTracker } from "@/lib/dictationTarget";
 import { SubscriptionRealtimeTransportBroker } from "@/components/voice/SubscriptionRealtimeTransportBroker";
 import { BrowserRealtimeControl } from "@/components/voice/BrowserRealtimeControl";
 import { cn } from "@/lib/utils";
+import { HUD_SECTION_IDS } from "@/components/layout/navGroups";
 
 /** Where the collapsed/expanded choice for the nav sidebar is remembered. */
 const NAV_COLLAPSED_KEY = "jarvis.sidebar.collapsed.v1";
 
+/** The HUD's Stark screens: each draws its own rail and its own state line. */
+const STARK_SECTIONS: readonly SectionId[] = [...HUD_SECTION_IDS, "intelligence", "orbital", "world-intelligence"];
+
 /** Sections that fill the whole window instead of sitting beside the nav. */
-const FULLSCREEN_SECTIONS: readonly SectionId[] = ["agents", "docs", "memory"];
+const FULLSCREEN_SECTIONS: readonly SectionId[] = ["agents", "docs", "memory", ...STARK_SECTIONS];
 
 /**
  * The surface the active section is drawn on.
@@ -404,7 +408,10 @@ export default function App() {
         {/* A destination that spans several views (WORK, AGENTS, ORB) draws
             one tab bar over them; see navGroups.PRIMARY_DESTINATIONS. */}
         {!sectionFullscreen && <DestinationTabs />}
-        {!(["agentic-ide", "chat-workspace", "agentic-ide-classic"].includes(activeSection)) && <VoiceWarmingBanner />}
+        {/* The Stark screens say "starting" in their own header. */}
+        {!(["agentic-ide", "chat-workspace", "agentic-ide-classic", ...STARK_SECTIONS] as string[]).includes(activeSection) && (
+          <VoiceWarmingBanner />
+        )}
         <SectionStage visualization={visualizationActive}>
           <MainView />
         </SectionStage>

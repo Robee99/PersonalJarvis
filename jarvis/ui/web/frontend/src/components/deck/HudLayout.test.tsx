@@ -3,12 +3,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 /**
- * The HUD v3 board: the orb with the primary controls under it in the centre,
- * the real chat in the right column, the memory orb in the left one — and
- * the controls doing what they say (talk = the voice call path, bound to the
- * chat on screen first; mic = the pipeline's mute toggle mirrored from the
- * bus). The secondary instruments and the chat's own stage are stubbed; each
- * has its own tests.
+ * The Command screen: the reactor in the centre over the map, system status
+ * and quick access on the left, resources and tasks on the right, the command
+ * bar under the reactor and the rail down the left — and the controls doing
+ * what they say (talk = the voice call path, bound to the chat on screen
+ * first; mic = the pipeline's mute toggle mirrored from the bus; the field =
+ * a message into the HUD's chat). The instruments and the chat's own stage
+ * are stubbed; each has its own tests.
  */
 vi.mock("@/components/layout/DockRail", () => ({ DockRail: () => <nav data-testid="dock" /> }));
 vi.mock("@/components/deck/DeckActivityCards", () => ({
@@ -18,7 +19,7 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
 // The Stark instruments poll their own endpoints; each has its own tests.
 vi.mock("@/components/stark/StarkInstruments", () => ({
   SystemStatusPanel: () => <section>status</section>,
-  VitalsPanel: () => <section>vitals</section>,
+  ResourcesPanel: () => <section>vitals</section>,
   QuickAccess: () => <nav>quick</nav>,
   StarkClock: () => <span>clock</span>,
 }));
@@ -27,7 +28,12 @@ vi.mock("@/components/stark/ContextMeter", () => ({
   useDeckContext: () => ({ data: undefined }),
   fmtK: (n: number) => String(n),
 }));
-vi.mock("@/components/stark/WeatherGlobe", () => ({ WeatherGlobe: () => <section>weather</section> }));
+vi.mock("@/components/stark/WeatherGlobe", () => ({
+  WeatherGlobe: () => <section>weather</section>,
+  WeatherMini: () => <section>weather</section>,
+  readCity: () => null,
+}));
+vi.mock("@/components/stark/TasksPanel", () => ({ TasksPanel: () => <section>tasks</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   LiveCounter: () => <div>counter</div>,
@@ -107,7 +113,7 @@ function renderBoard() {
   );
 }
 
-describe("HUD v2 layout and controls", { timeout: 15_000 }, () => {
+describe("Command screen layout and controls", { timeout: 15_000 }, () => {
   beforeEach(() => {
     posts.length = 0;
     voiceBinds.length = 0;
@@ -139,55 +145,46 @@ describe("HUD v2 layout and controls", { timeout: 15_000 }, () => {
     vi.unstubAllGlobals();
   });
 
-  test("the reactor and its controls hold the centre; instruments left, the chat right over the memory orb", async () => {
+  test("the reactor holds the centre; status and quick access left, resources and tasks right", async () => {
     stubFetch();
     renderBoard();
     const board = screen.getByTestId("deck-board");
-    const orb = within(board).getByTestId("deck-orb");
-    const controls = within(board).getByTestId("hud-controls");
-    // The controls sit in the centre column, right under the orb's stage.
-    expect(orb.closest(".order-1")).toBe(controls.closest(".order-1"));
-    expect(within(controls).getByTestId("hud-talk").textContent).toContain("Talk");
-    expect(within(controls).getByTestId("hud-state").getAttribute("data-phase")).toBe("ready");
-
-    // The chat is the real one (AssistantChat → ChatStage), not a transcript.
-    const right = screen.getByTestId("deck-slot-right-top");
-    expect(within(right).getByTestId("hud-chat")).toBeTruthy();
-    expect(await within(right).findByTestId("chat-stage")).toBeTruthy();
-    expect(within(right).queryByTestId("hud-composer")).toBeNull();
-    // The orb stands in the reactor's halo.
     expect(within(screen.getByTestId("stark-halo")).getByTestId("deck-orb")).toBeTruthy();
-    // The instruments run down the left: status, vitals, context, weather.
-    const left = screen.getByTestId("deck-slot-left-top");
-    for (const name of ["status", "vitals", "context", "weather"]) {
-      expect(within(left).getByText(name)).toBeTruthy();
+    const left = within(board).getByTestId("deck-slot-left-top");
+    expect(within(left).getByText("status")).toBeTruthy();
+    expect(within(left).getByText("quick")).toBeTruthy();
+    const right = within(board).getByTestId("deck-slot-right-top");
+    expect(within(right).getByText("vitals")).toBeTruthy();
+    expect(within(right).getByText("tasks")).toBeTruthy();
+    // The command bar sits under the reactor, the rail down the left edge.
+    expect(within(board).getByTestId("stark-command-bar")).toBeTruthy();
+    const rail = screen.getByTestId("stark-rail");
+    for (const key of ["command", "intelligence", "orbital", "world", "memory", "agents", "voice", "settings"]) {
+      expect(within(rail).getByTestId(`stark-rail-${key}`)).toBeTruthy();
     }
-    // The memory orb is on the board by default — no toggle to find first.
-    const memory = screen.getByTestId("deck-slot-right-bottom");
-    expect(within(memory).getByTestId("hud-memory")).toBeTruthy();
-    expect(within(memory).getByTestId("memory-orb-3d").className).not.toContain("hidden");
-    // The heavy secondary instruments are off the board.
-    expect(screen.queryByText("wiki")).toBeNull();
-    expect(screen.queryByText("terminals")).toBeNull();
-    await waitFor(() => expect(screen.getByTestId("hud-mic").hasAttribute("disabled")).toBe(false));
+    expect(screen.getByTestId("stark-rail-command").getAttribute("aria-current")).toBe("page");
+    // The header: the name as a wordmark, the clock, the three tools.
+    expect(screen.getByTestId("stark-wordmark").textContent).toBe("NOVA");
+    expect(screen.getByTestId("stark-clock")).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId("stark-mic-mute").hasAttribute("disabled")).toBe(false));
   });
 
-  test("Talk binds the chat on screen, then takes the voice call path; the state word follows the store", async () => {
+  test("Talk binds the chat on screen, then takes the voice call path; the state line follows the store", async () => {
     stubFetch();
     renderBoard();
-    fireEvent.click(screen.getByTestId("hud-talk"));
-    // The call continues the chat beside the orb: bound first, then started.
+    // Nothing listens before the button is pressed.
+    expect(requestVoiceCall).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("stark-talk"));
     await waitFor(() => expect(requestVoiceCall).toHaveBeenCalledTimes(1));
     expect(voiceBinds).toEqual([JSON.stringify({ session_id: "s-hud", voice_session_id: null })]);
     act(() => useEventStore.setState({ voiceState: "listening" }));
-    expect(screen.getByTestId("hud-state").getAttribute("data-phase")).toBe("listening");
-    expect(screen.getByTestId("hud-talk").textContent).toContain("End");
+    expect(screen.getByTestId("stark-bar-state").textContent).toMatch(/Listening/);
   });
 
   test("Mic posts the toggle and mirrors the pipeline's VoiceMuteChanged", async () => {
     stubFetch(false);
     renderBoard();
-    const mic = screen.getByTestId("hud-mic");
+    const mic = screen.getByTestId("stark-mic-mute");
     await waitFor(() => expect(mic.hasAttribute("disabled")).toBe(false));
     expect(mic.getAttribute("aria-pressed")).toBe("false");
     await act(async () => {
@@ -197,40 +194,67 @@ describe("HUD v2 layout and controls", { timeout: 15_000 }, () => {
     // The button does not guess: it flips when the bus says so.
     expect(mic.getAttribute("aria-pressed")).toBe("false");
     act(() => useDeckStore.getState().ingest("VoiceMuteChanged", { muted: true, source: "web.hud" }, Date.now()));
-    expect(screen.getByTestId("hud-mic").getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByText("Mic muted")).toBeTruthy();
+    expect(screen.getByTestId("stark-mic-mute").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("stark-bar-state").textContent).toBe("Microphone off");
   });
 
   test("Voice silences the assistant for the session only (never persisted)", async () => {
     stubFetch();
     renderBoard();
-    const voice = screen.getByTestId("hud-voice");
     await act(async () => {
-      fireEvent.click(voice);
+      fireEvent.click(screen.getByTestId("stark-voice-mute"));
     });
     expect(setTtsVolume).toHaveBeenCalledWith(0, false);
-    expect(screen.getByTestId("hud-voice").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("stark-voice-mute").getAttribute("aria-pressed")).toBe("true");
     await act(async () => {
-      fireEvent.click(screen.getByTestId("hud-voice"));
+      fireEvent.click(screen.getByTestId("stark-voice-mute"));
     });
     expect(setTtsVolume).toHaveBeenLastCalledWith(0.8, false);
   });
 
-  test("the full memory map — and its data import — open over the HUD and close back to it", async () => {
+  test("a typed message goes into the HUD's chat; a failed send says so and keeps the text", async () => {
+    stubFetch();
+    const send = vi.fn(async (_text: string) => "sent" as const);
+    useAgentChatStore.setState({ send } as never);
+    renderBoard();
+    const field = screen.getByTestId("stark-ask") as HTMLInputElement;
+    expect(screen.getByTestId("stark-send").hasAttribute("disabled")).toBe(true);
+    fireEvent.change(field, { target: { value: "  status report  " } });
+    await act(async () => {
+      fireEvent.submit(field.closest("form")!);
+    });
+    expect(send).toHaveBeenCalledWith("status report");
+    expect(field.value).toBe("");
+
+    send.mockImplementationOnce(async () => "failed" as never);
+    fireEvent.change(field, { target: { value: "again" } });
+    await act(async () => {
+      fireEvent.submit(field.closest("form")!);
+    });
+    expect(screen.getByTestId("stark-send-failed")).toBeTruthy();
+    expect(field.value).toBe("again");
+  });
+
+  test("the chat button opens the whole thread over the screen and closes it again", () => {
     stubFetch();
     renderBoard();
-    fireEvent.click(screen.getByRole("button", { name: "Import data into memory" }));
+    const drawer = screen.getByTestId("stark-chat-drawer");
+    expect(drawer.className).toContain("hidden");
+    fireEvent.click(screen.getByTestId("stark-chat-toggle"));
+    expect(drawer.className).not.toContain("hidden");
+    fireEvent.click(screen.getByTestId("stark-chat-toggle"));
+    expect(drawer.className).toContain("hidden");
+  });
+
+  test("Memory on the rail opens the full memory map over the HUD; Escape closes back to it", async () => {
+    stubFetch();
+    renderBoard();
+    fireEvent.click(screen.getByTestId("stark-rail-memory"));
     const map = await screen.findByTestId("memory-orb-view");
     expect(map.getAttribute("data-mode")).toBe("memory");
-    expect(map.getAttribute("data-import")).toBe("open");
     // Still the HUD underneath: same section, the board stays mounted.
     expect(useEventStore.getState().activeSection).toBe("deck");
     expect(screen.getByTestId("deck-board")).toBeTruthy();
-    fireEvent.click(screen.getByTestId("hud-full-map-close"));
-    expect(screen.queryByTestId("hud-full-map")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Open the full memory map" }));
-    expect((await screen.findByTestId("memory-orb-view")).getAttribute("data-mode")).toBe("projects");
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("hud-full-map")).toBeNull();
   });

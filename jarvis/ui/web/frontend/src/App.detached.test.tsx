@@ -79,6 +79,7 @@ afterEach(() => {
 
 describe("App shell around detached coding views", () => {
   it("keeps the main sidebar while Settings floats over the app", () => {
+    useEventStore.setState({ activeSection: "skills" });
     render(<App />);
     expect(screen.getByTestId("sidebar")).toBeTruthy();
 
@@ -99,7 +100,7 @@ describe("App shell around detached coding views", () => {
     expect(document.documentElement.classList.contains("jarvis-wallpaper")).toBe(false);
   });
 
-  it.each(["agents", "docs", "memory"] as const)("gives the %s section the whole window", (section) => {
+  it.each(["agents", "docs", "memory", "chats", "intelligence", "orbital"] as const)("gives the %s section the whole window", (section) => {
     useEventStore.setState({ activeSection: section });
 
     render(<App />);

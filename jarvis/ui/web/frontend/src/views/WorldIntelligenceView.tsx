@@ -4,7 +4,7 @@ import {
   clearPendingGeVView,
   readPendingGeVView,
 } from "@/lib/gevViewBridge";
-import { StarkClock } from "@/components/stark/StarkInstruments";
+import { StarkShell } from "@/components/stark/StarkShell";
 import { StarkPanel } from "@/components/stark/StarkPanel";
 import { NewsBroadcast, NewsFeeds, NewsTicker } from "@/components/stark/WorldPanels";
 import { useT } from "@/i18n";
@@ -128,23 +128,17 @@ export function WorldIntelligenceView() {
     );
   }
   return (
-    <section className="stark-hud flex h-full min-h-0 min-w-0 flex-col" data-testid="stark-world">
-      <header className="relative flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2.5">
-        <Globe2 className="h-6 w-6 shrink-0 text-primary" aria-hidden="true" />
-        <div className="flex min-w-0 flex-col leading-none">
-          <h1 className="stark-title truncate font-mono text-xl font-bold uppercase tracking-[0.32em] text-primary">
-            {t("stark.world.title")}
-          </h1>
-          <p
-            aria-live="polite"
-            className="mt-1 truncate font-mono text-[9px] uppercase tracking-[0.24em] text-muted-foreground"
-          >
+    <StarkShell
+      screen="world"
+      subtitle={t("stark.world.title")}
+      testId="stark-world"
+      badge={
+        <div className="flex flex-col items-end gap-1">
+          <p aria-live="polite" className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             God’s Eye View · {globeStatus}
           </p>
-        </div>
-        <div className="ml-auto flex items-center gap-4">
           <a
-            className="stark-tile inline-flex shrink-0 items-center gap-2 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground hover:text-foreground"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-primary hover:underline"
             href={GEV_EMBED_URL}
             target="_blank"
             rel="noopener noreferrer"
@@ -152,10 +146,10 @@ export function WorldIntelligenceView() {
             Open separately
             <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
           </a>
-          <StarkClock />
         </div>
-      </header>
-      <div className="grid min-h-0 flex-1 gap-3 px-3 pb-3 xl:grid-cols-[1fr_minmax(300px,24rem)]">
+      }
+    >
+      <div className="grid min-h-0 flex-1 gap-3 px-4 pb-3 xl:grid-cols-[1fr_minmax(300px,24rem)] xl:px-6">
         <StarkPanel
           index="06"
           title="God’s Eye View"
@@ -179,9 +173,9 @@ export function WorldIntelligenceView() {
           <NewsFeeds className="shrink-0" />
         </div>
       </div>
-      <div className="shrink-0 px-3 pb-3">
+      <div className="shrink-0 px-4 pb-3 xl:px-6">
         <NewsTicker />
       </div>
-    </section>
+    </StarkShell>
   );
 }

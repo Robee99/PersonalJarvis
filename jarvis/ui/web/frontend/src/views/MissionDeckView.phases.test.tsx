@@ -22,7 +22,7 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
 // The Stark instruments poll their own endpoints; each has its own tests.
 vi.mock("@/components/stark/StarkInstruments", () => ({
   SystemStatusPanel: () => <section>status</section>,
-  VitalsPanel: () => <section>vitals</section>,
+  ResourcesPanel: () => <section>vitals</section>,
   QuickAccess: () => <nav>quick</nav>,
   StarkClock: () => <span>clock</span>,
 }));
@@ -31,7 +31,12 @@ vi.mock("@/components/stark/ContextMeter", () => ({
   useDeckContext: () => ({ data: undefined }),
   fmtK: (n: number) => String(n),
 }));
-vi.mock("@/components/stark/WeatherGlobe", () => ({ WeatherGlobe: () => <section>weather</section> }));
+vi.mock("@/components/stark/WeatherGlobe", () => ({
+  WeatherGlobe: () => <section>weather</section>,
+  WeatherMini: () => <section>weather</section>,
+  readCity: () => null,
+}));
+vi.mock("@/components/stark/TasksPanel", () => ({ TasksPanel: () => <section>tasks</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
@@ -113,7 +118,18 @@ vi.mock("@/hooks/useVoiceEngineDisplay", () => ({
   }),
 }));
 
-import { MissionDeckView } from "@/views/MissionDeckView";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MissionDeckView as Deck } from "@/views/MissionDeckView";
+
+/** The board inside a fresh query client (the command bar and badges read through it). */
+function MissionDeckView() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={client}>
+      <Deck />
+    </QueryClientProvider>
+  );
+}
 import { useDeckStore } from "@/store/deck";
 import { useEventStore } from "@/store/events";
 
@@ -193,7 +209,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     // The cards themselves mount one beat each, not in the click's own task
     // (the launch must not freeze on the board's mount): the slot is there,
     // its card is not yet, and the slot is not powered until its frame fades.
-    expect(screen.queryByText("log")).toBeNull();
+    expect(screen.queryByText("status")).toBeNull();
     expect(left.getAttribute("data-powered")).toBe("false");
     // The orb lands with a ring; the board ends with one scan.
     expect(screen.getByTestId("deck-orb-landing")).toBeTruthy();
@@ -203,7 +219,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     const standby = screen.getByTestId("deck-standby");
     await waitFor(() => expect(standby.getAttribute("data-leaving")).toBe("true"));
     expect(standby.querySelector('[data-testid="deck-handoff-wave"]')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("log")).toBeTruthy(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText("status")).toBeTruthy(), { timeout: 3000 });
     await waitFor(() => expect(screen.queryByTestId("deck-standby")).toBeNull(), { timeout: 4000 });
     await waitFor(() => expect(left.getAttribute("data-powered")).toBe("true"), { timeout: 4000 });
   });
@@ -228,9 +244,9 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     await waitFor(() => expect(requestVoiceCall).toHaveBeenCalledTimes(1));
   });
 
-  test("the header carries Gigi and leaves restart to the window caption", () => {
+  test("the header carries the wordmark and leaves restart to the window caption", () => {
     render(<MissionDeckView />);
-    expect(screen.getByTestId("deck-header-gigi")).toBeTruthy();
+    expect(screen.getByTestId("stark-wordmark").textContent).toBe("NOVA");
     expect(screen.queryByRole("button", { name: /^restart$/i })).toBeNull();
     expect(screen.queryByTestId("detach-view-button")).toBeNull();
   });
@@ -245,7 +261,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     const left = screen.getByTestId("deck-slot-left-top");
     expect(left.getAttribute("data-reveal")).toBe("false");
     // … cards and all, powered from the first render.
-    expect(screen.getByText("log")).toBeTruthy();
+    expect(screen.getByText("status")).toBeTruthy();
     expect(left.getAttribute("data-powered")).toBe("true");
   });
 });
