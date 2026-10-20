@@ -109,6 +109,27 @@ def parse_volume_command(text: str) -> VolumeCommand | None:
     return None
 
 
+#: Joins between orders in one breath: "unmute and set the volume to 50".
+_V_JOIN = re.compile(r"\s*(?:,\s*)?\b(?:and\s+then|and|then)\b\s*|\s*,\s*", re.IGNORECASE)
+
+
+def parse_volume_commands(text: str) -> list[VolumeCommand]:
+    """Every volume order in ``text``, in order, or ``[]``.
+
+    "Unmute and set the volume to 50" is two plain orders; left to the brain it
+    was answered "Unmuted, 50%" with nothing changed (2026-10-20). The whole
+    utterance must be volume orders: one other clause and the brain takes it.
+    """
+    single = parse_volume_command(text)
+    if single is not None:
+        return [single]
+    parts = [p for p in _V_JOIN.split(text or "") if p and p.strip()]
+    if len(parts) < 2:
+        return []
+    commands = [parse_volume_command(part) for part in parts]
+    return [c for c in commands if c is not None] if all(commands) else []
+
+
 @dataclass(frozen=True)
 class WindowCommand:
     """One plain window order: a window_control action and the window named."""
@@ -165,14 +186,21 @@ _STATE_WORDS = {
 
 
 def volume_reflex(text: str) -> str | None:
-    """The reply for a plain volume command on Windows, else ``None``."""
-    command = parse_volume_command(text)
-    if command is None or sys.platform != "win32":
+    """The reply for plain volume commands on Windows, else ``None``.
+
+    Several orders run in turn; the reply is the last read-back, which states
+    the final level and mute state.
+    """
+    commands = parse_volume_commands(text)
+    if not commands or sys.platform != "win32":
         return None
     from jarvis.plugins.tool.system_volume import VolumeUnavailable, apply  # noqa: PLC0415
 
     try:
-        return apply(command.action, command.percent)
+        reply = ""
+        for command in commands:
+            reply = apply(command.action, command.percent)
+        return reply
     except (VolumeUnavailable, OSError, ImportError) as exc:
         log.warning("volume reflex failed: %s", exc)
         return "I couldn't reach Windows' volume control, so I can't confirm any change."

@@ -181,3 +181,34 @@ def test_url_reflex_opens_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("os.startfile", opened.append, raising=False)
     assert pc_reflex.url_reflex("Open YouTube dot com") == "Opened youtube.com in your browser."
     assert opened == ["https://youtube.com"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("unmute and set volume to 50", [VolumeCommand("unmute"), VolumeCommand("set", 50)]),
+        ("mute, then volume up", [VolumeCommand("mute"), VolumeCommand("up", 10)]),
+        ("set the volume to 30", [VolumeCommand("set", 30)]),
+    ],
+)
+def test_volume_orders_in_one_breath_all_match(text: str, expected: list) -> None:
+    assert pc_reflex.parse_volume_commands(text) == expected
+
+
+def test_a_mixed_utterance_goes_to_the_brain() -> None:
+    assert pc_reflex.parse_volume_commands("unmute and open spotify") == []
+
+
+def test_several_volume_orders_run_in_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    import jarvis.plugins.tool.system_volume as sv
+
+    ran: list[tuple[str, int | None]] = []
+
+    def apply(action: str, percent: int | None) -> str:
+        ran.append((action, percent))
+        return f"after {action}"
+
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(sv, "apply", apply)
+    assert pc_reflex.volume_reflex("unmute and set volume to 50") == "after set"
+    assert ran == [("unmute", None), ("set", 50)]

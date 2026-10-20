@@ -707,6 +707,25 @@ def _route_policy_denies(provider: str, *, cfg: Any, manager: Any | None) -> str
     )
 
 
+#: Brain cards that ARE a model server (not a gateway that may forward to a
+#: cloud model, as ``hermes`` can): on the loopback interface they keep a
+#: screenshot on this machine.
+_MODEL_SERVER_BRAINS: frozenset[str] = frozenset({"local-openai", "ollama"})
+
+
+def _runs_on_this_machine(provider: str, cfg: Any) -> bool:
+    """Whether ``provider`` is a model server listening on this machine."""
+    if provider not in _MODEL_SERVER_BRAINS:
+        return False
+    from jarvis.core.config import is_loopback_url
+
+    providers = getattr(getattr(cfg, "brain", None), "providers", None) or {}
+    card = providers.get(provider)
+    base_url = str(getattr(card, "base_url", "") or "").strip()
+    # An Ollama card without an address talks to its default, 127.0.0.1:11434.
+    return is_loopback_url(base_url) if base_url else provider == "ollama"
+
+
 def _follow_route_policy(
     old: str | None, provider: str, *, cfg: Any, manager: Any | None, persist: bool
 ) -> None:
@@ -722,7 +741,9 @@ def _follow_route_policy(
     from jarvis.core.config import BrainRoutePolicyConfig
 
     policy = _live_route_policy(cfg, manager)
-    edits = tiers_following_switch(policy, old, provider)
+    edits = tiers_following_switch(
+        policy, old, provider, on_device=lambda name: _runs_on_this_machine(name, cfg)
+    )
     if not edits:
         return
     if persist:

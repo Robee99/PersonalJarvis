@@ -108,6 +108,28 @@ def test_an_unrelated_deep_tier_and_a_disabled_policy_are_left_alone() -> None:
     assert tiers_following_switch(off, "hermes", "gemini") == {}
 
 
+def test_a_tier_moved_to_a_model_server_on_this_machine_stays_local() -> None:
+    policy = BrainRoutePolicyConfig.model_validate(
+        {"enabled": True, "fast": {"provider": "nous", "local": False},
+         "deep": {"provider": "nous", "local": False}}
+    )
+    edits = tiers_following_switch(
+        policy, "nous", "local-openai", on_device=lambda name: name == "local-openai"
+    )
+    assert edits == {
+        "fast": {"provider": "local-openai", "local": True},
+        "deep": {"provider": "local-openai", "local": True},
+    }
+    # A cloud brain never inherits "local" from the tier it replaces.
+    back = tiers_following_switch(
+        BrainRoutePolicyConfig.model_validate(
+            {"enabled": True, "fast": {"provider": "local-openai", "local": True}}
+        ),
+        "local-openai", "nous", on_device=lambda name: name == "local-openai",
+    )
+    assert back == {"fast": {"provider": "nous"}}
+
+
 # --- through the real Brain -------------------------------------------------
 
 

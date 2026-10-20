@@ -198,7 +198,11 @@ def hermes_is_main_brain(config: Any) -> bool:
 
 
 def tiers_following_switch(
-    policy: Any, old_primary: str | None, new_primary: str
+    policy: Any,
+    old_primary: str | None,
+    new_primary: str,
+    *,
+    on_device: Callable[[str], bool] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """The ``[brain.route_policy]`` tier edits that follow a main-brain switch.
 
@@ -212,8 +216,11 @@ def tiers_following_switch(
       old fast target), so that brain does not keep answering deep turns.
 
     A model pinned for the previous provider means nothing on the new one, so
-    it is dropped (the tier then follows the provider card's selection), and
-    the ``local`` declaration is reset to the safe "may leave the device".
+    it is dropped (the tier then follows the provider card's selection). The
+    ``local`` declaration is reset to the safe "may leave the device" unless
+    ``on_device`` says the new brain runs on this machine: a model server on
+    the loopback interface keeps screenshots here, and leaving it marked as
+    cloud blocked every screen task with "no vision" (2026-10-20).
     Deny lists are left untouched. A disabled policy needs no edit.
     """
     if policy is None or not bool(getattr(policy, "enabled", False)):
@@ -231,11 +238,14 @@ def tiers_following_switch(
     replaced = {
         name.lower() for name in (str(old_primary or "").strip(), fast) if name
     } - {new.lower()}
+    target: dict[str, Any] = {"provider": new}
+    if on_device is not None and on_device(new):
+        target["local"] = True
     edits: dict[str, dict[str, Any]] = {}
     if fast.lower() != new.lower():
-        edits[TIER_FAST] = {"provider": new}
+        edits[TIER_FAST] = dict(target)
     if deep and deep.lower() in replaced:
-        edits[TIER_DEEP] = {"provider": new}
+        edits[TIER_DEEP] = dict(target)
     return edits
 
 
