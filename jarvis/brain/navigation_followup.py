@@ -9,7 +9,7 @@ section and then clicks the control by its words, through ``navigate``'s
 Conservative, like ``match_navigation_intent``: the utterance must split at a
 connector ("and", "then", a comma, "und dann", "y luego"), the part before it
 must be a navigation command on its own, and the part after it must start with
-a second cue ("go to", "show", "click", "öffne", ...) followed by a short label
+a second cue ("go to", "show", "click", ...) followed by a short label
 (at most four words once filler like "the", "page", "tab" is dropped). Anything
 longer is a sentence about the screen, not the name of a control, and the
 turn falls back to plain navigation. Pure regex, no LLM, no IO (AP-9/AP-11).
