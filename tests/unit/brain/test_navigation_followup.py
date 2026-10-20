@@ -121,3 +121,23 @@ async def test_a_plain_command_keeps_its_old_answer() -> None:
 
     assert executor.calls == [{"section": "settings"}]
     assert reply == "Opening Settings."
+
+
+async def test_a_tab_inside_a_section_is_not_a_terminal_tab() -> None:
+    # Live 2026-10-20: the Agentic IDE read "open … tab" as a terminal tab and
+    # answered "No workspace is open".
+    manager, executor = _manager(
+        ToolResult(success=True, output={"section": "world-intelligence", "clicked": "News"})
+    )
+    reply = await manager._run_navigation_fast_path("Open God's Eye and show the news tab")
+
+    assert executor.calls == [{"section": "world-intelligence", "then": "news"}]
+    assert reply is not None and reply.endswith("clicked News.")
+
+
+def test_only_a_control_in_an_app_section_outranks_other_gates() -> None:
+    from jarvis.brain.manager import _names_app_control, _navigation_followup
+
+    assert _names_app_control(_navigation_followup("open settings and go to the model page"))
+    assert not _names_app_control(_navigation_followup("open settings"))
+    assert not _names_app_control(_navigation_followup("open the IDE and show the terminal tab"))

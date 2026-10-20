@@ -2529,6 +2529,29 @@ def _navigation_followup_reply(
     return de if german else en
 
 
+#: Sections that are the Agentic IDE itself: a follow-up there may mean a pane.
+_IDE_SECTIONS = frozenset({"agentic-ide", "agentic-ide-classic", "chat-workspace"})
+_PANE_WORDS = re.compile(r"\b(?:terminals?|panes?|ide)\b", re.IGNORECASE)
+
+
+def _navigation_followup(user_text: str) -> Any:
+    from jarvis.brain.navigation_followup import match_navigation_followup
+
+    return match_navigation_followup(user_text)
+
+
+def _names_app_control(followup: Any) -> bool:
+    """Whether a two-step command names a control inside an app section.
+
+    Such a command ("open settings and go to the model page") is the app's
+    own navigation. The local-action gate read "go to" as a desktop task and
+    the Agentic IDE read "show the news tab" as a terminal tab (2026-10-20).
+    """
+    if followup is None or followup.section in _IDE_SECTIONS:
+        return False
+    return _PANE_WORDS.search(followup.label) is None
+
+
 def normalize_reply_language(value: object) -> str:
     """Coerce a raw reply-language value to a known code, else ``"auto"``.
 
@@ -7525,7 +7548,11 @@ class BrainManager:
         # is the second layer, because a matcher fix alone leaves the class open
         # for the next section word that lands next to a genuine cue.
         # <!-- i18n-allow: quoted spoken transcript of the failing utterance -->
-        if self._agentic_ide_owns_turn(user_text):
+        # A named app section plus a control inside it ("open God's Eye and
+        # show the news tab") is not a terminal request: the Agentic IDE read
+        # "open … tab" as "open a terminal tab" (live 2026-10-20). It still
+        # wins when the words name its own surface or a pane.
+        if self._agentic_ide_owns_turn(user_text) and not _names_app_control(followup):
             log.info(
                 "navigation fast-path stands down — this turn addresses a "
                 "running Agentic-IDE terminal (more specific evidence)."
@@ -11868,6 +11895,7 @@ class BrainManager:
             and not screen_context.has_image
             and self._skill_turn_match is None
             and not self._agentic_ide_owns_turn(user_text)
+            and not _names_app_control(_navigation_followup(user_text))
         ):
             local_action = await self._run_local_action_fast_path(
                 user_text, trace_id=turn_trace_id,
