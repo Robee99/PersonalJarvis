@@ -7018,6 +7018,21 @@ class BrainManager:
                 within.append(name)
             relevant = within
         keep.update(relevant)
+        # Discovery must remain reachable even when unrelated native settings
+        # fill the count cap. Reserve it only when its schema fits the budget.
+        protected = keep.intersection(tools)
+        discovery_cost = (
+            _tool_surface_tokens("tools-list", tools["tools-list"])
+            if "tools-list" in tools else 0
+        )
+        if "tools-list" in tools and (max_tools <= 0 or len(protected) < max_tools) and (
+            window <= 0 or (
+                discovery_cost <= max(window - used, 0) // 4
+                and sum(_tool_surface_tokens(name, tools[name]) for name in protected)
+                + discovery_cost <= max(window - used, 0)
+            )
+        ):
+            keep.add("tools-list")
         fitted, dropped = _fit_tools_to_context_window(
             tools, context_window=window, used_tokens=used, keep=keep, max_tools=max_tools
         )
@@ -14687,6 +14702,19 @@ def _relevant_tool_names(tools: dict[str, Tool], query: str, limit: int) -> list
     if limit <= 0 or not tools:
         return []
     wanted = _tool_words(query) - _TOOL_QUERY_STOPWORDS
+    # Natural screen names often differ from the connected tool's vocabulary.
+    # Expand only the request, never tool descriptions, and never execute or
+    # authorize anything from this lexical hint.
+    for word, aliases in {
+        "world": {"globe", "geospatial", "map"},
+        "fly": {"camera", "view"},
+        "chrome": {"browser", "application", "launch"},
+        "firefox": {"browser", "application", "launch"},
+        "edge": {"browser", "application", "launch"},
+        "mcps": {"mcp"},
+    }.items():
+        if word in wanted:
+            wanted.update(aliases)
     if not wanted:
         return []
     docs: dict[str, tuple[set[str], set[str]]] = {}

@@ -958,6 +958,10 @@ class ToolUseLoop:
         tool_log: list[ToolRecord] = []
         verify_rounds = 0
         round_no = 0
+        marker_retries = 0
+        guard_history_marker = "[used tool" not in user_utterance.lower() and not (
+            _is_instructional_question(user_utterance)
+        )
 
         def _progress() -> None:
             # Stall-timeout heartbeat (see ``on_progress`` in the docstring).
@@ -970,6 +974,13 @@ class ToolUseLoop:
 
         def _delta_progress(_delta: object) -> None:
             _progress()
+
+        def _deliver_marker_text(text: str) -> None:
+            if text_consumer is not None:
+                try:
+                    text_consumer(text)
+                except Exception:  # noqa: BLE001 - a closed consumer cannot abort a turn
+                    log.debug("tool marker consumer closed", exc_info=True)
 
         while True:
             # A message the person sent while this turn was running joins the
@@ -993,11 +1004,38 @@ class ToolUseLoop:
             stream = self._brain.complete(req)
             # Routing rounds suppress spoken text, not liveness: prefill,
             # reasoning and tool-argument deltas still reset the voice guard.
+            # A flattened historical tool note is prose, not an execution
+            # receipt. Hold its short prefix before it can reach speech/chat.
+            prefix = ""
+            prefix_decided = False
+            marker_muted = False
+
+            def round_consumer(chunk: str) -> None:
+                nonlocal prefix, prefix_decided, marker_muted
+                if text_consumer is None or marker_muted:
+                    return
+                if prefix_decided:
+                    text_consumer(chunk)
+                    return
+                prefix += chunk
+                candidate = prefix.lstrip().lower()
+                if candidate.startswith("[used tool"):
+                    marker_muted = True
+                elif "[used tool".startswith(candidate) and len(prefix) < 256:
+                    return
+                else:
+                    prefix_decided = True
+                    text_consumer(prefix)
+                    prefix = ""
+
+            hold_marker = guard_history_marker and not final_agg.executed_tool_names
             agg = await aggregate_with_consumer(
                 stream,
-                text_consumer,
+                round_consumer if hold_marker else text_consumer,
                 delta_consumer=_delta_progress,
             )
+            if hold_marker and prefix and not marker_muted and not prefix_decided:
+                _deliver_marker_text(prefix)
             # A model round finished — the brain is alive and working. Reset the
             # pipeline's no-progress deadline before the (possibly long) tool
             # execution + next round so a slow-but-working turn is not cut off.
@@ -1061,6 +1099,38 @@ class ToolUseLoop:
                 tokens_in=agg.usage.get("input_tokens", 0),
                 tokens_out=agg.usage.get("output_tokens", 0),
             )
+
+            if (
+                guard_history_marker
+                and not final_agg.executed_tool_names
+                and agg.text.lstrip().lower().startswith("[used tool")
+            ):
+                final_agg.text = ""
+                if agg.tool_calls:
+                    # Structured calls still use the normal executor below;
+                    # the premature prose is discarded, never rehydrated.
+                    agg.text = ""
+                elif (
+                    marker_retries == 0 and not deadline_forced and not self._budget.exceeded()
+                    and (self._deadline_s is None
+                         or time.monotonic() - loop_started < self._deadline_s)
+                ):
+                    marker_retries += 1
+                    current_messages.append(BrainMessage(
+                        role="user",
+                        content=(
+                            "No tool was executed in that response. Historical [used tool] "
+                            "notes are not calls or results. Use an actual available function "
+                            "call for this request, or explain the limitation honestly. Never "
+                            "claim an action succeeded without a current tool result."
+                        ),
+                    ))
+                    continue
+                else:
+                    final_agg.text = _anti_silence_phrase(user_utterance, reply_language)
+                    final_agg.finish_reason = "error"
+                    _deliver_marker_text(final_agg.text)
+                    break
 
             # A repeated call was already executed in an earlier model round.
             # Suppressing it is correct, but treating the now-empty call list
