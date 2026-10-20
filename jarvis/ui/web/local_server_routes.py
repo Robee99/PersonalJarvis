@@ -56,6 +56,7 @@ async def list_local_servers(request: Request) -> dict[str, Any]:
         "hermes_brain": hermes,
         "selection": selection,
         "servers": [s.as_dict() for s in servers],
+        "hermes_min_context": local_servers.HERMES_MIN_CONTEXT,
     }
 
 
@@ -83,6 +84,14 @@ async def use_local_server(body: UseBody, request: Request) -> dict[str, Any]:
         )
 
     if hermes_is_main_brain(cfg):
+        if server.context is not None and server.context < local_servers.HERMES_MIN_CONTEXT:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"The server at {root} runs with a {server.context:,}-token context window; "
+                    f"Hermes Agent needs at least {local_servers.HERMES_MIN_CONTEXT:,}."
+                ),
+            )
         from jarvis.cli_ctl.free_voice import _local_hermes_argv, _run
         from jarvis.plugins.brain.hermes_inventory import clear_cache
 

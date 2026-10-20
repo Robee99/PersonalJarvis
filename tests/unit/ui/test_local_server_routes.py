@@ -98,3 +98,33 @@ def test_a_remote_address_is_refused(saved: list) -> None:
     resp = client.post("/api/local-servers/use", json={"url": "http://10.0.0.5:8080"})
     assert resp.status_code == 422
     assert saved == []
+
+
+def test_the_list_says_how_much_context_hermes_needs(saved: list) -> None:
+    client, _cfg = _app("hermes")
+    body = client.get("/api/local-servers").json()
+    assert body["hermes_min_context"] == local_servers.HERMES_MIN_CONTEXT
+    assert body["servers"][0]["context"] is None
+
+
+def test_hermes_refuses_a_server_with_too_small_a_context(
+    saved: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    small = LocalServer(
+        url="http://127.0.0.1:11441",
+        port=11441,
+        kind="llama.cpp",
+        state="running",
+        models=["ui-venus-2-9b"],
+        context=16384,
+    )
+
+    async def scan(**_kw: Any) -> list[LocalServer]:
+        return [small]
+
+    monkeypatch.setattr(local_servers, "scan", scan)
+    client, _cfg = _app("hermes")
+    resp = client.post("/api/local-servers/use", json={"url": "127.0.0.1:11441"})
+    assert resp.status_code == 409
+    assert "16,384" in resp.json()["detail"]
+    assert saved == []

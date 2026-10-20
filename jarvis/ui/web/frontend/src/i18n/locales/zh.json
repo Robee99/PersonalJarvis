@@ -2661,7 +2661,8 @@
     "key_check_failed_toast": "{0} 没有响应：{1}",
     "pipeline_hint_title": "在找 Hermes、Nous Portal 或本地 Qwen？",
     "pipeline_hint_body": "这里只列出带原生实时音频模型的提供方。任何聊天模型，包括 Nous Portal 的模型和 Qwen 这样的本地 OpenAI 兼容服务器，都通过管线语音说话：语音转文字，然后是你选的大脑，再文字转语音。Hermes Agent 本身是命令行智能体，不能作为语音大脑。",
-    "pipeline_hint_action": "使用管线语音"
+    "pipeline_hint_action": "使用管线语音",
+    "brain_pick_above": "在本页顶部的列表中选择由谁回答"
   },
   "apikeys_test": {
     "button": "测试",
@@ -3399,11 +3400,6 @@
     "select_one": "请在左侧选择一个会话。",
     "no_turns": "此会话没有对话轮次，可能只触发了唤醒词。",
     "running": "运行中"
-  },
-  "provider_switcher": {
-    "loading_hint": "正在加载服务商列表；如果一直为空，请检查后端。",
-    "no_credential": "无凭据",
-    "active": "当前使用"
   },
   "wiki_provider": {
     "tier_label": "知识库（长期记忆）",
@@ -5841,10 +5837,8 @@
       "voice_differs_realtime": "文字聊天使用 {chat}，但语音由 {voice}（{mode}）回答，这是一个自己听也自己说的实时语音模型。要和 {chat} 对话，语音需要切换到管线：语音转文字，然后是 {chat}，再文字转语音。",
       "voice_cli": "文字聊天使用 {chat}，这是一个命令行智能体，只在完成后才回复，并自行批准工具，因此无法进行口语对话。语音由 {voice}（{mode}）回答。",
       "voice_cli_hermes": "要和 Hermes Agent 通过 Nous 使用的模型对话，请为管线语音选择 Nous Portal 作为大脑。",
-      "voice_use": "语音使用 {chat}",
-      "voice_use_hint": "把语音切换到管线：语音转文字，然后是 {chat}，再文字转语音。设置会保存，重启后依然有效。",
-      "voice_switched": "语音现在由 {chat} 回答。",
-      "voice_switch_failed": "无法把语音切换到 {chat}。",
+      "voice_use": "在 设置 › 模型 中选择 {chat}",
+      "voice_use_hint": "打开 设置 › 模型，在那里选择由谁回答。开启实时语音时，语音还需改用 Pipeline 才能使用 {chat}。",
       "voice_settings": "语音设置",
       "voice_pick_brain": "选择语音大脑"
     },
@@ -7637,7 +7631,7 @@
     "add": "按地址添加服务器",
     "add_label": "服务器地址",
     "add_connect": "连接",
-    "all_providers": "更换大脑提供方（全部提供方）",
+    "all_providers": "提供方的登录、密钥和模型",
     "selected": "已选择",
     "state_running": "运行中",
     "state_loading": "正在加载模型",
@@ -7646,12 +7640,19 @@
     "hermes_title": "Hermes Agent",
     "hermes_meta": "推荐。Hermes 用它的工具、记忆和审批处理每一轮。",
     "direct_title": "Jarvis 直接回答",
-    "direct_meta": "Jarvis 不经过 Hermes，自己调用一个提供方。在下面的列表中选择。",
+    "direct_meta": "Jarvis 自己调用一个提供方，不经过 Hermes。在下方列表中选择。",
     "active": "使用中",
     "status_hermes_auto": "现在由 Hermes 回答，并为每一轮选择模型。",
     "status_hermes_model": "现在由 Hermes 回答，使用 {model} 思考。",
     "status_direct": "Jarvis 正在直接用 {provider} 回答，未使用 Hermes。",
-    "switched_note": "已切换。你的下一条消息将发给 Hermes。"
+    "switched_note": "已切换。你的下一条消息将发给 Hermes。",
+    "current_label": "谁来回答",
+    "current_unknown": "尚不清楚",
+    "change_in_settings": "在 设置 › 模型 中更改",
+    "group_direct": "Jarvis 直接回答，不经过 Hermes",
+    "direct_none": "还没有已登录或已有密钥的提供方。",
+    "direct_set_up": "添加提供方（登录或粘贴密钥）",
+    "too_small": "对 Hermes 来说太小：上下文 {context}，需要 {min}"
   },
   "hud2": {
     "controls": {

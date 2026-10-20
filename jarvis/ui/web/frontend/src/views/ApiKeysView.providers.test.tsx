@@ -178,6 +178,16 @@ describe("ApiKeysView — Live calls", () => {
 });
 
 describe("ApiKeysView — Agents", () => {
+  it("shows who answers read-only and leaves the switch to Settings › Model", async () => {
+    renderPage();
+    await screen.findByTestId("apikeys-voice");
+    openAgents();
+    expect(await screen.findByTestId("apikeys-current-brain")).toBeTruthy();
+    expect(screen.queryByTestId("brain-picker")).toBeNull();
+    expect(calls.some((call) => call.url.startsWith("/api/local-servers"))).toBe(false);
+    expect(calls.some((call) => call.url === "/api/brain/switch")).toBe(false);
+  });
+
   it("lists each company once with its subscription account", async () => {
     renderPage();
     await screen.findByTestId("apikeys-voice");

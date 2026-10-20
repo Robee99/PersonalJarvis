@@ -522,7 +522,6 @@ export function AssistantPanel({
                       />
                       {proposal.value.brain_switch && !running && (
                         <BrainSwitchCard
-                          provider={proposal.value.brain_switch.provider}
                           why={proposal.value.brain_switch.why}
                           serverLabel={serverLabel}
                         />

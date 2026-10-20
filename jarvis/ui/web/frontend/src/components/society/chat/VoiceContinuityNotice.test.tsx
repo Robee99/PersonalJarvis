@@ -1,7 +1,14 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+/**
+ * The voice notice above a chat never switches the brain: the brain is picked
+ * in one place, Settings › Model, and the notice links there. A recording
+ * fake `fetch` proves no `POST /api/brain/switch` (or model save) leaves it.
+ */
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { VoiceEngineDisplay } from "@/lib/voiceEngineDisplay";
+import { useEventStore } from "@/store/events";
+import { useSettingsPage } from "@/store/settingsPage";
 
 // Identity translator; `fill` keeps its real substitution so names show up.
 vi.mock("@/i18n", async () => {
@@ -12,38 +19,31 @@ vi.mock("@/i18n", async () => {
 let engine: VoiceEngineDisplay = { tier: "realtime", providerId: "gemini", providerLabel: "Gemini Live", model: "" };
 vi.mock("@/hooks/useVoiceEngineDisplay", () => ({ useVoiceEngineDisplay: () => engine }));
 
-const setModeAsync = vi.fn(async () => undefined);
-vi.mock("@/hooks/useVoiceMode", () => ({ useVoiceMode: () => ({ setModeAsync }) }));
-
-const switchBrainProvider = vi.fn(async (_id: string) => undefined);
-const saveBrainProviderModel = vi.fn(async (_id: string, _model: string) => ({}));
-vi.mock("@/hooks/useProviders", () => ({
-  switchBrainProvider: (id: string) => switchBrainProvider(id),
-  saveBrainProviderModel: (id: string, model: string) => saveBrainProviderModel(id, model),
-}));
-
-const requestApiKeysTab = vi.fn();
-vi.mock("@/lib/apiKeysTab", () => ({ requestApiKeysTab: (tab: string) => requestApiKeysTab(tab) }));
-
-const pushToast = vi.fn();
-const setActiveSection = vi.fn();
-vi.mock("@/store/events", () => ({
-  useEventStore: (selector: (s: object) => unknown) => selector({ pushToast, setActiveSection }),
-}));
-
 import { VoiceContinuityNotice } from "./VoiceContinuityNotice";
+
+/** Every request the notice sends, as "METHOD url". */
+let sent: string[] = [];
 
 beforeEach(() => {
   engine = { tier: "realtime", providerId: "gemini", providerLabel: "Gemini Live", model: "" };
+  sent = [];
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    sent.push(`${init?.method ?? "GET"} ${url}`);
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  });
+  useEventStore.setState({ activeSection: "chats" });
+  useSettingsPage.setState({ page: null });
 });
 
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const hermes = { id: "hermes", label: "Hermes Agent", runner: "hermes-cli", model: "" };
 const nous = { id: "nous", label: "Nous Portal", runner: "api", model: "stepfun/step-3.7-flash:free" };
+
+const writes = () => sent.filter((line) => !line.startsWith("GET "));
 
 describe("VoiceContinuityNotice", () => {
   it("explains why Hermes Agent cannot be the voice brain and changes nothing", () => {
@@ -55,46 +55,31 @@ describe("VoiceContinuityNotice", () => {
     expect(screen.queryByTestId("voice-continuity-use")).toBeNull();
 
     fireEvent.click(screen.getByTestId("voice-continuity-settings"));
-    expect(requestApiKeysTab).toHaveBeenCalledWith("brain");
-    expect(setActiveSection).toHaveBeenCalledWith("apikeys");
-    expect(switchBrainProvider).not.toHaveBeenCalled();
-    expect(setModeAsync).not.toHaveBeenCalled();
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("model");
+    expect(writes()).toEqual([]);
   });
 
-  it("switches nothing on render, only after an explicit click", async () => {
+  it("opens Settings › Model instead of switching the brain", () => {
     render(<VoiceContinuityNotice chat={nous} />);
     expect(screen.getByTestId("voice-continuity").getAttribute("data-kind")).toBe("switchable");
     expect(screen.getByTestId("voice-continuity").textContent).toContain(
       "society.chat.voice_differs_realtime[Nous Portal|Gemini Live]",
     );
-    expect(switchBrainProvider).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId("voice-continuity-use"));
-    await waitFor(() => expect(setModeAsync).toHaveBeenCalledWith("pipeline"));
-    expect(switchBrainProvider).toHaveBeenCalledWith("nous");
-    expect(saveBrainProviderModel).toHaveBeenCalledWith("nous", "stepfun/step-3.7-flash:free");
-    expect(pushToast).toHaveBeenCalledWith("success", expect.stringContaining("Nous Portal"));
+
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("model");
+    expect(sent.some((line) => line.includes("/api/brain/switch"))).toBe(false);
+    expect(writes()).toEqual([]);
   });
 
-  it("leaves the voice mode alone when the brain refuses the provider", async () => {
-    switchBrainProvider.mockRejectedValueOnce(new Error("Nous Portal needs a key."));
+  it("leads the voice settings to the Voice page on Realtime", () => {
     render(<VoiceContinuityNotice chat={nous} />);
-    fireEvent.click(screen.getByTestId("voice-continuity-use"));
-    await waitFor(() =>
-      expect(pushToast).toHaveBeenCalledWith("error", expect.stringContaining("Nous Portal needs a key.")),
-    );
-    expect(setModeAsync).not.toHaveBeenCalled();
-    expect(saveBrainProviderModel).not.toHaveBeenCalled();
-  });
-
-  it("keeps Pipeline as it is when only the brain differs", async () => {
-    engine = { tier: "pipeline", providerId: "gemini", providerLabel: "Google Gemini", model: "gemini-3.5-flash" };
-    render(<VoiceContinuityNotice chat={{ ...nous, model: "" }} />);
-    fireEvent.click(screen.getByTestId("voice-continuity-use"));
-    await waitFor(() => expect(switchBrainProvider).toHaveBeenCalledWith("nous"));
-    await waitFor(() => expect(pushToast).toHaveBeenCalled());
-    expect(setModeAsync).not.toHaveBeenCalled();
-    expect(saveBrainProviderModel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("voice-continuity-settings"));
+    expect(useSettingsPage.getState().page).toBe("voice");
+    expect(writes()).toEqual([]);
   });
 
   it("says so when voice already runs on the chat's provider", () => {

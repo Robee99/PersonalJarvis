@@ -263,16 +263,15 @@
       "setup_skipped_no_pick": "没有已安装的模型适合，目录中也没有推荐",
       "setup_error": "设置已停止：{message}",
       "setup_brain_hint": "{server} 已设置好，但目前仍由 {brain} 回答。",
-      "setup_brain_button": "将 {server} 设为当前大脑",
-      "setup_brain_switched": "{server} 现在是当前大脑。",
-      "setup_brain_failed": "无法切换大脑：{message}",
       "resident_title": "如果所有工作同时加载",
       "resident_fits": "{total} / {gb} GB",
       "resident_over": "{total} / {gb} GB——超出显卡容量；Ollama 会在通话和对话之间来回切换",
       "resident_unknown": "共 {total}——显存未知",
       "resident_context": "上下文（估算）",
       "resident_context_short": "上下文",
-      "resident_reserve": "语音输入/输出预留"
+      "resident_reserve": "语音输入/输出预留",
+      "setup_brain_open": "在 设置 › 模型 中选择大脑",
+      "brain_suggest": "将 {server} 用作大脑？"
     },
     "installed": {
       "title": "已安装的模型",
@@ -310,7 +309,7 @@
       "subtitle": "哪个下载的模型负责哪项工作。每项一个按钮。",
       "loading": "正在读取角色…",
       "other_brain": "Ollama 不是你当前的大脑——目前由 {brain} 回答。这些位置仍会被填好，只是等待轮到它们。",
-      "other_brain_link": "在“API 密钥”中更换大脑",
+      "other_brain_link": "在 设置 › 模型 中更换大脑",
       "discovery": "Jarvis 会选择能胜任的最小模型。",
       "follows_chat": "在它自己的卡片上设置。",
       "not_installed": "未安装",

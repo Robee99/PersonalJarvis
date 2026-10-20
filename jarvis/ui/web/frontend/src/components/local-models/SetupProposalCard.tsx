@@ -9,9 +9,9 @@
  * the caller remembers the confirmed steps so the runner's approval cards
  * for exactly those steps are answered without another click.
  *
- * A `brain_switch` never runs by itself (the brain provider is the user's
- * lock): it is a separate card whose button calls the ordinary switch route
- * only when the user clicks it.
+ * A `brain_switch` never runs here: the brain is chosen in one place, the
+ * brain picker on Settings › Model, so the proposal becomes a card that says
+ * what the assistant suggests and links there.
  */
 import { Check, Download, FlaskConical, Mic, Settings2, Terminal, Wand2 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
@@ -19,8 +19,8 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/agentic/controls";
 import { Panel, StatusDot } from "@/components/extensions/primitives";
 import { Register, StepFooter, StepSection } from "@/components/ui/editorial";
-import { switchBrainProvider } from "@/hooks/useProviders";
 import { fill, useT } from "@/i18n";
+import { openSettingsDestination } from "@/lib/openSettings";
 import { cn } from "@/lib/utils";
 
 import {
@@ -185,61 +185,34 @@ export function SetupProposalCard({
 }
 
 /**
- * "Make Ollama the active brain" — the one thing the assistant may only
- * propose. The switch happens on this click and nowhere else.
+ * "Use Ollama as the brain?" — the one thing the assistant may only propose.
+ * The card says so and opens Settings › Model, where the brain is picked.
  */
 export function BrainSwitchCard({
-  provider,
   why,
   serverLabel,
 }: {
-  provider: string;
   why: string;
   /** What the section calls the local server ("Ollama"). */
   serverLabel: string;
 }) {
   const t = useT();
-  const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
-  const [error, setError] = useState<string>("");
-
-  const run = useCallback(async () => {
-    setState("busy");
-    setError("");
-    try {
-      await switchBrainProvider(provider);
-      setState("done");
-    } catch (err) {
-      setState("error");
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, [provider]);
-
   return (
     <Panel className="p-4">
       <div data-testid="brain-switch-card" className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <p className="font-medium text-foreground">
-            {fill(t("local_models.assistant.brain_switch_title"), { server: serverLabel })}
+            {fill(t("local_models.overview.brain_suggest"), { server: serverLabel })}
           </p>
           {why && <p className="text-sm text-muted-foreground">{why}</p>}
-          {state === "done" && (
-            <StatusDot
-              tone="ok"
-              label={fill(t("local_models.assistant.brain_switch_done"), { server: serverLabel })}
-            />
-          )}
-          {state === "error" && <StatusDot tone="error" label={error} />}
         </div>
-        {state !== "done" && (
-          <Button
-            variant="primary"
-            onClick={() => void run()}
-            disabled={state === "busy"}
-            data-testid="brain-switch-run"
-          >
-            {t("local_models.assistant.brain_switch_action")}
-          </Button>
-        )}
+        <Button
+          variant="primary"
+          onClick={() => openSettingsDestination("model", "brain")}
+          data-testid="brain-switch-run"
+        >
+          {t("local_models.overview.setup_brain_open")}
+        </Button>
       </div>
     </Panel>
   );

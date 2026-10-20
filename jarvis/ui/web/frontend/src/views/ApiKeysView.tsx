@@ -3,6 +3,7 @@ import { AudioLines, Brain, ChevronDown, Loader2, RefreshCw, Waypoints } from "l
 import { PageHeader } from "@/components/layout/PageHeader";
 import { LiveProfile } from "@/components/providers/LiveProfile";
 import { BrainPicker } from "@/components/providers/BrainPicker";
+import { CurrentBrainLink } from "@/components/providers/CurrentBrainLink";
 import {
   makeProviderCategories,
   ProviderCategory,
@@ -81,9 +82,11 @@ function initialTab(): Tab {
  * keys — lives under Advanced. All three are the `apikeys` section; the face
  * is the hub's choice (store/settingsPage.ts).
  *
- * - `model`: the brain — the one-list `BrainPicker` (Hermes decides / On this
- *   computer / Free cloud), the full brain catalogue folded under it, and the
- *   route policy (hidden while Hermes, which routes itself, is the brain);
+ * - `model`: the brain — the one-list `BrainPicker` (who answers, and with
+ *   which model: Hermes decides / On this computer / Free cloud / Jarvis
+ *   directly), the app's only brain switch; the brain providers' sign-ins,
+ *   keys and models folded under it (no switch there); and the route policy
+ *   (hidden while Hermes, which routes itself, is the brain);
  * - `voice`: the engine (Realtime | Pipeline) and either the live-call setup
  *   or the Pipeline's voice output, voice input and wording providers.
  *
@@ -163,18 +166,11 @@ function ApiKeysPage() {
       >
         <div key={tab} role="tabpanel" id="apikeys-panel" aria-labelledby={`apikeys-tab-${tab}`} className="profile-rise w-full">
           {tab === "voice" && <VoiceTab data={families} onSaved={refetch} />}
-          {/* Who answers (Hermes Agent or Jarvis directly) and every local
-              llama.cpp server found (Qwen, Gemma): the same picker as
-              Settings › Model, so this page never hides the brain. */}
+          {/* Who answers, read-only: the brain is picked in one place,
+              Settings › Model, and this line links there. */}
           {tab === "agents" && (
-            <div className="mb-10" data-testid="apikeys-brain-picker">
-              <BrainPicker
-                onChanged={() => {
-                  refetch();
-                  void families.reload();
-                }}
-                onPickOther={() => openSettingsDestination("model", "brain")}
-              />
+            <div className="mb-10 rounded-xl border border-border bg-card/40 p-4" data-testid="apikeys-current-brain">
+              <CurrentBrainLink />
             </div>
           )}
           {tab === "agents" &&
@@ -337,8 +333,8 @@ function ProviderFace({ scope }: { scope: ApiKeysScope }) {
   // what the app runs on (lib/localMode.ts). The notice above a shortened
   // list carries the switch back.
   const { localMode, setLocalMode } = useLocalMode();
-  // The Model page leads with the one-list picker; the full provider
-  // catalogue (switching the brain itself) stays one click away.
+  // The Model page leads with the one-list picker, the only brain switch;
+  // the providers' sign-ins, keys and models stay one click away.
   const [showAllBrains, setShowAllBrains] = useState(false);
   // A request that brought the hub to this face is served by showing it.
   useEffect(() => {
@@ -390,7 +386,11 @@ function ProviderFace({ scope }: { scope: ApiKeysScope }) {
         <div className="profile-rise mx-auto w-full max-w-[1440px] space-y-6">
           {scope === "model" && (
             <>
-              <BrainPicker onChanged={refetch} onPickOther={() => setShowAllBrains(true)} />
+              <BrainPicker
+                providers={providers}
+                onChanged={refetch}
+                onSetUpProvider={() => setShowAllBrains(true)}
+              />
               <button
                 type="button"
                 data-testid="all-brain-providers-toggle"

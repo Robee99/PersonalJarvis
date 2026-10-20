@@ -2661,7 +2661,8 @@
     "key_check_failed_toast": "{0} hat nicht geantwortet: {1}",
     "pipeline_hint_title": "Du suchst Hermes, Nous Portal oder ein lokales Qwen?",
     "pipeline_hint_body": "Hier stehen nur Provider mit einem eigenen Live-Audio-Modell. Jedes Chat-Modell, auch Nous-Portal-Modelle und ein lokaler OpenAI-kompatibler Server wie Qwen, spricht über Pipeline-Sprache: Sprache zu Text, dann das gewählte Gehirn, dann Text zu Sprache. Hermes Agent selbst ist ein Kommandozeilen-Agent und kann kein Sprach-Gehirn sein.",
-    "pipeline_hint_action": "Pipeline-Sprache nutzen"
+    "pipeline_hint_action": "Pipeline-Sprache nutzen",
+    "brain_pick_above": "Wer antwortet, wählst du in der Liste oben auf dieser Seite"
   },
   "apikeys_test": {
     "button": "Testen",
@@ -3399,11 +3400,6 @@
     "select_one": "Wähle links eine Session aus.",
     "no_turns": "Diese Session enthält keine Turns — vermutlich nur ein Wake-Word.",
     "running": "läuft"
-  },
-  "provider_switcher": {
-    "loading_hint": "Provider-Liste wird geladen — falls dauerhaft leer, prüfe das Backend.",
-    "no_credential": "kein Credential",
-    "active": "Aktiv"
   },
   "wiki_provider": {
     "tier_label": "Wiki (Langzeitgedächtnis)",
@@ -5841,10 +5837,8 @@
       "voice_differs_realtime": "Der getippte Chat nutzt {chat}, Sprache antwortet aber über {voice} ({mode}), ein Live-Sprachmodell, das selbst zuhört und spricht. Um mit {chat} zu sprechen, muss Sprache auf Pipeline wechseln: Sprache zu Text, dann {chat}, dann Text zu Sprache.",
       "voice_cli": "Der getippte Chat nutzt {chat}, einen Kommandozeilen-Agenten, der erst antwortet, wenn er fertig ist, und seine Werkzeuge selbst freigibt. Deshalb kann er kein Gespräch führen. Sprache antwortet über {voice} ({mode}).",
       "voice_cli_hermes": "Um mit den Modellen zu sprechen, die Hermes Agent über Nous nutzt, wähle Nous Portal als Gehirn für Pipeline-Sprache.",
-      "voice_use": "{chat} für Sprache nutzen",
-      "voice_use_hint": "Stellt Sprache auf Pipeline um: Sprache zu Text, dann {chat}, dann Text zu Sprache. Wird gespeichert und bleibt nach einem Neustart erhalten.",
-      "voice_switched": "Sprache antwortet jetzt mit {chat}.",
-      "voice_switch_failed": "Sprache konnte nicht auf {chat} umgestellt werden.",
+      "voice_use": "{chat} in Einstellungen › Modell wählen",
+      "voice_use_hint": "Öffnet Einstellungen › Modell, wo du wählst, wer antwortet. Mit Echtzeit-Sprache muss die Sprache außerdem über die Pipeline laufen, um {chat} zu nutzen.",
       "voice_settings": "Spracheinstellungen",
       "voice_pick_brain": "Sprach-Gehirn wählen"
     },
@@ -7637,7 +7631,7 @@
     "add": "Server per Adresse hinzufügen",
     "add_label": "Serveradresse",
     "add_connect": "Verbinden",
-    "all_providers": "Gehirn-Anbieter wechseln (alle Anbieter)",
+    "all_providers": "Anmeldungen, Schlüssel und Modelle der Anbieter",
     "selected": "Ausgewählt",
     "state_running": "Läuft",
     "state_loading": "Lädt Modell",
@@ -7651,7 +7645,14 @@
     "status_hermes_auto": "Hermes antwortet gerade und wählt das Modell für jeden Zug.",
     "status_hermes_model": "Hermes antwortet gerade und denkt mit {model}.",
     "status_direct": "Jarvis antwortet direkt mit {provider}. Hermes ist nicht in Gebrauch.",
-    "switched_note": "Umgeschaltet. Deine nächste Nachricht geht an Hermes."
+    "switched_note": "Umgeschaltet. Deine nächste Nachricht geht an Hermes.",
+    "current_label": "Wer antwortet",
+    "current_unknown": "Noch nicht bekannt",
+    "change_in_settings": "In Einstellungen › Modell ändern",
+    "group_direct": "Jarvis direkt, ohne Hermes",
+    "direct_none": "Noch kein Anbieter ist angemeldet oder hat einen Schlüssel.",
+    "direct_set_up": "Anbieter hinzufügen (anmelden oder Schlüssel einfügen)",
+    "too_small": "Zu klein für Hermes: {context} Kontext, Hermes braucht {min}"
   },
   "hud2": {
     "controls": {

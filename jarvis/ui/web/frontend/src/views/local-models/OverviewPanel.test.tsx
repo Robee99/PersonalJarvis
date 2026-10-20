@@ -38,6 +38,8 @@ import {
 } from "@/views/local-models/OverviewPanel";
 import { footprint } from "@/views/local-models/ServerLaunch";
 import type { OverviewResponse } from "@/hooks/useLocalModels";
+import { useEventStore } from "@/store/events";
+import { useSettingsPage } from "@/store/settingsPage";
 import {
   snapshotKey,
   writeOverviewSnapshot,
@@ -755,7 +757,7 @@ describe("OverviewPanel launch bar", () => {
     ).toBeDefined();
   });
 
-  it("runs the flow, reports what it did, then offers the brain switch", async () => {
+  it("runs the flow, reports what it did, then links to the brain picker", async () => {
     const fetchMock = installFetchMock({
       roles: ROLES.map((r) =>
         r.id === "tools_screen"
@@ -797,21 +799,19 @@ describe("OverviewPanel launch bar", () => {
       .map(([u]) => String(u).split("/").pop());
     expect(puts.sort()).toEqual(["chat", "deep", "embedding"]);
 
-    // Another brain answers: the one decision left is offered in place.
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "local_models.overview.setup_brain_buttonOllama",
-      }),
+    // Another brain answers: the panel says so and links to Settings › Model,
+    // the one place the brain is picked; it never switches it itself.
+    expect(screen.getByTestId("setup-brain").textContent).toContain(
+      "local_models.overview.setup_brain_hintOllama|OpenRouter",
     );
-    await screen.findByTestId("setup-brain-done");
+    fireEvent.click(
+      screen.getByRole("button", { name: "local_models.overview.setup_brain_open" }),
+    );
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("model");
     expect(
-      fetchMock.mock.calls.some(
-        ([u, i]) =>
-          String(u) === "/api/brain/switch" &&
-          (i as RequestInit)?.method === "POST",
-      ),
-    ).toBe(true);
-    expect(mockProviders.refetch).toHaveBeenCalled();
+      fetchMock.mock.calls.some(([u]) => String(u) === "/api/brain/switch"),
+    ).toBe(false);
   });
 });
 
@@ -821,7 +821,8 @@ describe("OverviewPanel notices", () => {
     mockProviders.providers = [
       { id: "gemini", label: "Gemini", tier: "brain", active: true },
     ];
-    renderPanel({ onOpenApiKeys: vi.fn() });
+    const onOpenBrainSettings = vi.fn();
+    renderPanel({ onOpenBrainSettings });
 
     const clause = await screen.findByTestId("overview-brain-clause");
     expect(clause.textContent).toContain(
@@ -829,6 +830,10 @@ describe("OverviewPanel notices", () => {
         "local_models.overview.status_generic_server|Gemini",
     );
     expect(clause.textContent).toContain("local_models.roles.other_brain_link");
+    fireEvent.click(
+      screen.getByRole("button", { name: "local_models.roles.other_brain_link" }),
+    );
+    expect(onOpenBrainSettings).toHaveBeenCalled();
   });
 
   it("does not claim the server was silent when it answered with nothing", async () => {

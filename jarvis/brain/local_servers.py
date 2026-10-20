@@ -49,6 +49,12 @@ KNOWN_PORTS: tuple[tuple[int, str], ...] = (
     (11434, "Ollama"),
 )
 
+#: The smallest context window Hermes Agent accepts for its model. Hermes
+#: refuses a smaller one at the first turn ("... has a context window of 16,384
+#: tokens, which is below the minimum 64,000 required by Hermes Agent"), so the
+#: picker says so up front instead of offering a row that cannot answer.
+HERMES_MIN_CONTEXT = 64_000
+
 #: How long one probe may take. Loopback answers in milliseconds; a closed
 #: port refuses at once. Short, because the settings page waits on the scan.
 PROBE_TIMEOUT = httpx.Timeout(1.5, connect=0.5)
@@ -76,6 +82,9 @@ class LocalServer:
     hermes_provider: str = ""
     #: The model that provider names (``providers.<name>.model``).
     hermes_model: str = ""
+    #: The context window the server runs with, in tokens; None when it does
+    #: not say (only ``llama-server`` reports it, at ``GET /props``).
+    context: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,6 +126,39 @@ def _kind_for(port: int, owned_by: Iterable[str], default: str) -> str:
     return default
 
 
+def _context_from_props(body: Any) -> int | None:
+    """``n_ctx`` from a ``llama-server`` ``/props`` answer, or None."""
+    if not isinstance(body, dict):
+        return None
+    settings = body.get("default_generation_settings")
+    candidates = [settings.get("n_ctx") if isinstance(settings, dict) else None, body.get("n_ctx")]
+    for value in candidates:
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+async def probe_context(client: httpx.AsyncClient, root: str) -> int | None:
+    """The context window a running server serves, when it says. Never raises.
+
+    ``llama-server`` reports the window it was started with (``-c``) at
+    ``GET /props`` under ``default_generation_settings.n_ctx``; other servers
+    answer 404 there, and the size stays unknown (None), which the picker
+    treats as "may be big enough".
+    """
+    try:
+        resp = await client.get(root + "/props", timeout=PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        log.debug("no /props from %s: %s", root, exc)
+        return None
+    if resp.status_code >= 400:
+        return None
+    try:
+        return _context_from_props(resp.json())
+    except ValueError:  # not JSON: a server without /props, size unknown
+        return None
+
+
 async def probe(client: httpx.AsyncClient, root: str, default_kind: str = "") -> LocalServer:
     """Ask one server for its models. Never raises."""
     port = _port_of(root)
@@ -144,6 +186,7 @@ async def probe(client: httpx.AsyncClient, root: str, default_kind: str = "") ->
         kind=_kind_for(port, owners, fallback),
         state="running",
         models=models,
+        context=await probe_context(client, root),
     )
 
 

@@ -67,6 +67,7 @@ import {
   useSectionHealth,
 } from "@/hooks/useProviders";
 import { useEventStore } from "@/store/events";
+import { isHermesBrain } from "@/hooks/useHermesBrain";
 import { useProviderTestStore, verificationOf, type Verification } from "@/store/providerTests";
 import { agentBrand, agentsBrand } from "@/lib/agentBrand";
 import { robustCopy } from "@/lib/clipboard";
@@ -543,6 +544,14 @@ export function ProviderCard({
     descriptor.secret_keys.length === 0;
   const isBrainSwitchable =
     descriptor.tier !== "brain" || descriptor.brain_switchable !== false;
+  // The brain is picked in one place, the brain picker at the top of
+  // Settings › Model. A brain card here holds its sign-in, key and model;
+  // it shows whether it is the brain but never switches to it (except the
+  // first key saved while no brain is set at all, `handleSavedActivate`).
+  const brainPickedElsewhere = descriptor.tier === "brain";
+  // The Hermes card's model is "Hermes decides" / a local server / a free
+  // cloud model: all rows of the brain picker, so no second picker here.
+  const modelPickedElsewhere = brainPickedElsewhere && isHermesBrain(descriptor.id);
 
   /**
    * Prove the polish provider the user just picked can actually answer, and
@@ -591,6 +600,7 @@ export function ProviderCard({
     // The Live profile saves the voice provider and thinking model together.
     if (descriptor.configuration_surface === "live") return;
     if (descriptor.active) return;
+    if (brainPickedElsewhere && !assumeConfigured) return;
     if (!isBrainSwitchable) {
       pushToast(
         "warning",
@@ -751,7 +761,7 @@ export function ProviderCard({
   // a brain) or the already-active card just opens/closes — otherwise every
   // click to paste a key would answer with a "save a key first" warning. See
   // rowGestures.ts for the click semantics.
-  const canSwitch = isBrainSwitchable && !isCodexBrain;
+  const canSwitch = isBrainSwitchable && !isCodexBrain && !brainPickedElsewhere;
   const switchesOnClick =
     canSwitch && !descriptor.active && descriptor.configured && !activating;
   const rowGestures = useRowGestures({
@@ -831,7 +841,9 @@ export function ProviderCard({
     : !isBrainSwitchable
       ? t("apikeys_view.agents_only_short").replace("{0}", agentsBrand(assistantName))
       : descriptor.configured
-        ? t("apikeys_view.click_to_activate")
+        ? brainPickedElsewhere
+          ? t("apikeys_view.brain_pick_above")
+          : t("apikeys_view.click_to_activate")
         : descriptor.auth_mode === "codex"
           ? t("apikeys_view.needs_codex")
           : descriptor.auth_mode === "antigravity"
@@ -934,7 +946,9 @@ export function ProviderCard({
           </p>
         </div>
 
-        {descriptor.configuration_surface !== "live" && (
+        {brainPickedElsewhere ? (
+          <BrainStateChip descriptor={descriptor} />
+        ) : descriptor.configuration_surface !== "live" && (
         <ActiveControl
           descriptor={
             isCodexBrain
@@ -1024,7 +1038,7 @@ export function ProviderCard({
               a model can be pre-picked. TTS/STT share a single global [tts]/[stt]
               block, so the picker only WRITES from the ACTIVE provider and sets the
               voice (Grok/Gemini/OpenAI/Google) or model (Cartesia/STT). */}
-          {((descriptor.tier === "brain" && isBrainSwitchable) ||
+          {((descriptor.tier === "brain" && isBrainSwitchable && !modelPickedElsewhere) ||
             ((descriptor.tier === "tts" || descriptor.tier === "stt") &&
               descriptor.active &&
               descriptor.configured)) &&
@@ -1323,6 +1337,28 @@ export function ActiveControl({
             : t(PROVIDER_STATE_CHIPS[providerStateChip(descriptor)].key)
           : t("apikeys_view.provider_set_active")}
     </label>
+  );
+}
+
+/**
+ * A brain card's state, read-only: "In use" on the brain that answers (or
+ * what it is missing), nothing on the others. The switch itself is the
+ * brain picker at the top of Settings › Model.
+ */
+function BrainStateChip({ descriptor }: { descriptor: ProviderDescriptor }) {
+  const t = useT();
+  if (!descriptor.active) return null;
+  return (
+    <span
+      data-testid={`provider-brain-state-${descriptor.id}`}
+      title={t(descriptor.configured ? "apikeys_view.activate_tooltip_active" : "apikeys_view.needs_credentials")}
+      className="inline-flex h-7 shrink-0 items-center gap-2 whitespace-nowrap px-2.5 text-xs font-medium text-foreground"
+    >
+      <span aria-hidden="true" className="h-[7px] w-[7px] rounded-full bg-secondary" />
+      {descriptor.configured
+        ? t("apikeys_view.provider_active")
+        : t(PROVIDER_STATE_CHIPS[providerStateChip(descriptor)].key)}
+    </span>
   );
 }
 

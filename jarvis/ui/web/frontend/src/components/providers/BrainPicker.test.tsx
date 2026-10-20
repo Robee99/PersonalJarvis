@@ -1,11 +1,13 @@
 /**
  * The Model page's one list: Hermes decides, models on this computer, free cloud.
  * Pins that a local llama.cpp server is shown with its state and that one click
- * makes it Hermes's model.
+ * makes it Hermes's model, that the signed-in providers are one click from
+ * answering directly, and that a server Hermes would refuse is not a choice.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import type { ProviderDescriptor } from "@/hooks/useProviders";
 import { useEventStore } from "@/store/events";
 
 import { BrainPicker } from "./BrainPicker";
@@ -34,6 +36,22 @@ const MODELS = {
   ],
 };
 
+const provider = (over: Partial<ProviderDescriptor>): ProviderDescriptor => ({
+  id: "x", label: "X", tier: "brain", auth_mode: "api_key", secret_keys: [], secrets_set: {},
+  dashboard_url: null, login_cli: null, install_hint: null, credential_path_hint: null,
+  configured: true, active: false, cli_installed: null, credential_help: null, signup_url: null,
+  billing: "api", alt_credential: null, ...over,
+});
+
+const PROVIDERS: ProviderDescriptor[] = [
+  provider({ id: "hermes", label: "Hermes Agent" }),
+  provider({ id: "local-openai", label: "Local server" }),
+  provider({ id: "gemini", label: "Google Gemini", active: true }),
+  provider({ id: "claude-cli", label: "Claude", billing: "subscription" }),
+  provider({ id: "nokey", label: "No key", configured: false }),
+  provider({ id: "voice", label: "Voice", tier: "tts" }),
+];
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -42,6 +60,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   useEventStore.getState().setBrainProvider("unknown");
+  useEventStore.getState().setBrainModel("");
 });
 
 describe("BrainPicker", () => {
@@ -102,6 +121,82 @@ describe("BrainPicker", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/brain/switch", expect.objectContaining({ method: "POST" }));
     expect(screen.getByTestId("brain-status").textContent).toMatch(/Hermes is answering now/);
     expect(hermes.textContent).toContain("Active");
+  });
+
+  it("offers the signed-in providers under Jarvis directly and switches to one", async () => {
+    useEventStore.getState().setBrainProvider("gemini");
+    useEventStore.getState().setBrainModel("gemini-3.5-flash");
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/brain/switch") {
+        calls.push(JSON.parse(String(init?.body)).provider);
+        return json({ ok: true });
+      }
+      if (url.startsWith("/api/local-servers")) return json({ ...LIST, hermes_brain: false, selection: "" });
+      return json(MODELS);
+    }));
+    const onSetUpProvider = vi.fn();
+    render(<BrainPicker providers={PROVIDERS} onSetUpProvider={onSetUpProvider} />);
+
+    expect(screen.getByTestId("brain-status").textContent).toContain("Google Gemini · gemini-3.5-flash");
+    const gemini = await screen.findByRole("radio", { name: /^Google Gemini/ });
+    expect(gemini.getAttribute("aria-checked")).toBe("true");
+    // Hermes and the local-server card are rows of their own, not repeated here;
+    // a provider with no key is reached through "Add a provider".
+    expect(screen.queryByRole("radio", { name: /^No key/ })).toBeNull();
+    expect(screen.queryByRole("radio", { name: /^Local server/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Claude/ }));
+    await waitFor(() => expect(calls).toEqual(["claude-cli"]));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /^Claude/ }).getAttribute("aria-checked")).toBe("true"),
+    );
+
+    fireEvent.click(screen.getByTestId("brain-picker-set-up"));
+    expect(onSetUpProvider).toHaveBeenCalled();
+  });
+
+  it("keeps the direct providers folded while Hermes answers, until Jarvis directly is clicked", async () => {
+    useEventStore.getState().setBrainProvider("hermes");
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (
+      url.startsWith("/api/local-servers") ? json(LIST) : json(MODELS)
+    )));
+    render(<BrainPicker providers={PROVIDERS} />);
+    await screen.findByRole("radio", { name: /qwen.*11437/i });
+    expect(screen.queryByRole("radio", { name: /^Claude/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Jarvis directly/ }));
+
+    expect(screen.getByRole("radio", { name: /^Claude/ }).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("shows a local server too small for Hermes, with the reason, but not as a choice", async () => {
+    useEventStore.getState().setBrainProvider("hermes");
+    const list = {
+      ...LIST,
+      hermes_min_context: 64000,
+      servers: [
+        { ...LIST.servers[0], context: 131072 },
+        {
+          url: "http://127.0.0.1:11441", port: 11441, kind: "llama.cpp", state: "running",
+          models: ["ui-venus-2-9b"], hermes_provider: "", hermes_model: "", context: 16384,
+        },
+      ],
+    };
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posted.push(url);
+      return url.startsWith("/api/local-servers") ? json(list) : json(MODELS);
+    }));
+    render(<BrainPicker />);
+
+    const venus = (await screen.findByRole("radio", { name: /ui-venus-2-9b/ })) as HTMLButtonElement;
+    expect(venus.disabled).toBe(true);
+    expect(venus.textContent).toContain("Too small for Hermes: 16k context, it needs 64k");
+    expect((screen.getByRole("radio", { name: /qwen.*11437/i }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(venus);
+    expect(posted).toEqual([]);
   });
 
   it("follows a brain switch made elsewhere on the page", async () => {

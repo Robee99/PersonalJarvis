@@ -121,10 +121,6 @@ export function LocalModelsView() {
   const [tuneModel, setTuneModel] = useState<string>("");
   const openBrowse = useCallback(() => setTab("catalogue"), []);
   const openManage = useCallback(() => setTab("models"), []);
-  const openApiKeys = useCallback(
-    () => setActiveSection("apikeys"),
-    [setActiveSection],
-  );
   const closeTune = useCallback(() => setTuneModel(""), []);
 
   // Refresh: drops the painted snapshot and every cached answer, then reads
@@ -204,7 +200,6 @@ export function LocalModelsView() {
               <OverviewPanel
                 providerId={providerId}
                 onTune={setTuneModel}
-                onOpenApiKeys={openApiKeys}
                 onBrowse={openBrowse}
                 onManage={openManage}
               />

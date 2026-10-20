@@ -153,3 +153,49 @@ def test_hermes_providers_written_with_an_api_key_are_found() -> None:
     }
     found = local_servers.hermes_local_providers(config)
     assert found == {"http://127.0.0.1:11440": ("local-qwen-vl", "qwen3-vl-8b")}
+
+
+def _path_client(routes: dict[str, httpx.Response]) -> httpx.AsyncClient:
+    """A fake loopback where each ``host:port/path`` answers on its own."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        answer = routes.get(f"{request.url.host}:{request.url.port}{request.url.path}")
+        if answer is None:
+            if f"{request.url.host}:{request.url.port}" in {k.split("/")[0] for k in routes}:
+                return httpx.Response(404, json={"error": "not found"})
+            raise httpx.ConnectError("refused", request=request)
+        return answer
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+
+@pytest.mark.asyncio
+async def test_scan_reports_the_context_window_llama_server_runs_with() -> None:
+    venus = {"object": "list", "data": [{"id": "ui-venus-2-9b", "owned_by": "llamacpp"}]}
+    client = _path_client(
+        {
+            "127.0.0.1:11441/v1/models": httpx.Response(200, json=venus),
+            "127.0.0.1:11441/props": httpx.Response(
+                200, json={"default_generation_settings": {"n_ctx": 16384}, "total_slots": 1}
+            ),
+            # Ollama has no /props: the size stays unknown, never guessed.
+            "127.0.0.1:11434/v1/models": httpx.Response(200, json={"data": [{"id": "qwen3:8b"}]}),
+        }
+    )
+
+    servers = {s.port: s for s in await local_servers.scan(hermes_config={}, client=client)}
+
+    assert servers[11441].context == 16384
+    assert servers[11441].context < local_servers.HERMES_MIN_CONTEXT
+    assert servers[11434].context is None
+    assert servers[11441].as_dict()["context"] == 16384
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_is_not_running_has_no_context() -> None:
+    config = {"providers": {"local-qwen": {"base_url": "http://127.0.0.1:11437/v1", "model": "q"}}}
+    client = _path_client({})
+
+    servers = await local_servers.scan(hermes_config=config, client=client)
+
+    assert [(s.state, s.context) for s in servers] == [("off", None)]

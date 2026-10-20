@@ -2661,7 +2661,8 @@
     "key_check_failed_toast": "{0} did not answer: {1}",
     "pipeline_hint_title": "Looking for Hermes, Nous Portal or a local Qwen?",
     "pipeline_hint_body": "Only providers with a native live-audio model are listed here. Any chat model, including Nous Portal models and a local OpenAI-compatible server such as Qwen, talks through Pipeline voice: speech-to-text, then the brain you pick, then text-to-speech. Hermes Agent itself is a command-line agent and can't be a voice brain.",
-    "pipeline_hint_action": "Use Pipeline voice"
+    "pipeline_hint_action": "Use Pipeline voice",
+    "brain_pick_above": "Choose who answers in the list at the top of this page"
   },
   "apikeys_test": {
     "button": "Test",
@@ -3399,11 +3400,6 @@
     "select_one": "Select a session on the left.",
     "no_turns": "This session has no turns — probably only a wake-word.",
     "running": "running"
-  },
-  "provider_switcher": {
-    "loading_hint": "Provider list is loading — if it stays empty, check the backend.",
-    "no_credential": "no credential",
-    "active": "Active"
   },
   "wiki_provider": {
     "tier_label": "Wiki (long-term memory)",
@@ -5841,10 +5837,8 @@
       "voice_differs_realtime": "Typed chat uses {chat}, but voice answers on {voice} ({mode}), a live voice model that listens and speaks by itself. To talk to {chat}, voice has to switch to Pipeline: speech-to-text, then {chat}, then text-to-speech.",
       "voice_cli": "Typed chat uses {chat}, a command-line agent that replies only once it has finished and approves its own tools, so it can't hold a spoken conversation. Voice answers on {voice} ({mode}).",
       "voice_cli_hermes": "To talk to the models Hermes Agent uses through Nous, pick Nous Portal as the brain for Pipeline voice.",
-      "voice_use": "Use {chat} for voice",
-      "voice_use_hint": "Switches voice to Pipeline: speech-to-text, then {chat}, then text-to-speech. Saved, so it survives a restart.",
-      "voice_switched": "Voice now answers with {chat}.",
-      "voice_switch_failed": "Couldn't move voice to {chat}.",
+      "voice_use": "Pick {chat} in Settings › Model",
+      "voice_use_hint": "Opens Settings › Model, where you choose who answers. With realtime voice on, voice also has to run the Pipeline to use {chat}.",
       "voice_settings": "Voice settings",
       "voice_pick_brain": "Choose a voice brain"
     },
@@ -7637,7 +7631,7 @@
     "add": "Add a server by address",
     "add_label": "Server address",
     "add_connect": "Connect",
-    "all_providers": "Switch the brain provider (all providers)",
+    "all_providers": "Provider sign-ins, keys and models",
     "selected": "Selected",
     "state_running": "Running",
     "state_loading": "Loading model",
@@ -7651,7 +7645,14 @@
     "status_hermes_auto": "Hermes is answering now and picks the model for each turn.",
     "status_hermes_model": "Hermes is answering now, thinking with {model}.",
     "status_direct": "Jarvis is answering directly with {provider}. Hermes is not in use.",
-    "switched_note": "Switched. Your next message goes to Hermes."
+    "switched_note": "Switched. Your next message goes to Hermes.",
+    "current_label": "Who answers",
+    "current_unknown": "Not known yet",
+    "change_in_settings": "Change in Settings › Model",
+    "group_direct": "Jarvis directly, without Hermes",
+    "direct_none": "No provider is signed in or has a key yet.",
+    "direct_set_up": "Add a provider (sign in or paste a key)",
+    "too_small": "Too small for Hermes: {context} context, it needs {min}"
   },
   "hud2": {
     "controls": {

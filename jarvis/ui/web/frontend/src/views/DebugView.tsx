@@ -1,7 +1,7 @@
 import { Activity, Trash2, Zap } from "lucide-react";
 import { ViewHeader } from "@/views/ChatsView";
 import { EventTimeline } from "@/components/EventTimeline";
-import { ProviderSwitcher } from "@/components/ProviderSwitcher";
+import { CurrentBrainLink } from "@/components/providers/CurrentBrainLink";
 import { Button } from "@/components/ui/button";
 import { useEventStore } from "@/store/events";
 import { useT } from "@/i18n";
@@ -55,19 +55,20 @@ export function DebugView() {
 
         <aside className="flex flex-col overflow-y-auto scrollbar-jarvis">
           <div className="border-b border-border p-4">
+            {/* Read-only: the brain is chosen only in Settings › Model. */}
             <h3 className="mb-3 text-micro uppercase tracking-wider text-muted-foreground">
-              Brain-Provider wechseln
+              Brain
             </h3>
-            <ProviderSwitcher />
+            <CurrentBrainLink />
           </div>
           <div className="border-b border-border p-4">
             <h3 className="mb-2 text-micro uppercase tracking-wider text-muted-foreground">
               Flight-Recorder
             </h3>
             <p className="text-xs text-muted-foreground">
-              JSONL-Traces aus{" "}
+              JSONL traces in{" "}
               <code className="font-mono">%APPDATA%\Jarvis\traces\</code> —
-              Replay-Player folgt.
+              replay player to follow.
             </p>
           </div>
           <div className="p-4">
@@ -75,7 +76,7 @@ export function DebugView() {
               Metrics
             </h3>
             <p className="text-xs text-muted-foreground">
-              Latenz / Tokens / Cost pro Provider — live-Charts ab Phase 2.
+              Latency / tokens / cost per provider — live charts from phase 2.
             </p>
           </div>
         </aside>

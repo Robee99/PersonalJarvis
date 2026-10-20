@@ -189,8 +189,10 @@ describe("ProviderCard selected without credentials", () => {
       secret_keys: [], secrets_set: {},
     });
     renderCard(descriptor);
-    expect((screen.getByRole("radio") as HTMLInputElement).checked).toBe(true);
-    expect(screen.getByText(chipLabel("no_key"))).toBeTruthy();
+    // A brain card shows its state but has no switch: the brain is picked in
+    // the brain picker at the top of Settings › Model.
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.getByTestId(`provider-brain-state-${id}`).textContent).toContain(chipLabel("no_key"));
     expect(screen.queryByText(enLocale.apikeys_view.provider_active)).toBeNull();
     expect(providerStateChip(descriptor, "ok")).toBe("no_key");
     expect(calls.some(call => call.method === "POST")).toBe(false);

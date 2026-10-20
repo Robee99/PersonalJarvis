@@ -5,14 +5,16 @@ import {
   saveBrainProviderModel,
   switchBrainProvider,
   type BrainModel,
+  type ProviderDescriptor,
 } from "@/hooks/useProviders";
 import { isHermesBrain } from "@/hooks/useHermesBrain";
+import { readableModel } from "@/components/providers/CurrentBrainLink";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
 
 /**
- * The Model page's one place to choose (2026-10-11).
+ * The app's one place to choose who answers and with which model.
  *
  * Before, the page was the Hermes card followed by every brain provider in
  * the catalogue, each with its own "Set active", and a local llama.cpp model
@@ -27,8 +29,18 @@ import { useEventStore } from "@/store/events";
  *   typed under "Add a server" does the same for any other port;
  * - **Free cloud** — the free models Hermes reaches through Nous.
  *
- * Without Hermes as the brain the list shows the local servers only, and
- * "Use" makes Jarvis's own local-server card the brain.
+ * - **Jarvis directly** — every brain provider that is signed in or has a
+ *   key, each one click from answering without Hermes.
+ *
+ * Without Hermes as the brain the list shows the direct providers and the
+ * local servers, and a local server becomes Jarvis's own local-server card.
+ * With Hermes, a local server whose context window is below what Hermes
+ * accepts (64k tokens) is shown but cannot be picked, with the reason.
+ *
+ * Every other surface that used to switch the brain (the debug view, the
+ * API Keys page, the voice notice in a chat, the local-models setup, the
+ * provider grid's "Use" buttons) now shows the current brain read-only and
+ * links here (`CurrentBrainLink`), so there is one switch, not six.
  *
  * Above the list, one switch says who answers right now, Hermes Agent or
  * Jarvis directly, and switches it (2026-10-12: a switch to Hermes made in
@@ -49,12 +61,33 @@ export interface LocalServer {
   models: string[];
   hermes_provider: string;
   hermes_model: string;
+  /** The context window the server runs with; null/absent when unknown. */
+  context?: number | null;
 }
 
 interface LocalServersResult {
   hermes_brain: boolean;
   selection: string;
   servers: LocalServer[];
+  /** The smallest context window Hermes accepts (older backends omit it). */
+  hermes_min_context?: number;
+}
+
+/** What Hermes Agent requires when the backend does not say. */
+const HERMES_MIN_CONTEXT = 64_000;
+
+/** 16384 → "16k", 131072 → "131k". */
+function tokens(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+/** The brain providers Jarvis can answer with directly, minus the ones the
+ *  rest of the list already covers (Hermes, and the local-server card). */
+const COVERED = new Set(["hermes", "local-openai"]);
+
+function directReady(p: ProviderDescriptor): boolean {
+  if (p.auth_mode === "codex" && p.tier === "brain") return Boolean(p.codex_brain_ready);
+  return p.configured;
 }
 
 export async function listLocalServers(): Promise<LocalServersResult> {
@@ -84,6 +117,8 @@ interface Choice {
   title: string;
   meta: string;
   state?: LocalServer["state"];
+  /** Why this row cannot be picked; set rows are shown disabled. */
+  blocked?: string;
   pick: () => Promise<unknown>;
 }
 
@@ -99,19 +134,16 @@ function localSelection(hermes: boolean, server: LocalServer, model: string): st
   return `${server.url}|${model}`;
 }
 
-/** The model part of a Hermes selection, for the status line. */
-function modelName(selection: string): string {
-  const model = selection.includes("::") ? selection.split("::").slice(1).join("::") : selection;
-  return model.replace(/^https?:\/\/[^|]*\|/, "");
-}
-
 export function BrainPicker({
+  providers = [],
   onChanged,
-  onPickOther,
+  onSetUpProvider,
 }: {
+  /** `/api/providers`, for the "Jarvis directly" rows. */
+  providers?: ProviderDescriptor[];
   onChanged?: () => void;
-  /** "Jarvis directly" was picked: show the full provider list to choose from. */
-  onPickOther?: () => void;
+  /** Opens the provider list below, where a sign-in or a key is added. */
+  onSetUpProvider?: () => void;
 }) {
   const t = useT();
   const [data, setData] = useState<LocalServersResult | null>(null);
@@ -121,6 +153,9 @@ export function BrainPicker({
   const [error, setError] = useState<string | null>(null);
   const [address, setAddress] = useState("");
   const [adding, setAdding] = useState(false);
+  // With Hermes answering, the direct providers stay folded until
+  // "Jarvis directly" is clicked.
+  const [showDirect, setShowDirect] = useState(false);
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -142,6 +177,7 @@ export function BrainPicker({
 
   // The live brain wins over the last scan, which a switch elsewhere outdates.
   const liveBrain = useEventStore((s) => s.brainProvider);
+  const liveModel = useEventStore((s) => s.brainModel);
   const known = Boolean(liveBrain) && liveBrain !== "unknown";
   const hermes = known ? isHermesBrain(liveBrain) : data?.hermes_brain ?? false;
   const [switched, setSwitched] = useState(false);
@@ -157,6 +193,9 @@ export function BrainPicker({
     setError(null);
     try {
       await action();
+      // Every pick changes the brain or its model: the status line, the
+      // sidebar and every read-only "who answers" line refresh on this.
+      window.dispatchEvent(new CustomEvent("jarvis:brain-switched"));
       await scan();
       onChanged?.();
     } catch (e) {
@@ -168,12 +207,23 @@ export function BrainPicker({
 
   const chooseServer = async (url: string, model: string) => {
     await connectLocalServer(url, model);
-    if (!hermes) await switchBrainProvider("local-openai");
+    if (!hermes) {
+      await switchBrainProvider("local-openai");
+      useEventStore.getState().setBrainProvider("local-openai");
+    }
   };
 
   const selection = data?.selection ?? "";
+  const minContext = data?.hermes_min_context ?? HERMES_MIN_CONTEXT;
   const local: Choice[] = (data?.servers ?? []).flatMap((server) => {
     const models = server.models.length ? server.models : [server.hermes_model].filter(Boolean);
+    // Hermes refuses a model served with a smaller window at the first turn.
+    const blocked =
+      hermes && typeof server.context === "number" && server.context < minContext
+        ? t("brain_picker.too_small")
+            .replace("{context}", tokens(server.context))
+            .replace("{min}", tokens(minContext))
+        : undefined;
     if (models.length === 0) {
       return [{
         key: server.url,
@@ -181,6 +231,7 @@ export function BrainPicker({
         title: server.kind,
         meta: hostOf(server.url),
         state: server.state,
+        blocked,
         pick: () => chooseServer(server.url, ""),
       }];
     }
@@ -190,6 +241,7 @@ export function BrainPicker({
       title: model,
       meta: `${server.kind} · ${hostOf(server.url)}`,
       state: server.state,
+      blocked,
       pick: () => chooseServer(server.url, model),
     }));
   });
@@ -204,19 +256,50 @@ export function BrainPicker({
 
   const autoOn = hermes && HERMES_AUTO.has(selection);
 
+  const labelFor = (id: string) => providers.find((p) => p.id === id)?.label ?? id;
+  const switchTo = async (id: string) => {
+    await switchBrainProvider(id);
+    useEventStore.getState().setBrainProvider(id);
+  };
+  const direct: Choice[] = providers
+    .filter(
+      (p) =>
+        p.tier === "brain" &&
+        p.brain_switchable !== false &&
+        !COVERED.has(p.id) &&
+        (directReady(p) || p.id === liveBrain),
+    )
+    .map((p) => {
+      const on = !hermes && p.id === liveBrain;
+      const billing = t(`provider_billing.${p.billing}`);
+      return {
+        key: `direct:${p.id}`,
+        selection: p.id,
+        title: p.label,
+        meta: on && liveModel ? `${billing} · ${readableModel(liveModel)}` : billing,
+        pick: () => switchTo(p.id),
+      };
+    });
+  const directVisible = !hermes || showDirect;
+
   const useHermes = () =>
     void run("brain:hermes", async () => {
       await switchBrainProvider("hermes");
       useEventStore.getState().setBrainProvider("hermes");
-      window.dispatchEvent(new CustomEvent("jarvis:brain-switched"));
       setSwitched(true);
+      setShowDirect(false);
     });
 
   const status = hermes
     ? HERMES_AUTO.has(selection)
       ? t("brain_picker.status_hermes_auto")
-      : t("brain_picker.status_hermes_model").replace("{model}", modelName(selection))
-    : t("brain_picker.status_direct").replace("{provider}", known ? liveBrain : "…");
+      : t("brain_picker.status_hermes_model").replace("{model}", readableModel(selection))
+    : t("brain_picker.status_direct").replace(
+        "{provider}",
+        known
+          ? [labelFor(liveBrain), readableModel(liveModel)].filter(Boolean).join(" · ")
+          : "…",
+      );
 
   return (
     <section data-testid="brain-picker" className="mb-6 rounded-xl border border-border bg-card/40 p-4">
@@ -258,7 +341,7 @@ export function BrainPicker({
           meta={t("brain_picker.direct_meta")}
           on={!hermes}
           busy={false}
-          onPick={onPickOther}
+          onPick={hermes ? () => setShowDirect((v) => !v) : undefined}
         />
       </div>
       <p data-testid="brain-status" role="status" className="mt-2 text-meta text-foreground">
@@ -268,6 +351,38 @@ export function BrainPicker({
       </p>
 
       <div role="radiogroup" aria-label={t("brain_picker.title")} className="mt-4 space-y-4">
+        {directVisible && (
+          <Group label={t("brain_picker.group_direct")} icon={<Bot className="h-3.5 w-3.5" aria-hidden />}>
+            {direct.length === 0 && (
+              <p data-testid="brain-picker-direct-none" className="px-3 py-2 text-meta text-muted-foreground">
+                {t("brain_picker.direct_none")}
+              </p>
+            )}
+            {direct.map((c) => (
+              <Row
+                key={c.key}
+                icon={<Bot className="h-4 w-4" aria-hidden />}
+                title={c.title}
+                meta={c.meta}
+                on={!hermes && c.selection === liveBrain}
+                busy={busy === c.key}
+                onPick={() => void run(c.key, c.pick)}
+              />
+            ))}
+            {onSetUpProvider && (
+              <button
+                type="button"
+                data-testid="brain-picker-set-up"
+                onClick={onSetUpProvider}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-meta text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Plus className="h-3.5 w-3.5" aria-hidden />
+                {t("brain_picker.direct_set_up")}
+              </button>
+            )}
+          </Group>
+        )}
+
         {hermes && (
           <Row
             icon={<Sparkles className="h-4 w-4" aria-hidden />}
@@ -293,11 +408,13 @@ export function BrainPicker({
               key={c.key}
               icon={<Cpu className="h-4 w-4" aria-hidden />}
               title={c.title}
-              meta={c.meta}
+              meta={c.blocked ?? c.meta}
               state={c.state}
-              on={c.selection === selection}
+              // Without Hermes, the local card's saved server is only "on"
+              // while that card is the brain.
+              on={c.selection === selection && (hermes || !known || liveBrain === "local-openai")}
               busy={busy === c.key}
-              disabled={c.state === "off" && !c.selection.includes("::")}
+              disabled={Boolean(c.blocked) || (c.state === "off" && !c.selection.includes("::"))}
               onPick={() => void run(c.key, c.pick)}
             />
           ))}
