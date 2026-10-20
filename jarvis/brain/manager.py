@@ -120,6 +120,7 @@ from .route_policy import (
     media_chain,
     media_stays_local_message,
     recovery_message,
+    tiers_behind_primary,
     wants_escalation,
 )
 from .local_action_gate import (
@@ -2843,6 +2844,7 @@ class BrainManager:
         readback_composer: "ReadbackComposer | None" = None,  # noqa: UP037
     ) -> None:
         self._config = config
+        self._heal_route_policy_behind_primary()
         self._bus = bus
         # User-facing reply-language pin. "auto" mirrors the user's input
         # language (DE/EN/ES); a pinned code forces that language for every
@@ -10923,6 +10925,27 @@ class BrainManager:
         (``_route_policy``), so swapping the object is the whole switch.
         """
         self._config.brain.route_policy = policy
+
+    def _heal_route_policy_behind_primary(self) -> None:
+        """Move route-policy tiers left behind by a hand edit onto ``brain.primary``."""
+        edits = tiers_behind_primary(self._config)
+        if not edits:
+            return
+        from jarvis.core.config import BrainRoutePolicyConfig  # noqa: PLC0415 - lazy (AP-26)
+
+        policy = self._config.brain.route_policy
+        try:
+            current = policy.model_dump() if hasattr(policy, "model_dump") else dict(vars(policy))
+            self._config.brain.route_policy = BrainRoutePolicyConfig.model_validate(
+                {**current, **edits}
+            )
+        except Exception as exc:  # noqa: BLE001 - logged; the stale tiers keep answering
+            log.warning("route policy could not follow brain.primary: %s", exc)
+            return
+        log.warning(
+            "Route policy tiers %s named another brain than brain.primary=%s; they now follow it.",
+            sorted(edits), self._config.brain.primary,
+        )
 
     def _route_policy(self) -> Any | None:
         """The enabled ``[brain.route_policy]`` table, or None (normal chain)."""

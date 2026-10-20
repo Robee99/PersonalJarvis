@@ -249,6 +249,25 @@ def tiers_following_switch(
     return edits
 
 
+def tiers_behind_primary(config: Any) -> dict[str, dict[str, Any]]:
+    """The tier edits that bring a stale ``[brain.route_policy]`` behind ``brain.primary``.
+
+    A switch moves the tiers with it (:func:`tiers_following_switch`), but a
+    hand-edited ``jarvis.toml`` or an older install can leave ``primary`` on
+    one brain and the fast tier on another. The enabled policy is consulted
+    first, so the tier wins and the brain the owner picked never answers
+    (2026-10-20: primary = hermes, every turn still went to local-openai).
+    ``brain.primary`` is the one switch; the tiers follow it.
+    """
+    brain = getattr(config, "brain", None)
+    policy = getattr(brain, "route_policy", None)
+    primary = str(getattr(brain, "primary", "") or "").strip()
+    if not primary or policy is None:
+        return {}
+    fast = str(getattr(getattr(policy, TIER_FAST, None), "provider", "") or "").strip()
+    return tiers_following_switch(policy, fast or None, primary)
+
+
 def hermes_is_live_brain() -> bool:
     """``hermes_is_main_brain`` for the running app's config (False before it is built)."""
     from jarvis.core import runtime_refs

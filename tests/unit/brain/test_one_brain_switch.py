@@ -227,3 +227,24 @@ def test_set_route_policy_can_keep_the_restore_point(tmp_path: Path) -> None:
 
     assert table["fast"] == {"provider": "gemini", "local": False}
     assert json.loads(backup.read_text(encoding="utf-8")) == {"enabled": False}
+
+
+def test_tiers_left_on_another_brain_follow_primary() -> None:
+    from types import SimpleNamespace
+
+    from jarvis.brain.route_policy import tiers_behind_primary
+
+    policy = BrainRoutePolicyConfig.model_validate(
+        {
+            "enabled": True,
+            "fast": {"provider": "local-openai"},
+            "deep": {"provider": "local-openai"},
+        }
+    )
+    config = SimpleNamespace(brain=SimpleNamespace(primary="hermes", route_policy=policy))
+    assert tiers_behind_primary(config) == {
+        "fast": {"provider": "hermes"},
+        "deep": {"provider": "hermes"},
+    }
+    config.brain.primary = "local-openai"
+    assert tiers_behind_primary(config) == {}
