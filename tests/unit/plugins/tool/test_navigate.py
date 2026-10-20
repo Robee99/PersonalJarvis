@@ -129,3 +129,51 @@ def test_known_sections_match_frontend_section_ids() -> None:
     ts_ids = set(re.findall(r'"([a-z0-9_-]+)"', block.group(1)))
     assert ts_ids, "no ids parsed from SECTION_IDS"
     assert NavigateTool.known_sections() == ts_ids
+
+
+# --------------------------------------------------------------------------- #
+# ``then``: click a control inside the section once it is open                 #
+# --------------------------------------------------------------------------- #
+
+
+async def test_then_clicks_inside_the_opened_section() -> None:
+    from jarvis.core.events import AppUiRequest
+    from tests.fakes.fake_app_window import FakeAppWindowBus
+
+    bus = FakeAppWindowBus({"ok": True, "result": {"clicked": {"name": "Model", "role": "tab"}}})
+    res = await NavigateTool(bus=bus).execute({"section": "settings", "then": "Model"}, ctx=None)
+
+    assert res.success is True
+    assert res.output["clicked"] == "Model"
+    nav, click = bus.events
+    assert isinstance(nav, NavigateSidebar) and nav.section == "settings"
+    assert isinstance(click, AppUiRequest)
+    assert (click.action, click.label) == ("click", "Model")
+    assert click.wait_ms > 0, "the new section may still be rendering"
+
+
+async def test_then_that_finds_nothing_still_reports_the_open_section() -> None:
+    from tests.fakes.fake_app_window import FakeAppWindowBus
+
+    error = 'No control named "Modle" on this screen; closest: "Model".'
+    bus = FakeAppWindowBus({"ok": False, "error": error})
+    res = await NavigateTool(bus=bus).execute({"section": "settings", "then": "Modle"}, ctx=None)
+
+    assert res.success is True
+    assert res.output["section"] == "settings"
+    assert res.output["clicked"] is None
+    assert res.output["then_error"] == error
+    assert "could not click 'Modle'" in res.output["summary"]
+
+
+async def test_plain_section_sends_no_click(tool: NavigateTool, bus: RecordingBus) -> None:
+    res = await tool.execute({"section": "settings", "then": "  "}, ctx=None)
+    assert res.success is True
+    assert [type(e).__name__ for e in bus.events] == ["NavigateSidebar"]
+    assert "clicked" not in res.output
+
+
+def test_gods_eye_short_name_resolves() -> None:
+    from jarvis.plugins.tool.navigate import _resolve
+
+    assert _resolve("God's Eye") == "world-intelligence"

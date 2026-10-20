@@ -5,7 +5,9 @@ switching the active screen). The brain calls it when the user asks to open or
 show a section ("zeig die Socials", "open settings", "show the agents"). It
 publishes a :class:`~jarvis.core.events.NavigateSidebar` event; the frontend
 listener (``useWebSocket.ts``) switches the active section when ``section`` is a
-known ``SectionId`` and otherwise no-ops gracefully.
+known ``SectionId`` and otherwise no-ops gracefully. An optional ``then`` label
+is clicked inside the opened section afterwards, through the same window round
+trip the ``app_ui_*`` tools use (``jarvis/core/app_ui_bridge.py``).
 
 A direct safe-gated UI action, never a spawn — it never enters a worker tool-set
 (AP-5/AP-14). ``KNOWN`` mirrors the frontend ``SECTION_IDS`` (store/events.ts);
@@ -16,8 +18,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from jarvis.core.app_ui_bridge import AppUiBridge
 from jarvis.core.events import NavigateSidebar
 from jarvis.core.protocols import ToolResult
+
+#: How long the ``then`` click may wait for the new section to render (a lazily
+#: loaded view can take a moment on first open).
+THEN_WAIT_MS = 3000
 
 # Canonical section ids — mirror of SECTION_IDS in
 # jarvis/ui/web/frontend/src/store/events.ts (parity-tested).
@@ -283,6 +290,9 @@ _ALIASES: dict[str, str] = {
     "world intelligence": "world-intelligence",
     "god's eye view": "world-intelligence",
     "gods eye view": "world-intelligence",
+    # The screen's own short name, as people say it ("open God's Eye").
+    "god's eye": "world-intelligence",
+    "gods eye": "world-intelligence",
     "intelligence": "intelligence",
     "world events": "intelligence",
     "event map": "intelligence",
@@ -382,8 +392,9 @@ class NavigateTool:
         "Open/switch the desktop app to a sidebar section (the UI screen the user "
         "sees). Use when the user asks to show or open a section — 'zeig die "
         "Socials', 'open settings', 'show the agents', 'geh zu den Aufgaben'. Pass "
-        "the section id in 'section'. Do NOT use it for anything other than moving "
-        "the UI."
+        "the section id in 'section'. To go further inside it ('settings, the Model "
+        "page'), pass the tab or button words in 'then', or call app_ui_snapshot "
+        "next. Do NOT use it for anything other than moving the UI."
     )
     schema: dict[str, Any] = {
         "type": "object",
@@ -394,13 +405,21 @@ class NavigateTool:
                 "description": (
                     "The sidebar section id to open (e.g. 'socials', 'settings', 'agents')."
                 ),
-            }
+            },
+            "then": {
+                "type": "string",
+                "description": (
+                    "Optional: the words on a tab, sub-page or button to click once "
+                    "the section is open, e.g. 'Model'."
+                ),
+            },
         },
         "required": ["section"],
     }
 
-    def __init__(self, bus: Any) -> None:
+    def __init__(self, bus: Any, bridge: AppUiBridge | None = None) -> None:
         self._bus = bus
+        self._bridge = bridge or AppUiBridge(bus, source_layer="brain.tool.navigate")
 
     @classmethod
     def known_sections(cls) -> set[str]:
@@ -420,7 +439,36 @@ class NavigateTool:
         await self._bus.publish(
             NavigateSidebar(section=section, source_layer="brain.tool.navigate")
         )
+        then = " ".join(str(args.get("then") or "").split())
+        if not then:
+            return ToolResult(
+                success=True,
+                output={"section": section, "summary": f"Opened the {section} section."},
+            )
+        # The section is open either way; the click is reported honestly on its
+        # own, so a missing tab never reads as a failed navigation.
+        reply = await self._bridge.request("click", label=then, wait_ms=THEN_WAIT_MS)
+        if reply.ok:
+            clicked = reply.result.get("clicked") or {}
+            name = str(clicked.get("name") or then)
+            return ToolResult(
+                success=True,
+                output={
+                    "section": section,
+                    "clicked": name,
+                    "summary": f"Opened the {section} section and clicked {name!r}.",
+                },
+            )
         return ToolResult(
             success=True,
-            output={"section": section, "summary": f"Opened the {section} section."},
+            output={
+                "section": section,
+                "clicked": None,
+                "then_error": reply.error,
+                "no_window": reply.no_window,
+                "summary": (
+                    f"Opened the {section} section, but could not click {then!r}: "
+                    f"{reply.error} Call app_ui_snapshot to see what is there."
+                ),
+            },
         )

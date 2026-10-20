@@ -101,6 +101,16 @@ ROUTER_TOOLS = frozenset({
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —
     # never in a worker set (AP-5/AP-14). See ADR-0011 amendment "Navigate tool".
     "navigate",
+    # In-app UI control (2026-10-20): read the open screen's controls with
+    # refs, click one, type into a field, scroll. One AppUiRequest round trip
+    # to the app's own main window each (jarvis/core/app_ui_bridge.py), the
+    # same as a user's click; destructive buttons and password fields are
+    # refused there. Risk safe, never a spawn, never in a worker or society
+    # tool set (AP-5/AP-14). See ADR-0011 amendment "In-app UI control".
+    "app-ui-snapshot",
+    "app-ui-click",
+    "app-ui-type",
+    "app-ui-scroll",
     # On-demand visualisation (2026-08-11): draw what is under discussion as a
     # On-demand artifact (2026-08-23, rebuilt from the 2026-08-11 visualize
     # tool): build ONE self-contained HTML page — dashboard, report, diagram,
@@ -550,10 +560,18 @@ def _load_tools_for_tier(
                 inst = cls()
             elif ep.name == "start-preview-server":
                 inst = cls(bus=bus)
-            elif ep.name == "navigate":
+            elif ep.name in (
+                "navigate",
+                "app-ui-snapshot",
+                "app-ui-click",
+                "app-ui-type",
+                "app-ui-scroll",
+            ):
                 # UI navigation: publishes NavigateSidebar on the shared bus,
                 # which the WS forwarder streams to the frontend (event_name
-                # "NavigateSidebar") to switch the active section.
+                # "NavigateSidebar") to switch the active section. The app_ui
+                # tools (and navigate's ``then`` click) publish AppUiRequest on
+                # the same bus and wait for the main window's answer.
                 inst = cls(bus=bus)
             elif ep.name == "create-artifact":
                 # The artifact is written by a mission worker (strongest model),

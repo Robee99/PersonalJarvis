@@ -74,6 +74,11 @@ NEVER_GRANTED: Final[frozenset[str]] = frozenset(
         "dispatch-to-admin",
         "dispatch-with-review",
         "navigate",
+        # The app's own window answers to Jarvis, like navigate.
+        "app-ui-snapshot",
+        "app-ui-click",
+        "app-ui-type",
+        "app-ui-scroll",
         "switch-provider",
         "manage-mcp-server",
         "app-command",

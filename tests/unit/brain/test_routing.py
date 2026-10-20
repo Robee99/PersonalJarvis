@@ -1856,6 +1856,14 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # voice/chat. Pure UI action (risk safe), publishes NavigateSidebar,
             # never a spawn (AP-5/AP-14). See ADR-0011 amendment "Navigate tool".
             "navigate",
+            # In-app UI control (2026-10-20): read the open screen's controls
+            # with refs, click, type, scroll; one AppUiRequest round trip to
+            # the app's main window each. Risk safe, never a spawn (AP-5/AP-14).
+            # ADR-0011 amendment "In-app UI control".
+            "app-ui-snapshot",
+            "app-ui-click",
+            "app-ui-type",
+            "app-ui-scroll",
             # Command Registry executor (2026-07-09): one curated app command
             # through the same REST endpoint the UI uses (in-process ASGI).
             # Enum-constrained + schema-validated; dangerous -> risk "ask".

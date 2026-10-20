@@ -881,6 +881,33 @@ class NavigateSidebar(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class AppUiRequest(Event):
+    """Ask the desktop app's main window to read or use its own visible controls.
+
+    Published by :class:`jarvis.core.app_ui_bridge.AppUiBridge` for the
+    ``app_ui_*`` router tools and for ``navigate``'s ``then`` click. The main
+    window (``src/lib/appUi.ts``, wired in ``useWebSocket.ts``; never a
+    detached solo window) performs the action and posts the outcome to
+    ``POST /api/app-ui/result`` under the same ``request_id``.
+
+    ``action`` is ``snapshot`` (list the visible controls with short refs),
+    ``click`` (by ``ref`` or ``label``), ``type`` (``text`` into a field found by
+    ``ref`` or ``label``; ``submit`` presses Enter) or ``scroll``
+    (``direction`` up / down / top / bottom). ``wait_ms`` is how long a click
+    or type by label may wait for the control to appear, so a click right after
+    a section switch can wait for the view to render.
+    """
+    request_id: str = ""
+    action: str = ""
+    ref: str = ""
+    label: str = ""
+    text: str = ""
+    submit: bool = False
+    direction: str = ""
+    wait_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class WorldIntelCommand(Event):
     """Ask the World screen to change what its incident panel and globe show.
 

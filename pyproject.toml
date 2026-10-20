@@ -797,6 +797,14 @@ inspect-pointer = "jarvis.plugins.tool.inspect_pointer:InspectPointerTool"
 # Publishes NavigateSidebar; the frontend switches the section. Never a spawn
 # (AP-5/AP-14). See ADR-0011 amendment "Navigate tool".
 navigate = "jarvis.plugins.tool.navigate:NavigateTool"
+# In-app UI control (2026-10-20) — read the open screen's controls with refs,
+# click, type, scroll; one round trip to the app's main window each. Router-
+# tier, risk safe. Never a spawn (AP-5/AP-14). See ADR-0011 amendment
+# "In-app UI control".
+app-ui-snapshot = "jarvis.plugins.tool.app_ui:AppUiSnapshotTool"
+app-ui-click = "jarvis.plugins.tool.app_ui:AppUiClickTool"
+app-ui-type = "jarvis.plugins.tool.app_ui:AppUiTypeTool"
+app-ui-scroll = "jarvis.plugins.tool.app_ui:AppUiScrollTool"
 # On-demand artifact (2026-08-23) — build one self-contained HTML page when
 # the user explicitly asks to SEE something ("visualisier mir das", "mach mir
 # ein Dashboard", "build me an artifact"). Router-tier dispatch to the mission

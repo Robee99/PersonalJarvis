@@ -177,15 +177,25 @@ def probe_hermes(
 
 #: The Jarvis tools Hermes may call over MCP: the ones Hermes has no native
 #: equivalent for. The browser, computer use, web search, local files and the
-#: terminal stay Hermes's own. Names are the registry's tool names. An
-#: ask-tier call among these (sending or permanently deleting mail, sharing or
-#: deleting a Drive file, the camera, a phone call) runs only after the user
-#: says yes in their own next turn; Jarvis checks that itself
+#: terminal stay Hermes's own; Jarvis's ``navigate`` and ``app_ui_*`` move the
+#: Jarvis app's own window, which Hermes's browser cannot reach. Names are the
+#: registry's tool names. An ask-tier call among these (sending or permanently
+#: deleting mail, sharing or deleting a Drive file, the camera, a phone call)
+#: runs only after the user says yes in their own next turn; Jarvis checks that itself
 #: (``jarvis.mcp.jarvis_tools_server``, ``jarvis.safety.spoken_consent``).
 HERMES_JARVIS_TOOLS: tuple[str, ...] = (
     "wiki-recall",
     "wiki-list",
     "wiki-ingest",
+    # One wiki page in full, after wiki-recall or wiki-list named it.
+    "wiki-page-read",
+    # The Jarvis app itself: open a section, then read its controls (tabs,
+    # buttons, fields, each with a ref), click, type and scroll inside it.
+    "navigate",
+    "app_ui_snapshot",
+    "app_ui_click",
+    "app_ui_type",
+    "app_ui_scroll",
     # Remembered chats by topic: the memory orb's groups, a topic's chats, one
     # chat paged (read-only, sized for a small local model).
     "memory_chats",

@@ -263,10 +263,16 @@ def test_hermes_gets_the_jarvis_tools_and_the_key_stays_in_its_env(tmp_path) -> 
     for name in (
         "wiki-recall", "wiki-list", "wiki-ingest", "gmail", "google_calendar",
         "google_drive", "camera", "contact-lookup", "call-contact",
+        "wiki-page-read",
+    ):
+        assert name in include
+    # The Jarvis app's own window: open a section, then use what is inside it.
+    for name in (
+        "navigate", "app_ui_snapshot", "app_ui_click", "app_ui_type", "app_ui_scroll",
     ):
         assert name in include
     # What Hermes already has natively stays Hermes's own.
-    for native in ("search_web", "run_shell", "computer_use", "navigate", "screenshot"):
+    for native in ("search_web", "run_shell", "computer_use", "screenshot"):
         assert native not in include
     assert "ck-new" not in argv[4], "the key never goes on a command line or into config.yaml"
 

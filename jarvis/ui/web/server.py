@@ -487,6 +487,7 @@ class WebServer:
         from .agentic_ide_routes import router as agentic_ide_router
         from .antigravity_routes import router as antigravity_router
         from .app_actions_routes import router as app_actions_router
+        from .app_ui_routes import router as app_ui_router
         from .appshot_routes import router as appshot_router
         from .board_routes import (
             board_router as board_meta_router,
@@ -752,6 +753,8 @@ class WebServer:
         # Appshots: the front window as conversation context, on a shortcut,
         # a button or a spoken request. Captures through Screen Context.
         app.include_router(app_actions_router)
+        # The main window's answers to the app_ui_* tools (AppUiRequest).
+        app.include_router(app_ui_router)
         app.include_router(appshot_router)
         app.include_router(jarvisx_router)
         # The mission deck's pictures: the last Screen-Context capture (one

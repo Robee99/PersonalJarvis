@@ -1606,3 +1606,47 @@ native tools.
   echoing provider text, `token_expired` → one refresh + retry, `Retry-After`
   handling, cursor pagination, channel/DM resolution, per-action risk tiers.
 - `tests/unit/brain/test_routing.py` (exact router set includes `slack`).
+
+## Amendment 2026-10-20 — In-app UI control
+
+`app-ui-snapshot`, `app-ui-click`, `app-ui-type` and `app-ui-scroll` join
+`ROUTER_TOOLS`. They register the `app_ui_snapshot`, `app_ui_click`,
+`app_ui_type` and `app_ui_scroll` tools, which act inside the section
+`navigate` opened. Until now the router could open Settings but not its Model
+tab, a sub-page, a button or a field.
+
+Each call is one `AppUiRequest` event (`jarvis/core/app_ui_bridge.py`). The
+app's main window performs it on its own DOM (`src/lib/appUi.ts`): a snapshot
+lists the visible tabs, buttons, switches, links and fields with short refs
+(`e1`, `e2` ...), the screen's headings and the scroll position; a click,
+type or scroll then names a ref or the control's words. The window posts the
+outcome to `POST /api/app-ui/result`, and the waiting tool returns it. No
+answer within eight seconds means no main window is open, and the tool says so.
+A detached solo window never answers. `navigate` gains an optional `then`
+label, clicked through the same round trip after the section opens, and the
+navigation fast path uses it for "open settings and go to the model page".
+
+### Pure-Dispatcher spirit is preserved
+
+- Risk tier is `safe`. The tools touch only the app's own window, exactly as
+  the person's click would, never another program.
+- The window refuses controls the app marks destructive (the `destructive`
+  button variant, `data-danger`, `data-destructive`): the person clicks
+  those. Password fields are never read back or typed into.
+- Nothing starts at boot (AP-26). A request is a bus event and a future.
+- The tools are never a spawn and never in a worker set (AP-5/AP-14). Their
+  names are in the worker broker's forbidden list and in the society
+  `NEVER_GRANTED` set.
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py` checks the exact router set.
+- `tests/unit/core/test_app_ui_bridge.py` covers the round trip, the
+  no-window timeout and first-answer-wins.
+- `tests/unit/ui/web/test_app_ui_routes.py` covers the result route.
+- `tests/unit/plugins/tool/test_app_ui.py` covers the four tools, factory
+  wiring and the Jarvis MCP catalog.
+- `tests/unit/brain/test_navigation_followup.py` covers the two-step
+  fast path.
+- `src/lib/appUi.test.tsx` covers the snapshot, label matching, React-safe
+  typing and both refusals.

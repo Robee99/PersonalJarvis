@@ -2491,6 +2491,44 @@ def _is_written_turn() -> bool:
     return context.get("delivery") == "written"
 
 
+def _navigation_followup_reply(
+    section_label: str, target: str, result: object, *, german: bool
+) -> str:
+    """The spoken answer to "open X and go to Y", true to what the click did.
+
+    ``result`` is the ``navigate`` tool's outcome as the executor returned it
+    (a ``ToolResult``, or a plain dict from a test double). The section opens
+    even when the click finds nothing, and the answer says which half worked.
+    """
+    output = getattr(result, "output", None)
+    success = getattr(result, "success", None)
+    if isinstance(result, dict):
+        output = result.get("output", output)
+        success = result.get("success", success)
+    details = output if isinstance(output, dict) else {}
+    clicked = details.get("clicked")
+    sec, tgt = section_label, target
+    if success is False:
+        de = f"Ich konnte {sec} nicht öffnen."  # i18n-allow: runtime voice output
+        en = f"I couldn't open {sec}."
+    elif clicked:
+        de = f"{sec} ist offen, {clicked} angeklickt."  # i18n-allow: runtime voice output
+        en = f"Opened {sec} and clicked {clicked}."
+    elif details.get("no_window"):
+        de = (
+            f"Ich wollte {sec} öffnen, aber das Jarvis-Fenster "  # i18n-allow: runtime voice output
+            f"hat nicht geantwortet, darum fehlt noch {tgt}."  # i18n-allow
+        )
+        en = (
+            f"I asked for {sec}, but the Jarvis window did not answer, "
+            f"so I couldn't open {tgt}."
+        )
+    else:
+        de = f"{sec} ist offen, aber {tgt} habe ich dort nicht gefunden."  # i18n-allow
+        en = f"Opened {sec}, but I couldn't find {tgt} there."
+    return de if german else en
+
+
 def normalize_reply_language(value: object) -> str:
     """Coerce a raw reply-language value to a known code, else ``"auto"``.
 
@@ -7447,10 +7485,17 @@ class BrainManager:
         ``NavigateSidebar`` for the frontend) and returns a short spoken
         confirmation. Returns ``None`` when the utterance is not a navigation
         request, so the normal path runs. Pure regex match, no LLM (AP-11).
+
+        A two-step command ("open settings and go to the model page") opens the
+        section and then clicks the named control inside it, through
+        ``navigate``'s ``then`` argument; a click that finds nothing is said
+        plainly ("Opened Settings, but I couldn't find model there.").
         """
+        from jarvis.brain.navigation_followup import match_navigation_followup
         from jarvis.brain.navigation_intent import match_navigation_intent
 
-        section = match_navigation_intent(user_text)
+        followup = match_navigation_followup(user_text)
+        section = followup.section if followup is not None else match_navigation_intent(user_text)
         if section is None:
             return None
         # User mandate (2026-06-15): an EXPLICIT heavy-work trigger ("subagent",
@@ -7490,10 +7535,13 @@ class BrainManager:
         if tool is None or self._tool_executor is None:
             return None
         tid = trace_id or uuid4()
+        args: dict[str, Any] = {"section": section}
+        if followup is not None:
+            args["then"] = followup.label
         try:
-            await self._tool_executor.execute(
+            result = await self._tool_executor.execute(
                 tool,
-                {"section": section},
+                args,
                 user_utterance=user_text,
                 trace_id=tid,
             )
@@ -7506,7 +7554,9 @@ class BrainManager:
         is_de = bool(re.search(r"[äöüÄÖÜß]", user_text)) or bool(  # i18n-allow
             re.search(r"\b(zeig\w*|öffne|oeffne|geh\w*|wechs\w*|spring\w*)\b", user_text, re.I)  # i18n-allow
         )
-        return f"Öffne {label}." if is_de else f"Opening {label}."  # i18n-allow
+        if followup is None:
+            return f"Öffne {label}." if is_de else f"Opening {label}."  # i18n-allow
+        return _navigation_followup_reply(label, followup.label, result, german=is_de)
 
     def _agentic_ide_owns_turn(self, user_text: str) -> bool:
         """True when this turn belongs to the open coding workspace.
