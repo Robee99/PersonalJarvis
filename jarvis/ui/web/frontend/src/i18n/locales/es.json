@@ -4219,6 +4219,8 @@
   },
   "use_web_socket": {
     "jarvis_opened": "{name} abrió",
+    "jarvis_clicked": "{name} pulsó",
+    "jarvis_typed": "{name} escribió en",
     "prompt_sent": "Prompt enviado a",
     "prompt_not_submitted": "el prompt está en su campo de entrada, no se envió",
     "prompt_unconfirmed": "el prompt se escribió, pero el panel no mostró que llegara: revisa ese panel",

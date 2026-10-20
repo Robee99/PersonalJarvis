@@ -4219,6 +4219,8 @@
   },
   "use_web_socket": {
     "jarvis_opened": "{name} öffnete",
+    "jarvis_clicked": "{name} klickte",
+    "jarvis_typed": "{name} tippte in",
     "prompt_sent": "Prompt gesendet an",
     "prompt_not_submitted": "der Prompt steht im Eingabefeld, abgeschickt wurde er nicht",
     "prompt_unconfirmed": "der Prompt wurde eingetippt, aber das Pane hat den Empfang nicht sichtbar gezeigt – bitte dort nachsehen",

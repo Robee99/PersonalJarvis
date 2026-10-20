@@ -4219,6 +4219,8 @@
   },
   "use_web_socket": {
     "jarvis_opened": "{name} 已打开",
+    "jarvis_clicked": "{name} 已点击",
+    "jarvis_typed": "{name} 已输入到",
     "prompt_sent": "提示词已发送至",
     "prompt_not_submitted": "提示词在输入框中，尚未发送",
     "prompt_unconfirmed": "提示词已输入，但窗格未显示已收到——请检查该窗格",

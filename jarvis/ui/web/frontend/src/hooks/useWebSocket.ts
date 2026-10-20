@@ -40,6 +40,7 @@ import { petKeys } from "@/hooks/usePets";
 import { focusChatComposer, startNewTextChat } from "@/lib/newChat";
 import { SPEAKER_MUTE_EVENT } from "@/lib/speakerMute";
 import { useIntelStore } from "@/store/intel";
+import { handleAppUiRequest, type AppUiRequestPayload } from "@/lib/appUi";
 
 let singleton: WSClient | null = null;
 
@@ -491,6 +492,13 @@ export function useWebSocket(): void {
           // or the whole globe (world_globe tool); the NavigateSidebar that
           // precedes it has already opened the screen.
           useIntelStore.getState().applyCommand(env.payload);
+        }
+
+        if (env.event_name === "AppUiRequest") {
+          // The assistant reads or uses this window's own controls (app_ui_*
+          // tools, navigate's "then"). Answered by the main window only, after
+          // a NavigateSidebar that came first has already switched sections.
+          void handleAppUiRequest(env.payload as AppUiRequestPayload);
         }
 
         if (env.event_name === "NavigateSidebar") {
