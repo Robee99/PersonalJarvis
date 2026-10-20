@@ -130,6 +130,10 @@ def match_navigation_intent(text: str) -> str | None:
     cues = [match.end() for match in _NAV_CUE.finditer(t)]
     if not cues:
         return None
+    # The target named first wins, and at one position the longest phrase:
+    # "open the live screen and show the city cameras" opened Ghost, because
+    # "city cameras" is longer than "live" (2026-10-20).
+    best: tuple[int, int, str] | None = None
     for phrase, section_id in _PHRASES:
         # Word boundaries so 'board' does not match inside 'keyboard'.
         for hit in re.finditer(r"\b" + re.escape(phrase) + r"\b", t):
@@ -139,5 +143,7 @@ def match_navigation_intent(text: str) -> str | None:
                 and not _foreign_target(t[cue_end : hit.start()], t[hit.end() :])
                 for cue_end in cues
             ):
-                return section_id
-    return None
+                rank = (hit.start(), -len(phrase), section_id)
+                if best is None or rank < best:
+                    best = rank
+    return best[2] if best is not None else None

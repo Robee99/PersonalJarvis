@@ -120,3 +120,11 @@ def test_binding_tolerates_ordinary_filler(text: str, expected: str) -> None:
 )
 def test_settings_of_the_computer_or_another_app_is_not_app_navigation(text: str) -> None:
     assert match_navigation_intent(text) is None
+
+
+def test_the_section_named_first_wins_over_a_longer_later_one() -> None:
+    # 2026-10-20: "city cameras" (Ghost) outranked "live" by length alone.
+    assert (
+        match_navigation_intent("Open the Live screen and show the city cameras.")
+        == "live-feeds"
+    )
