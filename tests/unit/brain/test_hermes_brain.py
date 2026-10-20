@@ -103,7 +103,9 @@ def test_instructions_stay_identical_across_spoken_typed_and_language_turns() ->
         system="X\n\nREPLY LANGUAGE: German.",
     )
     assert build_instructions(spoken) == build_instructions(typed_german)
-    assert hermes.run_input(spoken) == "[spoken] REPLY LANGUAGE: English.\nhi"
+    assert hermes.run_input(spoken) == (
+        f"[spoken] {hermes.FOCUS_NOTE} REPLY LANGUAGE: English.\nhi"
+    )
     note = hermes.turn_note(typed_german, written=True)
     assert note.startswith("[typed]")
     assert "REPLY LANGUAGE: German." in note
@@ -124,6 +126,22 @@ def test_only_the_first_message_of_a_typed_chat_says_it_is_a_new_chat() -> None:
     assert hermes.NEW_CHAT_NOTE not in hermes.turn_note(first)
 
 
+def test_every_other_turn_says_earlier_tasks_are_over() -> None:
+    # One Hermes session carries every turn; a small model replayed an old
+    # task in answer to a new question (2026-10-20).
+    first = BrainRequest(messages=(BrainMessage(role="user", content="hi"),))
+    later = BrainRequest(
+        messages=(
+            BrainMessage(role="user", content="sort my videos"),
+            BrainMessage(role="assistant", content="I can't."),
+            BrainMessage(role="user", content="show the earthquakes"),
+        )
+    )
+    assert hermes.FOCUS_NOTE in hermes.turn_note(first)
+    assert hermes.FOCUS_NOTE in hermes.turn_note(later, written=True)
+    assert hermes.FOCUS_NOTE not in hermes.turn_note(first, written=True)
+
+
 @pytest.mark.asyncio
 async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() -> None:
     server = FakeHermesApi(
@@ -139,7 +157,7 @@ async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() 
     assert brain.last_runtime == {"provider": "local-qwen", "model": "qwen"}
     sent = server.runs[0].body
     assert sent["model"] == "hermes-agent" and "provider" not in sent
-    assert sent["input"] == "[spoken]\nopen notepad"
+    assert sent["input"] == f"[spoken] {hermes.FOCUS_NOTE}\nopen notepad"
     assert "tools" not in sent and "conversation_history" not in sent
     assert server.runs[0].headers["x-hermes-session-key"] == hermes.SESSION_KEY
 

@@ -66,7 +66,7 @@ async def test_every_turn_is_a_run_in_one_hermes_session_with_only_the_newest_tu
 
     assert answer == "You asked me to say hi."
     assert [r.body["session_id"] for r in server.runs] == [SESSION_ID, SESSION_ID]
-    assert server.runs[1].body["input"] == "[spoken]\nwhat did I ask?"
+    assert server.runs[1].body["input"] == f"[spoken] {hermes.FOCUS_NOTE}\nwhat did I ask?"
     assert "conversation_history" not in server.runs[1].body
 
 

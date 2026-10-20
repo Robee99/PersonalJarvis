@@ -474,6 +474,13 @@ NEW_CHAT_NOTE = (
 )
 
 
+#: Added to every other turn. All of Jarvis shares one Hermes session, and a
+#: small local model answered "show me the earthquakes on the globe" with the
+#: Drive task from three turns earlier (2026-10-20). A follow-up such as "yes"
+#: or "carry on" still continues, because it asks for exactly that.
+FOCUS_NOTE = "Act on this message. An earlier task is over unless this message continues it."
+
+
 def is_first_chat_message(req: BrainRequest) -> bool:
     """Whether the newest message is the first the user wrote in this chat."""
     return sum(1 for m in req.messages if getattr(m, "role", None) == "user") == 1
@@ -484,6 +491,8 @@ def turn_note(req: BrainRequest, *, written: bool = False) -> str:
     parts = ["[typed]" if written else "[spoken]"]
     if written and is_first_chat_message(req):
         parts.append(NEW_CHAT_NOTE)
+    else:
+        parts.append(FOCUS_NOTE)
     lang = extract_reply_language_directive(req.system)
     if lang:
         parts.append(lang)

@@ -110,7 +110,7 @@ async def test_the_checkpoint_is_used_once() -> None:
     await _cut_off(brain, "write me an essay about lighthouses")
     await _say(brain, "continue")
     await _say(brain, "continue")
-    assert server.runs[2].body["input"] == "[spoken]\ncontinue"
+    assert server.runs[2].body["input"] == f"[spoken] {hermes.FOCUS_NOTE}\ncontinue"
 
 
 @pytest.mark.asyncio

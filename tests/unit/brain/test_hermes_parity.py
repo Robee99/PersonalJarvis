@@ -56,7 +56,7 @@ async def test_an_image_in_the_turn_reaches_hermes_as_an_image_part() -> None:
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "[spoken]\nWhat am I holding?"},
+                {"type": "text", "text": f"[spoken] {hermes.FOCUS_NOTE}\nWhat am I holding?"},
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
             ],
         }
@@ -70,7 +70,7 @@ async def test_a_turn_without_images_still_sends_plain_text() -> None:
 
     await _ask(_brain(server), BrainMessage(role="user", content="say hi"))
 
-    assert server.runs[0].body["input"] == "[spoken]\nsay hi"
+    assert server.runs[0].body["input"] == f"[spoken] {hermes.FOCUS_NOTE}\nsay hi"
     assert OBSERVE_ONLY_INSTRUCTIONS not in server.runs[0].body["input"]
 
 
