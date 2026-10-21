@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jarvis.ui.web.agent_mcp_routes import router
-from jarvis.ui.web.mcp_server_routes import build_mcp_asgi_app
+from jarvis.ui.web.mcp_server_routes import MCPMount, build_mcp_asgi_app
 
 #: A stateless Streamable HTTP request needs both content types offered.
 _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
@@ -30,7 +30,12 @@ _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 def _mounted_app() -> FastAPI:
     """The surfaces mounted exactly as ``server.py`` mounts them."""
     app = FastAPI()
-    app.mount("/api/control/mcp", build_mcp_asgi_app())
+    app.router.routes.append(MCPMount("/api/control/mcp", app=build_mcp_asgi_app()))
+
+    @app.get("/{path:path}")
+    def spa(path: str) -> dict[str, bool]:
+        return {"spa": True}
+
     return app
 
 
@@ -410,3 +415,27 @@ def test_pair_refuses_a_nameless_client(connect_app: FastAPI, token_store) -> No
     with TestClient(connect_app) as client:
         answer = client.post("/api/agent-mcp/pair", json={"name": "   "})
     assert answer.status_code == 422
+
+
+@pytest.mark.parametrize("surface", ["", "/agents"])
+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE"])
+@pytest.mark.parametrize("prefix", ["", "/nested"])
+def test_canonical_mcp_urls_reach_auth_without_redirect_or_spa(
+    keyed: str, surface: str, method: str, prefix: str
+) -> None:
+    app = _mounted_app()
+    if prefix:
+        outer = FastAPI()
+        outer.mount(prefix, app)
+        app = outer
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.request(method, f"{prefix}/api/control/mcp{surface}")
+    assert response.status_code == 401, response.text
+    assert "Invalid or missing Jarvis Control API key" in response.text
+
+
+def test_mcp_mount_does_not_capture_neighboring_spa_paths(keyed: str) -> None:
+    with TestClient(_mounted_app(), follow_redirects=False) as client:
+        response = client.get("/api/control/mcp-adjacent")
+    assert response.status_code == 200
+    assert response.json() == {"spa": True}
