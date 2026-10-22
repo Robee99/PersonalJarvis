@@ -41,6 +41,13 @@ from typing import Any, Literal
 
 from jarvis.core.protocols import BrainMessage, BrainRequest
 from jarvis.costs.ledger import usage_context
+from jarvis.missions.capacity import (
+    PaidCallGate,
+    PaidCallRefused,
+    PaidReservation,
+    max_call_cost_usd,
+    usage_cost_usd,
+)
 
 from .api_agent_tools import WORKER_TOOL_SPECS, execute_worker_tool_async
 from .capabilities import WorkerCapabilityInventory
@@ -98,6 +105,9 @@ _BRAIN_BY_PROVIDER: dict[str, tuple[str, str]] = {
     # NVIDIA NIM is OpenAI-compatible with no vendor CLI — same in-process
     # tool-loop path as openai/openrouter, running on the user's nvapi- key.
     "nvidia": ("jarvis.plugins.brain.nvidia", "NvidiaBrain"),
+    # Nous Portal: same in-process tool loop; NousBrain adds the user tag the
+    # Portal requires on every chat request.
+    "nous": ("jarvis.plugins.brain.nous", "NousBrain"),
     # B3/B4 (open-source AP-22): claude-api + gemini run the SAME in-process tool
     # loop, so an Anthropic- or Gemini-API-key-only user can run heavy missions
     # without the npm `claude`/`gemini` CLI binary. The CLI worker stays preferred
@@ -134,10 +144,41 @@ _DEFAULT_MODEL: dict[str, str] = {
     "gemini": "gemini-3.1-pro-preview",
     # NVIDIA's own reasoning flagship for heavy subagent work.
     "nvidia": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    # A free route, so a mission on a free Nous account runs without billing.
+    "nous": "stepfun/step-3.7-flash:free",
 }
 # Vertex serves the same Gemini catalogue on Google Cloud, so its worker default
 # is the Gemini one rather than a second literal that would drift from it.
 _DEFAULT_MODEL["vertex"] = _DEFAULT_MODEL["gemini"]
+
+
+def _book_call(
+    gate: PaidCallGate | None, reservation: PaidReservation | None, call_usd: float | None
+) -> float:
+    """USD to add to a spawn's spend for one model call. A gated (paid) call
+    is booked on the mission ledger — its whole reservation when it reported
+    no usage; an ungated call counts what it reported."""
+    if gate is None or reservation is None:
+        return call_usd or 0.0
+    return gate.commit(reservation, call_usd)
+
+
+def _request_bytes(req: BrainRequest) -> int:
+    """UTF-8 bytes a request sends (messages, system prompt, tool specs) —
+    the input side of a paid call's reservation."""
+
+    def size(value: Any) -> int:
+        text = value if isinstance(value, str) else json.dumps(
+            value, ensure_ascii=False, default=str
+        )
+        return len(text.encode("utf-8"))
+
+    total = size(req.system or "")
+    for message in req.messages:
+        total += size(message.content)
+    if req.tools:
+        total += size(list(req.tools))
+    return total
 
 
 def _resolve_worker_model(provider: str, explicit: str) -> str:
@@ -145,8 +186,9 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
 
     Precedence:
       1. the step's explicit model (the decomposer pinned one) — always wins;
-      2. ``[brain.sub_jarvis].model`` but ONLY when its provider matches this
-         worker (a pin set for antigravity must never run on the openrouter key);
+      2. ``[brain.worker].model`` but ONLY when its provider (or the inherited
+         ``brain.primary``) matches this worker (a pin set for antigravity must
+         never run on the openrouter key);
       3. ``[brain.providers[provider]].model`` — the user's own pick for this
          provider (e.g. the free OpenRouter model);
       4. the documented per-provider ``_DEFAULT_MODEL`` (non-paid for openrouter).
@@ -159,15 +201,12 @@ def _resolve_worker_model(provider: str, explicit: str) -> str:
     prov = (provider or "").strip().lower()
     try:
         from jarvis.core import config as _cfg
+        from jarvis.missions.worker_runtime.provider_map import pinned_worker_model
 
         root = _cfg.load_config()
-        sub = getattr(root.brain, "worker", None)
-        if (
-            sub is not None
-            and (getattr(sub, "provider", "") or "").strip().lower() == prov
-            and (getattr(sub, "model", "") or "").strip()
-        ):
-            return sub.model.strip()
+        pinned = pinned_worker_model(root, prov)
+        if pinned:
+            return pinned
         pc = (root.brain.providers or {}).get(prov)
         picked = (getattr(pc, "model", "") or "").strip()
         if picked:
@@ -243,11 +282,26 @@ class ApiAgentWorker:
         provider: str,
         *,
         capability_inventory: WorkerCapabilityInventory | None = None,
+        pinned_model: str = "",
+        paid_gate: PaidCallGate | None = None,
     ) -> None:
         self.provider = (provider or "").strip().lower()
+        # The exact model of a paid fallback run (jarvis/missions/capacity.py).
+        # Wins over every other model source.
+        self.pinned_model = (pinned_model or "").strip()
+        # Consent + caps in front of EVERY model call of a paid fallback run:
+        # each call reserves its maximum cost first and stops the loop when
+        # consent is gone or a cap is reached. None = the user's own chosen
+        # provider (no fallback), billed as configured.
+        self.paid_gate = paid_gate
         self.last_pid: int | None = None
         self.last_session_id: str | None = None
         self.capability_inventory = capability_inventory or WorkerCapabilityInventory.build()
+
+    @property
+    def family(self) -> str:
+        """Provider family this worker bills (jarvis/missions/capacity.worker_family)."""
+        return self.provider
 
     async def spawn(
         self,
@@ -312,7 +366,7 @@ class ApiAgentWorker:
         session_id = str(uuid.uuid4())
         self.last_pid = None
         self.last_session_id = session_id
-        resolved_model = _resolve_worker_model(self.provider, model)
+        resolved_model = _resolve_worker_model(self.provider, self.pinned_model or model)
         log_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 — trivial sync mkdir (mirrors sibling workers)
         stream_path = log_dir / "stream.jsonl"
         # The orchestrator reuses one log directory across critic iterations.
@@ -321,6 +375,11 @@ class ApiAgentWorker:
         with suppress(OSError):
             stream_path.write_text("", encoding="utf-8")
         written: list[str] = []
+        # What this spawn cost, from the usage each call reports — carried on
+        # the terminal result so a paid mission can log its real spend. A paid
+        # call that reports no usage counts its whole reservation.
+        spent_usd = 0.0
+        gate = self.paid_gate
         broker_specs = broker_binding.tool_specs if broker_binding is not None else ()
         local_names = {str(spec["name"]) for spec in WORKER_TOOL_SPECS}
         all_tool_specs = WORKER_TOOL_SPECS + tuple(
@@ -428,6 +487,19 @@ class ApiAgentWorker:
                 )
                 text_parts: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
+                reservation: PaidReservation | None = None
+                if gate is not None:
+                    # Raises PaidCallRefused — consent revoked or a cap hit —
+                    # BEFORE anything is billed; the orchestrator parks.
+                    reservation = gate.reserve(
+                        max_call_cost_usd(
+                            resolved_model,
+                            input_bytes=_request_bytes(req),
+                            max_output_tokens=_MAX_TOKENS,
+                        )
+                    )
+                call_usd: float | None = None
+                booked = False
                 try:
                     # Override credential lookup only for this awaited provider
                     # call. ContextVar isolation keeps concurrent Brain and
@@ -436,6 +508,10 @@ class ApiAgentWorker:
                         with usage_context("mission-worker"):
                             _stream = brain.complete(req)
                         async for delta in _stream:
+                            if delta.usage:
+                                call_usd = (call_usd or 0.0) + usage_cost_usd(
+                                    resolved_model, delta.usage
+                                )
                             if delta.content:
                                 text_parts.append(delta.content)
                             if delta.tool_call:
@@ -459,9 +535,12 @@ class ApiAgentWorker:
                         or ("404" in low and "tool" in low)
                     )
                     if turn == 0 and no_tool_endpoints:
+                        spent_usd += _book_call(gate, reservation, call_usd)
+                        booked = True
                         res = ClaudeResult(
                             subtype="error_during_execution",
                             is_error=True,
+                            cost_usd=round(spent_usd, 6),
                             session_id=session_id,
                             duration_ms=int((time.perf_counter() - t0) * 1000),
                             result=_tool_incapable_message(
@@ -472,6 +551,12 @@ class ApiAgentWorker:
                         yield res
                         return
                     raise
+                finally:
+                    # A call that died mid-stream may still have billed:
+                    # without a usage report its whole reservation counts.
+                    if not booked:
+                        spent_usd += _book_call(gate, reservation, call_usd)
+                        booked = True
 
                 assistant_text = "".join(text_parts).strip()
                 if assistant_text:
@@ -566,6 +651,7 @@ class ApiAgentWorker:
             res = ClaudeResult(
                 subtype="success",
                 is_error=False,
+                cost_usd=round(spent_usd, 6),
                 session_id=session_id,
                 num_turns=turns,
                 duration_ms=wall_ms,
@@ -582,7 +668,8 @@ class ApiAgentWorker:
         except Exception as exc:  # noqa: BLE001
             wall_ms = int((time.perf_counter() - t0) * 1000)
             logger.warning("ApiAgentWorker[%s] failed: %s", worker_id, exc, exc_info=True)
-            if _error_means_family_unusable(str(exc)):
+            # A refused paid call is the consent/cap rule, not a broken key.
+            if not isinstance(exc, PaidCallRefused) and _error_means_family_unusable(str(exc)):
                 # Remember that THIS key cannot run right now, fingerprinted so
                 # a freshly saved key lifts the block instantly. The factory's
                 # family walk skips the family on the retry and crosses to the
@@ -610,6 +697,7 @@ class ApiAgentWorker:
             res = ClaudeResult(
                 subtype="error_during_execution",
                 is_error=True,
+                cost_usd=round(spent_usd, 6),
                 session_id=session_id,
                 num_turns=turns,
                 duration_ms=wall_ms,

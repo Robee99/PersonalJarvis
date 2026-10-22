@@ -1,105 +1,65 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from "framer-motion";
 import { useEventStore, type VoiceState } from "@/store/events";
 import { useDeckStore } from "@/store/deck";
-import { VoiceWaveform, type WaveformPhase } from "@/components/overlay/VoiceWaveform";
-import { voiceInputLevelRef } from "@/lib/voiceInputLevel";
-import { DockRail } from "@/components/layout/DockRail";
-
-import { GigiMark } from "@/components/GigiMark";
 import { DeckOrb, type OrbReadouts } from "@/components/deck/DeckOrb";
 import type { ThinkingStep } from "@/lib/thinkingSteps";
 import { DeckStandby, ORB_TRAVEL } from "@/components/deck/DeckStandby";
 import { DeckReveal } from "@/components/deck/DeckReveal";
-import { DeckFloor, useDeckParallax } from "@/components/deck/DeckStage3D";
-import { SLOT_DEPTH, slotDepthVars } from "@/lib/deckDepth";
-import { HudLamp } from "@/components/deck/HudFrame";
-import {
-  IdeGridCard,
-  OutputsCard,
-  RunsCard,
-  TerminalsCard,
-} from "@/components/deck/DeckActivityCards";
-import { ApiStatsCard, CaptureCard, LiveCounter } from "@/components/deck/DeckSignalCards";
-import { LogCard } from "@/components/deck/DeckLogCard";
-import { TurnCard } from "@/components/deck/DeckTurnCard";
-import { WikiCard, warmWikiScene } from "@/components/deck/DeckWiki";
+import { ArcHalo } from "@/components/stark/ArcHalo";
+import { useDeckContext } from "@/components/stark/ContextMeter";
+import { QuickAccess, ResourcesPanel, SystemStatusPanel } from "@/components/stark/StarkInstruments";
+import { TasksPanel } from "@/components/stark/TasksPanel";
+import { WeatherMini } from "@/components/stark/WeatherGlobe";
+import { WorldDotMap } from "@/components/stark/WorldDotMap";
+import { NewsTicker } from "@/components/stark/WorldPanels";
+import { CommandBar } from "@/components/stark/CommandBar";
+import { StarkShell, wordmark } from "@/components/stark/StarkShell";
+import { useHudTalk } from "@/components/stark/useHudTalk";
 import { useVoiceEngineDisplay } from "@/hooks/useVoiceEngineDisplay";
-import { useVoiceReadiness } from "@/hooks/useVoiceReadiness";
+import { useAssistantStatus } from "@/hooks/useAssistantStatus";
+import { formatAssistantStatus } from "@/lib/assistantStatus";
 import { useWakeWord } from "@/hooks/useWakeWord";
-import { useVoiceCall } from "@/components/agentic/useVoiceCall";
 import { useElementSize } from "@/hooks/useElementSize";
-import { orbSizeFor, stageVignette, stageWashSize } from "@/lib/deckStage";
-import { HANDOFF, autoLaunchAfterMs, resolvePhase, type BoardSlot } from "@/lib/deckStandby";
-import { writeDeckMode } from "@/lib/deckMode";
+import { stageVignette, stageWashSize } from "@/lib/deckStage";
+import { HANDOFF, autoLaunchAfterMs, resolvePhase } from "@/lib/deckStandby";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n";
 
+export { wordmark };
+
 /**
- * The mission deck — the front page.
+ * The HUD's Command screen — the front page.
  *
- * One stage that shows everything the assistant is and does, without a
- * single navigation step. You talk to it by voice; the typed composer lives
- * on the classic chat surface, not here (maintainer decision 2026-08-18).
- * The layout follows the maintainer's sketch of 2026-08-17 (photographed
- * rotated; read upright):
+ * HUD v5 (2026-10-18, the owner's concept boards as the real screen): the
+ * Stark frame (`StarkShell`: the rail, the clock, the name and its state,
+ * search / new chat / settings) around one stage:
  *
- *   ┌ gigi · voice bars · lamps · counter ── name · brain · switch · chrome ┐
- *   │ dock │ [log — the     [response][api]        [ WIKI — 3D, tall    ] │
- *   │      │  terminal]     (      ORB      )       [                    ] │
- *   │      │ [outputs][run]   [capture]            [terminals] [ide grid] │
- *   └──────┴───────────────────────────────────────────────────────────────┘
+ *   ┌rail┬ 21:42 ─────────── J.A.R.V.I.S. · ONLINE ─────────── ⌕ ✎ ⚙ ┐
+ *   │    │ [SYSTEM STATUS]      (   the arc reactor over   ) [RESOURCES] │
+ *   │    │ [QUICK ACCESS ]      (   a dotted world map     ) [TASKS    ] │
+ *   │    │                  [ ◉  LISTENING… / Ask me anything ] (globe°) │
+ *   │    │ ◆ BREAKING  headline · headline · headline …                  │
+ *   └────┴────────────────────────────────────────────────────────────────┘
  *
- * Two of the sketch's cards were re-thought on 2026-08-18 (maintainer): the
- * "right now" trace doubled the run inspector, which the small RUNS card
- * already opens, so the tall left slot is now the LOG — a terminal of what
- * the assistant heard, thought, did and said, with timings, that is never
- * blank; and the live Computer-Use screen mirror gave way to the RESPONSE
- * instrument — the turn's phases and how long each stage took. Computer Use
- * still shows: as the "control" lamp, as the response card's act phase, and
- * as lines in the log.
+ * The chat is the command bar: talk with the round button, type into the
+ * field, read the newest answer above it, open the whole thread (history,
+ * sessions, approvals) from its chat button. The memory orb opens from the
+ * rail. Narrower than 1024 px the board is one column and scrolls.
  *
- * Every card is a window onto a section and reads that section's own data;
- * its title jumps there. The dock on the left is the ONLY place the sections
- * are listed — the sidebar steps aside while the deck is up (App.tsx).
+ * Nothing on this screen is invented: a number the store or an endpoint
+ * cannot source is not shown, and a list that is empty says so.
  *
- * The board is the deck's SECOND act (maintainer, 2026-08-18: a fresh start
- * showed nine instruments all saying "nothing yet"). While the app comes up
- * the stage is `DeckStandby` — the boot sequence — and the board takes over
- * the moment a turn opens or the person asks for it
- * (`lib/deckStandby.ts::resolvePhase`, forward only). It also takes over ON
- * ITS OWN, a blink after the gates are up (maintainer, 2026-08-20: opening the app must land you on the board,
- * never on a screen that asks you to speak first —
- * `lib/deckStandby.ts::AUTO_LAUNCH`). The start plays out in full either
- * way; only the trigger changed. The hand-off is a LAUNCH, on one clock
- * (`lib/deckStandby.ts::HANDOFF`): the orb flares and a shockwave leaves
- * it, the boot's ring bursts past the camera and its console gets out of
- * the way (`DeckStandby`), the orb travels from the ring's centre to its
- * place on the board (one `layoutId` on both stages) and lands with a ring,
- * the instruments assemble from the centre outward as the wave reaches them
- * (`DeckReveal`), and one scan runs down the whole board. The maintainer's
- * verdict on a fade-and-wipe (2026-08-19): a hard switch, ridiculous — this
- * has to be cinematic.
- *
- * The frames differ on purpose (HudFrame.tsx): brackets for pictures and the
- * map, chamfers for readouts, rails for streams — a deck of instruments, not
- * a grid of identical boxes. Nothing on this screen is invented: a number the
- * store cannot source is not shown.
+ * The board is the deck's SECOND act. While the app comes up the stage is
+ * `DeckStandby` — the boot sequence — and the board takes over the moment a
+ * turn opens or the person asks for it (`lib/deckStandby.ts::resolvePhase`,
+ * forward only), or on its own a blink after the gates are up
+ * (`lib/deckStandby.ts::AUTO_LAUNCH`). The hand-off is a launch on one clock
+ * (`lib/deckStandby.ts::HANDOFF`): the reactor travels from the ring's centre
+ * to its place on the board (one `layoutId` on both stages), the panels
+ * assemble outward (`DeckReveal`), and one scan runs down the board.
  */
-export function MissionDeckView({
-  headerAccessory,
-}: {
-  /** The surface switch, handed down by the shell that owns the mode. */
-  headerAccessory?: ReactNode;
-}) {
+export function MissionDeckView() {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
   const connected = useEventStore((s) => s.connected);
@@ -109,24 +69,16 @@ export function MissionDeckView({
   const thinkingSteps = useEventStore((s) => s.thinkingSteps);
   const messages = useEventStore((s) => s.messages);
   const setActiveSection = useEventStore((s) => s.setActiveSection);
-  const cuActive = useDeckStore((s) => s.cu.active);
   const wordsSession = useDeckStore((s) => s.wordsSession);
   const turnPhase = useDeckStore((s) => s.turn.phase);
   const turnIndex = useDeckStore((s) => s.turn.index);
   const boardOpen = useDeckStore((s) => s.boardOpen);
   const openBoard = useDeckStore((s) => s.openBoard);
-  const { warming } = useVoiceReadiness();
-  // Header + orb name the engine that will answer the next spoken turn, not
-  // the dormant sibling. Pipeline and realtime are independent picks; the
-  // sidebar footer already followed this rule and the deck was still showing
-  // the classic brain (OpenRouter) while Vertex AI Live was talking.
+  const status = useAssistantStatus();
+  // The engine that will answer the next spoken turn, not the dormant sibling.
   const engine = useVoiceEngineDisplay();
-  // The orb is the click-shaped wake word: the same start/stop path the
-  // classic surface's voice bubble uses, so both do exactly one thing.
-  const { active: callActive, busy: callBusy, connecting, toggleCall } = useVoiceCall();
-  // The idle line names the real phrase ("Hey Nova"), never "your wake word":
-  // a person who just installed the app should read what to say. Until the
-  // phrase is known the name it derives from stands in.
+  // The reactor and the command bar's round button are the same press.
+  const talk = useHudTalk(openBoard);
   const { config: wakeConfig } = useWakeWord();
   const wakePhrase = wakeConfig?.phrase.trim() || assistantName;
 
@@ -135,23 +87,14 @@ export function MissionDeckView({
     boardOpen,
     turnIndex,
     messageCount: messages.length,
-    voiceEngaged: callActive || connecting,
+    voiceEngaged: talk.active || talk.connecting,
   });
-  // Forward only, for real: a transient reason for the board (a call being
-  // set up, a voice state that came and went without a turn) must not let the
-  // start sequence come back over a stage that already handed off — an interrupted
-  // hand-off leaves the orb's shared-layout crossfade half-way, with the ring
-  // back and nothing in it (seen 2026-08-19). So the first board render
-  // latches the store's sticky flag.
+  // The first board render latches the store's sticky flag, so a transient
+  // reason for the board can never bring the start sequence back over it.
   useEffect(() => {
     if (phase === "board") openBoard();
   }, [phase, openBoard]);
-  // The start sequence launches itself. Nobody who opens the app wants a
-  // screen that asks to be spoken to first (maintainer, 2026-08-20) — so the
-  // boot lights its gates and a blink later the SAME hand-off a spoken word
-  // triggers plays on its own (`lib/deckStandby.ts::AUTO_LAUNCH`). Any real
-  // trigger arriving first simply wins: the phase is already board and this
-  // timer never fires.
+  // The start sequence launches itself a blink after the gates are up.
   useEffect(() => {
     if (phase === "board") return;
     const after = autoLaunchAfterMs({ connected, voiceReady });
@@ -160,264 +103,128 @@ export function MissionDeckView({
     return () => window.clearTimeout(id);
   }, [phase, connected, voiceReady, openBoard]);
   // The board powers on with its choreography ONLY when it takes over from
-  // the standby on this very screen. A deck that mounts straight into a
-  // running session (a section change and back) is simply there. Fixed on
-  // the first render so the wrappers never remount because the flag moved.
+  // the standby on this very screen; fixed on the first render.
   const mountedInto = useRef(phase);
   const revealBoard = mountedInto.current !== "board";
-  // The board is a display case: the pointer sways its planes (lib/deckDepth).
-  const boardRef = useRef<HTMLDivElement>(null);
-  useDeckParallax(boardRef, phase === "board");
-  // While the stage waits for the first word, the board's heaviest part gets
-  // ready in the idle time: the WebGL probe and the 3D map's chunk. Measured
-  // 2026-08-19: done in the click's own task they froze the launch for half
-  // a second, and every JS-driven beat of it — the orb's travel — jumped.
-  useEffect(() => {
-    if (phase === "board") return;
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-      cancelIdleCallback?: (id: number) => void;
-    };
-    if (w.requestIdleCallback && w.cancelIdleCallback) {
-      const id = w.requestIdleCallback(() => warmWikiScene(), { timeout: 4000 });
-      return () => w.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(() => warmWikiScene(), 1500);
-    return () => window.clearTimeout(id);
-  }, [phase]);
-
-  const running = useMemo(
-    () => thinkingSteps.filter((s) => s.status === "active"),
-    [thinkingSteps],
-  );
+  const running = useMemo(() => thinkingSteps.filter((s) => s.status === "active"), [thinkingSteps]);
   // The deck's own turn counts too: the text chat's thinking flag never arms
-  // for a voice turn, and the orb must sweep for those as well.
+  // for a voice turn, and the reactor must sweep for those as well.
   const busy =
     chatThinking ||
     running.length > 0 ||
     voiceState === "thinking" ||
     turnPhase === "think" ||
     turnPhase === "act";
+  const statusLabel =
+    status.phase === "ready" && busy ? t("voice_state.thinking") : formatAssistantStatus(status, t);
 
-  const mood: DeckMood = !connected
-    ? "offline"
-    : voiceState === "error"
-      ? "fail"
-      : voiceState === "listening"
-        ? "listening"
-        : voiceState === "speaking"
-          ? "speaking"
-          : busy
-            ? "busy"
-            : "ready";
-
-  const lastAssistant = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "assistant"),
-    [messages],
-  );
-  const headline = lastAssistant
-    ? lastAssistant.content
-    : warming
-      ? t("deck.warming")
-      : t("deck.idle_headline").replace("{0}", wakePhrase);
-  const orbPressLabel = callActive
-    ? t("deck.orb_hangup")
-    : t("deck.orb_call").replace("{0}", wakePhrase);
+  const orbPressLabel = talk.active ? t("deck.orb_hangup") : t("deck.orb_call").replace("{0}", wakePhrase);
   const readouts: OrbReadouts = {
-    nw: t(`deck.mood_${mood}`),
+    nw: statusLabel,
     ne: `${running.length} ${t("deck.orb_steps")}`,
     sw: engine.providerLabel,
     se: `${wordsSession} ${t("deck.orb_words")}`,
   };
-  // Pressing the orb reaches for the voice — the board opens on the press
-  // itself, so the hand-off plays the moment the person acts, not a second
-  // later when the transport reports back.
-  const pressOrb = () => {
-    openBoard();
-    void toggleCall();
-  };
-  const pressDisabled = callBusy || connecting || !connected;
+
+  const badge = (
+    <div className="flex flex-col items-end gap-0.5 text-right">
+      <button
+        type="button"
+        data-testid="deck-stat-engine"
+        onClick={() => setActiveSection("apikeys")}
+        className="text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground hover:text-primary"
+      >
+        {t(engine.tier === "realtime" ? "deck.stat_realtime" : "deck.stat_brain")}{" "}
+        <span className="text-primary">{engine.providerLabel}</span>
+      </button>
+      <button
+        type="button"
+        data-testid="deck-stat-model"
+        onClick={() => setActiveSection("apikeys")}
+        className="max-w-[16rem] truncate text-xs font-medium text-foreground/80 hover:text-primary"
+        title={engine.model || undefined}
+      >
+        {engine.model || "—"}
+      </button>
+    </div>
+  );
 
   return (
     <MotionConfig reducedMotion="user">
-    <div className="flex h-full min-h-0 flex-col">
-      {/* The deck's own instruments. Theme, restart and the window buttons
-          live in the window caption, not in a second row here. */}
-      <header className="relative flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2">
-        <span
-          className="flex h-8 w-8 shrink-0 items-center justify-center"
-          data-testid="deck-header-gigi"
-        >
-          <GigiMark size={32} />
-        </span>
-        <div className="flex items-center gap-3">
-          <VoiceWaveform
-            levelRef={voiceInputLevelRef}
-            phase={waveformPhase(voiceState, connected)}
-            count={14}
-            className="h-6"
-          />
-          <span
-            className={cn(
-              "font-mono text-micro uppercase tracking-[0.18em]",
-              mood === "fail" ? "text-destructive" : "text-primary",
-            )}
-          >
-            {t(`deck.mood_${mood}`)}
-          </span>
-        </div>
-
-        {/* Lamp row: the things that have to be true for a voice turn. */}
-        <div className="flex items-center gap-3 font-mono text-micro uppercase tracking-[0.14em] text-muted-foreground">
-          <Lamp on={connected} label={t("deck.lamp_link")} />
-          <Lamp on={voiceReady} label={t("deck.lamp_voice")} />
-          <Lamp
-            on={engine.providerLabel !== "—"}
-            label={t(engine.tier === "realtime" ? "deck.stat_realtime" : "deck.lamp_brain")}
-          />
-          <Lamp on={cuActive} label={t("deck.lamp_cu")} />
-        </div>
-
-        <LiveCounter />
-
-        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="font-display text-sm font-bold uppercase tracking-[0.18em]">
-            {assistantName}
-          </span>
-          <HeaderStat
-            label={t(engine.tier === "realtime" ? "deck.stat_realtime" : "deck.stat_brain")}
-            value={engine.providerLabel}
-            hot
-            testId="deck-stat-engine"
-            onClick={() => setActiveSection("apikeys")}
-          />
-          <HeaderStat
-            label={t("deck.stat_model")}
-            value={engine.model || "—"}
-            testId="deck-stat-model"
-            onClick={() => setActiveSection("apikeys")}
-          />
-          {headerAccessory}
-        </div>
-
-        <svg
-          className="pointer-events-none absolute inset-x-3 bottom-0 h-2 w-[calc(100%-1.5rem)]"
-          preserveAspectRatio="none"
-          viewBox="0 0 100 8"
-          aria-hidden
-        >
-          <path
-            d="M 0 0 V 8 M 0 7.5 H 100 M 100 0 V 8"
-            fill="none"
-            stroke="hsl(var(--primary))"
-            strokeWidth={1}
-            opacity={0.5}
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-      </header>
-
-      {/* Stage */}
-      <div className="flex min-h-0 flex-1">
-        <DockRail />
-
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <StarkShell screen="command" badge={badge} testId="stark-hud">
+        <div className="relative flex min-h-0 flex-1 flex-col">
           {phase === "board" && (
             <div
-              ref={boardRef}
               data-testid="deck-board"
-              className="deck-board-3d relative grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[minmax(200px,3fr)_minmax(0,6fr)_minmax(240px,4fr)] lg:grid-rows-[minmax(0,1fr)_minmax(0,0.6fr)] lg:overflow-hidden"
+              className={cn(
+                "relative grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto overflow-x-hidden px-4 pb-3 pt-1 xl:px-6",
+                "lg:grid-cols-[minmax(250px,21rem)_minmax(0,1fr)_minmax(300px,25rem)] lg:grid-rows-[minmax(0,1fr)_auto] lg:overflow-hidden",
+              )}
             >
-              {/* The floor the case stands on — behind every plane, on the wall's side. */}
-              <DeckFloor />
+              {/* The world behind the reactor, faint: the stage's floor. */}
+              <WorldDotMap
+                dotAlpha={0.28}
+                className="pointer-events-none absolute inset-x-0 top-[4%] bottom-[14%] -z-0 opacity-90"
+                testId="stark-backdrop"
+              />
 
-              {/* LEFT top: the log — the terminal of the session */}
+              {/* LEFT: the status lamps and the quick doors. */}
               <DeckReveal
                 slot="left-top"
                 reveal={revealBoard}
-                {...depthSlot("left-top")}
-                bodyClassName="flex min-h-0 flex-col"
+                className="order-3 lg:order-none lg:col-start-1 lg:row-start-1 lg:min-h-0"
+                bodyClassName="flex min-h-0 flex-col justify-center gap-4 lg:h-full lg:overflow-y-auto"
               >
-                <LogCard className="min-h-0 flex-1" />
+                <SystemStatusPanel brainLabel={engine.providerLabel} modelLabel={engine.model} className="shrink-0" />
+                <QuickAccess className="shrink-0" />
               </DeckReveal>
 
-              {/* CENTRE top: the response instrument + api on a strip, the orb underneath */}
-              <div className="flex min-h-0 flex-col gap-3">
-                <DeckReveal
-                  slot="centre-top"
-                  reveal={revealBoard}
-                  className={cn("shrink-0", depthSlot("centre-top").className)}
-                  bodyClassName="grid grid-cols-2 gap-3"
-                  style={{ height: "36%", ...depthSlot("centre-top").style }}
-                >
-                  <TurnCard className="min-h-0" />
-                  <ApiStatsCard className="min-h-0" />
-                </DeckReveal>
+              {/* CENTRE: the reactor in its halo — press it to talk. */}
+              <div className="order-1 flex min-h-[26rem] flex-col lg:order-none lg:col-start-2 lg:row-start-1 lg:min-h-0">
                 <BoardCentre
                   steps={running}
                   busy={busy}
                   readouts={readouts}
-                  onPress={pressOrb}
+                  onPress={talk.press}
                   pressLabel={orbPressLabel}
-                  pressDisabled={pressDisabled}
-                  headline={headline}
-                  headlineIsAnswer={Boolean(lastAssistant)}
+                  pressDisabled={talk.disabled}
                   reveal={revealBoard}
+                  voiceState={voiceState}
+                  title={wordmark(assistantName)}
                 />
               </div>
 
-              {/* RIGHT top: the wiki, in space, tall */}
+              {/* RIGHT: the machine, then the work. */}
               <DeckReveal
                 slot="right-top"
                 reveal={revealBoard}
-                {...depthSlot("right-top")}
-                bodyClassName="flex min-h-0 flex-col"
+                className="order-4 lg:order-none lg:col-start-3 lg:row-start-1 lg:min-h-0"
+                bodyClassName="flex min-h-0 flex-col gap-4 lg:h-full"
               >
-                <WikiCard className="min-h-0 flex-1" />
+                <ResourcesPanel className="shrink-0" />
+                <TasksPanel className="min-h-[12rem] lg:min-h-0 lg:flex-1" />
               </DeckReveal>
 
-              {/* LEFT bottom: outputs and runs */}
+              {/* BOTTOM: the command bar under the reactor, the weather in the corner. */}
               <DeckReveal
-                slot="left-bottom"
+                slot="centre-top"
                 reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("left-bottom").className)}
-                style={depthSlot("left-bottom").style}
-                bodyClassName="grid grid-cols-2 gap-3"
+                className="order-2 lg:order-none lg:col-start-2 lg:row-start-2"
+                bodyClassName="flex justify-center"
               >
-                <OutputsCard className="min-h-0" />
-                <RunsCard className="min-h-0" />
+                <CommandBar onTalk={openBoard} />
               </DeckReveal>
-
-              {/* CENTRE bottom: the last capture (briefly), then the ledger; centred and not too wide */}
-              <DeckReveal
-                slot="centre-bottom"
-                reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("centre-bottom").className)}
-                style={depthSlot("centre-bottom").style}
-                bodyClassName="flex items-stretch justify-center"
-              >
-                <CaptureCard className="w-full max-w-[28rem]" />
-              </DeckReveal>
-
-              {/* RIGHT bottom: terminals and the coding workspace */}
-              <DeckReveal
-                slot="right-bottom"
-                reveal={revealBoard}
-                className={cn("min-h-[8rem]", depthSlot("right-bottom").className)}
-                style={depthSlot("right-bottom").style}
-                bodyClassName="grid grid-cols-2 gap-3"
-              >
-                <TerminalsCard className="min-h-0" />
-                <IdeGridCard className="min-h-0" />
-              </DeckReveal>
+              <div className="order-5 flex items-end justify-end lg:order-none lg:col-start-3 lg:row-start-2">
+                <WeatherMini />
+              </div>
 
               {/* The launch's last beat: one scan down the whole board. */}
               {revealBoard && <BoardSweep />}
             </div>
           )}
 
-          {/* Before the board: the start sequence. Absolute over the stage
-              so its exit plays over the board powering on underneath. */}
+          {/* Before the board: the start sequence, over the stage so its exit
+              plays over the board powering on underneath. */}
           <AnimatePresence>
             {phase !== "board" && (
               <DeckStandby
@@ -427,42 +234,41 @@ export function MissionDeckView({
                 busy={busy}
                 readouts={readouts}
                 wakeConfig={wakeConfig}
-                onPressOrb={pressOrb}
+                onPressOrb={talk.press}
                 pressLabel={orbPressLabel}
-                pressDisabled={pressDisabled}
+                pressDisabled={talk.disabled}
                 onOpenBoard={openBoard}
               />
             )}
           </AnimatePresence>
         </div>
-      </div>
-
-    </div>
+        <div className="shrink-0 px-4 pb-3 xl:px-6">
+          <NewsTicker />
+        </div>
+      </StarkShell>
     </MotionConfig>
   );
 }
 
-type DeckMood = "ready" | "busy" | "listening" | "speaking" | "fail" | "offline";
+/** The halo's bounds: below the minimum the orb's readouts collide, above
+ * the maximum the rings stop reading as an instrument and start reading as
+ * wallpaper. The orb sits inside the halo's inner race. */
+const HUD_HALO_MIN = 220;
+const HUD_HALO_MAX = 640;
+const ORB_IN_HALO = 0.7;
 
-/**
- * A slot's place in the display case (lib/deckDepth.ts) as the props its
- * DeckReveal wrapper takes: the transform rule's class, the depth as custom
- * properties, and `deck-slot-far` for planes behind the wall so their cards
- * read softer.
- */
-function depthSlot(slot: BoardSlot): { className: string; style: CSSProperties } {
-  return {
-    className: cn("deck-slot-3d", SLOT_DEPTH[slot].z < 0 && "deck-slot-far"),
-    style: slotDepthVars(slot) as CSSProperties,
-  };
+/** The halo size for the centre stage — as large as the room allows. */
+function hudHaloSize(width: number, height: number): number {
+  if (!width || !height) return 460;
+  const fit = Math.min(width - 16, height - 8);
+  return Math.max(HUD_HALO_MIN, Math.min(HUD_HALO_MAX, Math.floor(fit)));
 }
 
-
 /**
- * The board's centre: the orb on its vignetted stage with the headline under
- * it. The centre grows with the room it has — as large as the stage allows,
- * never taller than the room left under the headline, and never past the
- * point where the reticle stops reading as an instrument. It measures ITSELF
+ * The board's centre: the orb on its vignetted stage. Since HUD v2 the
+ * headline under it is gone — the transcript panel carries the words and the
+ * controls under this stage carry the state — so the orb takes all of the
+ * room it is given, up to `HUD_ORB_MAX`. It measures ITSELF
  * because it mounts with the board, not with the view: a measurement taken
  * by the view while the standby is up would find no stage and never look
  * again.
@@ -474,9 +280,9 @@ function BoardCentre({
   onPress,
   pressLabel,
   pressDisabled,
-  headline,
-  headlineIsAnswer,
   reveal,
+  voiceState,
+  title,
 }: {
   steps: ThinkingStep[];
   busy: boolean;
@@ -484,14 +290,19 @@ function BoardCentre({
   onPress: () => void;
   pressLabel: string;
   pressDisabled: boolean;
-  headline: string;
-  /** The headline is the assistant's last answer, not the idle prompt. */
-  headlineIsAnswer: boolean;
   reveal: boolean;
+  voiceState: VoiceState;
+  title: string;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const stage = useElementSize(stageRef);
-  const orbSize = orbSizeFor(stage.width, stage.height);
+  const haloSize = hudHaloSize(stage.width, stage.height);
+  const orbSize = Math.round(haloSize * ORB_IN_HALO);
+  const context = useDeckContext().data;
+  const ctx =
+    context?.available && typeof context.used === "number" && context.window
+      ? { used: context.used, window: context.window }
+      : null;
   const reduced = useReducedMotion() ?? false;
   // The landing ring fires once and leaves the DOM.
   const [landed, setLanded] = useState(false);
@@ -502,6 +313,7 @@ function BoardCentre({
     >
       {/* The same layoutId as the standby's orb: when the board takes over,
           the orb travels here instead of blinking — and lands with a ring. */}
+      <ArcHalo size={haloSize} voiceState={voiceState} busy={busy} context={ctx} title={title}>
       <div className="relative isolate">
         {/* The wash that lifts the centre off the background. It rides on the
             orb, on a square of its own, because it used to be a background
@@ -542,17 +354,7 @@ function BoardCentre({
           />
         )}
       </div>
-      <motion.p
-        initial={reveal ? { opacity: 0, y: 6 } : false}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: HANDOFF.headlineDelayS, duration: 0.4 }}
-        className={cn(
-          "max-w-[44ch] text-pretty text-sm leading-relaxed",
-          headlineIsAnswer ? "text-foreground" : "text-muted-foreground",
-        )}
-      >
-        {headline}
-      </motion.p>
+      </ArcHalo>
     </div>
   );
 }
@@ -588,106 +390,5 @@ function BoardSweep() {
       }}
       onAnimationComplete={() => setDone(true)}
     />
-  );
-}
-
-function waveformPhase(state: VoiceState, connected: boolean): WaveformPhase {
-  if (!connected) return "idle";
-  switch (state) {
-    case "connecting":
-      return "connecting";
-    case "listening":
-      return "listening";
-    case "thinking":
-      return "working";
-    case "speaking":
-      return "speaking";
-    case "error":
-      return "error";
-    default:
-      return "idle";
-  }
-}
-
-function Lamp({ on, label }: { on: boolean; label: string }) {
-  return (
-    <span className="flex items-center gap-1">
-      <HudLamp on={on} />
-      <span className={on ? "text-foreground/80" : undefined}>{label}</span>
-    </span>
-  );
-}
-
-function HeaderStat({
-  label,
-  value,
-  hot,
-  onClick,
-  testId,
-}: {
-  label: string;
-  value: string;
-  hot?: boolean;
-  onClick?: () => void;
-  testId?: string;
-}) {
-  const body = (
-    <>
-      <span className="font-mono text-micro uppercase tracking-[0.14em] text-muted-foreground">
-        {label}
-      </span>
-      <span className={cn("font-mono text-xs tabular-nums", hot ? "text-primary" : "text-foreground")}>
-        {value}
-      </span>
-    </>
-  );
-  if (!onClick) {
-    return (
-      <div data-testid={testId} className="flex items-baseline gap-1.5 whitespace-nowrap">
-        {body}
-      </div>
-    );
-  }
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      onClick={onClick}
-      className="flex items-baseline gap-1.5 whitespace-nowrap transition-colors hover:[&>span]:text-primary"
-    >
-      {body}
-    </button>
-  );
-}
-
-/**
- * The escape hatch, rendered by the shell above both surfaces.
- *
- * Kept in this module so the deck and the switch that leaves it stay together.
- */
-export function SurfaceSwitch({
-  mode,
-  onChange,
-}: {
-  mode: "deck" | "classic";
-  onChange: (mode: "deck" | "classic") => void;
-}) {
-  const t = useT();
-  const next = mode === "deck" ? "classic" : "deck";
-  const label = t(next === "classic" ? "deck.switch_to_classic" : "deck.switch_to_deck");
-
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        writeDeckMode(next);
-        onChange(next);
-      }}
-      title={label}
-      className="flex items-center gap-1.5 border border-border px-2 py-1 font-mono text-micro uppercase tracking-[0.12em] text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
-      style={{ clipPath: "polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px)" }}
-    >
-      {label}
-    </button>
   );
 }

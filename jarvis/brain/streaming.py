@@ -46,6 +46,8 @@ async def aggregate(stream: AsyncIterator[BrainDelta]) -> StreamingAggregate:
             agg.tool_calls.append(dict(delta.tool_call))
         if delta.finish_reason:
             agg.finish_reason = delta.finish_reason
+        if delta.agent_tools:
+            agg.executed_tool_names.update(delta.agent_tools)
         if delta.usage:
             for k, v in delta.usage.items():
                 agg.usage[k] = agg.usage.get(k, 0) + int(v)
@@ -165,6 +167,8 @@ async def aggregate_first_json(
             agg.tool_calls.append(dict(delta.tool_call))
         if delta.finish_reason:
             agg.finish_reason = delta.finish_reason
+        if delta.agent_tools:
+            agg.executed_tool_names.update(delta.agent_tools)
         if delta.usage:
             for k, v in delta.usage.items():
                 agg.usage[k] = agg.usage.get(k, 0) + int(v)
@@ -207,6 +211,8 @@ async def aggregate_with_consumer(
             agg.tool_calls.append(dict(delta.tool_call))
         if delta.finish_reason:
             agg.finish_reason = delta.finish_reason
+        if delta.agent_tools:
+            agg.executed_tool_names.update(delta.agent_tools)
         if delta.usage:
             for k, v in delta.usage.items():
                 agg.usage[k] = agg.usage.get(k, 0) + int(v)

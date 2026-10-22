@@ -6,7 +6,7 @@
  * what you can do to the agent.
  */
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Share2 } from "lucide-react";
 
 import { useT } from "@/i18n";
 
@@ -16,6 +16,7 @@ import { AgentRoutinesList } from "./AgentRoutinesList";
 import { JarvisHistoryRail } from "../chat/JarvisHistoryRail";
 import { RetireButton } from "./RetireButton";
 const AgentAppearanceDialog = lazy(() => import("../companion/AgentAppearanceDialog").then(m => ({ default: m.AgentAppearanceDialog })));
+const ShareAgentDialog = lazy(() => import("./ShareAgentDialog").then(m => ({ default: m.ShareAgentDialog })));
 
 export interface OptionsRailProps {
   agent: SocietyAgent;
@@ -28,12 +29,14 @@ export function OptionsRail({ agent, onRetired, sample = false }: OptionsRailPro
   const t = useT();
   const [more, setMore] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [routineOpen, setRoutineOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setMore(false);
     setAppearanceOpen(false);
+    setShareOpen(false);
   }, [agent.agentId]);
 
   useEffect(() => {
@@ -84,8 +87,17 @@ export function OptionsRail({ agent, onRetired, sample = false }: OptionsRailPro
           ) : null}
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden px-3 pb-3 pt-2">
-        <button type="button" onClick={() => setAppearanceOpen(true)} data-testid="edit-agent-appearance" className="shrink-0 rounded-lg border border-border px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-secondary">{t("society.companion.appearance")}</button>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-3 pt-2">
+        <div className="flex shrink-0 gap-2">
+          <button type="button" onClick={() => setAppearanceOpen(true)} data-testid="edit-agent-appearance" className="min-w-0 flex-1 rounded-lg border border-border px-3 py-2 text-left text-sm font-medium text-foreground hover:bg-secondary">{t("society.companion.appearance")}</button>
+          {/* The lead is every install's own Jarvis and sample rows are not real agents: neither is shareable. */}
+          {agent.tier !== "lead" && !sample && (
+            <button type="button" onClick={() => setShareOpen(true)} data-testid="share-agent" title={t("society.share.cta_hint")} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary">
+              <Share2 className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+              {t("society.share.cta")}
+            </button>
+          )}
+        </div>
         <div className={routineOpen ? "hidden" : "contents"}>
           <AgentBrowserPreview agent={agent} />
           {agent.tier === "lead" ? <JarvisHistoryRail /> : null}
@@ -96,10 +108,11 @@ export function OptionsRail({ agent, onRetired, sample = false }: OptionsRailPro
           onDetailOpenChange={setRoutineOpen}
           sampleRoutines={sample ? agent.routines : undefined}
           variant="rail"
-          className="min-h-0 flex-1"
+          className="min-h-48 flex-1"
         />
       </div>
       {appearanceOpen && <Suspense fallback={null}><AgentAppearanceDialog key={agent.agentId} agent={agent} sample={sample} onClose={() => setAppearanceOpen(false)} /></Suspense>}
+      {shareOpen && <Suspense fallback={null}><ShareAgentDialog key={agent.agentId} agent={agent} onClose={() => setShareOpen(false)} /></Suspense>}
     </aside>
   );
 }

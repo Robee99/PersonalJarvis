@@ -46,6 +46,18 @@ function societyRow(over: Partial<SocietyProviderRow>): SocietyProviderRow {
 }
 
 describe("brainSeats", () => {
+  it.each(["claude-api", "gemini", "grok"])("%s uses its actual API transport even when account metadata describes a subscription", (id) => {
+    const [seat] = brainSeats([option({ id, runner: "brain" })],
+      [societyRow({ id, subscription: true, accounts: [account("subscription-login")] })]);
+    expect(seat.kind).toBe("api");
+    expect(seat.accounts).toEqual([]);
+  });
+
+  it.each(["claude-api", "gemini", "grok", "openrouter", "nvidia"])("%s does not resurrect fallback models after a successful empty live catalog", (id) => {
+    const [seat] = brainSeats([option({ id, curated_models: [{ id: "retired", label: "Retired" }] })], [], { [id]: [] });
+    expect(seat.provider.curated_models).toEqual([]);
+  });
+
   it("lists only connected rows, subscriptions first, then keys, then local", () => {
     const seats = brainSeats(
       [
@@ -177,5 +189,36 @@ describe("brainSeats", () => {
     expect(effortsFor(seat, "pro")).toEqual(["low", "high"]);
     expect(effortsFor(seat, "flash")).toEqual(["low", "medium", "high"]);
     expect(effortsFor(null, "pro")).toEqual([]);
+  });
+});
+
+describe("brainSeats — the API Keys page's choices", () => {
+  it("leaves out a provider turned off for the agents", () => {
+    const seats = brainSeats(
+      [option({ id: "openai", label: "OpenAI", enabled: false }), option({ id: "gemini", label: "Google Gemini" })],
+      [],
+    );
+    expect(seats.map((s) => s.provider.id)).toEqual(["gemini"]);
+  });
+
+  it("leaves out hidden models, and the provider once every model is hidden", () => {
+    const seats = brainSeats(
+      [
+        option({ id: "openai", curated_models: [{ id: "a", label: "A" }, { id: "b", label: "B" }], hidden_models: ["a"] }),
+        option({ id: "gemini", label: "Google Gemini", curated_models: [{ id: "g", label: "G" }], hidden_models: ["g"] }),
+      ],
+      [],
+    );
+    expect(seats.map((s) => s.provider.id)).toEqual(["openai"]);
+    expect(seats[0].provider.curated_models.map((m) => m.id)).toEqual(["b"]);
+  });
+
+  it("hides models in a live list too", () => {
+    const seats = brainSeats(
+      [option({ id: "openai", hidden_models: ["old"] })],
+      [],
+      { openai: [{ id: "old", label: "Old" }, { id: "new", label: "New" }] },
+    );
+    expect(seats[0].provider.curated_models.map((m) => m.id)).toEqual(["new"]);
   });
 });

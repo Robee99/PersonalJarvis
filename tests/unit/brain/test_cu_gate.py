@@ -15,6 +15,9 @@ import pytest
 from jarvis.brain.cu_gate import (
     CU_BLOCKED_MODEL_FEEDBACK,
     CU_VEHICLE_TOOL_NAMES,
+    has_negated_desktop_action,
+    is_explicit_computer_use_turn,
+    is_observation_only,
     llm_computer_use_allowed,
 )
 from jarvis.harness import cu_run_registry
@@ -262,3 +265,93 @@ def test_gate_covers_exactly_the_computer_use_tool() -> None:
 def test_feedback_redirects_to_inline_answer_and_search_web() -> None:
     assert "search_web" in CU_BLOCKED_MODEL_FEEDBACK
     assert "NOT executed" in CU_BLOCKED_MODEL_FEEDBACK
+
+
+# ── observation-only turns: a forbidden action is not an order ────────────
+#
+# "Don't click anything, just look at my screen" passed the gate on the bare
+# verb "click". A negated action verb forbids; a look-restricted turn looks.
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Don't click anything, just look at my screen",
+        "Don’t click anything, just look at my screen",
+        "don't touch anything",
+        "Do not interact with anything.",
+        "just look",
+        "only look at my screen",
+        "Just look at the screen.",
+        "tell me what is there, don't interact",
+        "Look at it but don't touch anything, tell me what to click.",
+        "nichts anklicken",  # i18n-allow: DE turn fixture
+        "nur schauen",  # i18n-allow: DE turn fixture
+        "nicht klicken",  # i18n-allow: DE turn fixture
+        "Klick nichts an, nur schauen.",  # i18n-allow: DE turn fixture
+    ],
+)
+def test_observation_only_turn_never_drives_the_desktop(utterance: str) -> None:
+    assert is_observation_only(utterance) is True
+    assert llm_computer_use_allowed(utterance) is False
+    assert is_explicit_computer_use_turn(utterance) is False
+
+
+def test_observation_only_holds_inside_a_live_desktop_episode() -> None:
+    cu_run_registry.register_run("m4", "open the browser", token=None)
+    assert llm_computer_use_allowed("Don't touch anything, just look.") is False
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "click the Start button",
+        "open Spotify",
+        "Öffne Spotify",  # i18n-allow: DE trigger
+        "Don't open Spotify, open Chrome",
+        "Just look at it and then click OK.",
+        "I don't know, open Spotify",
+        "Never mind, click the blue button.",
+        "Klick auf nicht speichern.",  # i18n-allow: DE trigger (button label)
+        "take a screenshot",
+        "What's on my screen?",
+        "",
+    ],
+)
+def test_orders_and_plain_looks_are_not_observation_only(utterance: str) -> None:
+    assert is_observation_only(utterance) is False
+
+
+@pytest.mark.parametrize(
+    ("utterance", "allowed"),
+    [
+        ("click the Start button", True),
+        ("open Spotify", True),
+        ("Öffne Spotify", True),  # i18n-allow: DE trigger
+        # Looks stay looks — refused here, answered by Screen Context.
+        ("take a screenshot", False),
+        ("What's on my screen?", False),
+    ],
+)
+def test_positive_controls_keep_their_verdict(utterance: str, allowed: bool) -> None:
+    assert llm_computer_use_allowed(utterance) is allowed
+
+
+@pytest.mark.parametrize(
+    ("utterance", "negated"),
+    [
+        ("don't open Spotify", True),
+        ("do not open chrome", True),
+        ("no need to open Spotify", True),
+        ("stop opening Spotify", True),
+        ("Why is Spotify not opening?", True),
+        ("Spotify nicht öffnen", True),  # i18n-allow: DE turn fixture
+        ("öffne Discord lieber nicht", True),  # i18n-allow: DE turn fixture
+        ("open Spotify", False),
+        ("stop the music and open Spotify", False),
+        ("never mind, open Spotify", False),
+        ("klick auf nicht speichern", False),  # i18n-allow: DE trigger
+    ],
+)
+def test_negated_desktop_action_detector(utterance: str, negated: bool) -> None:
+    assert has_negated_desktop_action(utterance) is negated

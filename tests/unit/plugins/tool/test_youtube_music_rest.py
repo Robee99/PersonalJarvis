@@ -330,6 +330,43 @@ async def test_play_song_pauses_the_old_player_opens_the_radio_link_and_confirms
     assert out["now"]["track"] == "Karma Police"
 
 
+_PUBLIC_PAGE = (
+    'var ytInitialData = {"contents":[{"videoRenderer":{"videoId":"Kbj2Zss-5GY",'
+    '"thumbnail":{},"title":{"runs":[{"text":"A$AP Rocky - Praise The Lord \\u0026 Skepta"}]}}}]};'
+)
+
+
+def _public_handler(request: httpx.Request) -> httpx.Response:
+    assert request.url.host == "www.youtube.com"
+    assert request.url.params.get("search_query") == "praise the lord asap rocky"
+    assert "googleapis" not in str(request.url)
+    return httpx.Response(200, text=_PUBLIC_PAGE)
+
+
+async def test_play_without_the_plugin_starts_the_top_public_result():
+    media = FakeMedia(now=None, after_open=_playing())
+    opener = Opener(media=media)
+    out = await _tool(_public_handler, media=media, opener=opener, token=None).play(
+        query="praise the lord asap rocky"
+    )
+    assert opener.urls == [song_url("Kbj2Zss-5GY")]
+    assert out["started"]["title"] == "A$AP Rocky - Praise The Lord & Skepta"
+    assert "connect YouTube Music" in out["started"]["note"]
+
+
+async def test_play_without_the_plugin_still_needs_it_for_own_playlists():
+    out = await _tool(_public_handler, token=None).play(query="running", item_type="playlist")
+    assert "not connected" in out["error"].lower()
+
+
+async def test_play_without_the_plugin_says_when_youtube_finds_nothing():
+    def empty(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>no results</html>")
+
+    out = await _tool(empty, token=None).play(query="zzzz")
+    assert "nothing called" in out["error"]
+
+
 async def test_play_reports_when_the_browser_withholds_autoplay():
     media = FakeMedia(now=None, after_open=_paused())
     opener = Opener(media=media)

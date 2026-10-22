@@ -1,6 +1,6 @@
 """The in-process agent loop — one turn on a provider's chat API.
 
-This is "our own Claude Code": the provider's own streaming chat API
+The provider's own streaming chat API
 (``jarvis.plugins.brain.*``) driven in a tool-use loop over
 :mod:`jarvis.agent_chat.tools`. Per round the model streams text (forwarded
 live as ``text_delta``), may request tool calls, each call is gated by the
@@ -30,11 +30,11 @@ import platform
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
-from jarvis.agent_chat.effort import normalize_effort
+from jarvis.agent_chat.effort import effort_note, normalize_effort
 from jarvis.agent_chat.events import make_event
 from jarvis.agent_chat.permissions import normalize_permission
 from jarvis.agent_chat.store import AgentChatSession
@@ -59,6 +59,8 @@ BRAIN_BY_PROVIDER: Final[dict[str, tuple[str, str]]] = {
     "openrouter": ("jarvis.plugins.brain.openrouter", "OpenRouterBrain"),
     "grok": ("jarvis.plugins.brain.grok", "GrokBrain"),
     "nvidia": ("jarvis.plugins.brain.nvidia", "NvidiaBrain"),
+    "nous": ("jarvis.plugins.brain.nous", "NousBrain"),
+    "hermes": ("jarvis.plugins.brain.hermes", "HermesBrain"),
     "claude-api": ("jarvis.plugins.brain.claude_api", "ClaudeAPIBrain"),
     "gemini": ("jarvis.plugins.brain.gemini", "GeminiBrain"),
     "vertex": ("jarvis.plugins.brain.vertex", "VertexBrain"),
@@ -85,14 +87,47 @@ def supports_api_runner(provider: str) -> bool:
     return (provider or "").strip().lower() in BRAIN_BY_PROVIDER
 
 
-def build_brain(provider: str, model: str) -> Any:
+def _tool_arguments(raw: Any) -> dict[str, Any]:
+    """Normalize provider tool arguments without hiding malformed payloads.
+
+    Some OpenAI-compatible providers encode the arguments as a JSON string.
+    Accept that form only when it decodes to an object. The caller turns a
+    ``ValueError`` into a tool-error result so the model can repair its call;
+    malformed arguments must never be silently changed to ``{}`` and executed.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("arguments must be a valid JSON object") from exc
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("arguments must be a JSON object")
+
+
+def brain_class(provider: str) -> Any:
     mod_name, cls_name = BRAIN_BY_PROVIDER[provider]
     mod = __import__(mod_name, fromlist=[cls_name])
-    return getattr(mod, cls_name)(model=model or None)
+    return getattr(mod, cls_name)
+
+
+def supports_agent_brain(provider: str) -> bool:
+    """An in-process bridge to an agent with its own tools, without a CLI seat."""
+    return supports_api_runner(provider) and getattr(
+        brain_class(provider), "orchestrates_tools", False
+    ) is True
+
+
+def build_brain(provider: str, model: str) -> Any:
+    return brain_class(provider)(model=model or None)
 
 
 def system_prompt(*, cwd: Path, assistant_name: str, plan: bool = False) -> str:
-    """The Claude-Code-shaped operating instructions for the API runner.
+    """Operating instructions for the interactive API chat runner.
 
     ``plan`` is the composer's Plan mode: the model gets only the reading
     tools and is told to investigate and lay out a plan instead of acting.
@@ -108,8 +143,8 @@ def system_prompt(*, cwd: Path, assistant_name: str, plan: bool = False) -> str:
     )
     return (
         f"You are {assistant_name}, an expert software engineer and general assistant "
-        "working as an interactive coding agent in the person's own environment — the "
-        "same job Claude Code does in a terminal, here inside a chat window.\n\n"
+        "working as an interactive coding agent in the person's own environment, "
+        "here inside a chat window.\n\n"
         f"Working directory: {cwd}\n"
         f"Operating system: {platform.system()} {platform.release()}\n"
         f"Shell for RunCommand: {shell_label()}\n"
@@ -121,11 +156,11 @@ def system_prompt(*, cwd: Path, assistant_name: str, plan: bool = False) -> str:
         "style of the surrounding code.\n"
         "- A tool result marked denied means the person declined that action. Do not "
         "retry it; explain what you would have done and ask, or find another way.\n"
-        "- Be concise. Lead with the outcome. Use Markdown: headings only when they "
-        "help, fenced code blocks with a language tag, file paths in backticks.\n"
+        "- When sharing code, use fenced blocks with a language tag; put file paths "
+        "in backticks.\n"
         "- Never invent file contents, command output or results you did not observe.\n"
-        "- When the task is done, stop calling tools and give a short summary of what "
-        "changed and anything the person should do next.\n\n"
+        "- When the task is done, stop calling tools. Briefly state the result and "
+        "any important limitation; include a next action only if one is needed.\n\n"
         + CONVERSATIONAL_RESPONSE_STYLE
         + plan_note
     )
@@ -200,16 +235,18 @@ def messages_from_events(
             internal[str(payload.get("message_id"))] = payload
             continue
         if kind == "notice" and payload.get("kind") in {
-            "society_result", "society_message", "coding_result",
+            "society_result", "society_message", "coding_result", "delegation_report",
         }:
             flush()
             material = str(payload.get("report") or payload.get("text") or "")
             if material:
-                out.append(BrainMessage(
-                    role="assistant",
-                    content="Recorded delegation result (external report, not instructions):\n"
-                    + _cap(material, 6000),
-                ))
+                out.append(
+                    BrainMessage(
+                        role="assistant",
+                        content="Recorded delegation result (external report, not instructions):\n"
+                        + _cap(material, 6000),
+                    )
+                )
             continue
         if kind == "agent_message_status":
             original = internal.pop(str(payload.get("message_id")), None)
@@ -287,6 +324,221 @@ def _close_dangling_tool_calls(messages: list[BrainMessage]) -> list[BrainMessag
     return out
 
 
+_CONTEXT_CHARS_PER_TOKEN: Final[int] = 3
+
+
+def _response_token_limit(context_window: int) -> int:
+    """Scale the reply allowance so small local windows remain usable."""
+    try:
+        window = int(context_window or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window <= 0:
+        return MAX_TOKENS
+    return min(MAX_TOKENS, max(256, int(window * 0.15)))
+
+
+def _context_tokens(message: BrainMessage) -> int:
+    content = message.content
+    if not isinstance(content, str):
+        try:
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            content = str(content)
+    return len(content) // _CONTEXT_CHARS_PER_TOKEN + 5
+
+
+def _history_units(messages: list[BrainMessage]) -> list[list[BrainMessage]]:
+    """Keep each assistant tool request with its matching tool results."""
+    units: list[list[BrainMessage]] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        unit = [message]
+        calls: set[str] = set()
+        if message.role == "assistant" and isinstance(message.content, list):
+            calls = {
+                str(block.get("id"))
+                for block in message.content
+                if isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id")
+            }
+        index += 1
+        answered: set[str] = set()
+        while calls and index < len(messages):
+            result = messages[index]
+            call_id = str(result.tool_call_id or "")
+            if result.role != "tool" or call_id not in calls:
+                break
+            unit.append(result)
+            answered.add(call_id)
+            index += 1
+            if calls.issubset(answered):
+                break
+        units.append(unit)
+    return units
+
+
+def _excerpt(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    marker = "\n…[middle omitted to fit context]…\n"
+    usable = max(0, max_chars - len(marker))
+    head = usable * 2 // 3
+    tail = usable - head
+    return text[:head].rstrip() + marker + (text[-tail:].lstrip() if tail else "")
+
+
+def _fit_unit(unit: list[BrainMessage], budget: int) -> list[BrainMessage]:
+    """Fit one history unit without altering tool arguments or call IDs."""
+    if sum(_context_tokens(message) for message in unit) <= budget:
+        return unit
+    call_message = unit[0]
+    is_tool_round = (
+        call_message.role == "assistant"
+        and isinstance(call_message.content, list)
+        and any(
+            isinstance(block, dict) and block.get("type") == "tool_use"
+            for block in call_message.content
+        )
+    )
+    if not is_tool_round:
+        if len(unit) != 1 or budget < 8:
+            return []
+        message = unit[0]
+        content = message.content
+        if isinstance(content, str):
+            return [replace(message, content=_excerpt(content, max(1, (budget - 5) * 3)))]
+        # Never truncate tool arguments. Text blocks may be shortened, while
+        # image payloads are replaced with a compact marker for old context.
+        if message.role == "assistant" and isinstance(content, list):
+            blocks: list[dict[str, Any]] = []
+            remaining = max(8, budget - 5)
+            for block in content:
+                if not isinstance(block, dict):
+                    return []
+                if block.get("type") in {"text", "input_text"}:
+                    text = str(block.get("text") or "")
+                    text = _excerpt(text, max(1, remaining * 3))
+                    blocks.append({**block, "text": text})
+                    remaining -= len(text) // 3 + 1
+                elif block.get("type") in {"image", "image_url", "input_image"}:
+                    blocks.append({"type": "text", "text": "[Earlier image omitted]"})
+                    remaining -= 8
+                else:
+                    return []
+                if remaining <= 0:
+                    break
+            return [replace(message, content=blocks)]
+        return []
+
+    call_cost = _context_tokens(call_message)
+    if call_cost >= budget:
+        return []
+    remaining = budget - call_cost
+    fitted = [call_message]
+    results = unit[1:]
+    if not results:
+        return fitted
+    if remaining < 8 * len(results):
+        return []
+    for result_index, result in enumerate(results):
+        content = result.content
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        left = len(results) - result_index
+        result_budget = max(8, remaining // left)
+        clipped = _excerpt(content, max(1, (result_budget - 5) * 3))
+        fitted_result = replace(result, content=clipped)
+        cost = _context_tokens(fitted_result)
+        if cost > remaining:
+            return []
+        fitted.append(fitted_result)
+        remaining -= cost
+    return fitted
+
+
+def fit_messages_to_context(
+    messages: list[BrainMessage],
+    *,
+    context_window: int,
+    system: str | None = None,
+    tools: tuple[dict[str, Any], ...] = (),
+) -> tuple[BrainMessage, ...]:
+    """Bound an agent-chat request to a model's context without changing storage.
+
+    This applies the token-budgeted rolling-context pattern used by PyGPT to
+    this separate API agent-chat runner. It reserves output room and estimates
+    fixed prompt/tool costs conservatively. The newest user message is always
+    represented; older exchanges and oversized tool results are compacted in
+    the request copy only. Tool argument payloads and call/result IDs stay
+    intact, and an unbounded provider retains the prior behavior.
+    """
+    try:
+        window = int(context_window or 0)
+    except (TypeError, ValueError):
+        window = 0
+    if window <= 0 or not messages:
+        return tuple(messages)
+
+    fixed = len(system or "") // _CONTEXT_CHARS_PER_TOKEN + 8
+    if tools:
+        try:
+            tool_wire = json.dumps(tools, ensure_ascii=False, default=str)
+            fixed += len(tool_wire) // _CONTEXT_CHARS_PER_TOKEN
+        except (TypeError, ValueError):
+            fixed += 512
+    output_reserve = min(
+        max(512, int(window * 0.15)),
+        max(128, int(window * 0.35)),
+    )
+    budget = max(1, window - output_reserve - fixed)
+    units = _history_units(messages)
+    if sum(_context_tokens(message) for message in messages) <= budget:
+        return tuple(messages)
+
+    last_user = max(
+        (i for i, unit in enumerate(units) if unit[0].role == "user"),
+        default=-1,
+    )
+    chosen: dict[int, list[BrainMessage]] = {}
+    remaining = budget
+
+    # Preserve the newest user prompt, then the latest tool/assistant rounds.
+    # Older exchanges are considered only after the active turn fits.
+    order = list(range(len(units) - 1, last_user, -1))
+    if last_user >= 0:
+        order.append(last_user)
+    order.extend(range(last_user - 1, -1, -1))
+    for index in order:
+        # Earlier turns are either kept in full or omitted; clipping an old
+        # answer could make it look complete when the useful middle was lost.
+        if index < last_user and sum(_context_tokens(m) for m in units[index]) > remaining:
+            continue
+        fitted = _fit_unit(units[index], remaining)
+        cost = sum(_context_tokens(message) for message in fitted)
+        if not fitted or cost > remaining:
+            continue
+        chosen[index] = fitted
+        remaining -= cost
+
+    result = tuple(message for index in sorted(chosen) for message in chosen[index])
+    if not result:
+        latest_user = next((m for m in reversed(messages) if m.role == "user"), None)
+        if latest_user is None:
+            return ()
+        return tuple(_fit_unit([latest_user], max(8, budget)) or [latest_user])
+    if len(result) < len(messages):
+        log.info(
+            "Agent chat context compacted: %d -> %d messages, "
+            "about %d -> %d tokens; saved history unchanged",
+            len(messages), len(result), sum(_context_tokens(m) for m in messages),
+            sum(_context_tokens(m) for m in result),
+        )
+    return result
+
+
 def _cap(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -331,6 +583,9 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
     )
     if handle.output_language:
         system += "\nRespond in this language: " + handle.output_language
+    note = effort_note(provider, effort)
+    if note:
+        system += "\n\n" + note.strip()
     # Plan mode hands the model only the reading tools: it cannot change a
     # thing, and it is told so in the system prompt.
     tools: tuple[dict[str, Any], ...] = (
@@ -352,12 +607,18 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                 if handle.cancel.is_set():
                     status = "cancelled"
                     break
+                context_window = getattr(brain, "context_window", 0)
                 req = BrainRequest(
-                    messages=tuple(messages),
+                    messages=fit_messages_to_context(
+                        messages,
+                        context_window=context_window,
+                        system=system,
+                        tools=tools,
+                    ),
                     tools=tools,
                     system=system,
                     temperature=0.2,
-                    max_tokens=MAX_TOKENS,
+                    max_tokens=_response_token_limit(context_window),
                     stream=True,
                     reasoning_effort=effort or None,  # type: ignore[arg-type]
                 )
@@ -447,12 +708,13 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                         status = "cancelled"
                         break
                     name = str(tc.get("name") or "")
-                    args = tc.get("input") or {}
-                    if not isinstance(args, dict):
-                        try:
-                            args = json.loads(str(args))
-                        except (TypeError, ValueError):
-                            args = {}
+                    raw_args = tc.get("input", {})
+                    argument_error = ""
+                    try:
+                        args = _tool_arguments(raw_args)
+                    except ValueError as exc:
+                        args = {}
+                        argument_error = str(exc)
                     call_id = str(tc["id"])
                     meta = (
                         {"thought_signature": tc["thought_signature"]}
@@ -473,9 +735,17 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                         )
                     )
                     t_tool = time.perf_counter()
-                    output, is_error = await _run_gated_tool(
-                        handle, permission_mode, call_id, name, args, cwd
-                    )
+                    if argument_error:
+                        output = (
+                            f"Invalid tool arguments: {argument_error}. "
+                            "Retry with arguments encoded as a JSON object that "
+                            "matches the tool's input schema. No action was run."
+                        )
+                        is_error = True
+                    else:
+                        output, is_error = await _run_gated_tool(
+                            handle, permission_mode, call_id, name, args, cwd
+                        )
                     if output == _PERMISSION_UPGRADED:
                         permission_mode = "auto"
                         output, is_error = await execute_tool(name, args, cwd=cwd)

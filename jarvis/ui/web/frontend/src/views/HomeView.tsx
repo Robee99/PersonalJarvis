@@ -2,7 +2,11 @@ import { useHomeStore } from "@/store/home";
 import { AssistantChat } from "@/components/home/AssistantChat";
 
 /**
- * The front page — the "chats" section.
+ * The chat on a page of its own — what the "chats" section showed until the
+ * HUD became the front page (2026-10-12). The HUD now mounts the same
+ * `AssistantChat` in its right column (`embedded`, see HudChatPanel); this
+ * full-page shell stays for the chat's own tests and any surface that wants
+ * the chat without the HUD around it.
  *
  * Since 2026-10-01 it is ONE chat with the assistant, with a voice mode
  * inside it (components/home/AssistantChat): the maintainer retired the

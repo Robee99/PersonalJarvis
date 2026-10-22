@@ -19,6 +19,7 @@ attempt fails — the caller then speaks an apology instead of going mute. A
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -138,3 +139,27 @@ async def test_final_retries_timeout_then_succeeds(monkeypatch: pytest.MonkeyPat
 
     assert transcript is _OK
     assert stt.calls == 2, "first call timed out, second succeeded"
+
+
+@pytest.mark.asyncio
+async def test_stt_unavailable_line_follows_the_conversation_language() -> None:
+    """No transcript exists, so the line must not fall back to hard-coded German."""
+    from jarvis.speech import pipeline as pipeline_mod
+
+    pipe = SpeechPipeline.__new__(SpeechPipeline)
+    spoken: list[tuple[str, str | None]] = []
+
+    async def _speak(text: str, language: str | None = None, **_: object) -> bool:
+        spoken.append((text, language))
+        return False
+
+    async def _state(_s: object) -> None:
+        return None
+
+    pipe._speak = _speak  # type: ignore[method-assign]
+    pipe._set_turn_state = _state  # type: ignore[method-assign]
+    pipe._brain = SimpleNamespace(reply_language="auto", conversation_language="")
+
+    await pipe._speak_stt_unavailable(pipe._output_language(None, ""))
+
+    assert spoken == [(pipeline_mod._STT_UNAVAILABLE_PHRASE["en"], "en")]

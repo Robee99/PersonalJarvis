@@ -63,9 +63,6 @@ async def test_canonical_id_publishes_navigate(tool: NavigateTool, bus: Recordin
         ("Aufgaben", "agents"),
         ("tasks", "agents"),
         ("notizen", "memory"),
-        ("Kontakte", "contacts"),
-        ("kontakt", "contacts"),
-        ("contacts", "contacts"),
         # The retired Outputs section: its old id and spoken names land on
         # Artifacts, where every run is listed now (2026-08-23).
         ("outputs", "visualization"),
@@ -111,10 +108,11 @@ def test_tool_metadata() -> None:
     assert "socials" in enum and "settings" in enum
 
 
-def test_contacts_section_is_known() -> None:
-    """The Contacts section (Chunk A) is a navigable target."""
-    assert "contacts" in NavigateTool.known_sections()
-    assert "contacts" in NavigateTool.schema["properties"]["section"]["enum"]
+def test_removed_sections_are_unknown() -> None:
+    """Contacts and Local models left the app; neither is a navigable target."""
+    for section in ("contacts", "local-models"):
+        assert section not in NavigateTool.known_sections()
+        assert section not in NavigateTool.schema["properties"]["section"]["enum"]
 
 
 def test_known_sections_match_frontend_section_ids() -> None:
@@ -131,3 +129,51 @@ def test_known_sections_match_frontend_section_ids() -> None:
     ts_ids = set(re.findall(r'"([a-z0-9_-]+)"', block.group(1)))
     assert ts_ids, "no ids parsed from SECTION_IDS"
     assert NavigateTool.known_sections() == ts_ids
+
+
+# --------------------------------------------------------------------------- #
+# ``then``: click a control inside the section once it is open                 #
+# --------------------------------------------------------------------------- #
+
+
+async def test_then_clicks_inside_the_opened_section() -> None:
+    from jarvis.core.events import AppUiRequest
+    from tests.fakes.fake_app_window import FakeAppWindowBus
+
+    bus = FakeAppWindowBus({"ok": True, "result": {"clicked": {"name": "Model", "role": "tab"}}})
+    res = await NavigateTool(bus=bus).execute({"section": "settings", "then": "Model"}, ctx=None)
+
+    assert res.success is True
+    assert res.output["clicked"] == "Model"
+    nav, click = bus.events
+    assert isinstance(nav, NavigateSidebar) and nav.section == "settings"
+    assert isinstance(click, AppUiRequest)
+    assert (click.action, click.label) == ("click", "Model")
+    assert click.wait_ms > 0, "the new section may still be rendering"
+
+
+async def test_then_that_finds_nothing_still_reports_the_open_section() -> None:
+    from tests.fakes.fake_app_window import FakeAppWindowBus
+
+    error = 'No control named "Modle" on this screen; closest: "Model".'
+    bus = FakeAppWindowBus({"ok": False, "error": error})
+    res = await NavigateTool(bus=bus).execute({"section": "settings", "then": "Modle"}, ctx=None)
+
+    assert res.success is True
+    assert res.output["section"] == "settings"
+    assert res.output["clicked"] is None
+    assert res.output["then_error"] == error
+    assert "could not click 'Modle'" in res.output["summary"]
+
+
+async def test_plain_section_sends_no_click(tool: NavigateTool, bus: RecordingBus) -> None:
+    res = await tool.execute({"section": "settings", "then": "  "}, ctx=None)
+    assert res.success is True
+    assert [type(e).__name__ for e in bus.events] == ["NavigateSidebar"]
+    assert "clicked" not in res.output
+
+
+def test_gods_eye_short_name_resolves() -> None:
+    from jarvis.plugins.tool.navigate import _resolve
+
+    assert _resolve("God's Eye") == "world-intelligence"

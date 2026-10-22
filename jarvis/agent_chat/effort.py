@@ -74,8 +74,14 @@ _LADDERS: Final[dict[str, tuple[tuple[str, ...], str]]] = {
     "kimi": (("",), ""),
     "glm": (("",), ""),
     "deepseek-harness": (("",), ""),
+    # Hermes takes ``model_options.reasoning`` and folds it per provider; a
+    # local llama.cpp model (Qwen, Gemma) gets it through the model swapper
+    # as ``model@effort`` (jarvis.plugins.brain.hermes.local_thinking_model).
+    "hermes": (("", "none", "low", "medium", "high", "xhigh", "max"), ""),
     "cursor": (("",), ""),
     "nvidia": (("", "none", "low", "medium", "high"), ""),
+    # Nous Portal documents no reasoning-effort parameter, so no knob is offered.
+    "nous": (("",), ""),
     "ollama": (("", "none", "low", "medium", "high", "max"), ""),
     "local-openai": (("", "none", "low", "medium", "high"), ""),
 }
@@ -91,6 +97,32 @@ def effort_levels(provider: str) -> tuple[str, ...]:
 def default_effort(provider: str) -> str:
     """The level a fresh session on ``provider`` starts with."""
     return _LADDERS.get((provider or "").strip().lower(), _FALLBACK_LADDER)[1]
+
+
+def effort_note(
+    provider: str, effort: str, model_ladder: tuple[str, ...] | list[str] | None = None
+) -> str:
+    """Tell the model the reasoning effort its turn really runs on.
+
+    A model does not see the level's name — only how long it may think — so
+    asked "which effort are you on?" it guesses, and a guess like "low" on a
+    seat the person set to medium reads as a broken picker. ``effort`` is the
+    level the runner actually passes on; the CLI runners put this block in
+    front of the message, the API runner in the system prompt. ``""`` when
+    the provider — or the picked model (an empty ``model_ladder``) — has no
+    effort knob at all.
+    """
+    if not any(effort_levels(provider)):
+        return ""
+    if model_ladder is not None and not any(model_ladder):
+        return ""
+    level = effort or "the provider's own default"
+    return (
+        "<jarvis_turn_settings>\n"
+        f"Reasoning effort for this turn: {level} (as selected in the Jarvis composer). "
+        "If asked about your effort level, report exactly this.\n"
+        "</jarvis_turn_settings>\n\n"
+    )
 
 
 def snap_to_ladder(level: str | None, ladder: tuple[str, ...] | list[str]) -> str:
@@ -110,6 +142,34 @@ def snap_to_ladder(level: str | None, ladder: tuple[str, ...] | list[str]) -> st
     idx = ORDER.index(picked)
     lower = [lvl for lvl in offered if lvl in ORDER and ORDER.index(lvl) <= idx]
     return lower[-1] if lower else offered[0]
+
+
+def effort_for_model(
+    provider: str, level: str | None, model_ladder: tuple[str, ...] | list[str] | None
+) -> str:
+    """The level a turn really runs on: the provider fold, then the model's own.
+
+    ``model_ladder`` is the picked model's ``efforts`` from the catalog
+    (``None`` = the provider ladder applies unchanged; empty = the model has
+    no effort knob). The CLIs fold an unsupported level silently — Claude
+    Code sends ``high`` for ``--effort xhigh`` on Opus 4.6 — so the runner
+    must pass, and tell the model, the folded level rather than the pick.
+    The composer applies the same rule (``snapEffort`` in the frontend).
+    """
+    picked = (level or "").strip().lower()
+    if model_ladder is not None and picked and picked in model_ladder:
+        # The model's own list is the newer word (a level a CLI added after
+        # this table was written): it wins over the provider ladder.
+        return picked
+    effort = normalize_effort(provider, level)
+    if not effort and "" not in effort_levels(provider):
+        # The picker cannot offer "Default" on this ladder, so it shows the
+        # provider's default level — run that, not whatever the CLI's own
+        # settings file happens to say.
+        effort = default_effort(provider)
+    if model_ladder is None:
+        return effort
+    return snap_to_ladder(effort, model_ladder)
 
 
 def normalize_effort(provider: str, level: str | None) -> str:

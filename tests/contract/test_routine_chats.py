@@ -12,6 +12,14 @@ from jarvis.tasks.store import TaskStore
 from tests.contract.test_society_continuity import world as world
 
 
+def _beyond_routine_cards(events: list[dict]) -> list[dict]:
+    """The agent's one chat may only show the card that opens a run."""
+    return [
+        e for e in events
+        if not (e["kind"] == "notice" and e["payload"].get("kind") == "routine_run")
+    ]
+
+
 async def test_persisted_run_links_survive_reopening_without_loading_main_chat(world, tmp_path):
     runtime, service, main, _ = world
     store = TaskStore(tmp_path / "tasks.db")
@@ -34,12 +42,21 @@ async def test_persisted_run_links_survive_reopening_without_loading_main_chat(w
                 assert session.provider == main.provider
                 assert session.cwd == main.cwd
                 assert reopened.list_events(sid)[-1]["kind"] == "turn_finished"
-            assert reopened.list_events(main.session_id) == []
+            assert _beyond_routine_cards(reopened.list_events(main.session_id)) == []
+            # The agent's one chat holds a card per run that opens that run.
+            cards = [e["payload"] for e in reopened.list_events(main.session_id)]
+            assert [c["session_id"] for c in cards] == links
+            assert all(c["kind"] == "routine_run" and c["task_id"] == task_id for c in cards)
             assert reopened.get_session(main.session_id).permission_mode == main.permission_mode
         finally:
             reopened.close()
     finally:
         await store.close()
+
+
+#: Hang guards, not speed budgets: a loaded Windows runner needs more than a
+#: few seconds to start a chat turn, and a real hang still fails.
+_HANG_GUARD_S = 15
 
 
 async def test_busy_main_chat_queues_routine_without_mixing_transcripts(world, monkeypatch):
@@ -56,7 +73,7 @@ async def test_busy_main_chat_queues_routine_without_mixing_transcripts(world, m
 
     monkeypatch.setattr(brain, "generate", respond)
     await service.send(main.session_id, "Main conversation")
-    await asyncio.wait_for(started.wait(), 2)
+    await asyncio.wait_for(started.wait(), _HANG_GUARD_S)
     created = asyncio.Event()
     create_session = service.store.create_session
 
@@ -70,10 +87,10 @@ async def test_busy_main_chat_queues_routine_without_mixing_transcripts(world, m
         run_owned_routine(runtime, "digest", ("society", "agent:mailbox"), "Read mail")
     )
     try:
-        await asyncio.wait_for(created.wait(), 2)
+        await asyncio.wait_for(created.wait(), _HANG_GUARD_S)
         assert service.is_running(main.session_id)
         release.set()
-        assert await asyncio.wait_for(routine, 3) == brain.reply
+        assert await asyncio.wait_for(routine, _HANG_GUARD_S) == brain.reply
         messages = [
             e for e in service.store.list_events(main.session_id) if e["kind"] == "user_message"
         ]
@@ -101,7 +118,7 @@ async def test_failed_run_stays_in_its_chat_and_cannot_fall_back(world, monkeypa
     ]
     assert len(runs) == 1
     assert service.store.list_events(runs[0].session_id)[-1]["payload"]["status"] == "error"
-    assert service.store.list_events(main.session_id) == []
+    assert _beyond_routine_cards(service.store.list_events(main.session_id)) == []
 
 
 @pytest.mark.parametrize("via_chat", [False, True])
@@ -120,7 +137,7 @@ async def test_cancelling_routine_preserves_main_chat(world, monkeypatch, via_ch
         run_owned_routine(runtime, "digest", ("society", "agent:mailbox"), "Read mail")
     )
     try:
-        await asyncio.wait_for(started.wait(), 2)
+        await asyncio.wait_for(started.wait(), _HANG_GUARD_S)
         if via_chat:
             session = next(
                 s
@@ -138,9 +155,54 @@ async def test_cancelling_routine_preserves_main_chat(world, monkeypatch, via_ch
         assert len(runs) == 1
         assert not service.is_running(runs[0].session_id)
         assert service.store.list_events(runs[0].session_id)[-1]["payload"]["status"] == "cancelled"
-        assert service.store.list_events(main.session_id) == []
+        assert _beyond_routine_cards(service.store.list_events(main.session_id)) == []
     finally:
         release.set()
         if not routine.done():
             routine.cancel()
             await asyncio.gather(routine, return_exceptions=True)
+
+
+async def test_a_run_that_leaves_its_owners_runtime_says_so(world, tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from jarvis.society import routine_runner
+    from jarvis.society.events import AgentRuntime
+
+    runtime, service, _, _ = world
+    store = TaskStore(tmp_path / "tasks.db")
+    await store.init()
+    runtime.task_services = lambda: (store, None)
+    hermes = replace(await runtime.roster.get("mailbox"), runtime=AgentRuntime.HERMES)
+    get = runtime.roster.get
+
+    async def roster_get(agent_id):
+        return hermes if agent_id == "mailbox" else await get(agent_id)
+
+    monkeypatch.setattr(runtime.roster, "get", roster_get)
+    # The run's seat is one Hermes cannot drive: it runs on Jarvis' own loop.
+    monkeypatch.setattr(routine_runner, "_run_runtime", lambda agent, provider: "")
+    spec = build_task_spec(hermes, title="Inbox", prompt="Read mail", schedule={"kind": "every"})
+    task_id = str(await store.insert(spec))
+    try:
+        await run_owned_routine(runtime, task_id, spec.tags, spec.action.prompt)
+        steps = [step["payload"] for step in (await store.get(task_id))["steps"]]
+        notes = [p for p in steps if p.get("event") == "routine_runtime_fallback"]
+        assert len(notes) == 1 and notes[0]["runtime"] == "hermes"
+        run = next(p["session_id"] for p in steps if p.get("event") == "routine_chat")
+        notices = [
+            e["payload"] for e in service.store.list_events(run) if e["kind"] == "notice"
+        ]
+        assert [n["kind"] for n in notices] == ["routine_runtime_fallback"]
+    finally:
+        await store.close()
+
+
+def test_only_a_run_off_its_owners_external_runtime_is_noted():
+    from types import SimpleNamespace
+
+    from jarvis.society.routine_runner import _left_runtime
+
+    assert _left_runtime(SimpleNamespace(runtime="hermes"), "") == "hermes"
+    assert _left_runtime(SimpleNamespace(runtime="openclaw"), "openclaw") == ""
+    assert _left_runtime(SimpleNamespace(runtime="jarvis"), "") == ""

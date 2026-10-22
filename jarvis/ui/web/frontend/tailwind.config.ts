@@ -153,6 +153,8 @@ const config: Config = {
           "Segoe UI",
           "sans-serif",
         ],
+        // The Stark HUD's squared display face (index.css imports it).
+        hud: ["Rajdhani", "Inter Variable", "Inter", "ui-sans-serif", "sans-serif"],
         mono: [
           "JetBrains Mono",
           "ui-monospace",

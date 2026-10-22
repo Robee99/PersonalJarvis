@@ -625,3 +625,219 @@ def test_echo_gate_suppression_keeps_scanning_for_real_speech() -> None:
     detected = detector.feed(alternating)
     assert detected is not None
     assert detector.active is False
+
+
+# --- Interruption length: ~0.5 s of speech, natural dips bridged ---------- #
+# A barge-in counts only after about half a second of user speech, so a cough
+# or an echo blip never cuts the answer off. That speech is counted across the
+# short dips between syllables and words: requiring one unbroken run meant a
+# natural interruption ("wait, no, the other one") almost never confirmed.
+
+
+def _length_detector(probabilities: list[float], **kwargs) -> DesktopRealtimeBargeInDetector:
+    detector = DesktopRealtimeBargeInDetector(
+        min_frame_rms=0.0,
+        grace_s=0,
+        model=FakeVadModel(probabilities),
+        **kwargs,
+    )
+    detector.warmup()
+    detector.start_output()
+    return detector
+
+
+def test_default_interruption_needs_half_a_second_of_speech() -> None:
+    # 15 speech frames (~480 ms) are not enough; the 16th (~512 ms) confirms.
+    detector = _length_detector([0.99] * 16)
+
+    assert detector.feed(_pcm_frames(*([1000] * 15))) is None
+    assert detector.active is True
+    assert detector.feed(_pcm_frames(1000)) is not None
+    assert detector.active is False
+
+
+def test_short_dips_between_words_do_not_restart_the_count() -> None:
+    # Speech with a two-frame dip after every five frames: 16 speech frames in
+    # total, never 16 in a row.
+    pattern = ([0.99] * 5 + [0.2] * 2) * 3 + [0.99]
+    detector = _length_detector(pattern)
+
+    detected = detector.feed(_pcm_frames(*range(1000, 1000 + len(pattern))))
+
+    assert detected is not None
+    # The bridged dips stay in the returned audio: it is the user's speech.
+    assert len(detected) == len(pattern) * VAD_FRAME_SAMPLES * 2
+
+
+def test_a_long_pause_restarts_the_count() -> None:
+    # Ten frames of speech, a 200 ms pause, ten more: never 16 in one stretch.
+    pattern = [0.99] * 10 + [0.1] * 6 + [0.99] * 10
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None
+    assert detector.active is True
+
+
+def test_scattered_blips_never_add_up_to_an_interruption() -> None:
+    # Echo/noise blips shorter than a syllable are never bridged, however
+    # many of them arrive.
+    pattern = ([0.99] * 3 + [0.1]) * 10
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None
+    assert detector.active is True
+
+
+def test_bridging_is_capped_at_half_the_required_speech() -> None:
+    # Five-frame runs separated by four-frame dips: each dip is allowed, but
+    # after eight bridged frames the next dip ends the candidate.
+    pattern = ([0.99] * 5 + [0.1] * 4) * 3 + [0.99] * 2
+    detector = _length_detector(pattern)
+
+    assert detector.feed(_pcm_frames(*([1000] * len(pattern)))) is None
+
+
+# --- Time-aligned echo floor (echo_tracking, classic playback barge) -------- #
+# Live 2026-10-12 (Lenovo LOQ, laptop speakers, no AEC): the adaptive floor is
+# one number per window — 1.4 x the 90th percentile of the echo — and the echo
+# of laptop speakers beside the built-in mic is louder than the user, so no
+# interruption ever confirmed. The grace window calibrates lag and gain against
+# the recorded output envelope; afterwards the gate follows the echo predicted
+# for each instant, so the user is heard in Jarvis' pauses.
+
+_TRACK_FRAME_S = VAD_FRAME_SAMPLES / 16_000.0
+_TRACK_LAG_S = 0.1
+_TRACK_BLOCK_S = 0.064
+_TRACK_ECHO_RMS = 0.06
+
+
+def _track_segments() -> list[tuple[float, float]]:
+    """Loud (start, end) spans of an aperiodic word/pause pattern from t=990 s."""
+    loud = (0.30, 0.22, 0.38, 0.26, 0.34, 0.20, 0.42, 0.28)
+    quiet = (0.50, 0.62, 0.45, 0.70, 0.55, 0.48, 0.66, 0.58)
+    spans = []
+    t = 990.0
+    index = 0
+    while t < 1060.0:
+        length = loud[index % len(loud)]
+        spans.append((t, t + length))
+        t += length + quiet[(index * 3) % len(quiet)]
+        index += 1
+    return spans
+
+
+_TRACK_SPANS = _track_segments()
+
+
+def _track_output_level(t: float) -> float:
+    """Played output RMS at ``t``: loud words separated by pauses."""
+    for start, end in _TRACK_SPANS:
+        if start <= t < end:
+            return _TRACK_ECHO_RMS
+        if start > t:
+            break
+    return 0.0
+
+
+def _track_played_level(t: float) -> float:
+    """What the speakers emit at ``t``: the level of the block playing then."""
+    block_start = 990.0 + ((t - 990.0) // _TRACK_BLOCK_S) * _TRACK_BLOCK_S
+    return _track_output_level(block_start)
+
+
+class _TrackClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def snapshot(self, window_s: float) -> list[tuple[float, float, float]]:
+        entries = []
+        start = 990.0
+        while start <= self.now:
+            if start >= self.now - window_s:
+                entries.append((start, _TRACK_BLOCK_S, _track_output_level(start)))
+            start += _TRACK_BLOCK_S
+        return entries
+
+
+def _track_detector(
+    monkeypatch: pytest.MonkeyPatch, *, echo_tracking: bool, snapshot=None
+) -> tuple[DesktopRealtimeBargeInDetector, _TrackClock]:
+    clock = _TrackClock()
+    monkeypatch.setattr("jarvis.realtime.desktop.time.monotonic", clock.monotonic)
+    detector = DesktopRealtimeBargeInDetector(
+        grace_s=1.5,
+        echo_tracking=echo_tracking,
+        echo_reference_snapshot=snapshot or clock.snapshot,
+        model=_AlwaysSpeechModel(),
+    )
+    detector.warmup()
+    detector.start_output()
+    return detector, clock
+
+
+def _track_feed(
+    detector: DesktopRealtimeBargeInDetector,
+    clock: _TrackClock,
+    seconds: float,
+    *,
+    user_amplitude: int = 0,
+    echo_wobble: float = 0.0,
+) -> bytes | None:
+    """Feed one frame per tick: the speakers' echo plus an optional user.
+
+    ``echo_wobble`` varies the echo loudness frame to frame (room acoustics,
+    loudness inside a word) by up to that fraction around the calibrated level.
+    """
+    for tick in range(int(seconds / _TRACK_FRAME_S)):
+        clock.now += _TRACK_FRAME_S
+        wobble = 1.0 + echo_wobble * float(np.sin(tick * 1.7))
+        echo = _track_played_level(clock.now - _TRACK_LAG_S) * 32768.0 * wobble
+        detected = detector.feed(_pcm_frames(int(echo + user_amplitude + 20)))
+        if detected is not None:
+            return detected
+    return None
+
+
+def test_echo_tracking_hears_a_user_quieter_than_the_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector, clock = _track_detector(monkeypatch, echo_tracking=True)
+    assert _track_feed(detector, clock, 1.6) is None  # grace: pure echo
+    # The user (~0.016 RMS) is far below the echo (~0.06): the one-number
+    # floor can never hear them, the time-aligned one does in the pauses.
+    assert _track_feed(detector, clock, 4.0, user_amplitude=500) is not None
+    assert detector.stats()["echo_track"].startswith("lag=")
+
+
+def test_without_echo_tracking_the_same_user_never_interrupts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector, clock = _track_detector(monkeypatch, echo_tracking=False)
+    assert _track_feed(detector, clock, 1.6) is None
+    assert _track_feed(detector, clock, 4.0, user_amplitude=500) is None
+    assert detector.stats()["echo_track"] == "off"
+
+
+def test_echo_tracking_never_interrupts_on_echo_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector, clock = _track_detector(monkeypatch, echo_tracking=True)
+    assert _track_feed(detector, clock, 1.6) is None
+    # Ten seconds of Jarvis talking with nobody else in the room, his loudness
+    # swinging +-40 % around the calibrated echo level.
+    assert _track_feed(detector, clock, 10.0, echo_wobble=0.4) is None
+    assert detector.active is True
+
+
+def test_echo_tracking_falls_back_to_adaptive_floor_without_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detector, clock = _track_detector(
+        monkeypatch, echo_tracking=True, snapshot=lambda _window: []
+    )
+    assert _track_feed(detector, clock, 1.6) is None
+    assert _track_feed(detector, clock, 4.0, user_amplitude=500) is None
+    assert detector.stats()["echo_track"] == "uncalibrated"

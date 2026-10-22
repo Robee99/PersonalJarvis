@@ -61,6 +61,12 @@ BrainCallback = Callable[[str], Awaitable[str]]
 ROUTER_TOOLS = frozenset({
     "run-shell",
     "screen-snapshot",
+    # Camera still (2026-10-02): one webcam photo for vision when the user asks
+    # Jarvis to look at them or at something they hold up. Risk "ask" (the
+    # frame shows the person), hidden from blind brains like screenshot, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14). See
+    # ADR-0011 amendment "Camera still".
+    "camera-snapshot",
     # NB: ``dispatch-to-harness`` deliberately absent (removed 2026-06-28) —
     # see the header comment above. Heavy work → spawn-worker; desktop →
     # computer-use. The tool remains for the internal local-action fast path.
@@ -71,11 +77,40 @@ ROUTER_TOOLS = frozenset({
     # never a spawn — never in a worker set (AP-5/AP-14). See
     # docs/plans/ai-pointer/DESIGN.md.
     "inspect-pointer",
+    # Point at (2026-10-02): the push direction of the AI Pointer. A glowing
+    # arrow lands on the named element of the foreground window ("where do I
+    # click to export?"), drawn by the CU indicator sidecar; it never clicks.
+    # Read-only on the app, risk safe, never a spawn and never in a worker or
+    # society tool set (AP-5/AP-14). See ADR-0011 amendment "Point at".
+    "point-at",
+    # Laptop power (2026-10-02): "turbo mode", "silent mode", "cap the battery
+    # at 80" - the Windows power slider plus ASUS Armoury Crate's operating
+    # mode and charge limit. Risk monitor, never a spawn and never in a worker
+    # or society tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
+    "laptop-power",
+    # System volume (2026-10-12): "volume to 30", "mute". The default speaker's
+    # master level via Windows Core Audio. Risk safe, never a spawn and never
+    # in a worker or society tool set (AP-5/AP-14).
+    "system-volume",
+    # Window control (2026-10-12): minimize / maximize / restore / focus /
+    # close a window by title or program, state read back. Risk monitor, never
+    # a spawn and never in a worker or society tool set (AP-5/AP-14).
+    "window-control",
     # UI navigation (2026-06-02): switch the active sidebar section by voice/chat
     # ("zeig die Socials", "open settings"). Publishes NavigateSidebar; the
     # frontend listener moves the UI. Pure UI action, risk safe, NO spawn —
     # never in a worker set (AP-5/AP-14). See ADR-0011 amendment "Navigate tool".
     "navigate",
+    # In-app UI control (2026-10-20): read the open screen's controls with
+    # refs, click one, type into a field, scroll. One AppUiRequest round trip
+    # to the app's own main window each (jarvis/core/app_ui_bridge.py), the
+    # same as a user's click; destructive buttons and password fields are
+    # refused there. Risk safe, never a spawn, never in a worker or society
+    # tool set (AP-5/AP-14). See ADR-0011 amendment "In-app UI control".
+    "app-ui-snapshot",
+    "app-ui-click",
+    "app-ui-type",
+    "app-ui-scroll",
     # On-demand visualisation (2026-08-11): draw what is under discussion as a
     # On-demand artifact (2026-08-23, rebuilt from the 2026-08-11 visualize
     # tool): build ONE self-contained HTML page — dashboard, report, diagram,
@@ -139,6 +174,8 @@ ROUTER_TOOLS = frozenset({
     # The brain calls this when the user asks "what do we know about X" or
     # references a past project, person, or decision by name.
     "wiki-recall",
+    # Optional read-only external archive search, disabled until a vault path is configured.
+    "kept-archive-search",
     # Phase B5 follow-up: full-page reader for the wiki vault. Used after
     # wiki-recall when the brain has narrowed to one page and needs the
     # complete content, not the 240-char snippet.
@@ -150,10 +187,18 @@ ROUTER_TOOLS = frozenset({
     # Jarvis-Agents may call it only through the ADR-0025 supervisor broker,
     # never through a legacy worker tier (AP-5/AP-14). See ADR-0011.
     "wiki-list",
+    # Memory by topic (2026-10-12): the memory orb's note communities, the
+    # chats in one topic or matching a query, and one chat paged 6,000
+    # characters at a time. Lets the local brain (Gemma under Hermes) answer
+    # "all my chats about X" over a 2,000-chat import that wiki-list cannot
+    # print and wiki-recall caps at 5 hits. Read-only and safe; never a spawn
+    # and never in a worker tool set (AP-5/AP-14).
+    "memory_chats",
     # Phase B5 follow-up: deterministic ingest path. Lets the brain
     # explicitly store a fact ("merk dir: …") rather than relying on the
     # VoiceFactBridge acknowledgement heuristic.
     "wiki-ingest",
+    "cognee-source",
     # CLI-Integration (2026-05-24): virtual loader that expands to one
     # ``cli_<name>`` tool per connected & usable CLI (gcloud, gh, docker, …).
     # This is the MCP/plugin model for command-line tools: only connected
@@ -216,6 +261,12 @@ ROUTER_TOOLS = frozenset({
     # directly; otherwise a connected YouTube Music is not callable by voice.
     # risk_tier "monitor": audible and instantly undone. Never a spawn (AP-5/AP-14).
     "youtube_music",
+    # Slack Marketplace plugin (2026-10-05): native REST tool over the Slack Web
+    # API. Slack's hosted MCP server admits only Marketplace-listed or internal
+    # apps, so the plugin carries no MCP server block and must be router-visible
+    # directly. Reads are "safe"; post_message keeps "ask" (echo-confirm).
+    # Never a spawn (AP-5/AP-14).
+    "slack",
     # Computer-Use (Wave 1, 2026-05-29): first-class, clearly-described tool to
     # drive the user's LIVE desktop (open apps, click, type, scroll, operate
     # any GUI). The router previously had no honest desktop path — spawn-worker
@@ -509,10 +560,18 @@ def _load_tools_for_tier(
                 inst = cls()
             elif ep.name == "start-preview-server":
                 inst = cls(bus=bus)
-            elif ep.name == "navigate":
+            elif ep.name in (
+                "navigate",
+                "app-ui-snapshot",
+                "app-ui-click",
+                "app-ui-type",
+                "app-ui-scroll",
+            ):
                 # UI navigation: publishes NavigateSidebar on the shared bus,
                 # which the WS forwarder streams to the frontend (event_name
-                # "NavigateSidebar") to switch the active section.
+                # "NavigateSidebar") to switch the active section. The app_ui
+                # tools (and navigate's ``then`` click) publish AppUiRequest on
+                # the same bus and wait for the main window's answer.
                 inst = cls(bus=bus)
             elif ep.name == "create-artifact":
                 # The artifact is written by a mission worker (strongest model),
@@ -537,6 +596,11 @@ def _load_tools_for_tier(
                 )
             elif ep.name == "whoami":
                 inst = cls(profile=user_profile, people=people)
+            elif ep.name == "kept-archive-search":
+                # Kept is an explicit, read-only external archive. Its default
+                # unset path keeps the capability disabled until configured.
+                integration = getattr(config, "wiki_integration", None)
+                inst = cls(archive_root=getattr(integration, "kept_archive_root", None))
             elif ep.name == "wiki-recall":
                 # Phase B5: build VaultSearch with the configured vault root.
                 # The search instance is created once per brain build and
@@ -547,7 +611,19 @@ def _load_tools_for_tier(
                 # default so the tool surface stays stable).
                 from jarvis.plugins.tool.wiki_recall import _build_search_instance
 
-                inst = cls(search=_build_search_instance())
+                search_instance = _build_search_instance()
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
+
+                inst = cls(
+                    search=search_instance,
+                    cognee=build_cognee_adapter(search_instance._root),
+                    graphrag=build_graphrag_adapter(search_instance._root),
+                )
+            elif ep.name == "cognee-source":
+                from jarvis.plugins.tool.cognee_source import build_cognee_source_tool
+
+                inst = build_cognee_source_tool()
             elif ep.name == "wiki-page-read":
                 # Phase B5 follow-up: same vault-root resolution as wiki-recall.
                 from jarvis.plugins.tool.wiki_page_read import _build_page_read_tool
@@ -559,15 +635,28 @@ def _load_tools_for_tier(
                 from jarvis.plugins.tool.wiki_list import _build_wiki_list_tool
 
                 inst = _build_wiki_list_tool()
+            elif ep.name == "memory_chats":
+                # Memory by topic: same vault-root resolution and FTS search
+                # as the other wiki tools; the topics are the orb's own.
+                from jarvis.plugins.tool.memory_chats import _build_memory_chats_tool
+
+                inst = _build_memory_chats_tool()
             elif ep.name == "wiki-ingest":
                 # Phase B5 follow-up: lazy curator resolver — the curator is
                 # constructed by ``bootstrap_wiki_integration`` after the brain
                 # is built, so the tool must defer the lookup to execute time.
                 # Mirrors the spawn-worker lazy-resolver pattern.
+                from jarvis.memory.cognee_adapter import build_cognee_adapter
+                from jarvis.memory.graphrag_adapter import build_graphrag_adapter
                 from jarvis.memory.wiki.integration import get_running_curator
+                from jarvis.memory.wiki.vault_root import resolve_vault_root
                 from jarvis.plugins.tool.wiki_ingest import WikiIngestTool
 
-                inst = WikiIngestTool(curator_resolver=get_running_curator)
+                inst = WikiIngestTool(
+                    curator_resolver=get_running_curator,
+                    cognee_adapter=build_cognee_adapter(resolve_vault_root(None).path),
+                    graphrag_adapter=build_graphrag_adapter(resolve_vault_root(None).path),
+                )
             elif ep.name == "create-skill":
                 # Skill authoring by voice/chat: the tool resolves the live
                 # SkillRegistry (skill_context) and the live BrainManager
@@ -612,6 +701,13 @@ def _load_tools_for_tier(
                     register_tool(tool, source=ep.name, virtual=True)
             else:
                 register_tool(inst, source=ep.name, virtual=False)
+        except ModuleNotFoundError as exc:
+            # A missing Jarvis module is a packaging fault, not an optional
+            # extra: the frozen build once dropped the MCP/CLI/plugin loaders
+            # and the brain lost every MCP tool without a word in the log.
+            missing = getattr(exc, "name", "") or ""
+            level = logging.WARNING if missing.startswith("jarvis") else logging.DEBUG
+            log.log(level, "Tool %s not loadable: %s", ep.name, exc)
         except Exception as exc:  # noqa: BLE001
             log.debug("Tool %s not loadable: %s", ep.name, exc)
 
@@ -884,6 +980,7 @@ def _register_runtime_manager(manager: Any) -> None:
 def _phase2_full_brain(
     tier: Literal["router"] = "router",
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Build the BrainManager in router tier.
 
@@ -910,7 +1007,10 @@ def _phase2_full_brain(
     from jarvis.memory.curator import Curator
     from jarvis.safety import ApprovalWorkflow, RiskTierEvaluator, ToolExecutor
 
-    config = cfg.load_config()
+    # The web/desktop runtime owns the authoritative config object. Reusing it
+    # keeps the brain resolver and provider UI in sync and avoids a second disk
+    # read racing a settings update during deferred startup.
+    config = config if config is not None else cfg.load_config()
     if bus is None:
         bus = EventBus()
 
@@ -1560,6 +1660,7 @@ def build_default_brain(
     tier: Literal["router"] = "router",
     allow_phase2: bool = True,
     bus: Any | None = None,
+    config: Any | None = None,
 ) -> Any:
     """Return a brain callback (async (str)->str) according to the fallback chain.
 
@@ -1573,6 +1674,8 @@ def build_default_brain(
         allow_phase2: When ``False``, skips BrainManager and falls back
             immediately to the Phase-1 Gemini fallback. Intended for tests.
         bus: Optional ``EventBus``. ``None`` = own bus (voice-pipeline default).
+        config: Optional runtime config to share with BrainManager. When
+            supplied, this is the same authoritative object used by the UI.
 
     Control via ENV:
     - `JARVIS_BRAIN=echo`    → pure echo (no LLM)
@@ -1686,7 +1789,7 @@ def build_default_brain(
     # fallback in the production path: if the manager cannot be built, the UI
     # should show a genuine error state.
     try:
-        brain = _phase2_full_brain(tier=tier, bus=bus)
+        brain = _phase2_full_brain(tier=tier, bus=bus, config=config)
         log.info(
             "Brain stack: BrainManager tier=%s active — provider=%s, tools=%d",
             tier,
@@ -1808,6 +1911,13 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
     telemetry labels show the concrete provider.
     """
     from jarvis.brain.ack_brain.providers import REGISTRY
+    from jarvis.brain.route_policy import hermes_is_main_brain
+
+    if hermes_is_main_brain(jcfg):
+        # One brain (ADR-0042): no second model writes what Jarvis says while
+        # Hermes answers. Every flash consumer then uses its canned pool.
+        log.info("Flash-Brain: Hermes is the brain — canned acknowledgements only.")
+        return None
 
     provider_name = ack_cfg.provider
     if provider_name == "follow_brain":
@@ -1848,7 +1958,9 @@ def _build_flash_provider(jcfg: Any, ack_cfg: Any) -> Any:
             sorted(REGISTRY.keys()),
         )
         return None
-    provider_cfg = getattr(ack_cfg.providers, provider_name)
+    # Provider ids can contain hyphens while Pydantic config fields use
+    # underscores (for example ``local-openai`` -> ``local_openai``).
+    provider_cfg = getattr(ack_cfg.providers, provider_name.replace("-", "_"))
     return provider_cls(provider_cfg)
 
 

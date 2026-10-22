@@ -196,9 +196,136 @@ def _normalized(text: str) -> str:
     "context window", "edge case") can never be read as an on-screen command.
     It substitutes a space, not the empty string, so the surrounding words keep
     their boundaries and a genuine command in the same turn still matches.
+    Typographic apostrophes are folded to ASCII so "don’t" and "don't" read
+    the same to the negation grammar below.
     """
-    folded = (text or "").casefold().translate(_UMLAUT_TRANSLITERATION)
+    folded = (
+        (text or "").casefold().translate(_UMLAUT_TRANSLITERATION)
+        .replace("\u2019", "'").replace("\u2018", "'")
+    )
     return _PRODUCT_NAME_NOISE_RE.sub(" ", folded)
+
+
+# ---------------------------------------------------------------------------
+# Observation-only turns (negated or look-restricted desktop requests).
+#
+# "Don't click anything, just look at my screen" used to pass this gate on the
+# bare verb "click" — the action vocabulary above is matched without asking
+# whether the user FORBADE the action — and the local fast path handed the same
+# turn to the computer-use loop. A negated action verb is a prohibition, not a
+# command. The grammar below is deliberately scoped (negator + a few
+# clause-internal words + an action verb), so "I don't know, open Spotify" and
+# "never mind, click OK" still read as orders, and a button label such as
+# "click 'Do not save'" is not mistaken for a prohibition.
+# ---------------------------------------------------------------------------
+
+#: Desktop action verbs (en) a negator can govern. Pinned conjugations, so
+#: "presentation" or "editor" never read as "press" / "edit".
+_NEG_EN_VERB = (
+    r"(?:(?:double-?)?click(?:s|ed|ing)?|tap(?:s|ped|ping)?|typ(?:e|es|ed|ing)"
+    r"|press(?:es|ed|ing)?|hit(?:s|ting)?|scroll(?:s|ed|ing)?|drag(?:s|ged|ging)?"
+    r"|touch(?:es|ed|ing)?|interact(?:s|ed|ing)?|mov(?:e|es|ed|ing)"
+    r"|clos(?:e|es|ed|ing)|quit(?:s|ting)?|open(?:s|ed|ing)?|launch(?:es|ed|ing)?"
+    r"|start(?:s|ed|ing)?|run(?:s|ning)?|minimi[sz](?:e|es|ed|ing)"
+    r"|maximi[sz](?:e|es|ed|ing)|chang(?:e|es|ed|ing)|modif(?:y|ies|ied|ying)"
+    r"|edit(?:s|ed|ing)?|delet(?:e|es|ed|ing)|select(?:s|ed|ing)?"
+    r"|navigat(?:e|es|ed|ing)|operat(?:e|es|ed|ing)|control(?:s|led|ling)?"
+    r"|play(?:s|ed|ing)?|do(?:ing)?\s+(?:anything|something|stuff))"
+)
+# i18n-allow: German speech-input matching data (verb stems, separable prefixes)
+_NEG_DE_VERB = (
+    r"(?:an|auf|zu|ab)?(?:zu)?"
+    r"(?:klick|oeffn|start|tipp|drueck|scroll|zieh|schliess|fass|ruehr|beruehr"
+    r"|mach|interagier|bedien|steuer|aender|loesch|beweg|navigier)\w*"
+)
+#: Up to three clause-internal words between the negator and the verb ("don't
+#: you EVER open", a German negator before an object and a verb). A
+#: coordinator or a clause break ends the scope, so "stop the music and open
+#: Spotify" stays an order.
+_NEG_GAP = (
+    r"(?:\s+(?!(?:and|or|but|then|und|oder|aber|dann|sondern)\b)"  # i18n-allow
+    r"[^\s,.;:!?]+){0,3}?"
+)
+#: A coordinated verb list stays under the same negation: "don't click or
+#: type anything", and the same shape in German.
+_NEG_EN_TAIL = rf"(?:\s*,?\s*(?:or|nor|and)\s+(?:not\s+)?{_NEG_EN_VERB}\b)*"
+_NEG_DE_TAIL = rf"(?:\s*,?\s*(?:oder|und|noch)\s+(?:nicht\s+)?{_NEG_DE_VERB})*"  # i18n-allow
+
+_NEGATED_ACTION_RE: re.Pattern[str] = re.compile(
+    # English: negator before the verb.
+    r"\b(?:don't|dont|do\s+not|does\s+not|doesn't|never(?!\s+mind)|not"
+    r"|no\s+need\s+to|without|stop)"
+    rf"{_NEG_GAP}\s+{_NEG_EN_VERB}\b{_NEG_EN_TAIL}"
+    # English: verb + "nothing" ("click nothing", "touch nothing").
+    rf"|\b{_NEG_EN_VERB}\s+(?:on\s+)?nothing\b"
+    # German: negator before the verb (also "without" + zu-infinitive).
+    r"|\b(?:nicht|nichts|kein\w*|nie|niemals|ohne)"  # i18n-allow: DE input data
+    rf"{_NEG_GAP}\s+{_NEG_DE_VERB}{_NEG_DE_TAIL}"
+    # German: verb-first imperative whose negator ENDS the clause. The
+    # clause-end anchor keeps a button label that merely contains a negation
+    # (the German "do not save" button) an order.
+    rf"|\b{_NEG_DE_VERB}{_NEG_GAP}\s+(?:nicht|nichts|nie|niemals)"  # i18n-allow
+    r"(?:\s+(?:an|auf|zu|mehr|bitte|lieber|mal))*"  # i18n-allow: DE particles
+    r"(?=\s*(?:$|[,.;:!?]|(?:und|oder|sondern|nur|aber)\b))",  # i18n-allow
+    re.IGNORECASE,
+)
+
+#: "just look", "only tell me what you see", "nur schauen" — the user limits
+#: the turn to looking.
+_LOOK_ONLY_RE: re.Pattern[str] = re.compile(
+    r"\b(?:just|only|merely|simply)\s+(?:(?:have|take)\s+a\s+)?"
+    r"(?:look|watch|see|observe|read|describe|tell|check|glance|peek)\w*"
+    r"|\b(?:look|watch|observe)\s+only\b|\bhands\s+off\b"
+    # i18n-allow: German speech-input matching data
+    r"|\bnur\s+(?:mal\s+)?(?:an)?(?:schau|guck|seh|sieh|beobacht|les|lies"
+    r"|beschreib|sag)\w*"
+    r"|\b(?:schau|guck|sieh)\w*\s+(?:dir\s+)?(?:[^\s,.;:!?]+\s+)?nur\b",  # i18n-allow
+    re.IGNORECASE,
+)
+
+#: An action verb that is the OBJECT of a question ("tell me what to click",
+#: "where should I click") names a target, it orders nothing.
+_ASKED_ABOUT_ACTION_RE: re.Pattern[str] = re.compile(
+    r"\b(?:what|where|which|how|when)\s+(?:\w+\s+)?"
+    r"(?:to|i\s+(?:should|need\s+to|have\s+to|must|can))\s+"
+    rf"{_NEG_EN_VERB}\b",
+    re.IGNORECASE,
+)
+
+
+def has_negated_desktop_action(text: str) -> bool:
+    """True when the turn FORBIDS a desktop action ("don't open Spotify").
+
+    Pure regex, English + German. A turn that forbids one action may still
+    order another ("don't open Spotify, open Chrome"); callers that must never
+    act on a prohibition (the local fast path) decline on any hit, callers that
+    only need "may act at all" use :func:`is_observation_only`.
+    """
+    return bool(_NEGATED_ACTION_RE.search(_normalized(text)))
+
+
+def is_observation_only(text: str) -> bool:
+    """True when the turn asks Jarvis to look (or do nothing), never to act.
+
+    That is: the turn forbids acting ("don't click anything", "don't touch
+    anything", "nichts anklicken") or restricts itself to looking ("just look
+    at the screen", "nur schauen"), AND no action verb survives outside the
+    prohibited/asked-about spans. "Don't open Spotify, open Chrome" and "just
+    look and then click OK" therefore still order something and return False.
+
+    Pure regex, no IO, safe on the voice hot path. Looking stays allowed — a
+    caller may still answer the turn with a Screen Context capture.
+    """
+    normalized = _normalized(text).strip()
+    if not normalized:
+        return False
+    negated = _NEGATED_ACTION_RE.search(normalized) is not None
+    if not negated and not _LOOK_ONLY_RE.search(normalized):
+        return False
+    rest = _NEGATED_ACTION_RE.sub(" ", normalized)
+    rest = _ASKED_ABOUT_ACTION_RE.sub(" ", rest)
+    rest = _LOOK_ONLY_RE.sub(" ", rest)
+    return not (_DESKTOP_ACTION_RE.search(rest) or _EXPLICIT_HARNESS_RE.search(rest))
 
 
 def _is_look_request(user_text: str) -> bool:
@@ -253,6 +380,14 @@ def llm_computer_use_allowed(user_text: str) -> bool:
     normalized = _normalized(user_text).strip()
     if not normalized:
         return True
+    # Checked before the action verbs: "don't click anything, just look" names
+    # the verb only to forbid it.
+    if is_observation_only(user_text):
+        log.info(
+            "cu_gate: blocked computer_use — this turn forbids acting on the "
+            "screen (observation only)"
+        )
+        return False
     if _DESKTOP_ACTION_RE.search(normalized) or _EXPLICIT_HARNESS_RE.search(
         normalized
     ):
@@ -314,6 +449,8 @@ def is_explicit_computer_use_turn(user_text: str) -> bool:
     normalized = _normalized(user_text).strip()
     if not normalized:
         return False
+    if is_observation_only(user_text):
+        return False
     if _EXPLICIT_HARNESS_RE.search(normalized):
         return True
     if _is_look_request(user_text):
@@ -328,6 +465,8 @@ __all__ = [
     "CU_BLOCKED_MODEL_FEEDBACK",
     "CU_VEHICLE_TOOL_NAMES",
     "FOLLOW_UP_WINDOW_S",
+    "has_negated_desktop_action",
     "is_explicit_computer_use_turn",
+    "is_observation_only",
     "llm_computer_use_allowed",
 ]

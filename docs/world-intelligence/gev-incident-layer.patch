@@ -1,0 +1,1102 @@
+From 71fab797f239e938847708c2dccb60bfc3c56428 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 09:17:08 +0000
+Subject: [PATCH 1/2] Draw incidents a framing page sends, with two-way
+ selection
+
+A page that frames GEV (JARVIS) can send a bounded list of incidents
+(id, position, kind, severity, evidence, title) over postMessage. GEV
+draws one point per id, reports clicks back, flies to a selection on
+request and returns home. Messages are accepted only from the framing
+origin, validated and capped; nothing is followed as an instruction.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WPPSXQnG7RfZ1xugyYTx5K
+---
+ scripts/format-scope.json                     |   5 +-
+ scripts/package-boundaries.json               |   4 +-
+ src/app/embed.js                              | 125 +++++++++-
+ src/app/embed.test.mjs                        | 137 ++++++++++-
+ .../externalEvents/externalEvents.test.mjs    | 228 ++++++++++++++++++
+ src/layers/externalEvents/index.js            | 204 ++++++++++++++++
+ src/layers/externalEvents/records.js          | 140 +++++++++++
+ 7 files changed, 837 insertions(+), 6 deletions(-)
+ create mode 100644 src/layers/externalEvents/externalEvents.test.mjs
+ create mode 100644 src/layers/externalEvents/index.js
+ create mode 100644 src/layers/externalEvents/records.js
+
+diff --git a/scripts/format-scope.json b/scripts/format-scope.json
+index 52f76357..f8c152e9 100644
+--- a/scripts/format-scope.json
++++ b/scripts/format-scope.json
+@@ -895,5 +895,8 @@
+   "src/tools/views.test.mjs",
+   "src/app/embed.test.mjs",
+   "src/tools/globePanel.test.mjs",
+-  "src/costEndpointThrottle.test.mjs"
++  "src/costEndpointThrottle.test.mjs",
++  "src/layers/externalEvents/records.js",
++  "src/layers/externalEvents/index.js",
++  "src/layers/externalEvents/externalEvents.test.mjs"
+ ]
+diff --git a/scripts/package-boundaries.json b/scripts/package-boundaries.json
+index ab28b67e..0caae7d6 100644
+--- a/scripts/package-boundaries.json
++++ b/scripts/package-boundaries.json
+@@ -2056,7 +2056,9 @@
+       "src/tools/functions.js",
+       "src/voice/actionSchemas.js",
+       "src/view/index.js",
+-      "src/app/embed.js"
++      "src/app/embed.js",
++      "src/layers/externalEvents/index.js",
++      "src/layers/externalEvents/records.js"
+     ],
+     "external": [
+       "hls.js",
+diff --git a/src/app/embed.js b/src/app/embed.js
+index a1485fe7..12821550 100644
+--- a/src/app/embed.js
++++ b/src/app/embed.js
+@@ -9,15 +9,52 @@
+  *
+  * Annotations in a share link are drawn once the link has been restored,
+  * embedded or not.
++ *
++ * Incidents (capability `events@1`): the framing page sends
++ * `gev:events-upsert { v, id, replace, events }`, `gev:events-remove { v,
++ * ids }`, `gev:events-clear`, `gev:events-select { v, eventId, fly }` and
++ * `gev:events-home`; the app answers `gev:events-applied { id, ok, applied,
++ * removed, rejected }` and reports clicks as `gev:event-selected { v,
++ * eventId, via }` and `gev:event-selection-cleared { v, reason }`. These are
++ * accepted only from the framing page's own origin.
+  */
+ 
+ import * as Cesium from 'cesium';
+ import { announceNavigationAuthority } from '../navigationPolicy.js';
+ import { annotationsFromParams, createView } from '../view/index.js';
++import {
++  EXTERNAL_EVENTS_CAPABILITY,
++  EXTERNAL_EVENTS_VERSION,
++  createExternalEventsLayer,
++} from '../layers/externalEvents/index.js';
+ 
+ export const EMBED_VIEW_MESSAGE = 'gev:view';
+ export const EMBED_APPLIED_MESSAGE = 'gev:view-applied';
+ export const EMBED_READY_MESSAGE = 'gev:ready';
++export const EMBED_CAPABILITIES = ['view', EXTERNAL_EVENTS_CAPABILITY];
++const EVENTS_PREFIX = 'gev:events-';
++
++const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
++
++/**
++ * The origin allowed to send incidents: the framing page's own origin when
++ * the browser tells us (`location.ancestorOrigins`), otherwise only a page
++ * served from this computer.
++ */
++export function trustedParentOrigin(origin, location = globalThis.location) {
++  if (typeof origin !== 'string' || !origin || origin === 'null') return false;
++  const ancestors = location?.ancestorOrigins;
++  if (ancestors && ancestors.length) return origin === ancestors[0];
++  try {
++    const url = new URL(origin);
++    return (
++      (url.protocol === 'http:' || url.protocol === 'https:') &&
++      LOOPBACK_HOSTS.has(url.hostname)
++    );
++  } catch {
++    return false; // not an origin at all
++  }
++}
+ 
+ const FOLLOW_LAYERS = {
+   aircraft: 'flights',
+@@ -230,6 +267,7 @@ export function installViews({
+   signal,
+   location = globalThis.location,
+   windowRef = globalThis.window,
++  createIncidentClickHandler = null,
+ }) {
+   const ready = Promise.resolve(shell.initialRestorePromise).catch(() => {});
+   const linked = annotationsFromParams(
+@@ -257,9 +295,89 @@ export function installViews({
+   };
+   // Views apply one at a time, in the order they arrive.
+   let queue = ready;
++  // The incident layer is created on the first incident message, and only
++  // talks back to the origin that sent incidents.
++  let incidents = null;
++  let incidentOrigin = null;
++  const tellParent = (message) => {
++    if (incidentOrigin) post(message, incidentOrigin);
++  };
++  const incidentLayer = () => {
++    incidents ??= createExternalEventsLayer({
++      viewer,
++      onSelect: (eventId) =>
++        tellParent({
++          type: 'gev:event-selected',
++          v: EXTERNAL_EVENTS_VERSION,
++          eventId,
++          via: 'click',
++        }),
++      onClear: (reason) =>
++        tellParent({
++          type: 'gev:event-selection-cleared',
++          v: EXTERNAL_EVENTS_VERSION,
++          reason,
++        }),
++      beforeFlight: () => announceNavigationAuthority('embed-view'),
++      ...(createIncidentClickHandler
++        ? { createClickHandler: createIncidentClickHandler }
++        : {}),
++    });
++    return incidents;
++  };
++  const onIncidentMessage = (data) => {
++    if (data.v !== EXTERNAL_EVENTS_VERSION) {
++      post(
++        {
++          type: 'gev:events-applied',
++          id: data.id ?? null,
++          ok: false,
++          error: `Unsupported incident message version ${data.v}`,
++        },
++        incidentOrigin,
++      );
++      return;
++    }
++    const layer = incidentLayer();
++    if (data.type === 'gev:events-upsert') {
++      const result = layer.upsert(data.events, {
++        replace: data.replace === true,
++      });
++      post(
++        {
++          type: 'gev:events-applied',
++          id: data.id ?? null,
++          ok: true,
++          ...result,
++        },
++        incidentOrigin,
++      );
++    } else if (data.type === 'gev:events-remove') {
++      layer.remove(data.ids);
++    } else if (data.type === 'gev:events-clear') {
++      layer.clear();
++    } else if (data.type === 'gev:events-select') {
++      layer.select(typeof data.eventId === 'string' ? data.eventId : null, {
++        fly: data.fly === true,
++      });
++    } else if (data.type === 'gev:events-home') {
++      layer.select(null);
++      layer.home();
++    }
++  };
+   const onMessage = (event) => {
+-    if (event.source !== peer || event.data?.type !== EMBED_VIEW_MESSAGE)
++    if (event.source !== peer) return;
++    const type = event.data?.type;
++    if (typeof type === 'string' && type.startsWith(EVENTS_PREFIX)) {
++      if (!isEmbeddedInline() && !trustedParentOrigin(event.origin, location))
++        return;
++      incidentOrigin = isEmbeddedInline() ? '*' : event.origin;
++      void ready.then(() => {
++        if (!signal?.aborted) onIncidentMessage(event.data);
++      });
+       return;
++    }
++    if (type !== EMBED_VIEW_MESSAGE) return;
+     const { id = null } = event.data;
+     const replyOrigin =
+       isEmbeddedInline() || !event.origin || event.origin === 'null'
+@@ -296,10 +414,13 @@ export function installViews({
+   };
+   windowRef.addEventListener('message', onMessage);
+   void ready.then(() => {
+-    if (!signal?.aborted) post({ type: EMBED_READY_MESSAGE });
++    if (!signal?.aborted)
++      post({ type: EMBED_READY_MESSAGE, capabilities: EMBED_CAPABILITIES });
+   });
+   return () => {
+     stopRendering();
+     windowRef.removeEventListener('message', onMessage);
++    incidents?.destroy();
++    incidents = null;
+   };
+ }
+diff --git a/src/app/embed.test.mjs b/src/app/embed.test.mjs
+index 5ef80090..04e0bafa 100644
+--- a/src/app/embed.test.mjs
++++ b/src/app/embed.test.mjs
+@@ -5,6 +5,7 @@ import {
+   installViews,
+   isEmbedded,
+   keepPanelRendering,
++  trustedParentOrigin,
+ } from './embed.js';
+ import { createView } from '../view/index.js';
+ 
+@@ -131,7 +132,9 @@ test('an embedded page takes views only from its parent and answers it', async (
+   });
+   await new Promise((resolve) => setTimeout(resolve, 0));
+   assert.equal(shell.clean, true);
+-  assert.deepEqual(posted, [{ type: 'gev:ready' }]);
++  assert.deepEqual(posted, [
++    { type: 'gev:ready', capabilities: ['view', 'events@1'] },
++  ]);
+   const send = (source, data, origin = 'https://host.example') => {
+     const event = new Event('message');
+     Object.assign(event, { source, data, origin });
+@@ -195,7 +198,9 @@ test('an app loaded inline into a panel page talks through its own window', asyn
+       windowRef,
+     });
+     await new Promise((resolve) => setTimeout(resolve, 0));
+-    assert.deepEqual(posted, [{ type: 'gev:ready' }]);
++    assert.deepEqual(posted, [
++      { type: 'gev:ready', capabilities: ['view', 'events@1'] },
++    ]);
+     const event = new Event('message');
+     Object.assign(event, {
+       source: windowRef,
+@@ -323,3 +328,131 @@ test('a followed aircraft owns the camera, and cockpit view is entered after it'
+     /no cockpit view/,
+   );
+ });
++
++test('incident messages are taken only from the framing page origin', () => {
++  const ancestors = {
++    search: '?embed=1',
++    ancestorOrigins: ['http://127.0.0.1:8765'],
++  };
++  assert.equal(trustedParentOrigin('http://127.0.0.1:8765', ancestors), true);
++  assert.equal(trustedParentOrigin('http://127.0.0.1:9999', ancestors), false);
++  // Without ancestorOrigins, only a page on this computer.
++  assert.equal(
++    trustedParentOrigin('http://localhost:5173', { search: '' }),
++    true,
++  );
++  assert.equal(
++    trustedParentOrigin('https://evil.example', { search: '' }),
++    false,
++  );
++  assert.equal(trustedParentOrigin('null', { search: '' }), false);
++});
++
++test('an embedded page draws incidents, reports clicks and cleans up', async () => {
++  const posted = [];
++  const parent = {
++    postMessage: (message, target) => posted.push([message, target]),
++  };
++  const windowRef = new EventTarget();
++  windowRef.parent = parent;
++  windowRef.document = { body: { classList: new Set() } };
++  windowRef.document.body.classList.add = Set.prototype.add;
++  windowRef.dispatchEvent(new Event('noop'));
++  const added = [];
++  const removed = [];
++  let clickAction = null;
++  let picked;
++  const handler = {
++    destroyed: false,
++    setInputAction: (fn) => {
++      clickAction = fn;
++    },
++    destroy() {
++      this.destroyed = true;
++    },
++  };
++  const viewer = {
++    ...fakeViewer(),
++    dataSources: {
++      add: (ds) => added.push(ds),
++      remove: (ds) => removed.push(ds),
++    },
++    scene: { canvas: {}, pick: () => picked },
++  };
++  const { run } = recorder();
++  const origin = 'http://127.0.0.1:8765';
++  const remove = installViews({
++    shell: { initialRestorePromise: Promise.resolve(), setCleanView() {} },
++    viewer,
++    dataManager: fakeLayers(new Set()),
++    run,
++    location: { search: '?embed=1', hash: '', ancestorOrigins: [origin] },
++    windowRef,
++    createIncidentClickHandler: () => handler,
++  });
++  const send = (data, from = origin) => {
++    const event = new Event('message');
++    Object.assign(event, { source: parent, data, origin: from });
++    windowRef.dispatchEvent(event);
++  };
++  const quake = {
++    id: 'usgs:us6000u3bc',
++    lat: -14.03,
++    lon: 165.71,
++    kind: 'earthquake',
++    category: 'hazard',
++    severity: 2,
++    evidence: 'measured',
++    title: 'M 5.9 earthquake',
++    time: 1,
++    source: 'usgs',
++  };
++  send(
++    {
++      type: 'gev:events-upsert',
++      v: 1,
++      id: 'x',
++      replace: true,
++      events: [quake],
++    },
++    'https://evil.example',
++  );
++  send({ type: 'gev:events-upsert', v: 9, id: 'old' });
++  send({
++    type: 'gev:events-upsert',
++    v: 1,
++    id: 'm1',
++    replace: true,
++    events: [quake, { id: 'bad' }],
++  });
++  await new Promise((resolve) => setTimeout(resolve, 10));
++  const answers = posted.filter(([m]) => m.type === 'gev:events-applied');
++  assert.deepEqual(
++    answers.map(([m]) => [m.id, m.ok]),
++    [
++      ['old', false],
++      ['m1', true],
++    ],
++  );
++  assert.equal(answers[1][0].rejected, 1);
++  assert.ok(answers.every(([, target]) => target === origin));
++  assert.equal(added.length, 1, 'one incident layer, created on demand');
++  assert.equal(added[0].entities.values.length, 1);
++
++  picked = { id: added[0].entities.getById('external-event:usgs:us6000u3bc') };
++  clickAction({ position: { x: 0, y: 0 } });
++  const selected = posted.find(([m]) => m.type === 'gev:event-selected');
++  assert.deepEqual(selected, [
++    {
++      type: 'gev:event-selected',
++      v: 1,
++      eventId: 'usgs:us6000u3bc',
++      via: 'click',
++    },
++    origin,
++  ]);
++
++  remove();
++  assert.equal(handler.destroyed, true);
++  assert.equal(removed.length, 1);
++});
+diff --git a/src/layers/externalEvents/externalEvents.test.mjs b/src/layers/externalEvents/externalEvents.test.mjs
+new file mode 100644
+index 00000000..10c5f07c
+--- /dev/null
++++ b/src/layers/externalEvents/externalEvents.test.mjs
+@@ -0,0 +1,228 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import {
++  MAX_EXTERNAL_EVENTS,
++  cleanTitle,
++  createExternalEventsLayer,
++  diffIncidents,
++  normalizeIncident,
++  readIncidents,
++} from './index.js';
++
++const incident = (id, extra = {}) => ({
++  id,
++  lat: 28.6,
++  lon: 77.2,
++  kind: 'protest',
++  category: 'unrest',
++  severity: null,
++  evidence: 'media',
++  title: 'Protest reported in New Delhi',
++  time: 1792400000000,
++  source: 'gdelt',
++  ...extra,
++});
++
++/** A viewer with just what the layer touches, and a click handler to drive. */
++function fakeViewer() {
++  const added = [];
++  const removed = [];
++  const flights = [];
++  let homes = 0;
++  let clickAction = null;
++  let picked;
++  const viewer = {
++    dataSources: {
++      add: (ds) => {
++        added.push(ds);
++        return Promise.resolve(ds);
++      },
++      remove: (ds, destroy) => {
++        removed.push([ds, destroy]);
++        return true;
++      },
++    },
++    scene: {
++      canvas: {},
++      pick: () => picked,
++      requestRender: () => {},
++    },
++    camera: {
++      flyTo: (options) => flights.push(options),
++      flyHome: () => {
++        homes += 1;
++      },
++    },
++  };
++  const handler = {
++    destroyed: false,
++    setInputAction: (fn) => {
++      clickAction = fn;
++    },
++    destroy() {
++      this.destroyed = true;
++    },
++  };
++  return {
++    viewer,
++    handler,
++    added,
++    removed,
++    flights,
++    homes: () => homes,
++    click: (pick) => {
++      picked = pick;
++      clickAction({ position: { x: 1, y: 1 } });
++    },
++    createClickHandler: () => handler,
++  };
++}
++
++test('incidents are validated: id, position, bounded plain title', () => {
++  assert.equal(normalizeIncident(incident('a', { lat: 91 })), null);
++  assert.equal(normalizeIncident(incident('a', { lat: 0, lon: 0 })), null);
++  assert.equal(normalizeIncident(incident('a', { lat: '28.6' })), null);
++  assert.equal(normalizeIncident(incident('a', { lat: Number.NaN })), null);
++  assert.equal(normalizeIncident(incident('<script>')), null);
++  assert.equal(normalizeIncident(incident('x'.repeat(201))), null);
++  const kept = normalizeIncident(
++    incident('gdelt:protest--2106102-20261019', {
++      title: 'A‮\u0007  b\n<img src=x onerror=alert(1)>',
++      severity: 9,
++      evidence: 'confirmed',
++      kind: 'Robbery!',
++    }),
++  );
++  assert.equal(kept.title, 'A b <img src=x onerror=alert(1)>');
++  assert.equal(kept.severity, null);
++  // An unknown evidence class is never upgraded: it becomes the weakest.
++  assert.equal(kept.evidence, 'media');
++  assert.equal(kept.kind, 'other');
++  assert.equal(cleanTitle('x'.repeat(400)).length, 160);
++});
++
++test('a message keeps the first of each id and counts the rest', () => {
++  const { incidents, rejected } = readIncidents([
++    incident('a'),
++    incident('a'),
++    { id: 'b' },
++    'junk',
++    incident('c'),
++  ]);
++  assert.deepEqual(
++    incidents.map((i) => i.id),
++    ['a', 'c'],
++  );
++  assert.equal(rejected, 3);
++  assert.deepEqual(readIncidents('nope'), {
++    incidents: [],
++    rejected: 0,
++    truncated: false,
++  });
++});
++
++test('diff adds, changes, removes on replace, and never grows past the cap', () => {
++  const current = new Map([
++    ['a', normalizeIncident(incident('a'))],
++    ['b', normalizeIncident(incident('b'))],
++  ]);
++  const next = [
++    normalizeIncident(incident('a', { title: 'changed' })),
++    normalizeIncident(incident('c')),
++  ];
++  assert.deepEqual(
++    Object.fromEntries(
++      Object.entries(diffIncidents(current, next, true)).map(([k, v]) => [
++        k,
++        v.map((i) => i.id ?? i),
++      ]),
++    ),
++    { add: ['c'], change: ['a'], remove: ['b'] },
++  );
++  assert.deepEqual(diffIncidents(current, next, false).remove, []);
++  const full = new Map(
++    Array.from({ length: MAX_EXTERNAL_EVENTS }, (_, i) => [
++      `f${i}`,
++      normalizeIncident(incident(`f${i}`)),
++    ]),
++  );
++  assert.equal(
++    diffIncidents(full, [normalizeIncident(incident('new'))], false).add.length,
++    0,
++  );
++});
++
++test('the layer draws one entity per id and leaves no orphans', () => {
++  const fake = fakeViewer();
++  const layer = createExternalEventsLayer({
++    viewer: fake.viewer,
++    createClickHandler: fake.createClickHandler,
++  });
++  const ds = fake.added[0];
++  layer.upsert([incident('a'), incident('b'), incident('bad', { lat: 200 })], {
++    replace: true,
++  });
++  assert.equal(ds.entities.values.length, 2);
++  const result = layer.upsert([incident('b'), incident('c')], {
++    replace: true,
++  });
++  assert.deepEqual(result, {
++    applied: 1,
++    removed: 1,
++    rejected: 0,
++    truncated: false,
++  });
++  assert.deepEqual(ds.entities.values.map((e) => e.id).sort(), [
++    'external-event:b',
++    'external-event:c',
++  ]);
++  layer.remove(['c', 42]);
++  assert.equal(layer.size, 1);
++  layer.clear();
++  assert.equal(ds.entities.values.length, 0);
++  layer.destroy();
++  assert.equal(fake.handler.destroyed, true);
++  assert.equal(fake.removed.length, 1);
++  // A destroyed layer ignores late messages.
++  layer.upsert([incident('z')]);
++  assert.equal(layer.size, 0);
++});
++
++test('clicks select our incidents only; selection flies only when asked', () => {
++  const fake = fakeViewer();
++  const selected = [];
++  const cleared = [];
++  const layer = createExternalEventsLayer({
++    viewer: fake.viewer,
++    createClickHandler: fake.createClickHandler,
++    onSelect: (id) => selected.push(id),
++    onClear: (reason) => cleared.push(reason),
++  });
++  layer.upsert([incident('a'), incident('b', { lat: -14, lon: 165 })]);
++  const entity = fake.added[0].entities.getById('external-event:b');
++  fake.click({ id: entity });
++  assert.deepEqual(selected, ['b']);
++  assert.equal(layer.selected, 'b');
++  const ring = () => entity.point.outlineWidth.getValue();
++  assert.equal(ring(), 3, 'the selected incident is ringed');
++  assert.equal(entity.label, undefined, 'world text stays in the overlay host');
++  assert.equal(fake.flights.length, 0);
++  // Another layer's object leaves the selection alone; empty globe clears it.
++  fake.click({ id: 'flight:abc' });
++  assert.equal(layer.selected, 'b');
++  fake.click(undefined);
++  assert.equal(layer.selected, null);
++  assert.deepEqual(cleared, ['empty-click']);
++  assert.equal(ring(), 1);
++  // Selecting from the page flies there; an unknown id selects nothing.
++  layer.select('a', { fly: true });
++  assert.equal(fake.flights.length, 1);
++  assert.equal(layer.select('nope'), false);
++  // Removing the selected incident clears the selection.
++  layer.select('a');
++  layer.upsert([], { replace: true });
++  assert.deepEqual(cleared, ['empty-click', 'removed']);
++  layer.home();
++  assert.equal(fake.homes(), 1);
++  layer.destroy();
++});
+diff --git a/src/layers/externalEvents/index.js b/src/layers/externalEvents/index.js
+new file mode 100644
+index 00000000..c0995f42
+--- /dev/null
++++ b/src/layers/externalEvents/index.js
+@@ -0,0 +1,204 @@
++import * as Cesium from 'cesium';
++import {
++  registerPickOwner,
++  resolvePickId,
++  unregisterPickOwner,
++} from '../../data/pickRegistry.js';
++import { diffIncidents, incidentStyle, readIncidents } from './records.js';
++export * from './records.js';
++
++export const EXTERNAL_EVENTS_LAYER_ID = 'external-events';
++const ENTITY_PREFIX = 'external-event:';
++const FOCUS_ALTITUDE_M = 2_500_000;
++const FLIGHT_SECONDS = 1.5;
++
++/**
++ * Incidents a framing page sends, drawn as points the person can click.
++ *
++ * The page owns the list (ids, positions, titles); this layer only draws it,
++ * keeps one entity per id (a replace removes what the page dropped, so no
++ * marker outlives its incident), rings the selected one (its title is shown by
++ * the framing page, since GEV keeps world text in its overlay host),
++ * and reports clicks through `onSelect` / `onClear`. It sits outside the
++ * layer catalog, so a view applied to the globe never turns it off.
++ */
++export function createExternalEventsLayer({
++  viewer,
++  onSelect = () => {},
++  onClear = () => {},
++  beforeFlight = () => {},
++  createClickHandler = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
++}) {
++  const dataSource = new Cesium.CustomDataSource('jarvis-incidents');
++  void viewer.dataSources.add(dataSource);
++  const drawn = new Map();
++  let selected = null;
++  let destroyed = false;
++
++  const entityId = (id) => `${ENTITY_PREFIX}${id}`;
++  registerPickOwner(EXTERNAL_EVENTS_LAYER_ID, (pickedId) =>
++    pickedId.startsWith(ENTITY_PREFIX),
++  );
++
++  const paint = (entity, incident) => {
++    const style = incidentStyle(incident);
++    const isSelected = incident.id === selected;
++    entity.position = Cesium.Cartesian3.fromDegrees(
++      incident.lon,
++      incident.lat,
++      300,
++    );
++    entity.point = new Cesium.PointGraphics({
++      pixelSize: isSelected ? style.pixelSize + 6 : style.pixelSize,
++      color: Cesium.Color.fromCssColorString(style.color).withAlpha(0.92),
++      outlineColor: isSelected
++        ? Cesium.Color.WHITE
++        : Cesium.Color.BLACK.withAlpha(0.6),
++      outlineWidth: isSelected ? 3 : 1,
++      heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
++    });
++  };
++
++  const repaint = (id) => {
++    const incident = drawn.get(id);
++    const entity = incident && dataSource.entities.getById(entityId(id));
++    if (incident && entity) paint(entity, incident);
++  };
++
++  const handler = createClickHandler(viewer.scene.canvas);
++  handler.setInputAction((click) => {
++    if (destroyed) return;
++    const picked = viewer.scene.pick(click.position);
++    const pickedId = resolvePickId(picked);
++    if (pickedId?.startsWith(ENTITY_PREFIX)) {
++      const id = pickedId.slice(ENTITY_PREFIX.length);
++      if (drawn.has(id)) {
++        layer.select(id, { fly: false });
++        onSelect(id);
++      }
++      return;
++    }
++    // A click on empty globe clears the selection; a click on another
++    // layer's object leaves it alone.
++    if (!picked && selected) {
++      layer.select(null);
++      onClear('empty-click');
++    }
++  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
++
++  const layer = {
++    id: EXTERNAL_EVENTS_LAYER_ID,
++
++    /** Add or update incidents; with `replace`, drop every one not listed. */
++    upsert(list, { replace = false } = {}) {
++      if (destroyed)
++        return { applied: 0, removed: 0, rejected: 0, truncated: false };
++      const { incidents, rejected, truncated } = readIncidents(list);
++      const { add, change, remove } = diffIncidents(drawn, incidents, replace);
++      dataSource.entities.suspendEvents();
++      try {
++        for (const id of remove) {
++          dataSource.entities.removeById(entityId(id));
++          drawn.delete(id);
++        }
++        for (const incident of [...add, ...change]) {
++          drawn.set(incident.id, incident);
++          const entity =
++            dataSource.entities.getById(entityId(incident.id)) ??
++            dataSource.entities.add(
++              new Cesium.Entity({ id: entityId(incident.id) }),
++            );
++          paint(entity, incident);
++        }
++      } finally {
++        dataSource.entities.resumeEvents();
++      }
++      if (selected && !drawn.has(selected)) {
++        selected = null;
++        onClear('removed');
++      }
++      viewer.scene.requestRender?.();
++      return {
++        applied: add.length + change.length,
++        removed: remove.length,
++        rejected,
++        truncated,
++      };
++    },
++
++    remove(ids) {
++      if (destroyed || !Array.isArray(ids)) return 0;
++      let removed = 0;
++      for (const id of ids.slice(0, 2000)) {
++        if (typeof id === 'string' && drawn.delete(id)) {
++          dataSource.entities.removeById(entityId(id));
++          removed += 1;
++          if (selected === id) {
++            selected = null;
++            onClear('removed');
++          }
++        }
++      }
++      viewer.scene.requestRender?.();
++      return removed;
++    },
++
++    clear() {
++      if (destroyed) return;
++      dataSource.entities.removeAll();
++      drawn.clear();
++      if (selected) {
++        selected = null;
++        onClear('removed');
++      }
++      viewer.scene.requestRender?.();
++    },
++
++    /** Highlight an incident (or none); with `fly`, move the camera to it. */
++    select(id, { fly = false } = {}) {
++      if (destroyed) return false;
++      const previous = selected;
++      selected = id && drawn.has(id) ? id : null;
++      if (previous && previous !== selected) repaint(previous);
++      if (selected) repaint(selected);
++      viewer.scene.requestRender?.();
++      if (selected && fly) {
++        const incident = drawn.get(selected);
++        beforeFlight();
++        viewer.camera.flyTo({
++          destination: Cesium.Cartesian3.fromDegrees(
++            incident.lon,
++            incident.lat,
++            FOCUS_ALTITUDE_M,
++          ),
++          duration: FLIGHT_SECONDS,
++        });
++      }
++      return selected !== null || id === null;
++    },
++
++    home() {
++      if (destroyed) return;
++      beforeFlight();
++      viewer.camera.flyHome(FLIGHT_SECONDS);
++    },
++
++    get size() {
++      return drawn.size;
++    },
++
++    get selected() {
++      return selected;
++    },
++
++    destroy() {
++      if (destroyed) return;
++      destroyed = true;
++      handler.destroy();
++      unregisterPickOwner(EXTERNAL_EVENTS_LAYER_ID);
++      drawn.clear();
++      viewer.dataSources.remove(dataSource, true);
++    },
++  };
++  return layer;
++}
+diff --git a/src/layers/externalEvents/records.js b/src/layers/externalEvents/records.js
+new file mode 100644
+index 00000000..38cac03d
+--- /dev/null
++++ b/src/layers/externalEvents/records.js
+@@ -0,0 +1,140 @@
++/**
++ * Incidents a framing page (JARVIS) sends to the globe: validation and the
++ * difference between what is drawn and what was sent.
++ *
++ * Everything here is untrusted input from another window. An incident is
++ * kept only with a well-formed id and a real position; its title is plain,
++ * bounded text that is only ever drawn as a label, never parsed as markup.
++ * Nothing in a message is followed as an instruction.
++ */
++
++export const EXTERNAL_EVENTS_VERSION = 1;
++export const EXTERNAL_EVENTS_CAPABILITY = 'events@1';
++/** The most incidents drawn at once, and in one message. */
++export const MAX_EXTERNAL_EVENTS = 2000;
++export const TITLE_MAX = 160;
++const ID_PATTERN = /^[A-Za-z0-9:._-]{1,200}$/;
++const TOKEN_PATTERN = /^[a-z_]{1,24}$/;
++const EVIDENCE = new Set(['measured', 'agency', 'media']);
++// Control and bidirectional-override characters that could disguise a title.
++const CONTROL = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g;
++
++function finite(value) {
++  return typeof value === 'number' && Number.isFinite(value) ? value : null;
++}
++
++function token(value, fallback) {
++  return typeof value === 'string' && TOKEN_PATTERN.test(value)
++    ? value
++    : fallback;
++}
++
++/** Plain single-line text, at most TITLE_MAX characters. */
++export function cleanTitle(value) {
++  if (typeof value !== 'string') return '';
++  const text = value.replace(/\s+/g, ' ').replace(CONTROL, '').trim();
++  return text.length <= TITLE_MAX ? text : `${text.slice(0, TITLE_MAX - 1)}…`;
++}
++
++export function isIncidentId(value) {
++  return typeof value === 'string' && ID_PATTERN.test(value);
++}
++
++/** One incident as the layer draws it, or null when it cannot be drawn. */
++export function normalizeIncident(raw) {
++  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
++  if (!isIncidentId(raw.id)) return null;
++  const lat = finite(raw.lat);
++  const lon = finite(raw.lon);
++  if (lat === null || lon === null) return null;
++  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
++  if (lat === 0 && lon === 0) return null;
++  const severity = finite(raw.severity);
++  return {
++    id: raw.id,
++    lat,
++    lon,
++    kind: token(raw.kind, 'other'),
++    category: token(raw.category, 'hazard'),
++    severity:
++      severity !== null &&
++      Number.isInteger(severity) &&
++      severity >= 0 &&
++      severity <= 4
++        ? severity
++        : null,
++    evidence: EVIDENCE.has(raw.evidence) ? raw.evidence : 'media',
++    title: cleanTitle(raw.title),
++    time: finite(raw.time),
++    source: token(raw.source, 'unknown'),
++  };
++}
++
++/** The valid incidents of a message (first of each id), and how many were refused. */
++export function readIncidents(list) {
++  if (!Array.isArray(list))
++    return { incidents: [], rejected: 0, truncated: false };
++  const seen = new Set();
++  const incidents = [];
++  let rejected = 0;
++  for (const raw of list.slice(0, MAX_EXTERNAL_EVENTS)) {
++    const incident = normalizeIncident(raw);
++    if (!incident || seen.has(incident.id)) {
++      rejected += 1;
++      continue;
++    }
++    seen.add(incident.id);
++    incidents.push(incident);
++  }
++  return { incidents, rejected, truncated: list.length > MAX_EXTERNAL_EVENTS };
++}
++
++function same(a, b) {
++  return (
++    a.lat === b.lat &&
++    a.lon === b.lon &&
++    a.kind === b.kind &&
++    a.category === b.category &&
++    a.severity === b.severity &&
++    a.evidence === b.evidence &&
++    a.title === b.title &&
++    a.time === b.time &&
++    a.source === b.source
++  );
++}
++
++/**
++ * What to add, change and remove to go from `current` (a Map by id) to
++ * `incoming`. With `replace`, anything not in `incoming` is removed.
++ */
++export function diffIncidents(current, incoming, replace) {
++  const add = [];
++  const change = [];
++  const keep = new Set();
++  for (const incident of incoming) {
++    keep.add(incident.id);
++    const held = current.get(incident.id);
++    if (!held) add.push(incident);
++    else if (!same(held, incident)) change.push(incident);
++  }
++  const remove = replace
++    ? [...current.keys()].filter((id) => !keep.has(id))
++    : [];
++  // Never grow past the cap: drop the excess additions.
++  const room = MAX_EXTERNAL_EVENTS - (current.size - remove.length);
++  return { add: add.slice(0, Math.max(0, room)), change, remove };
++}
++
++/** Marker colour (CSS) and size in pixels for an incident. */
++export function incidentStyle(incident) {
++  const severity = incident.severity ?? 0;
++  const color =
++    incident.evidence === 'media'
++      ? '#c794ff'
++      : severity >= 4
++        ? '#ff4738'
++        : severity >= 3
++          ? '#ff8a2a'
++          : '#ffc74d';
++  return { color, pixelSize: 7 + severity * 2 };
++}
+-- 
+2.43.0
+
+
+From f3148fd350de68b4a044a1be16cf201c90aad0d9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 19 Oct 2026 09:57:54 +0000
+Subject: [PATCH 2/2] Let the framing page bring the whole globe into view
+
+gev:events-home takes an optional centre, so opening the incident list
+shows the whole globe over the person's own region instead of whatever
+close-up view GEV last had. A missing or invalid centre keeps the
+viewer's own home view.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01WPPSXQnG7RfZ1xugyYTx5K
+---
+ src/app/embed.js                              |  9 +++---
+ .../externalEvents/externalEvents.test.mjs    |  7 +++++
+ src/layers/externalEvents/index.js            | 28 +++++++++++++++++--
+ 3 files changed, 38 insertions(+), 6 deletions(-)
+
+diff --git a/src/app/embed.js b/src/app/embed.js
+index 12821550..8f7dc6b5 100644
+--- a/src/app/embed.js
++++ b/src/app/embed.js
+@@ -13,9 +13,10 @@
+  * Incidents (capability `events@1`): the framing page sends
+  * `gev:events-upsert { v, id, replace, events }`, `gev:events-remove { v,
+  * ids }`, `gev:events-clear`, `gev:events-select { v, eventId, fly }` and
+- * `gev:events-home`; the app answers `gev:events-applied { id, ok, applied,
+- * removed, rejected }` and reports clicks as `gev:event-selected { v,
+- * eventId, via }` and `gev:event-selection-cleared { v, reason }`. These are
++ * `gev:events-home { v, center? }`; the app answers `gev:events-applied {
++ * id, ok, applied, removed, rejected }` and reports clicks as
++ * `gev:event-selected { v, eventId, via }` and
++ * `gev:event-selection-cleared { v, reason }`. These are
+  * accepted only from the framing page's own origin.
+  */
+ 
+@@ -362,7 +363,7 @@ export function installViews({
+       });
+     } else if (data.type === 'gev:events-home') {
+       layer.select(null);
+-      layer.home();
++      layer.home(data.center);
+     }
+   };
+   const onMessage = (event) => {
+diff --git a/src/layers/externalEvents/externalEvents.test.mjs b/src/layers/externalEvents/externalEvents.test.mjs
+index 10c5f07c..8a5b24ef 100644
+--- a/src/layers/externalEvents/externalEvents.test.mjs
++++ b/src/layers/externalEvents/externalEvents.test.mjs
+@@ -224,5 +224,12 @@ test('clicks select our incidents only; selection flies only when asked', () =>
+   assert.deepEqual(cleared, ['empty-click', 'removed']);
+   layer.home();
+   assert.equal(fake.homes(), 1);
++  // A centre turns home into a whole-globe view over that point; a bad one
++  // falls back to the viewer's own home.
++  layer.home({ lat: 18.5, lon: 73.9 });
++  assert.equal(fake.flights.length, 2);
++  layer.home({ lat: 91, lon: 0 });
++  layer.home({ lat: '18', lon: 73 });
++  assert.equal(fake.homes(), 3);
+   layer.destroy();
+ });
+diff --git a/src/layers/externalEvents/index.js b/src/layers/externalEvents/index.js
+index c0995f42..8522d8f0 100644
+--- a/src/layers/externalEvents/index.js
++++ b/src/layers/externalEvents/index.js
+@@ -10,8 +10,19 @@ export * from './records.js';
+ export const EXTERNAL_EVENTS_LAYER_ID = 'external-events';
+ const ENTITY_PREFIX = 'external-event:';
+ const FOCUS_ALTITUDE_M = 2_500_000;
++/** High enough to see a whole hemisphere. */
++const GLOBE_ALTITUDE_M = 20_000_000;
+ const FLIGHT_SECONDS = 1.5;
+ 
++/** A finite WGS84 point, or null. */
++function readCenter(center) {
++  if (!center || typeof center !== 'object') return null;
++  const { lat, lon } = center;
++  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
++  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
++  return { lat, lon };
++}
++
+ /**
+  * Incidents a framing page sends, drawn as points the person can click.
+  *
+@@ -177,10 +188,23 @@ export function createExternalEventsLayer({
+       return selected !== null || id === null;
+     },
+ 
+-    home() {
++    /** The whole globe, centred on `center` when it is a valid point. */
++    home(center = null) {
+       if (destroyed) return;
+       beforeFlight();
+-      viewer.camera.flyHome(FLIGHT_SECONDS);
++      const point = readCenter(center);
++      if (!point) {
++        viewer.camera.flyHome(FLIGHT_SECONDS);
++        return;
++      }
++      viewer.camera.flyTo({
++        destination: Cesium.Cartesian3.fromDegrees(
++          point.lon,
++          point.lat,
++          GLOBE_ALTITUDE_M,
++        ),
++        duration: FLIGHT_SECONDS,
++      });
+     },
+ 
+     get size() {
+-- 
+2.43.0
+

@@ -3,14 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useEventStore } from "@/store/events";
 import {
+  browserVoiceCallLive,
+  startBrowserVoiceCall,
+  stopBrowserVoiceCall,
+} from "@/lib/browserVoiceCall";
+import {
   setBrowserVoiceInputOwnership,
   setVoiceInputLevel,
   voiceInputLevelRef,
 } from "@/lib/voiceInputLevel";
 
 import { BrowserRealtimeControl, waveformPhase } from "./BrowserRealtimeControl";
+import { MicrophoneSelectionError } from "@/lib/browserMicrophone";
 
 const fakes = vi.hoisted(() => ({
+  prepareAudio: vi.fn(() => vi.fn()),
   native: false,
   mode: "realtime",
   available: true,
@@ -28,8 +35,10 @@ const fakes = vi.hoisted(() => ({
     onInputLevel?: (level: number) => void;
     onStatus?: (status: string, payload: Record<string, unknown>) => void;
   },
-  options: null as null | { requiresWebRtcOffer?: boolean },
+  options: null as null | { requiresWebRtcOffer?: boolean; browserAudio?: boolean },
 }));
+
+vi.mock("@/lib/realtimeAudioPreparation", () => ({ registerRealtimeAudioPreparation: fakes.prepareAudio }));
 
 vi.mock("@/hooks/useCapabilities", () => ({
   useCapabilities: () => ({ data: { native_file_actions: fakes.native, platform: "linux" } }),
@@ -67,7 +76,18 @@ vi.mock("@/lib/realtimeAudio", () => ({
 }));
 
 describe("BrowserRealtimeControl", () => {
+  it("shows a selected-microphone error in the hidden desktop media host", async () => {
+    fakes.browserAudio = true;
+    fakes.connect.mockRejectedValueOnce(new MicrophoneSelectionError("Reconnect the selected microphone in Audio settings."));
+    useEventStore.setState({ events: [{
+      id: "mic-selection-failure", name: "BrowserVoiceRequested", ts: Date.now(), payload: { action: "start" },
+    }] });
+    render(<BrowserRealtimeControl controlOnly />);
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", expect.stringContaining("Reconnect the selected microphone"));
+  });
+
   beforeEach(() => {
+    fakes.prepareAudio.mockClear();
     fakes.native = false;
     fakes.mode = "realtime";
     fakes.available = true;
@@ -91,6 +111,31 @@ describe("BrowserRealtimeControl", () => {
     });
   });
 
+  it("prepares only the enabled voice owner's local audio and disposes it when disabled", () => {
+    fakes.native = true;
+    fakes.browserAudio = true;
+    (window as unknown as { pywebview?: unknown }).pywebview = { api: {} };
+    const view = render(<BrowserRealtimeControl controlOnly />);
+    expect(fakes.prepareAudio).toHaveBeenCalledOnce();
+    const dispose = fakes.prepareAudio.mock.results[0].value;
+    fakes.mode = "pipeline";
+    view.rerender(<BrowserRealtimeControl controlOnly />);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(fakes.connect).not.toHaveBeenCalled();
+  });
+
+  it("does not prepare in a detached non-owner desktop view or unavailable mode", () => {
+    fakes.native = true;
+    fakes.browserAudio = true;
+    (window as unknown as { pywebview?: unknown }).pywebview = { api: {} };
+    useEventStore.setState({ solo: true, activeSection: "settings" });
+    const view = render(<BrowserRealtimeControl controlOnly />);
+    expect(fakes.prepareAudio).not.toHaveBeenCalled();
+    fakes.available = false;
+    view.rerender(<BrowserRealtimeControl />);
+    expect(fakes.prepareAudio).not.toHaveBeenCalled();
+  });
+
   it("offers a browser recovery link when the hidden media host cannot start", async () => {
     fakes.browserAudio = true;
     fakes.connect.mockRejectedValueOnce(new Error("Microphone unavailable"));
@@ -100,6 +145,159 @@ describe("BrowserRealtimeControl", () => {
     }] });
     render(<BrowserRealtimeControl controlOnly />);
     expect(await screen.findByRole("link", { name: "live.open_browser" })).toBeTruthy();
+  });
+
+  describe("correlated native startup failure", () => {
+    const firstRequest = "1a468a93-a7c3-43f6-a95e-7b1a6b49c28b";
+    const secondRequest = "4fd86de5-0c5b-4351-8871-fb43ab708ac7";
+    let fetchSpy: ReturnType<typeof vi.fn>;
+    const request = (id: string, action: string, requestId?: string) => act(() => useEventStore.getState().pushEvent({
+      id, name: "BrowserVoiceRequested", ts: Date.now(),
+      payload: { action, ...(requestId ? { request_id: requestId } : {}) },
+    }));
+    beforeEach(() => {
+      fakes.browserAudio = true;
+      fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchSpy);
+    });
+    afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+    it.each([200, 404])("reports only the current request once and preserves its error (HTTP %s)", async status => {
+      fetchSpy.mockResolvedValueOnce(new Response("{}", { status }));
+      fakes.connect.mockRejectedValueOnce(new Error("Local audio device did not become ready"));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("native-failure", "start", firstRequest);
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+      expect(fetchSpy.mock.calls[0]).toEqual(["/api/voice/startup-failed", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: firstRequest }),
+      }]);
+      expect(screen.getByRole("alert").textContent).toContain("sidebar.realtime_error");
+      act(() => fakes.callbacks?.onStatus?.("disconnected", { reason: "late close" }));
+      expect(fetchSpy).toHaveBeenCalledOnce();
+    });
+
+    it("preserves request correlation while a hidden browser waits for visibility", async () => {
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      fakes.connect.mockRejectedValueOnce(new Error("Device failed"));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("hidden-failure", "start", firstRequest);
+      expect(fakes.connect).not.toHaveBeenCalled();
+      visibility.mockReturnValue("visible");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+      expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ request_id: firstRequest });
+    });
+
+    it("ignores an old rejected attempt and its stop after a newer call starts", async () => {
+      let rejectOld!: (error: Error) => void;
+      fakes.connect.mockImplementationOnce(() => new Promise<undefined>((_resolve, reject) => { rejectOld = reject; }));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("old-start", "start", firstRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(1));
+      request("old-stop", "stop", firstRequest);
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledTimes(1));
+      request("new-start", "start", secondRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(2));
+      await act(async () => { rejectOld(new Error("Late old device failure")); });
+      request("late-old-stop", "stop", firstRequest);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fakes.disconnect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+      request("new-stop", "stop", secondRequest);
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledTimes(2));
+    });
+
+    it.each(["resolve", "reject"])("replaces a pending native request without an old stop and ignores its late %s", async settle => {
+      let resolveOld!: () => void, rejectOld!: (error: Error) => void, rejectNew!: (error: Error) => void;
+      fakes.connect.mockImplementationOnce(() => new Promise<undefined>((resolve, reject) => {
+        resolveOld = () => resolve(undefined);
+        rejectOld = reject;
+      }));
+      fakes.connect.mockImplementationOnce(() => new Promise<undefined>((_resolve, reject) => { rejectNew = reject; }));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("pending-old-start", "start", firstRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(1));
+      const oldCallbacks = fakes.callbacks;
+      request("replacement-start", "start", secondRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(2));
+      expect(fakes.disconnect).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        if (settle === "resolve") resolveOld(); else rejectOld(new Error("Old attempt failed"));
+      });
+      act(() => oldCallbacks?.onStatus?.("provider_error", { error: "Late old callback" }));
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fakes.disconnect).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+      await act(async () => { rejectNew(new Error("New attempt failed")); });
+      await waitFor(() => expect(fetchSpy).toHaveBeenCalledOnce());
+      expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ request_id: secondRequest });
+    });
+
+    it("retires a superseded connecting request while hidden and starts its replacement on visibility", async () => {
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+      let finishOld!: () => void;
+      fakes.connect.mockImplementationOnce(() => new Promise<undefined>(resolve => { finishOld = () => resolve(undefined); }));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("visible-old", "start", firstRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledOnce());
+      visibility.mockReturnValue("hidden");
+      request("hidden-replacement", "start", secondRequest);
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledOnce());
+      expect(fakes.connect).toHaveBeenCalledOnce();
+      visibility.mockReturnValue("visible");
+      act(() => document.dispatchEvent(new Event("visibilitychange")));
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(2));
+      await act(async () => { finishOld(); });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fakes.disconnect).toHaveBeenCalledOnce();
+      request("replacement-stop", "stop", secondRequest);
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledTimes(2));
+    });
+
+    it("keeps an established native call through reconnecting and preserves its original stop correlation", async () => {
+      render(<BrowserRealtimeControl controlOnly />);
+      request("established-start", "start", firstRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledOnce());
+      act(() => fakes.callbacks?.onStatus?.("audio_ready", {}));
+      act(() => fakes.callbacks?.onStatus?.("reconnecting", {}));
+      request("new-during-reconnect", "start", secondRequest);
+      await act(async () => undefined);
+      expect(fakes.disconnect).not.toHaveBeenCalled();
+      expect(fakes.connect).toHaveBeenCalledOnce();
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(useEventStore.getState().voiceState).toBe("connecting");
+      request("unrelated-stop", "stop", secondRequest);
+      expect(fakes.disconnect).not.toHaveBeenCalled();
+      request("original-stop", "stop", firstRequest);
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledOnce());
+    });
+
+    it("does not acknowledge an uncorrelated older backend request", async () => {
+      fakes.connect.mockRejectedValueOnce(new Error("Device failed"));
+      render(<BrowserRealtimeControl controlOnly />);
+      request("legacy-start", "start");
+      await screen.findByRole("alert");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("does not acknowledge a browser-held user call", async () => {
+      fakes.connect.mockRejectedValueOnce(new Error("Device failed"));
+      render(<BrowserRealtimeControl controlOnly />);
+      act(() => { expect(startBrowserVoiceCall()).toBe(true); });
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalled());
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(browserVoiceCallLive()).toBe(false);
+    });
+
+    it("does not acknowledge a provider failure after native startup succeeded", async () => {
+      render(<BrowserRealtimeControl controlOnly />);
+      request("connected-start", "start", firstRequest);
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledOnce());
+      act(() => fakes.callbacks?.onStatus?.("audio_ready", {}));
+      act(() => fakes.callbacks?.onStatus?.("provider_error", { error: "Provider disconnected" }));
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("parks a wake start while hidden and fires it when the tab returns", async () => {
@@ -474,5 +672,89 @@ describe("BrowserRealtimeControl", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("sidebar.realtime_https_required")).toBeTruthy();
     expect(fakes.connect).not.toHaveBeenCalled();
+  });
+
+  // Issue #399: on a host with no speech pipeline the browser that presses
+  // Start holds the call itself, in pipeline mode through the classic chain.
+  describe("call held by this browser", () => {
+    beforeEach(() => {
+      fakes.mode = "pipeline";
+      fakes.available = false;
+      useEventStore.setState({ toasts: [] });
+    });
+
+    it("starts in pipeline mode with plain PCM and keeps the call through the mode gate", async () => {
+      // A realtime transport pinned in the settings must not leak into a
+      // classic call: it has no WebRTC peer and no browser-audio contract.
+      fakes.requiresWebRtcOffer = true;
+      fakes.browserAudio = true;
+      render(<BrowserRealtimeControl controlOnly />);
+
+      act(() => {
+        expect(startBrowserVoiceCall()).toBe(true);
+      });
+
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(1));
+      expect(fakes.options).toMatchObject({ requiresWebRtcOffer: false, browserAudio: false });
+      expect(useEventStore.getState().voiceState).toBe("connecting");
+      expect(browserVoiceCallLive()).toBe(true);
+
+      act(() => fakes.callbacks?.onStatus?.("audio_ready", {}));
+      expect(useEventStore.getState().voiceState).toBe("listening");
+      // Pipeline mode hides the realtime surface; it must not hang this up.
+      expect(fakes.disconnect).not.toHaveBeenCalled();
+
+      act(() => {
+        expect(stopBrowserVoiceCall()).toBe(true);
+      });
+      await waitFor(() => expect(fakes.disconnect).toHaveBeenCalledTimes(1));
+      expect(useEventStore.getState().voiceState).toBe("idle");
+      expect(browserVoiceCallLive()).toBe(false);
+    });
+
+    it("reports a failed start as a toast and frees the controls", async () => {
+      fakes.connect.mockRejectedValueOnce(new Error("socket closed"));
+      render(<BrowserRealtimeControl controlOnly />);
+
+      act(() => {
+        startBrowserVoiceCall();
+      });
+
+      await waitFor(() => expect(useEventStore.getState().voiceState).toBe("idle"));
+      // A classic call has no realtime provider to blame; the line points at
+      // the chain it actually runs on.
+      expect(
+        useEventStore.getState().toasts.map(({ kind, message }) => ({ kind, message })),
+      ).toEqual([{ kind: "error", message: "sidebar.browser_voice_error" }]);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(browserVoiceCallLive()).toBe(false);
+    });
+
+    it("shows the server's sentence when the server closes the call", async () => {
+      render(<BrowserRealtimeControl controlOnly />);
+      act(() => {
+        startBrowserVoiceCall();
+      });
+      await waitFor(() => expect(fakes.connect).toHaveBeenCalledTimes(1));
+
+      act(() =>
+        fakes.callbacks?.onStatus?.("disconnected", {
+          code: 1011,
+          reason: "Voice could not start: a provider is missing. Check API Keys.",
+        }),
+      );
+
+      await waitFor(() => expect(useEventStore.getState().voiceState).toBe("idle"));
+      expect(useEventStore.getState().toasts.map((toast) => toast.message)).toEqual([
+        "Voice could not start: a provider is missing. Check API Keys.",
+      ]);
+      expect(fakes.disconnect).toHaveBeenCalled();
+    });
+
+    it("is owned only by the app-root control", () => {
+      render(<BrowserRealtimeControl />);
+      expect(startBrowserVoiceCall()).toBe(false);
+      expect(stopBrowserVoiceCall()).toBe(false);
+    });
   });
 });

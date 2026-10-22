@@ -134,7 +134,9 @@ class GmailRestTool:
         "inbox. Use for 'check my mail', 'any new emails from X', 'read the last "
         "mail', 'send an email to X', 'archive that', 'mark it read', 'move it to "
         "trash', 'delete it permanently'. Actions: list_messages (search the "
-        "inbox), get_message (read one by id), send_message (compose + send), "
+        "inbox), get_message (read one by id), create_draft (compose into "
+        "Drafts without sending; the default for 'write/draft an email'), "
+        "send_message (compose + send, only when the user says send), "
         "modify_message (add/remove labels by id — archive = remove 'INBOX', "
         "mark read = remove 'UNREAD', star = add 'STARRED'), trash_message (move "
         "to Trash, reversible), delete_message (permanent, irreversible). "
@@ -148,6 +150,7 @@ class GmailRestTool:
                 "enum": [
                     "list_messages",
                     "get_message",
+                    "create_draft",
                     "send_message",
                     "modify_message",
                     "trash_message",
@@ -161,7 +164,7 @@ class GmailRestTool:
                 "type": "string",
                 "description": "message id (get/modify/trash/delete_message)",
             },
-            "to": {"type": "string", "description": "recipient (send_message)"},
+            "to": {"type": "string", "description": "recipient (create_draft, send_message)"},
             "subject": {"type": "string"},
             "body": {"type": "string"},
             "add_labels": {
@@ -286,6 +289,16 @@ class GmailRestTool:
             lambda headers: self._post("/messages/send", {"raw": raw}, headers)
         )
 
+    async def create_draft(
+        self, *, to: str = "", subject: str = "", body: str = ""
+    ) -> dict[str, Any]:
+        """Compose into Drafts; nothing is sent (the person sends it, or says send)."""
+        mime = f"To: {to}\r\nSubject: {subject}\r\n\r\n{body}"
+        raw = base64.urlsafe_b64encode(mime.encode("utf-8")).decode("ascii")
+        return await self._with_auth_retry(
+            lambda headers: self._post("/drafts", {"message": {"raw": raw}}, headers)
+        )
+
     async def modify_message(
         self,
         *,
@@ -330,7 +343,9 @@ class GmailRestTool:
         # Gmail keeps recoverable for 30 days) is audited but unprompted, so a
         # cleanup pass doesn't nag. Only send (outbound) and permanent delete
         # (irreversible) keep the two-turn echo-confirm. Unknown → conservative.
-        if action in ("modify_message", "trash_message"):
+        # A draft sends nothing and is deleted in one click: the safe default
+        # for "write an email", audited but unprompted.
+        if action in ("modify_message", "trash_message", "create_draft"):
             return "monitor"
         return "ask"  # send_message / delete_message / unknown
 
@@ -347,6 +362,12 @@ class GmailRestTool:
                 if not mid:
                     return ToolResult(success=False, output=None, error="message_id missing")
                 out = await self.get_message(message_id=mid)
+            elif action == "create_draft":
+                out = await self.create_draft(
+                    to=args.get("to", "") or "",
+                    subject=args.get("subject", ""),
+                    body=args.get("body", ""),
+                )
             elif action == "send_message":
                 to = args.get("to")
                 if not to:

@@ -138,7 +138,8 @@ def session_ref(scope: dict[str, Any]) -> str | None:
             # Society chats use a namespaced roster slug, while ordinary chats
             # use opaque alphanumeric IDs. Preserve that scope for tool lookup.
             if len(value) <= 128 and re.fullmatch(
-                r"society:[a-z0-9]+(?:-[a-z0-9]+)*(?::routine:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+)?",
+                r"society:[a-z0-9]+(?:-[a-z0-9]+)*"
+                r"(?::routine:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+|:with:[a-z0-9]+(?:-[a-z0-9]+)*)?",
                 value,
             ):
                 return value
@@ -216,22 +217,25 @@ def _surface_for(scope: dict[str, Any]) -> _Surface | None:
 def _authorized(scope: dict[str, Any], surface: _Surface | None) -> bool:
     """Whether this request may proceed.
 
-    Two credentials open the agent surface: the Control API key (the owner at
-    their own machine, full scope) and a per-client MCP token (named, scoped,
-    individually revocable). Everything else, including the tools surface,
-    takes the control key alone — a scoped token has no meaning for a catalog
-    that is Jarvis' own hands.
+    The control key opens both surfaces. Named tokens are surface-specific:
+    agent tokens open only the ecosystem; a ``tools`` token opens only the
+    exact safe/monitor Jarvis tools saved on that token.
     """
     from jarvis.core import control_key as ck
 
     presented = _bearer(scope)
     if ck.verify_control_key(presented):
         return True
-    if surface is not _AGENTS_SURFACE:
+    if surface not in (_AGENTS_SURFACE, _TOOLS_SURFACE):
         return False
     from jarvis.mcp.agents import tokens
 
-    return tokens.store().verify(presented) is not None
+    token = tokens.store().verify(presented)
+    if token is None:
+        return False
+    if surface is _AGENTS_SURFACE:
+        return token.scope in {"read", "work", "full"}
+    return token.scope == "tools" and bool(token.allowed_tools)
 
 
 def _agent_identity(scope: dict[str, Any]) -> tuple[str, str]:
@@ -304,6 +308,21 @@ def build_mcp_asgi_app() -> Any:
                 REQUEST_SCOPE.reset(scope_token)
                 REQUEST_CLIENT.reset(client_token)
             return
+        # A tools token is narrower than the owner's control key. Verify it
+        # again before setting request context so revocation between the auth
+        # gate and dispatch fails closed instead of widening to the full list.
+        from jarvis.mcp.agents import tokens
+        from jarvis.mcp.jarvis_tools_server import TOOLS_TOKEN
+
+        presented = _bearer(scope)
+        scoped_token = tokens.store().verify(presented)
+        if scoped_token is not None:
+            if scoped_token.scope != "tools" or not scoped_token.allowed_tools:
+                await _reject(send, 401, _UNAUTHORIZED_BODY)
+                return
+            tools_token = TOOLS_TOKEN.set(scoped_token)
+        else:
+            tools_token = None
         # The session travels in a ContextVar: the stateless transport runs
         # the tool call in a task started from this request, which inherits
         # the context, and the tool server reads it when it builds the
@@ -315,6 +334,8 @@ def build_mcp_asgi_app() -> Any:
             await manager.handle_request(scope, receive, send)
         finally:
             CHAT_SESSION_REF.reset(token)
+            if tools_token is not None:
+                TOOLS_TOKEN.reset(tools_token)
 
     return app
 

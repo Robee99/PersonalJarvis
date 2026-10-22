@@ -110,6 +110,7 @@ import numpy as np
 
 from jarvis.core.protocols import AudioChunk
 from jarvis.plugins.wake.vosk_native import build_recognizer, native_call
+from jarvis.plugins.wake.vosk_runtime import LoadBackoff, load_vosk
 from jarvis.speech.wake_constants import (
     WAKE_PREFIXES,
     normalize_phrase_for_match,
@@ -363,6 +364,7 @@ _COOLDOWN_S = 5.0
 # listening during this window and latches one retry; otherwise a user's
 # immediate second call would land in a two-second deaf period.
 _REJECTED_CANDIDATE_BACKOFF_S = 2.0
+_INFERENCE_SHUTDOWN_BUDGET_S = 0.02
 
 # How much audio to let land in the ring AFTER a PARTIAL candidate before the
 # confirm pass runs. A partial fires DURING the phrase (that is its virtue),
@@ -678,6 +680,7 @@ class _StreamingVerify:
             max_workers=1, thread_name_prefix="vosk-verify-free"
         )
         self._pending: list[Any] = []
+        self._closed = False
         self.feed(ring)
 
     def _normalise(self, audio: np.ndarray) -> tuple[np.ndarray, bytes]:
@@ -720,10 +723,16 @@ class _StreamingVerify:
         window = np.concatenate(self._parts) if self._parts else np.zeros(0, np.float32)
         return window, b"".join(self._pcm_parts), gres, fres
 
-    def close(self) -> None:
+    def close(self, *, wait: bool = False) -> None:
         """Discard (early fire, superseded candidate, teardown)."""
-        self._g_pool.shutdown(wait=False, cancel_futures=True)
-        self._f_pool.shutdown(wait=False, cancel_futures=True)
+        self._closed = True
+        self._g_pool.shutdown(wait=wait, cancel_futures=True)
+        self._f_pool.shutdown(wait=wait, cancel_futures=True)
+
+    @property
+    def ready_to_reap(self) -> bool:
+        """A closed decoder with no running feeds can be joined off-loop."""
+        return self._closed and all(future.done() for future in self._pending)
 
 
 class VoskKwsProvider:
@@ -837,6 +846,13 @@ class VoskKwsProvider:
         # Set once ``start()`` has attempted every model load — the honest
         # "warm" floor even when a broken model directory never loads.
         self._load_attempted = False
+        # A model that failed to load is retried with capped, jittered backoff,
+        # never on every audio chunk: the detect loop used to rebuild every
+        # ~30 ms and log each failure (4,353 warnings a day on one install).
+        # The backoff logs the first failure and the recovery; the set below
+        # does the same for the per-chunk recognizer rebuild.
+        self._load_backoff = LoadBackoff()
+        self._unusable_paths: set[str] = set()
         # Pre-warmed ONE-SHOT verify recognizers, keyed (model_path, kind).
         # Why: a fresh KaldiRecognizer's FIRST decode pays ~400ms lazy init
         # on top of ~100ms construction (measured 2026-07-11: fresh verify
@@ -870,6 +886,9 @@ class VoskKwsProvider:
         self._early_active = False
         self._early_task: asyncio.Task[bool] | None = None
         self._pending_gen = 0
+        self._detect_guard = threading.Lock()
+        self._inference_reaper: threading.Thread | None = None
+        self._inference_cleanup: asyncio.Task[None] | None = None
         # Instance-local clock hook keeps reject/backpressure state-machine
         # tests deterministic without replacing Python's process-global
         # monotonic clock (which asyncio itself also consumes).
@@ -914,18 +933,27 @@ class VoskKwsProvider:
         model = self._models.get(key)
         if model is not None:
             return model
+        # A model that just failed is not retried until its backoff expires.
+        self._load_backoff.check(key)
         # Double-checked: the fast path above stays lock-free (it runs on every
         # verify recognizer build), and only the rare actual load serialises.
         with self._model_load_lock:
             model = self._models.get(key)
             if model is not None:
                 return model
-            from vosk import Model, SetLogLevel  # lazy: keep base import light
-
-            SetLogLevel(-1)
+            self._load_backoff.check(key)
             t0 = time.perf_counter()
-            model = Model(key)
+            try:
+                # Lazy, once per process, PATH-safe (vosk_runtime): keeps the
+                # base import light and never re-runs a failed vosk import.
+                vosk = load_vosk()
+                vosk.SetLogLevel(-1)
+                model = vosk.Model(key)
+            except Exception as exc:
+                self._load_backoff.failed(key, exc)
+                raise
             self._models[key] = model
+            self._load_backoff.succeeded(key)
             log.info(
                 "vosk-kws: model loaded in %.1f s (%s)",
                 time.perf_counter() - t0,
@@ -998,6 +1026,8 @@ class VoskKwsProvider:
         # ear's hypothesis and "[unk]") instead of standing unconditionally.
         kinds = ("grammar", "free", _COMPETITION_KIND)
         for path in self._model_paths:
+            if self._load_backoff.remaining(path) > 0.0:
+                continue  # backing off after a failed load; retried later
             for kind in kinds:
                 key = (path, kind)
                 while True:
@@ -1040,12 +1070,30 @@ class VoskKwsProvider:
         still loaded for the verify and the sibling rescue.
         """
         recs: dict[str, Any] = {}
+        attempted = False
         for path in self._stage1_paths:
+            if self._load_backoff.remaining(path) > 0.0:
+                continue  # its backoff already logged the failure
+            attempted = True
             try:
                 recs[path] = self._take_verify_rec(path, "grammar")
             except Exception as exc:  # noqa: BLE001 — isolate a broken model
-                log.warning("vosk-kws: model %s unusable (%s) — skipped.", path, exc)
-        self._kick_replenish()
+                # One line per state change, never one per audio chunk. A
+                # failed model LOAD was already logged by its backoff.
+                first = path not in self._unusable_paths
+                self._unusable_paths.add(path)
+                if first and self._load_backoff.failures(path) == 0:
+                    log.warning("vosk-kws: model %s unusable (%s) — skipped.", path, exc)
+                else:
+                    log.debug("vosk-kws: model %s still unusable (%s).", path, exc)
+                continue
+            if path in self._unusable_paths:
+                self._unusable_paths.discard(path)
+                log.info("vosk-kws: model %s usable again.", path)
+        if attempted:
+            # Nothing to top up while every model is backing off; this runs on
+            # every chunk while ``recs`` is empty.
+            self._kick_replenish()
         return recs
 
     @property
@@ -1086,8 +1134,9 @@ class VoskKwsProvider:
             try:
                 await asyncio.to_thread(self._ensure_model, path)
             except Exception as exc:  # noqa: BLE001 — a broken model must not
-                # brick the working ones; _fresh_recs skips it too.
-                log.warning("vosk-kws: model %s failed to load (%s).", path, exc)
+                # brick the working ones; _fresh_recs skips it too. The
+                # backoff in _ensure_model already logged this state change.
+                log.debug("vosk-kws: model %s failed to load (%s).", path, exc)
 
         await asyncio.gather(*(_load_one(path) for path in self._model_paths))
         self._load_attempted = True
@@ -1116,6 +1165,10 @@ class VoskKwsProvider:
             self._rec_stock.clear()
         self._models.clear()
         self._load_attempted = False
+        # A new lifecycle (wake-plan reload) is a new unit of work: its first
+        # load attempt is not held back by the previous one's failures.
+        self._load_backoff.reset()
+        self._unusable_paths.clear()
         self._ring.clear()
         self._ring_len = 0
 
@@ -1222,7 +1275,8 @@ class VoskKwsProvider:
             log.debug("early-candidate listener failed: %s", exc)
 
     async def _run_early_check(
-        self, window: np.ndarray, gen: int, model_path: str | None = None
+        self, window: np.ndarray, gen: int, model_path: str | None,
+        run_verify: Callable[..., Awaitable[Any]],
     ) -> bool:
         """Strictly verify the candidate prefix and optionally show the bar.
 
@@ -1231,7 +1285,7 @@ class VoskKwsProvider:
         it must not overwrite a clean verdict over the candidate audio itself.
         """
         try:
-            ok = await asyncio.to_thread(self._early_check, window, model_path)
+            ok = await run_verify(self._early_check, window, model_path)
         except Exception as exc:  # noqa: BLE001 — fallback verify remains
             log.debug("early-candidate check errored: %s", exc)
             return False
@@ -1345,6 +1399,10 @@ class VoskKwsProvider:
         with a demotion).
         """
         self._last_stage1_cost = (0.0, 0.0)
+        if not recs:
+            # Every model is unusable (backing off after a failed load): no
+            # decode to run, so no worker-thread hop on every audio chunk.
+            return None, recs
         found = await _in_pool(self._grammar_hit_all, recs, pcm)
         if self._note_stage1_cost(*self._last_stage1_cost):
             active = set(self._stage1_paths)
@@ -1892,31 +1950,138 @@ class VoskKwsProvider:
         # would deafen the ear permanently (AP-24 — a timeout bounds a hang, it
         # never recovers it). The pool lives exactly as long as this detect()
         # session, so a wake-plan reload rebuilds it.
+        if not self._detect_guard.acquire(blocking=False):
+            raise RuntimeError("The previous wake detector is still running or retiring")
         infer_pool = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="vosk-wake-infer"
         )
+        # Verification must not queue behind unrelated application workers or
+        # take either of stage one's reserved slots. Sibling rescues still run
+        # concurrently, each with its own one-shot recognizers.
+        verify_pool = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="vosk-wake-confirm"
+        )
         loop = asyncio.get_running_loop()
+        streams: set[_StreamingVerify] = set()
+        stream_lock = threading.Lock()
+
+        def invoke(fn: Callable[..., Any], args: tuple[Any, ...]) -> Any:
+            # A long-lived detector may reject many candidates. Release finished
+            # decoder pairs on a worker instead of retaining all of them until
+            # the next wake, and never join a native worker on the audio loop.
+            with stream_lock:
+                finished = [stream for stream in streams if stream.ready_to_reap]
+                streams.difference_update(finished)
+            for stream in finished:
+                stream.close(wait=True)
+            result = fn(*args)
+            if isinstance(result, _StreamingVerify):
+                # Register before the future publishes its result: cancellation
+                # cannot hide a successfully constructed decoder pair.
+                with stream_lock:
+                    streams.add(result)
+            return result
+
+        async def _run(pool: ThreadPoolExecutor, fn: Callable[..., Any], *args: Any) -> Any:
+            future = pool.submit(invoke, fn, args)
+            wrapped = asyncio.wrap_future(future)
+            try:
+                return await wrapped
+            except asyncio.CancelledError:
+                # Pending obsolete work must never occupy a verifier slot.
+                # Running native work remains owned by the retirement thread.
+                future.cancel()
+
+                def consume_late(done: Any) -> None:
+                    if done.cancelled():
+                        return
+                    exc = done.exception()
+                    if exc is not None:
+                        log.debug("Cancelled wake inference finished with %s", type(exc).__name__)
+                future.add_done_callback(consume_late)
+                raise
 
         async def _in_pool(fn: Callable[..., Any], *args: Any) -> Any:
-            return await loop.run_in_executor(infer_pool, fn, *args)
+            return await _run(infer_pool, fn, *args)
 
+        async def _verify_pool(fn: Callable[..., Any], *args: Any) -> Any:
+            return await _run(verify_pool, fn, *args)
+
+        inner = self._detect_inner(chunks, _in_pool, _verify_pool)
         try:
-            async for keyword in self._detect_inner(chunks, _in_pool):
+            async for keyword in inner:
                 yield keyword
         finally:
-            infer_pool.shutdown(wait=False)
+            try:
+                await inner.aclose()
+            finally:
+                self._pending_gen += 1
+                early, self._early_task = self._early_task, None
+                if early is not None:
+                    early.cancel()
+                retired = loop.create_future()
+
+                def notify_retired() -> None:
+                    if not retired.done():
+                        retired.set_result(None)
+
+                def reap() -> None:
+                    try:
+                        infer_pool.shutdown(wait=True, cancel_futures=True)
+                        verify_pool.shutdown(wait=True, cancel_futures=True)
+                        # Both owning pools have joined. No constructor can add
+                        # another stream or prune this set after this point.
+                        for streaming in streams:
+                            streaming.close(wait=True)
+                    except Exception:
+                        # Retain the guard when retirement cannot be confirmed.
+                        log.exception("Wake inference retirement failed")
+                    else:
+                        self._detect_guard.release()
+                    finally:
+                        try:
+                            loop.call_soon_threadsafe(notify_retired)
+                        except RuntimeError:
+                            # The loop may close first; this thread still joined
+                            # the native workers and owns their last references.
+                            pass
+
+                async def retire() -> None:
+                    # Finish coroutine cancellation before joining its workers;
+                    # the shielded coordinator survives repeated caller cancels.
+                    try:
+                        if early is not None:
+                            await asyncio.gather(early, return_exceptions=True)
+                    finally:
+                        reaper = threading.Thread(
+                            target=reap, name="vosk-wake-retire", daemon=True,
+                        )
+                        self._inference_reaper = reaper
+                        reaper.start()
+                    await retired
+
+                cleanup = asyncio.create_task(retire(), name="vosk-wake-retirement")
+                self._inference_cleanup = cleanup
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(cleanup), timeout=_INFERENCE_SHUTDOWN_BUDGET_S,
+                    )
+                except TimeoutError:
+                    log.warning("Wake inference is still retiring; detector re-entry is blocked")
 
     async def _detect_inner(
         self,
         chunks: AsyncIterator[AudioChunk],
         _in_pool: Callable[..., Awaitable[Any]],
+        _verify_pool: Callable[..., Awaitable[Any]],
     ) -> AsyncIterator[str]:
         """The detection loop proper; ``_in_pool`` runs native decode work."""
         for path in self._model_paths:
             try:
                 await _in_pool(self._ensure_model, path)
-            except Exception as exc:  # noqa: BLE001 — skip a broken model
-                log.warning("vosk-kws: model %s failed to load (%s).", path, exc)
+            except Exception as exc:  # noqa: BLE001 — skip a broken model; the
+                # backoff in _ensure_model already logged this state change.
+                log.debug("vosk-kws: model %s failed to load (%s).", path, exc)
         # One streaming grammar per installed model — a phrase whose language
         # differs from the speaker's still has a model that can spell it
         # (union recall measured +38% on the fixture corpus, 2026-07-11). The
@@ -2060,7 +2225,9 @@ class VoskKwsProvider:
                         # a negative still falls through to the later full window.
                         self._pending_gen += 1
                         self._early_task = asyncio.create_task(
-                            self._run_early_check(ring_now, self._pending_gen, hit_path)
+                            self._run_early_check(
+                                ring_now, self._pending_gen, hit_path, _verify_pool,
+                            )
                         )
                         continue
                 # The candidate-prefix check and fallback decision must not fan out
@@ -2095,11 +2262,11 @@ class VoskKwsProvider:
                     # The decode already ran during the tail; this is the
                     # finalize + judgement (~0.1 s) — the spawn-latency win.
                     finishing, streaming = streaming, None
-                    confirmed = await asyncio.to_thread(
+                    confirmed = await _verify_pool(
                         self._finish_streaming_verify, finishing, window
                     )
                 else:
-                    confirmed = await asyncio.to_thread(
+                    confirmed = await _verify_pool(
                         self._verify_candidate, window, hit_path
                     )
                 if not confirmed:
@@ -2126,7 +2293,7 @@ class VoskKwsProvider:
                     if others:
                         rescues = await asyncio.gather(
                             *(
-                                asyncio.to_thread(self._early_check, window, other)
+                                _verify_pool(self._early_check, window, other)
                                 for other in others
                             )
                         )
@@ -2206,8 +2373,12 @@ def vosk_model_supports_phrase(model_path: str, phrase: str) -> bool:
     import tempfile
 
     try:
-        from vosk import KaldiRecognizer, Model, SetLogLevel
-    except Exception:  # noqa: BLE001 — no vosk → cannot disprove support
+        vosk = load_vosk()
+        KaldiRecognizer, Model, SetLogLevel = (  # noqa: N806 — vosk API names
+            vosk.KaldiRecognizer, vosk.Model, vosk.SetLogLevel
+        )
+    except Exception as exc:  # noqa: BLE001 — no vosk → cannot disprove support
+        log.debug("vosk-kws: vocabulary probe skipped, vosk unavailable (%s).", exc)
         return True
     tmp = None
     old = None

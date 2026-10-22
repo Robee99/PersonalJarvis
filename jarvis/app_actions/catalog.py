@@ -11,6 +11,7 @@ __all__ = [
     "build_catalog",
     "default_tier",
     "is_excluded",
+    "is_provider_switch",
     "live_catalog",
 ]
 
@@ -18,13 +19,26 @@ _METHODS: Final[tuple[str, ...]] = ("get", "post", "put", "patch", "delete")
 
 #: Never offered to the brain: credentials and sign-ins (voice must never carry
 #: a secret, AP-2), the raw control plane, webhooks, self-modification, the
-#: action policy itself — Jarvis never edits its own permissions — and the
-#: main-brain switch, which only the person may flip (the provider lock).
+#: action policy itself — Jarvis never edits its own permissions — the
+#: main-brain switch, which only the person may flip (the provider lock), and
+#: consent to spend money: the missions' paid-API fallback switch and a
+#: mission's paid-use approval (jarvis/missions/capacity.py).
 _EXCLUDED: Final[re.Pattern[str]] = re.compile(
     r"(secret|api-?keys?|/keys?(/|$)|install-key|host-key|use-key|token|password|"
     r"credential|oauth|/auth(/|$)|login|pairing|/callback|/hooks/|openapi|/ws$|"
-    r"^/api/control/|^/api/self-mod|^/api/app-actions|^/api/brain/switch$)",
+    r"^/api/control/|^/api/self-mod|^/api/app-actions|^/api/brain/switch$|"
+    r"^/api/mission-billing|/capacity-decision$)",
     re.IGNORECASE,
+)
+
+#: Operations that change WHICH provider, model or voice engine serves the
+#: user. Any of them can move the user onto a usage-billed provider, so a model
+#: runs one only after the user's explicit yes (``ask``), never on its own
+#: initiative: a live voice model switched unasked on 2026-10-04. The curated
+#: registry commands for the same routes are ``dangerous`` (parity-tested).
+_PROVIDER_SWITCH: Final[re.Pattern[str]] = re.compile(
+    r"^/api/(?:[a-z-]+/switch|settings/(?:voice-mode|wiki-provider)"
+    r"|providers/\{[^}/]+\}/(?:model|cu-model))$"
 )
 
 _SCHEMA_KEYS: Final[tuple[str, ...]] = ("type", "enum", "items", "properties", "required")
@@ -92,6 +106,11 @@ def is_excluded(path: str) -> bool:
     return bool(_EXCLUDED.search(path))
 
 
+def is_provider_switch(method: str, path: str) -> bool:
+    """True for a request that changes the active provider, model or voice mode."""
+    return method.upper() != "GET" and bool(_PROVIDER_SWITCH.match(path))
+
+
 def _field_names(schema: Any, components: dict[str, Any], depth: int = 0) -> set[str]:
     """Every property name a schema can carry, through refs, unions and arrays."""
     if not isinstance(schema, dict) or depth > 6:
@@ -133,7 +152,7 @@ def _carries_secret(operation: dict[str, Any], components: dict[str, Any]) -> bo
 def _dangerous(
     method: str, path: str, operation: dict[str, Any], components: dict[str, Any] | None = None
 ) -> bool:
-    if operation.get("x-jarvis-dangerous"):
+    if operation.get("x-jarvis-dangerous") or is_provider_switch(method, path):
         return True
     if method in {"PUT", "PATCH"} or (method == "POST" and "/approvals/" in path):
         body, _ = _json_schemas(operation)

@@ -181,6 +181,14 @@ class ComputerUseTool:
         # completion announcement). A DIFFERENT goal still runs concurrently.
         self._active_goals: dict[str, asyncio.Task[None]] = {}
 
+    @property
+    def execution_timeout_s(self) -> float:
+        """The ToolExecutor's deadline. With a bus the mission runs in the
+        background and this call returns at once; without one it runs inline
+        under the harness dispatch's own queue-plus-work allowance
+        (``3 * timeout_s``), which this backstop must never cut short."""
+        return 3 * self._timeout_s + 30.0
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         goal = (args.get("goal") or "").strip()
         if not goal:

@@ -13,6 +13,10 @@ describe("prettyProviderName", () => {
     expect(prettyProviderName("claude-api")).toBe("Claude (API)");
   });
 
+  it("names the Nous Portal cloud host, never the Hermes Agent CLI", () => {
+    expect(prettyProviderName("nous")).toBe("Nous Portal");
+  });
+
   it("names every realtime transport the deck can show", () => {
     expect(prettyProviderName("openai-realtime")).toBe("OpenAI Realtime");
     expect(prettyProviderName("gemini-live")).toBe("Gemini Live");

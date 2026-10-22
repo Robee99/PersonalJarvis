@@ -11,6 +11,7 @@ import type { SocietyAgentRow } from "@/lib/societyApi";
 import { AgentChatStoreProvider } from "@/components/agentchat/AgentChatStoreContext";
 import { createAgentChatStore, type AgentChatStoreHook } from "@/store/agentChat";
 import { clearModelMenuSnapshot, MODEL_MENU_SNAPSHOT_KEY, writeModelMenuSnapshot } from "./modelMenuSnapshot";
+import { MODEL_ACCESS_KEY } from "@/lib/modelAccess";
 
 const provider = (id: string, overrides: Partial<AgentChatProvider> = {}): AgentChatProvider => ({
   id, label: id, family: id, runner: "brain", models_source: "curated",
@@ -25,6 +26,10 @@ let failSave: boolean;
 let extraProviders: AgentChatProvider[];
 let liveModels: Record<string, { id: string; label: string }[]>;
 let providerRows: unknown[];
+let accessWays: Record<string, string[]>;
+let supportedProviders: string[];
+let runtimeGate: Promise<void> | undefined;
+let failedModelProvider: string;
 let catalogCalls: number;
 let saving: Mock<(saving: boolean) => void>;
 let catalogGate: Promise<void> | undefined;
@@ -32,6 +37,7 @@ let connectionsGate: Promise<void> | undefined;
 let accountsGate: Promise<void> | undefined;
 
 beforeEach(async () => {
+  localStorage.removeItem(MODEL_ACCESS_KEY);
   clearModelMenuSnapshot();
   await loadLocaleChunk("society");
   row = {
@@ -41,12 +47,19 @@ beforeEach(async () => {
   } as unknown as SocietyAgentRow;
   posts = []; failSave = false; saving = vi.fn<(saving: boolean) => void>();
   extraProviders = []; liveModels = {}; providerRows = []; catalogCalls = 0;
+  accessWays = {};
+  supportedProviders = []; runtimeGate = undefined;
+  failedModelProvider = "";
   catalogGate = undefined; connectionsGate = undefined; accountsGate = undefined;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     if (url.includes("/catalog")) await catalogGate;
     if (url.endsWith("/status")) await connectionsGate;
     if (url.endsWith("/providers")) await accountsGate;
     const response = (data: unknown, ok = true) => ({ ok, status: ok ? 200 : 503, json: async () => data }) as Response;
+    if (url === "/api/agent-runtimes") {
+      await runtimeGate;
+      return response({ runtimes: [], supported_providers: supportedProviders, access: accessWays });
+    }
     if (url.endsWith("/model")) {
       const choice = JSON.parse(String(init?.body));
       posts.push(choice);
@@ -56,13 +69,44 @@ beforeEach(async () => {
     }
     if (url.includes("/catalog")) { catalogCalls++; return response({ providers: [provider("openai"), provider("gemini"), provider("offline"), provider("ollama", { keyless: true, models_source: "live" }), ...extraProviders] }); }
     if (url.endsWith("/status")) return response({ mapping: [{ jarvis: "openai", key_set: true }, { jarvis: "gemini", key_set: true }, { jarvis: "openrouter", key_set: true }, { jarvis: "offline", key_set: false }] });
-    if (url.endsWith("/models")) return response({ models: liveModels[url.split("/").at(-2)!] ?? [] });
+    if (url.endsWith("/models")) {
+      const id = url.split("/").at(-2)!;
+      return response({ models: liveModels[id] ?? [] }, id !== failedModelProvider);
+    }
     if (url.endsWith("/providers")) return response({ providers: providerRows });
     if (url.endsWith("/agents")) return response({ agents: [row] });
     throw new Error(`Unexpected request: ${url}`);
   }));
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+test.each(["hermes", "openclaw"] as const)("%s never offers unapproved providers while runtime metadata loads or is empty", async (runtime) => {
+  row = { ...row, runtime };
+  let release!: () => void;
+  runtimeGate = new Promise<void>((resolve) => { release = resolve; });
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Model" }));
+  expect(screen.queryByTitle("openai-small")).toBeNull();
+  await act(async () => { release(); await runtimeGate; });
+  await screen.findByText("No matching models. Connect a provider or refresh the list.");
+  expect(screen.queryByTitle("openai-small")).toBeNull();
+  supportedProviders = ["gemini"];
+  fireEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+  await screen.findByTitle("gemini-small");
+  expect(screen.queryByTitle("openai-small")).toBeNull();
+  expect(posts).toEqual([]);
+});
+
+test("a failed OpenRouter catalog reports its error without hiding another provider", async () => {
+  extraProviders = [provider("openrouter", { models_source: "live" })];
+  failedModelProvider = "openrouter";
+  mount(); await open(); show("openrouter");
+  await screen.findByRole("alert");
+  show("gemini");
+  expect(screen.getByTitle("gemini-small")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(posts).toEqual([]);
+});
 
 test("a first open after page reload needs no request when a snapshot is available", async () => {
   writeModelMenuSnapshot({ version: 1, savedAt: Date.now(),
@@ -177,7 +221,7 @@ test("a cold menu renders models without waiting for subscription account discov
   let release!: () => void;
   accountsGate = new Promise<void>((resolve) => { release = resolve; });
   try {
-    mount(); await open();
+    mount(); await open(); show("gemini");
     expect(screen.getByTitle("gemini-small")).toBeTruthy();
     expect(screen.queryByText("Loading the provider catalog…")).toBeNull();
   } finally {
@@ -193,16 +237,24 @@ test("catalog loading starts when the card mounts, before the picker is clicked"
   expect(catalogCalls).toBe(1);
 });
 
-async function open() {
+async function open(expected = "openai-large") {
   fireEvent.click(screen.getByRole("button", { name: "Model" }));
-  await screen.findByTitle("openai-large");
+  await screen.findByTitle(expected);
   return screen.getByRole("textbox", { name: "Search models" });
+}
+
+/** Lists one provider's models, as a click on its rail mark does. */
+function show(id: string) {
+  fireEvent.click(screen.getByTestId(`agent-model-rail-${id}`));
 }
 
 test("groups connected models and hides disconnected or empty local endpoints", async () => {
   mount(); await open();
   expect(screen.getByRole("group", { name: "openai · API key" })).toBeTruthy();
+  show("gemini");
   expect(screen.getByTitle("gemini-small")).toBeTruthy();
+  expect(screen.queryByTestId("agent-model-rail-offline")).toBeNull();
+  expect(screen.queryByTestId("agent-model-rail-ollama")).toBeNull();
   expect(screen.queryByTitle("offline-small")).toBeNull();
   expect(screen.queryByTitle("ollama-small")).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
@@ -221,7 +273,7 @@ test("clicking a model persists immediately, preserves the account and updates t
 });
 
 test("changing provider resets the subscription account and uses a supported effort", async () => {
-  mount(); await open();
+  mount(); await open(); show("gemini");
   fireEvent.click(screen.getByTitle("gemini-small"));
   await waitFor(() => expect(posts).toHaveLength(1));
   expect(posts[0]).toEqual({ provider: "gemini", model: "gemini-small", effort: "low", account_id: "" });
@@ -254,7 +306,7 @@ test("search filters by model and provider, and Escape closes without saving", a
 });
 
 test("the effort submenu commits the model and chosen effort together", async () => {
-  mount(); await open();
+  mount(); await open(); show("gemini");
   fireEvent.click(within(screen.getByRole("group", { name: "gemini · API key" })).getByRole("button", { name: "Thinking effort: Large" }));
   fireEvent.click(within(screen.getByRole("menu", { name: "Thinking effort" })).getByRole("menuitemradio", { name: "Medium" }));
   await waitFor(() => expect(posts[0]).toEqual({ provider: "gemini", model: "gemini-large", effort: "medium", account_id: "" }));
@@ -263,7 +315,7 @@ test("the effort submenu commits the model and chosen effort together", async ()
 test("OpenCode models are offered without a duplicate app-managed login", async () => {
   extraProviders = [provider("opencode", { runner: "opencode-cli", cli_installed: true,
     curated_models: [{ id: "opencode/test-free", label: "Free model" }] })];
-  mount(); await open();
+  mount(); await open(); show("opencode");
   fireEvent.click(screen.getByTitle("opencode/test-free"));
   await waitFor(() => expect(posts[0].provider).toBe("opencode"));
   expect(posts[0].model).toBe("opencode/test-free");
@@ -275,7 +327,7 @@ test("all connected subscription accounts are selectable for a model", async () 
     { id: "work", label: "Work", connected: true }, { id: "personal", label: "Personal", connected: true },
     { id: "expired", label: "Expired", connected: false },
   ] }];
-  mount(); await open();
+  mount(); await open(); show("openai-codex");
   fireEvent.click(screen.getByRole("button", { name: "Account: ChatGPT / Codex subscription" }));
   expect(screen.queryByRole("menuitemradio", { name: "Expired" })).toBeNull();
   fireEvent.click(screen.getByRole("menuitemradio", { name: "Personal" }));
@@ -288,6 +340,7 @@ test("refresh reloads catalogs and reveals newly available models", async () => 
   mount(); await open();
   extraProviders = [provider("opencode", { runner: "opencode-cli", cli_installed: true })];
   fireEvent.click(screen.getByRole("button", { name: "Refresh models" }));
+  fireEvent.click(await screen.findByTestId("agent-model-rail-opencode"));
   fireEvent.click(await screen.findByRole("button", { name: /Show more models/ }));
   await screen.findByTitle("opencode-small");
   expect(catalogCalls).toBe(2);
@@ -296,6 +349,7 @@ test("refresh reloads catalogs and reveals newly available models", async () => 
 test("local endpoints show only installed models, and search works by model id", async () => {
   liveModels.ollama = [{ id: "qwen3:8b", label: "Qwen 3" }];
   mount(); const input = await open();
+  fireEvent.click(await screen.findByTestId("agent-model-rail-ollama"));
   await screen.findByTitle("qwen3:8b");
   fireEvent.change(input, { target: { value: "qwen3:8b" } });
   fireEvent.click(screen.getByTitle("qwen3:8b"));
@@ -305,9 +359,9 @@ test("local endpoints show only installed models, and search works by model id",
 test("keyboard navigation moves through results and closes back to the trigger", async () => {
   mount(); const input = await open();
   fireEvent.keyDown(input, { key: "ArrowDown" });
-  expect(document.activeElement).toBe(screen.getByTitle("gemini-small"));
+  expect(document.activeElement).toBe(screen.getByTitle("openai-small"));
   fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
-  expect(document.activeElement).toBe(screen.getByTitle("gemini-large"));
+  expect(document.activeElement).toBe(screen.getByTitle("openai-large"));
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Model" }));
 });
@@ -326,9 +380,9 @@ test("subscriptions precede OpenCode, which initially shows only explicit free m
     { id: "opencode/big-pickle", label: "Big Pickle" },
   ] }), provider("z-plan", { runner: "grok-cli", cli_installed: true })];
   mount(); await open();
-  const groups = screen.getAllByRole("group");
-  expect(groups[0].getAttribute("aria-label")).toBe("Grok subscription");
-  expect(groups[1].getAttribute("aria-label")).toBe("opencode");
+  const rail = screen.getAllByTestId(/^agent-model-rail-/).map((mark) => mark.getAttribute("aria-label"));
+  expect(rail.slice(0, 3)).toEqual(["Favorites", "Grok subscription", "opencode"]);
+  show("opencode");
   expect(screen.getByTitle("opencode/test-free")).toBeTruthy();
   expect(screen.getByTitle("opencode/big-pickle")).toBeTruthy();
   expect(screen.queryByTitle("opencode/paid")).toBeNull();
@@ -341,8 +395,8 @@ test("subscriptions precede OpenCode, which initially shows only explicit free m
 
 test("OpenRouter folds independently, searching finds hidden models, and clearing restores the fold", async () => {
   extraProviders = [provider("openrouter")];
-  mount(); const input = await open();
-  const toggle = screen.getByRole("button", { name: "openrouter · API key" });
+  mount(); const input = await open(); show("openrouter");
+  const toggle = within(screen.getByRole("menu", { name: "Model" })).getByRole("button", { name: "openrouter · API key" });
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   expect(screen.queryByTitle("openrouter-small")).toBeNull();
   fireEvent.click(toggle);
@@ -358,7 +412,7 @@ test("OpenRouter folds independently, searching finds hidden models, and clearin
 
 test("hidden OpenCode models remain selectable through search and a reopened menu is compact", async () => {
   extraProviders = [provider("opencode", { runner: "opencode-cli", cli_installed: true })];
-  mount(); const input = await open();
+  mount(); const input = await open(); show("opencode");
   fireEvent.click(screen.getByRole("button", { name: /Show more models/ }));
   fireEvent.keyDown(input, { key: "Escape" });
   const reopened = await open();
@@ -373,8 +427,61 @@ test.each([
   ["glm", "glm-cli"], ["deepseek-harness", "dsh-cli"],
 ] as const)("%s can use its CLI account without a published model list", async (id, runner) => {
   extraProviders = [provider(id, { runner, cli_installed: true, curated_models: [], default_model: "", effort_levels: [], default_effort: "" })];
-  mount(); await open();
+  mount(); await open(); show(id);
   const group = screen.getByRole("group", { name: id });
   fireEvent.click(within(group).getByRole("menuitemradio", { name: /Default model/ }));
   await waitFor(() => expect(posts[0]).toEqual({ provider: id, model: "", effort: "", account_id: "" }));
+});
+
+test("one logo covers OpenAI access, defaults to subscription and retains an explicit API choice", async () => {
+  extraProviders = [provider("openai-codex", { family: "openai", runner: "codex-cli", cli_installed: true })];
+  providerRows = [{ id: "openai-codex", subscription: true, accounts: [{ id: "work", label: "Work", connected: true }] }];
+  mount(); await open("openai-codex-small");
+  expect(screen.queryByTestId("agent-model-rail-openai-codex")).toBeNull();
+  expect(screen.getByTestId("agent-model-rail-openai")).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "Subscription" }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByTitle("openai-codex-small")).toBeTruthy();
+  fireEvent.click(screen.getByRole("radio", { name: "API key" }));
+  expect(screen.getByTitle("openai-small")).toBeTruthy();
+  expect(posts).toEqual([]);
+  fireEvent.keyDown(screen.getByRole("radio", { name: "API key" }), { key: "Escape" });
+  await open();
+  expect(screen.getByRole("radio", { name: "API key" }).getAttribute("aria-checked")).toBe("true");
+  show("gemini"); show("openai");
+  expect(screen.getByRole("radio", { name: "API key" }).getAttribute("aria-checked")).toBe("true");
+});
+
+test("a dual Claude row saves the exact access and never carries a subscription account onto its API", async () => {
+  row = { ...row, provider: "claude-api", model: "claude-sonnet-5", account_id: "work" };
+  accessWays = { "claude-api": ["api", "subscription"] };
+  extraProviders = [provider("claude-api", { family: "claude", runner: "claude-cli", cli_installed: true,
+    curated_models: [{ id: "opusplan", label: "Opus Plan" }, { id: "claude-sonnet-5", label: "Sonnet" }] })];
+  providerRows = [{ id: "claude-api", subscription: true, accounts: [{ id: "work", label: "Work", connected: true }] }];
+  mount(); await open("claude-sonnet-5");
+  await screen.findByRole("radio", { name: "Subscription" });
+  fireEvent.click(screen.getByRole("button", { name: /Older models/ }));
+  expect(screen.getByTitle("opusplan")).toBeTruthy();
+  fireEvent.click(screen.getByRole("radio", { name: "API key" }));
+  expect(screen.queryByTitle("opusplan")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Account:/ })).toBeNull();
+  fireEvent.click(screen.getByTitle("claude-sonnet-5"));
+  await waitFor(() => expect(posts[0]).toMatchObject({ provider: "claude-api", model: "claude-sonnet-5", account_id: "api-key" }));
+  await open("claude-sonnet-5");
+  fireEvent.click(screen.getByRole("radio", { name: "Subscription" }));
+  fireEvent.click(screen.getByRole("button", { name: /Older models/ }));
+  fireEvent.click(screen.getByTitle("opusplan"));
+  await waitFor(() => expect(posts[1]).toMatchObject({ provider: "claude-api", model: "opusplan", account_id: "subscription" }));
+});
+
+test("rail marks move with Alt+Arrow and keep their place on reopen", async () => {
+  localStorage.removeItem("jarvis.chat.providerOrder");
+  mount(); const input = await open();
+  const railOrder = () => screen.getAllByTestId(/^agent-model-rail-(?!favorites)/).map((mark) => mark.getAttribute("data-testid"));
+  expect(railOrder()).toEqual(["agent-model-rail-gemini", "agent-model-rail-openai"]);
+  fireEvent.keyDown(screen.getByTestId("agent-model-rail-openai"), { key: "ArrowUp", altKey: true });
+  expect(railOrder()).toEqual(["agent-model-rail-openai", "agent-model-rail-gemini"]);
+  fireEvent.keyDown(input, { key: "Escape" });
+  await open();
+  expect(railOrder()).toEqual(["agent-model-rail-openai", "agent-model-rail-gemini"]);
+  localStorage.removeItem("jarvis.chat.providerOrder");
 });

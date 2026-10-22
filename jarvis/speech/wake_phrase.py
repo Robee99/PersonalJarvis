@@ -320,8 +320,8 @@ def resolve_wake_plan(
 
     ``language`` selects the per-language Vosk model for the ``vosk_kws``
     engine (falls back to the first installed model on ``auto``/None).
-    ``vosk_available`` overrides the vosk import probe (tests); None probes
-    ``importlib.util.find_spec("vosk")``.
+    ``vosk_available`` overrides the vosk probe (tests); None asks
+    ``vosk_runtime_available()`` (package and native library present).
     """
     phrase = str(_read(cfg, "phrase", DEFAULT_WAKE_PHRASE)).strip()
     engine_pref = str(_read(cfg, "engine", "auto")).strip().lower()
@@ -413,9 +413,12 @@ def resolve_wake_plan(
     vosk_model = None
     if phrase and engine_pref in ("auto", "vosk_kws"):
         if vosk_available is None:
-            import importlib.util as _ilu
+            # Package AND native library on disk, without importing either: a
+            # frozen build missing vosk's native folder must pick another
+            # engine here instead of arming a detector that can never load.
+            from jarvis.plugins.wake.vosk_runtime import vosk_runtime_available
 
-            vosk_available = _ilu.find_spec("vosk") is not None
+            vosk_available = vosk_runtime_available()
         if vosk_available:
             if engine_pref == "vosk_kws":
                 # Explicit force: honour the user's choice, any installed model.

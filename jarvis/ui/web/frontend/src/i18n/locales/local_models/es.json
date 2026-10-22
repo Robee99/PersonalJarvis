@@ -263,16 +263,15 @@
       "setup_skipped_no_pick": "ningún modelo instalado encaja y el catálogo no tiene recomendación",
       "setup_error": "La configuración se detuvo: {message}",
       "setup_brain_hint": "{server} está configurado, pero {brain} sigue respondiendo.",
-      "setup_brain_button": "Hacer de {server} el cerebro activo",
-      "setup_brain_switched": "{server} es ahora el cerebro activo.",
-      "setup_brain_failed": "No se pudo cambiar el cerebro: {message}",
       "resident_title": "Si todas las tareas se cargan a la vez",
       "resident_fits": "{total} de {gb} GB",
       "resident_over": "{total} de {gb} GB — más de lo que cabe en la tarjeta; Ollama alternará entre llamada y chat",
       "resident_unknown": "{total} en total — memoria gráfica desconocida",
       "resident_context": "Contexto (estimación)",
       "resident_context_short": "contexto",
-      "resident_reserve": "Reserva para voz"
+      "resident_reserve": "Reserva para voz",
+      "setup_brain_open": "Elegir el cerebro en Ajustes › Modelo",
+      "brain_suggest": "¿Usar {server} como cerebro?"
     },
     "installed": {
       "title": "Modelos instalados",
@@ -310,7 +309,7 @@
       "subtitle": "Qué descarga responde a qué tarea. Un botón por fila.",
       "loading": "Leyendo los roles…",
       "other_brain": "Ollama no es tu cerebro activo: ahora responde {brain}. Estos puestos se llenan igual, solo esperan su turno.",
-      "other_brain_link": "Cambiar el cerebro en Claves API",
+      "other_brain_link": "Cambiar el cerebro en Ajustes › Modelo",
       "discovery": "Jarvis elige la descarga más pequeña que sirva.",
       "follows_chat": "Se elige en su propia tarjeta.",
       "not_installed": "no instalado",

@@ -134,7 +134,7 @@
     {
       "id": "slack",
       "display_name": "Slack",
-      "description": "Channels, DMs, search and Canvas drafts",
+      "description": "Search, read and post in your channels and DMs",
       "category": "Messaging",
       "logo_slug": "slack",
       "logo_color": "4A154B",
@@ -152,11 +152,7 @@
         "scopes": [
           "chat:write",
           "users:read",
-          "users:read.email",
-          "search:read.public",
-          "search:read.private",
-          "search:read.im",
-          "search:read.mpim",
+          "search:read",
           "channels:history",
           "groups:history",
           "im:history",
@@ -164,20 +160,14 @@
           "channels:read",
           "groups:read",
           "im:read",
-          "mpim:read",
-          "canvases:read",
-          "canvases:write"
+          "mpim:read"
         ],
         "user_scopes_only": true,
         "refresh_supported": true,
         "refresh_token_ttl_days": 30
       },
-      "mcp_server": {
-        "transport": "http",
-        "url": "https://mcp.slack.com/mcp",
-        "auth_header_template": "Authorization: Bearer ${plugin_slack_access_token}"
-      },
-      "post_install_hint_md": "Slack PKCE apps use user-level scopes only — Jarvis acts as you, not as a bot. If your workspace admin requires approval, the OAuth flow will surface that prompt automatically."
+      "native_tool": "slack",
+      "post_install_hint_md": "Sign in to your Slack workspace in the browser and approve access. Jarvis acts as you with your own permissions, not as a bot: it can search and read the channels and direct messages you belong to, and it posts a message only after you confirm it. Some workspaces require an admin to approve new apps; Slack shows that request during sign-in. The sign-in renews itself; if it lapses after 30 days without use, reconnect here."
     },
     {
       "id": "linear",
@@ -479,6 +469,30 @@
       }
     },
     {
+      "id": "atlassian",
+      "acceptance": "verified",
+      "display_name": "Atlassian (Jira & Confluence)",
+      "description": "Jira issues and Confluence pages",
+      "category": "Lists & Tasks",
+      "logo_slug": "atlassian",
+      "logo_color": "0052CC",
+      "featured": false,
+      "longevity": "self_renewing",
+      "browser_flow": "dcr",
+      "auth": {
+        "mode": "hosted_mcp_oauth_dcr",
+        "mcp_url": "https://mcp.atlassian.com/v1/mcp",
+        "discovery_url": "https://mcp.atlassian.com/.well-known/oauth-authorization-server",
+        "refresh_supported": true
+      },
+      "mcp_server": {
+        "transport": "http",
+        "url": "https://mcp.atlassian.com/v1/mcp",
+        "auth_header_template": "Authorization: Bearer ${plugin_atlassian_access_token}"
+      },
+      "post_install_hint_md": "Needs a Jira or Confluence Cloud site. Sign in with your Atlassian account and pick the site to connect. Available projects and spaces follow your Jira and Confluence permissions."
+    },
+    {
       "id": "dropbox",
       "display_name": "Dropbox",
       "description": "Find, read and share files in your Dropbox",
@@ -603,6 +617,44 @@
       "browser_flow": "hosted",
       "publisher_managed": true,
       "verification_hook": "home_assistant_api"
+    },
+    {
+      "id": "paperclip",
+      "display_name": "Paperclip",
+      "description": "Hand tasks to the agents in your own Paperclip company and follow their work",
+      "category": "Developer",
+      "logo_slug": "paperclip",
+      "logo_color": "6E56CF",
+      "featured": true,
+      "longevity": "permanent",
+      "longevity_note": "Board keys do not expire unless you revoke them in Paperclip.",
+      "auth": {
+        "mode": "pat_paste",
+        "token_creation_url": "http://127.0.0.1:3100",
+        "token_prefix": "pcp_board_",
+        "validation_endpoint": "https://localhost:3100/api/companies",
+        "instruction_md": "Paperclip runs on your own computer. Open a terminal and run: paperclipai token board create --name Jarvis\nCopy the key it prints (it starts with pcp_board_) and paste it below. You can revoke it later with paperclipai token board revoke.",
+        "instance_url": {
+          "label": "Your Paperclip address",
+          "placeholder": "http://127.0.0.1:3100",
+          "validation_path": "/api/companies",
+          "help_md": "The address of the Paperclip dashboard. It listens on your own computer, so Jarvis must run on the same machine or reach it over your network."
+        }
+      },
+      "mcp_server": {
+        "transport": "stdio",
+        "install": [
+          "npx",
+          "-y",
+          "@paperclipai/mcp-server"
+        ],
+        "env_template": {
+          "PAPERCLIP_API_URL": "$plugin_paperclip_instance_url",
+          "PAPERCLIP_API_KEY": "$plugin_paperclip_access_token"
+        },
+        "risk_tier": "ask"
+      },
+      "post_install_hint_md": "Try “what are my Paperclip agents doing” or “give dan a task to research local vision models”. Creating or changing a task asks for confirmation first. Needs Node.js for npx."
     },
     {
       "id": "spotify",
@@ -1469,13 +1521,15 @@
       "auth": {
         "mode": "oauth_pkce_loopback",
         "authorization_url": "https://www.figma.com/oauth",
-        "token_url": "https://www.figma.com/api/oauth/token",
+        "token_url": "https://api.figma.com/v1/oauth/token",
+        "refresh_url": "https://api.figma.com/v1/oauth/refresh",
+        "client_auth_method": "client_secret_basic",
         "client_id": "REPLACE_WITH_JARVIS_FIGMA_CLIENT_ID",
         "callback_port": 3127,
         "callback_path": "/oauth/callback",
         "scopes": [
           "current_user:read",
-          "projects:read",
+          "folders:read",
           "file_content:read",
           "file_comments:read"
         ],
@@ -1487,7 +1541,7 @@
         "token_creation_url": "https://www.figma.com/settings",
         "token_prefix": "",
         "validation_endpoint": "https://api.figma.com/v1/me",
-        "instruction_md": "Generate a Figma personal access token with current_user:read, projects:read, file_content:read and file_comments:read. Paste it here. Team IDs and file keys can be copied from Figma URLs.",
+        "instruction_md": "Generate a Figma personal access token with current_user:read, folders:read, file_content:read and file_comments:read. Paste it here. Team IDs and file keys can be copied from Figma URLs.",
         "auth_scheme": "figma"
       },
       "mcp_server": {

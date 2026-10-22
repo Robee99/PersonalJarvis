@@ -319,6 +319,23 @@ def test_boot_failure_without_a_stored_exception_still_names_the_interpreter() -
     assert sys.executable in msg
 
 
+def test_uncaught_backend_thread_error_is_preserved_for_startup_dialog() -> None:
+    error = RuntimeError("backend setup failed before bind")
+    app = _FakeApp(_backend_boot_error=None)
+
+    def fail_backend(*, prebound=None) -> None:
+        raise error
+
+    app._run_backend = fail_backend  # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="before bind"):
+        DesktopApp._run_backend_guarded(app)  # type: ignore[arg-type]
+
+    assert app._backend_boot_error is error
+    assert "backend setup failed before bind" in DesktopApp._format_backend_boot_failure(
+        app  # type: ignore[arg-type]
+    )
+
+
 def test_a_backend_that_never_binds_reports_visibly() -> None:
     src = inspect.getsource(DesktopApp.run_window_only)
     assert "_report_startup_failure" in src

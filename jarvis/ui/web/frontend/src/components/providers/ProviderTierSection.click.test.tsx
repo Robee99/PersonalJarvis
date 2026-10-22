@@ -1,16 +1,15 @@
 /**
  * The row CLICK gesture inside a provider tier list.
  *
- * One click on a row selects it: the body opens AND the provider becomes the
- * active one (maintainer request 2026-08-23 — "one click is enough; the row
- * that is open is the active one"). The Use control keeps switching without
- * touching the body. A row that would only warn ("save a key first") must
- * NOT fire a switch on the click that was there to open its key field.
+ * On the brain tier a click only opens or closes the row: the brain is
+ * picked in one place, the brain picker at the top of Settings › Model, so a
+ * brain card holds its sign-in, key and model and never switches the brain.
+ * (Other tiers keep "one click selects", see ProviderTierSection.test.tsx.)
  *
  * No jest-dom in this repo — assertions use plain values.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { TierSection } from "@/components/providers/ProviderTierSection";
 import type { ProviderDescriptor } from "@/hooks/useProviders";
@@ -82,7 +81,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("one click on a configured row opens it AND makes it the active provider", async () => {
+it("one click on a configured brain row opens it and switches nothing", () => {
   const { onActivateOptimistic } = renderTier([
     brainCard({ active: true }),
     brainCard({ id: "cloud-b", label: "Cloud B" }),
@@ -93,11 +92,18 @@ it("one click on a configured row opens it AND makes it the active provider", as
   fireEvent.click(screen.getByTestId("provider-row-cloud-b"));
 
   expect(screen.getByTestId("provider-body-cloud-b")).toBeTruthy();
-  expect(onActivateOptimistic).toHaveBeenCalledWith("brain", "cloud-b");
-  await waitFor(() => expect(switches()).toEqual(["cloud-b"]));
+  expect(onActivateOptimistic).not.toHaveBeenCalled();
+  expect(switches()).toEqual([]);
 });
 
-it("a double click switches once — the second click never closes the row again", async () => {
+it("a brain card has no Use control; only the brain that answers says so", () => {
+  renderTier([brainCard({ active: true }), brainCard({ id: "cloud-b", label: "Cloud B" })]);
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.getByTestId("provider-brain-state-cloud-a")).toBeTruthy();
+  expect(screen.queryByTestId("provider-brain-state-cloud-b")).toBeNull();
+});
+
+it("a double click opens the row once and switches nothing", () => {
   renderTier([brainCard({ active: true }), brainCard({ id: "cloud-b", label: "Cloud B" })]);
   const row = screen.getByTestId("provider-row-cloud-b");
 
@@ -107,7 +113,7 @@ it("a double click switches once — the second click never closes the row again
   fireEvent.doubleClick(row);
 
   expect(screen.getByTestId("provider-body-cloud-b")).toBeTruthy();
-  await waitFor(() => expect(switches()).toEqual(["cloud-b"]));
+  expect(switches()).toEqual([]);
 });
 
 it("a click on a row WITHOUT a key only opens its key field — no switch, no warning", () => {
@@ -137,12 +143,30 @@ it("a click on the open active row closes it and switches nothing", () => {
   expect(switches()).toEqual([]);
 });
 
-it("Enter on a focused row selects it like a click", async () => {
+it("Enter on a focused row opens it like a click", () => {
   renderTier([brainCard({ active: true }), brainCard({ id: "cloud-b", label: "Cloud B" })]);
   const row = screen.getByTestId("provider-row-cloud-b");
 
   fireEvent.keyDown(row, { key: "Enter" });
 
   expect(screen.getByTestId("provider-body-cloud-b")).toBeTruthy();
-  await waitFor(() => expect(switches()).toEqual(["cloud-b"]));
+  expect(switches()).toEqual([]);
+});
+
+/** Model catalogues the open cards asked for, by provider id. */
+function catalogues(): string[] {
+  return fetchMock.mock.calls
+    .map((c) => String(c[0]).match(/^\/api\/providers\/([^/]+)\/models/)?.[1])
+    .filter((id): id is string => Boolean(id));
+}
+
+it("the Hermes card has no model picker: the brain picker sets Hermes's model", () => {
+  renderTier([brainCard({ id: "hermes", label: "Hermes Agent", active: true })]);
+  expect(screen.getByTestId("provider-body-hermes")).toBeTruthy();
+  expect(catalogues()).toEqual([]);
+});
+
+it("another brain card keeps its model picker", async () => {
+  renderTier([brainCard({ active: true })]);
+  await vi.waitFor(() => expect(catalogues()).toContain("cloud-a"));
 });

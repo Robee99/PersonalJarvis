@@ -16,6 +16,7 @@ pathological-drip-feed backstop.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 
 import pytest
@@ -35,6 +36,14 @@ def _make_pipeline(*, stall: float, ceiling: float, poll: float) -> SpeechPipeli
     p._brain_stall_poll_s = poll
     p._brain_last_progress = time.monotonic()
     return p
+
+
+def test_default_hard_ceiling_allows_slow_local_voice_turns() -> None:
+    """A productive local-model voice turn must not be guillotined at 90 s."""
+    parameter = inspect.signature(SpeechPipeline.__init__).parameters[
+        "brain_hard_timeout_s"
+    ]
+    assert parameter.default == 600.0
 
 
 @pytest.mark.asyncio

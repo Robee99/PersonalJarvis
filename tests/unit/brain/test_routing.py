@@ -1856,6 +1856,14 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # voice/chat. Pure UI action (risk safe), publishes NavigateSidebar,
             # never a spawn (AP-5/AP-14). See ADR-0011 amendment "Navigate tool".
             "navigate",
+            # In-app UI control (2026-10-20): read the open screen's controls
+            # with refs, click, type, scroll; one AppUiRequest round trip to
+            # the app's main window each. Risk safe, never a spawn (AP-5/AP-14).
+            # ADR-0011 amendment "In-app UI control".
+            "app-ui-snapshot",
+            "app-ui-click",
+            "app-ui-type",
+            "app-ui-scroll",
             # Command Registry executor (2026-07-09): one curated app command
             # through the same REST endpoint the UI uses (in-process ASGI).
             # Enum-constrained + schema-validated; dangerous -> risk "ask".
@@ -1927,6 +1935,11 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # must be router-visible directly. risk_tier "monitor". Never a
             # spawn (AP-5/AP-14).
             "youtube_music",
+            # Slack Marketplace plugin (2026-10-05): native REST tool over the
+            # Slack Web API — the hosted Slack MCP server admits only
+            # Marketplace-listed or internal apps. Reads safe, posting ask.
+            # Never a spawn (AP-5/AP-14).
+            "slack",
             # Computer-Use (Wave 1, 2026-05-29): first-class tool to drive the
             # live desktop. Router-tier only — a direct safe-gated action (the
             # loop gates each action via ToolExecutor, ADR-0008), never a spawn,
@@ -2004,6 +2017,23 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # worker set. See ADR-0011 amendment "Every app action".
             "find-app-action",
             "run-app-action",
+            # Camera still (2026-10-02): one confirmed webcam photo for
+            # vision (risk ask) - never a spawn, never in a worker set. See
+            # ADR-0011 amendment "Camera still".
+            "camera-snapshot",
+            # Point at (2026-10-02): an arrow on one UI element, never a
+            # click (risk safe). See ADR-0011 amendment "Point at".
+            "point-at",
+            # Laptop power (2026-10-02): power slider, ASUS operating mode,
+            # charge limit (risk monitor). See ADR-0011 amendment "Laptop power".
+            "laptop-power",
+            # System volume (2026-10-12): master level and mute (risk safe).
+            "system-volume",
+            # Window control (2026-10-12): window state by title (risk monitor).
+            "window-control",
+            # Memory by topic (2026-10-12): orb topics, their chats, one chat
+            # paged (risk safe, read-only).
+            "memory_chats",
         }
     )
     assert ROUTER_TOOLS == expected, (

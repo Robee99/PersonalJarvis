@@ -145,6 +145,7 @@ def build_override(
     ref: str,
     kit_tools: Mapping[str, Tool] | None = None,
     system_extra: str = "",
+    required_tool_name: str = "",
 ) -> TurnOverride:
     """The pick for this turn: the session's provider / model / effort, the
     surface's hands (its kit's tools, else the folder's), and the tool context
@@ -170,6 +171,7 @@ def build_override(
         ),
         credential_scope=kit.credential_scope,
         system_extra=system_extra,
+        required_tool_name=required_tool_name,
         tool_context={
             # A typed answer is read, not heard: no spoken two-liners.
             "delivery": "written",
@@ -264,6 +266,41 @@ def _default_model(brain: Any, provider: str) -> str | None:
         except Exception:  # noqa: BLE001 — the provider's own default then
             return None
     return None
+
+
+def _explicit_selected_mcp_tool(
+    text: str, choices: list[ToolChoice], tools: Mapping[str, Tool]
+) -> str:
+    """Return the best selected MCP operation only for a clear use/call request.
+
+    A server chip normally makes tools available. When the user's text also
+    explicitly asks Jarvis to use that server, rank its operations against the
+    request so the evidence gate can require the specific read/action asked for.
+    """
+    if len(choices) != 1 or choices[0].category != "mcp":
+        return ""
+    if not re.search(r"\b(use|call|query|check|fetch|open|read|search|navigate)\b", text, re.I):
+        return ""
+
+    stop = {
+        "about", "after", "also", "and", "any", "are", "for", "from", "get", "give",
+        "have", "into", "just", "please", "report", "return", "then", "that", "the",
+        "this", "with", "would", "you", "your", "mcp", "server", "tool", "use",
+        "call", "query", "check", "fetch", "open", "read", "search", "navigate",
+    }
+    query = {word for word in re.findall(r"[a-z0-9]+", text.casefold()) if len(word) > 2} - stop
+    best_name = ""
+    best_score = 0
+    for name in choices[0].tool_names:
+        tool = tools.get(name)
+        if tool is None:
+            continue
+        operation = f"{name.replace('/', ' ').replace('_', ' ')} {tool.description}".casefold()
+        tokens = set(re.findall(r"[a-z0-9]+", operation))
+        score = len(query & tokens)
+        if score > best_score:
+            best_name, best_score = name, score
+    return best_name
 
 
 # ------------------------------------------------------------- step mirror
@@ -448,6 +485,7 @@ async def run_brain_turn(
     cwd = Path(session.cwd or Path.home())
     stance = handle.stance or "ask"
     kit_tools, system_extra = await kit_payload(session, brain)
+    required_tool_name = ""
     if tool_choices:
         from jarvis.agent_chat.tool_catalog import (
             live_catalog,
@@ -465,6 +503,7 @@ async def run_brain_turn(
             extra.update(selection_tools(choices, base))
             kit_tools = extra
             system_extra += selection_briefing(choices)
+            required_tool_name = _explicit_selected_mcp_tool(text, choices, extra)
         except ValueError as exc:
             await finish("error", {}, str(exc))
             return
@@ -476,6 +515,7 @@ async def run_brain_turn(
         ref=ref,
         kit_tools=kit_tools,
         system_extra=system_extra,
+        required_tool_name=required_tool_name,
     )
     _note_skill_trigger(brain, text)
 
@@ -548,6 +588,9 @@ async def run_brain_turn(
         if override.receipt.guard_failure:
             status = "error"
             error = override.receipt.failure_reason or "guarded_response"
+        elif override.receipt.finish_reason in ("error", "length"):
+            status = "error"
+            error = "The selected agent did not complete this turn."
     await finish(status, override.receipt.usage(), error)
 
 
@@ -570,12 +613,13 @@ async def _generate(
     session = handle.session
     history = brain_history_from_events(handle.history)
     output_language = getattr(handle, "output_language", "")
-    if session.surface == "society":
+    if session.surface == "society" and not handle.continuation:
         from jarvis.society.reply_preference import resolve_agent_reply_language
 
         output_language = await resolve_agent_reply_language(
             session.session_id, text, output_language
         )
+    handle.output_language = output_language
     kwargs: dict[str, Any] = {
         "use_history": False,
         "history_override": history,
@@ -592,6 +636,7 @@ async def _generate(
         kwargs["force_output_language"] = output_language
     secret = _agent_secret(get_jarvis_agent_secret, session.provider)
     overrides = {session.provider: secret} if secret else {}
+    pending_before = set(getattr(brain, "_ide_background_tasks", ()))
     # The task inherits the credential override through its context copy, so
     # the scoped brain instance resolves the Agents-tab key on first use.
     with override_provider_secrets(overrides):
@@ -622,7 +667,21 @@ async def _generate(
     try:
         done, _ = await asyncio.wait({task, waiter}, return_when=asyncio.FIRST_COMPLETED)
         if task in done:
-            return await task
+            result = await task
+            from jarvis.core.delegated_work import register_dispatch
+
+            for delivery in set(getattr(brain, "_ide_background_tasks", ())) - pending_before:
+                register_dispatch(delivery, ["Coding agent delivery"])
+            # Reuse the brain's authoritative decision while still holding its
+            # turn lock; do not detect language from an English result prompt.
+            if not handle.output_language:
+                pin = getattr(brain, "reply_language", "")
+                language = pin if pin in {"de", "en", "es"} else getattr(
+                    brain, "conversation_language", ""
+                )
+                if language in {"de", "en", "es"}:
+                    handle.output_language = language
+            return result
         task.cancel()
         try:
             await task

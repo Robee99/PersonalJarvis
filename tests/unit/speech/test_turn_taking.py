@@ -328,8 +328,9 @@ async def test_hangup_accepts_split_auf_leg_transcript() -> None:
 
     keep_session = await pipe._handle_utterance(b"\x01\x00" * 1024)
 
-    assert keep_session is False
-    assert pipe._spoken == []
+    assert keep_session is True
+    assert pipe._spoken and "?" in pipe._spoken[0][0]
+    assert not pipe._hangup_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -757,6 +758,86 @@ async def test_streaming_legacy_adapter_keeps_voice_confirmation_enabled() -> No
     assert received_voice_confirm == [True]
 
 
+@pytest.mark.asyncio
+async def test_streaming_turn_hands_its_trace_id_to_the_brain() -> None:
+    from uuid import uuid4
+
+    from jarvis.telemetry.latency import LatencyTracker
+
+    pipe = _make_streaming_pipeline(FakeSTT(text="hi"), stream_chunks=[], all_failed=False)
+    trace = uuid4()
+    pipe._latency_tracker = LatencyTracker(None, trace, enabled=False)
+    received: list[dict] = []
+
+    class _TracingBrain:
+        async def generate_stream(self, _text: str, **kwargs):
+            received.append(kwargs)
+            yield "Done."
+
+    pipe._brain = _TracingBrain()
+
+    response, _barged = await pipe._brain_streaming("hi", "en")
+
+    assert response == "Done."
+    assert received[0]["trace_id"] == trace
+    assert received[0]["allow_voice_confirm"] is True
+    assert received[0]["consume_pending_voice_attachments"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_adapter_without_trace_id_keeps_attachments_and_confirm() -> None:
+    from uuid import uuid4
+
+    from jarvis.telemetry.latency import LatencyTracker
+
+    pipe = _make_streaming_pipeline(FakeSTT(text="hi"), stream_chunks=[], all_failed=False)
+    pipe._latency_tracker = LatencyTracker(None, uuid4(), enabled=False)
+    received: list[tuple[bool, bool]] = []
+
+    class _NoTraceBrain:
+        async def generate_stream(
+            self, _text: str, *, on_progress=None, allow_voice_confirm: bool = False,
+            consume_pending_voice_attachments: bool = False,
+        ):
+            received.append((allow_voice_confirm, consume_pending_voice_attachments))
+            yield "Done."
+
+    pipe._brain = _NoTraceBrain()
+
+    response, _barged = await pipe._brain_streaming("hi", "en")
+
+    assert response == "Done."
+    assert received == [(True, True)]
+
+
+def test_completion_call_hands_its_trace_id_to_the_brain() -> None:
+    from uuid import uuid4
+
+    pipe = _make_streaming_pipeline(FakeSTT(text="hi"), stream_chunks=[], all_failed=False)
+    trace = uuid4()
+    received: list[dict] = []
+
+    class _Brain:
+        def generate(self, _text: str, **kwargs):
+            received.append(kwargs)
+            return "call"
+
+    class _OldBrain:
+        def generate(self, _text: str, *, consume_pending_voice_attachments: bool = False):
+            received.append({"consume": consume_pending_voice_attachments})
+            return "call"
+
+    pipe._brain = _Brain()
+    assert pipe._open_brain_completion("hi", trace) == "call"
+    pipe._brain = _OldBrain()
+    assert pipe._open_brain_completion("hi", trace) == "call"
+
+    assert received == [
+        {"consume_pending_voice_attachments": True, "trace_id": trace},
+        {"consume": True},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # BUG-018 (2026-05-11): STT-probe truncated real speech on low Whisper
 # confidence. The probe's "empty tail" signal originally accepted three
@@ -905,7 +986,7 @@ async def test_probe_forces_endpoint_on_stable_repeating_tail() -> None:
 
 
 @pytest.mark.asyncio
-async def test_brain_end_call_sentinel_hangs_up_and_is_not_spoken() -> None:
+async def test_semantic_closing_asks_before_the_brain_can_end_the_call() -> None:
     # Conservative-but-clear dismissal: STT text is NOT an explicit regex
     # command, so the brain decides — and signals end via the sentinel.
     pipe = _make_pipeline(
@@ -916,10 +997,10 @@ async def test_brain_end_call_sentinel_hangs_up_and_is_not_spoken() -> None:
 
     keep_session = await pipe._handle_utterance(b"\x01\x00" * 1024)
 
-    assert keep_session is False
-    assert pipe._spoken == [("Bis später, Ruben.", "de")]  # sentinel stripped  # i18n-allow
-    assert pipe._session_end_reason == "voice_pattern"
-    assert pipe._hangup_event.is_set()
+    assert keep_session is True
+    assert pipe._spoken and "?" in pipe._spoken[0][0]
+    assert pipe._session_end_reason is None
+    assert not pipe._hangup_event.is_set()
 
 
 @pytest.mark.asyncio
@@ -941,15 +1022,38 @@ async def test_polite_thanks_no_longer_auto_hangs_up() -> None:
 
 
 @pytest.mark.asyncio
-async def test_explicit_auflegen_still_hard_hangs_up_via_regex() -> None:
+async def test_explicit_auflegen_requires_a_separate_yes() -> None:
     pipe = _make_pipeline(FakeSTT(text="Auflegen bitte"))
     pipe._player = SlowPlayer()
 
     keep_session = await pipe._handle_utterance(b"\x01\x00" * 1024)
 
+    assert keep_session is True
+    assert not pipe._hangup_event.is_set()
+    assert pipe._player.stop_calls == 0
+    pipe._stt.text = "Ja"
+    keep_session = await pipe._handle_utterance(b"\x01\x00" * 1024)
     assert keep_session is False
     assert pipe._hangup_event.is_set()
-    assert pipe._player.stop_calls == 1  # "auflegen" stays an absolute kill switch
+    assert pipe._player.stop_calls == 1  # only confirmed voice termination stops playback
+
+
+@pytest.mark.parametrize("answer", ["No", "Explain this task", "Yes, keep talking"])
+async def test_classic_hangup_cannot_reuse_a_later_task_approval(answer) -> None:
+    pipe = _make_pipeline(
+        FakeSTT(text="Hang up"), continue_listening_after_response=True,
+    )
+    for text in ["Hang up", answer, "Yes"]:
+        pipe._stt.text = text
+        assert await pipe._handle_utterance(b"\x01\x00" * 1024)
+        assert not pipe._hangup_event.is_set()
+
+
+async def test_muted_classic_hangup_question_never_arms_confirmation() -> None:
+    pipe = _make_pipeline(FakeSTT(text="Hang up"))
+    pipe._muted = True
+    assert await pipe._handle_utterance(b"\x01\x00" * 1024)
+    assert pipe._hangup_confirmation.pending_turn is None
 
 
 @pytest.mark.asyncio

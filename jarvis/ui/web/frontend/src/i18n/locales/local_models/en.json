@@ -263,16 +263,15 @@
       "setup_skipped_no_pick": "no installed model fits and the catalogue has no pick",
       "setup_error": "Setup stopped: {message}",
       "setup_brain_hint": "{server} is set up, but {brain} still answers.",
-      "setup_brain_button": "Make {server} the active brain",
-      "setup_brain_switched": "{server} is now the active brain.",
-      "setup_brain_failed": "Could not switch the brain: {message}",
       "resident_title": "If every job is loaded at once",
       "resident_fits": "{total} of {gb} GB",
       "resident_over": "{total} of {gb} GB — more than the card holds; Ollama will swap between a call and a chat",
       "resident_unknown": "{total} in total — graphics memory unknown",
       "resident_context": "Context (estimate)",
       "resident_context_short": "context",
-      "resident_reserve": "Speech in/out reserve"
+      "resident_reserve": "Speech in/out reserve",
+      "setup_brain_open": "Choose the brain in Settings › Model",
+      "brain_suggest": "Use {server} as the brain?"
     },
     "installed": {
       "title": "Installed models",
@@ -310,7 +309,7 @@
       "subtitle": "Which download answers for which job. One button each.",
       "loading": "Reading the roles…",
       "other_brain": "Ollama is not your active brain — {brain} answers right now. These slots still fill, they just wait their turn.",
-      "other_brain_link": "Change the brain in API Keys",
+      "other_brain_link": "Change the brain in Settings › Model",
       "discovery": "Jarvis picks the smallest capable download.",
       "follows_chat": "Set on its own card.",
       "not_installed": "not installed",

@@ -248,3 +248,25 @@ async def test_sentences_play_in_order_and_full_text_returned() -> None:
     assert barged is False
     assert [event.text for event in confirmed] == ["Erstes.", "Zweites.", "Drittes."]
     assert {event.spoken_kind for event in confirmed} == {"reply"}
+
+
+@pytest.mark.asyncio
+async def test_barge_in_keeps_the_cut_sentence_for_a_false_interruption() -> None:
+    """The sentence playing when the barge-in fired is remembered, so a
+    follow-up without words can resume it instead of leaving silence."""
+    tts = _RecordingTTS()
+    player = _BargePlayer()
+    pipeline = _make_pipeline(tts, player, _ThreeSentenceBrain())
+
+    async def _barge_after_play_starts() -> bool:
+        await player.play_started.wait()
+        return True
+
+    pipeline._barge_monitor = _barge_after_play_starts  # type: ignore[assignment]
+
+    _full_text, barged = await asyncio.wait_for(
+        pipeline._brain_streaming("egal", "de"), timeout=3.0
+    )
+
+    assert barged is True
+    assert pipeline._false_interruption().take() == ("Erstes.", "de")

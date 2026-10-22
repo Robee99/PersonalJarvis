@@ -27,7 +27,10 @@ import time
 
 from jarvis.core.branding import CONFIG_FILE_NAME
 from jarvis.core.branding import PRODUCT_NAME as APP_DISPLAY_NAME
-from jarvis.core.process_utils import ensure_standard_streams
+from jarvis.core.process_utils import (
+    drop_inherited_electron_node_mode,
+    ensure_standard_streams,
+)
 from jarvis.core.win32_dpi import ensure_dpi_awareness as _ensure_dpi_awareness
 
 # Boot-profiling anchor (opt-in via JARVIS_BOOT_PROFILE=1). ``main()`` stamps the
@@ -42,6 +45,8 @@ _BOOT_PROFILE_T0: float | None = None
 # streams. Uvicorn probes stdout while configuring its formatter, so repair the
 # streams before any desktop/backend construction can begin.
 ensure_standard_streams()
+# Programs this app opens must start as themselves, not as bare Node.js.
+drop_inherited_electron_node_mode()
 
 # DPI awareness — claim PER_MONITOR_AWARE for the whole process BEFORE anything
 # imports pywebview. Windows honours only the FIRST process-awareness claim, and
@@ -127,6 +132,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
     p.add_argument(
+        "--persistent-server", action="store_true",
+        help="Run the independent agent server; clients never take it over or stop it.",
+    )
+    p.add_argument(
+        "--connect", nargs="?", const="local", default=None, metavar="URL",
+        help="Open a client of an HTTPS server, or the independent local agent server.",
+    )
+    p.add_argument(
         "--instance",
         default=None,
         metavar="NAME",
@@ -137,6 +150,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     return p.parse_args(argv)
+
+
+def _configure_voice_for_mode(args: argparse.Namespace) -> None:
+    """Mark local voice as disabled for a headless server process.
+
+    The headless launcher serves text and browser-mic clients; it never creates
+    the desktop ``SpeechPipeline``. Leaving ``JARVIS_VOICE`` unset made the
+    WebServer wait for a ``VoiceBootStatus`` event that this process cannot
+    publish, then report a misleading ``watchdog_timeout``. A headless boot is
+    therefore explicitly voice-off, matching the background-service mode.
+    """
+    if args.headless:
+        os.environ["JARVIS_VOICE"] = "0"
 
 
 def _select_instance_early(argv: list[str]) -> str | None:
@@ -606,7 +632,7 @@ async def _run_headless(args) -> int:
     if _service_lock is None:
         _headless_lock = _claim_headless_primary_lock(args, port=_port)
     else:
-        _write_service_sidecar(_port)
+        _write_service_sidecar(_port, persistent=getattr(args, "persistent_server", False))
     _lx_mark("lock")
 
     from jarvis.brain.factory import build_default_brain
@@ -651,7 +677,9 @@ async def _run_headless(args) -> int:
 
     async def _build_brain_bg() -> None:
         try:
-            built = await asyncio.to_thread(build_default_brain, bus=server.bus, tier="router")
+            built = await asyncio.to_thread(
+                build_default_brain, bus=server.bus, tier="router", config=cfg
+            )
             brain_holder["brain"] = built
             server.app.state.brain = built
             # Re-wire the late-built brain into the task runner: _init_task_stack
@@ -845,6 +873,10 @@ async def _run_headless(args) -> int:
     from jarvis.agentic_ide.session import schedule_boot_restore
 
     schedule_boot_restore()
+    # Carry on the IDE thread turns the turn host kept running.
+    from jarvis.ui.web.agent_chat_routes import schedule_turn_reattach
+
+    schedule_turn_reattach(server.app.state)
 
     # The full app's init chain is done and the chat handler is subscribed — hand
     # the real ASGI app to the already-listening bootstrap server, which now
@@ -905,6 +937,16 @@ async def _run_headless(args) -> int:
     asyncio.create_task(_autostart_mcps())
 
     stop_event = asyncio.Event()
+    server.app.state.agent_server_mode = bool(getattr(args, "persistent_server", False))
+    stop_loop = asyncio.get_running_loop()
+    server.app.state.agent_server_stop = lambda: stop_loop.call_soon_threadsafe(stop_event.set)
+    agent_boot = None
+    if server.app.state.agent_server_mode:
+        from jarvis.ui.web.agent_server import start_agents
+
+        agent_boot = asyncio.create_task(
+            start_agents(server.app.state), name="agent-server-restore",
+        )
 
     def _stop(*_):
         stop_event.set()
@@ -919,7 +961,7 @@ async def _run_headless(args) -> int:
     _service_watch = None
     if _service_lock is not None:
         _service_watch, _service_tray = _start_background_service_duties(
-            server.app.state, stop_event
+            server.app.state, stop_event, persistent=getattr(args, "persistent_server", False)
         )
 
     # Show the actual bind host (JARVIS_BIND_HOST may be 0.0.0.0 on a VPS);
@@ -935,6 +977,9 @@ async def _run_headless(args) -> int:
             # A wedged teardown must not keep a windowless process holding the
             # lock the reopening desktop is waiting for.
             _arm_service_exit_backstop(SERVICE_SHUTDOWN_BACKSTOP_S)
+        if agent_boot is not None:
+            agent_boot.cancel()
+            await asyncio.gather(agent_boot, return_exceptions=True)
         if _service_watch is not None:
             _service_watch.cancel()
         if _service_tray is not None:
@@ -1053,7 +1098,7 @@ def _prepare_background_service(args):
         if not wait_for_pid_exit(int(after), timeout=bg.PARENT_EXIT_WAIT_S):
             logger.warning("background: desktop pid={} never exited — service not started", after)
             return None
-    if bg.handover_requested():
+    if not getattr(args, "persistent_server", False) and bg.handover_requested():
         logger.info("background: the desktop app is opening again — service not started")
         return None
     from jarvis.ui.desktop_app import SingleInstanceError, acquire_single_instance_lock
@@ -1067,21 +1112,21 @@ def _prepare_background_service(args):
     # Findable the instant it holds the lock: a desktop reopened during this
     # boot must ask for a hand-back, never read the holder as a stuck app.
     try:
-        bg.write_marker(0)
+        bg.write_marker(0, persistent=getattr(args, "persistent_server", False))
     except OSError as exc:
         logger.warning("background: service marker not written: {}", exc)
     logger.info("background: agent service starting (pid={})", os.getpid())
     return lock
 
 
-def _write_service_sidecar(port: int) -> None:
+def _write_service_sidecar(port: int, *, persistent: bool = False) -> None:
     """The service's marker plus the instance sidecar a desktop launch reads."""
     from loguru import logger
 
     from jarvis.core import background_service as bg
 
     try:
-        bg.write_marker(port)
+        bg.write_marker(port, persistent=persistent)
     except OSError as exc:
         logger.warning("background: service marker not written: {}", exc)
     try:
@@ -1092,14 +1137,15 @@ def _write_service_sidecar(port: int) -> None:
         logger.opt(exception=True).warning("background: instance sidecar not written")
 
 
-def _start_background_service_duties(state, stop_event):
+def _start_background_service_duties(state, stop_event, *, persistent: bool = False):
     """Start the handover/idle watch and the tray. Returns ``(task, tray)``."""
     from loguru import logger
 
     from jarvis.ui.background_tray import BackgroundTray, open_desktop_app
 
     loop = asyncio.get_running_loop()
-    task = loop.create_task(
+    # Future requests must remain possible even with no clients or scheduled work.
+    task = None if persistent else loop.create_task(
         _watch_background_service(state, stop_event), name="background-service-watch"
     )
 
@@ -1641,7 +1687,12 @@ def _recover_from_already_running(
     pid = None
     with contextlib.suppress(Exception):
         pid = discover(error, meta)
-    if pid is not None and pid != os.getpid() and booting_grace > 0:
+    if (
+        pid is not None
+        and pid != os.getpid()
+        and booting_grace > 0
+        and _desktop_app._quitting_grace_remaining(meta, pid) <= 0
+    ):
         age = None
         with contextlib.suppress(Exception):
             age = process_age(pid)
@@ -1705,6 +1756,12 @@ def _recover_from_already_running(
                 pid,
                 replacement_pid,
             )
+            # Closing the desktop may spawn its background service before
+            # this launch can acquire the lock. That service has no window;
+            # use its existing local handover instead of waiting for one.
+            service_lock = _take_over_from_background_service(expected_pid=replacement_pid)
+            if service_lock is not None:
+                return True, service_lock
             # A relauncher can win the lock while this launch is waiting for
             # consent. Let its shell appear, even before backend health is up.
             # Consent for the old PID does not authorize killing this one.
@@ -1731,6 +1788,24 @@ def _recover_from_already_running(
     handled, lock = _recheck_lock()
     if handled:
         return lock
+
+    # A user can close and reopen before cleanup has released the old lock.
+    # Its missing window is intentional, not evidence of a stuck process.
+    # The sidecar survives HTTP teardown and ties the bounded wait to this PID.
+    quitting_grace = _desktop_app._quitting_grace_remaining(meta, pid)
+    if quitting_grace > 0:
+        deadline = now() + quitting_grace
+        logger.info(
+            "launcher: holder pid={} is quitting; waiting up to {:.1f}s for its lock",
+            pid,
+            quitting_grace,
+        )
+        while now() < deadline:
+            sleep(min(0.5, max(0.0, deadline - now())))
+            handled, lock = _recheck_lock()
+            if handled:
+                return lock
+        logger.warning("launcher: quitting holder pid={} exceeded its exit budget", pid)
 
     if frozen_window:
         stuck_detail = (
@@ -1814,17 +1889,25 @@ def _recover_from_already_running(
     return lock
 
 
-def _take_over_from_background_service():
+def _take_over_from_background_service(*, expected_pid: int | None = None):
     """The lock, handed back by a running background service — else ``None``."""
     try:
-        from jarvis.core.background_service import take_over_from_service
+        from jarvis.core.background_service import read_marker, service_pid, take_over_from_service
+
+        if (read_marker() or {}).get("persistent"):
+            return None
         from jarvis.ui import desktop_app as _desktop_app
+
+        def find_service():
+            candidate = service_pid()
+            return candidate if expected_pid is None or candidate == expected_pid else None
 
         return take_over_from_service(
             lambda: _desktop_app.acquire_single_instance_lock(
                 timeout=0.5, terminate=lambda _pid: False
             ),
             busy_error=_desktop_app.SingleInstanceError,
+            find_pid=find_service,
         )
     except Exception:  # noqa: BLE001 — fall through to the normal lock handling
         import logging as _logging
@@ -1841,6 +1924,21 @@ def _run_desktop(cfg, use_lock: bool) -> int:
     ``main()`` has already established that pywebview is importable
     (``_missing_window_toolkit``), so the window layer can be built here.
     """
+    from jarvis.core.background_service import read_marker, service_pid
+
+    section = getattr(cfg, "background", None)
+    independent = bool(getattr(section, "persistent_server", False))
+    server_url = str(getattr(section, "server_url", "") or "")
+    existing_server = bool((read_marker() or {}).get("persistent") and service_pid())
+    if independent or server_url or existing_server:
+        from jarvis.ui.server_client import run
+
+        try:
+            return run(server_url or None, port=cfg.ui.admin_api_port)
+        except (RuntimeError, ValueError) as exc:
+            _report_startup_failure(str(exc))
+            return 4
+
     # AUMID must be set before pywebview creates the window (taskbar icon).
     _ensure_windows_app_identity()
     from jarvis.ui.desktop_app import (
@@ -2061,7 +2159,7 @@ def _desktop_backend_main(args, port: int, token: str, holder: dict, app_ready) 
         return
     app_ready.set()
     # Build + serve the real app on this loop, reusing the already-bound bootstrap.
-    app._run_backend(prebound=(loop, bootstrap))
+    app._run_backend_guarded(prebound=(loop, bootstrap))
 
 
 def _run_desktop_fast(args) -> int | None:
@@ -2236,8 +2334,11 @@ def _main(argv: list[str] | None = None) -> int:
         )
 
     args = _parse_args(_raw_argv)
+    if args.persistent_server:
+        args.background_service = True
     if args.background_service:
         args.headless = True
+    _configure_voice_for_mode(args)
 
     # From here on every desktop launch is written down — see the helper.
     if not args.headless:
@@ -2284,11 +2385,16 @@ def _main(argv: list[str] | None = None) -> int:
 
             import jarvis as _jarvis
             from jarvis.platform.deescalate import maybe_relaunch_unelevated
-            from jarvis.ui.relauncher import detached_creationflags, fresh_user_env
+            from jarvis.ui.relauncher import (
+                detached_creationflags,
+                fresh_user_env,
+                restart_workdir,
+                self_launch_command,
+            )
 
             _drop = maybe_relaunch_unelevated(
-                [sys.executable, "-m", "jarvis.ui.web.launcher", *_raw_argv],
-                cwd=str(_Path(_jarvis.__file__).resolve().parent.parent),
+                self_launch_command(list(_raw_argv)),
+                cwd=restart_workdir(str(_Path(_jarvis.__file__).resolve().parent.parent)),
                 env=fresh_user_env(),
                 creationflags=detached_creationflags(),
             )
@@ -2353,6 +2459,22 @@ def _main(argv: list[str] | None = None) -> int:
         if args.background_service:
             _exit_background_service(code)
         return code
+
+    # A client needs the same toolkit, privilege and branded-launch guards as
+    # the integrated window. It must only skip backend construction, not those
+    # device-side prerequisites (an elevated window rejects normal text input).
+    if args.connect is not None:
+        from jarvis.ui.server_client import run
+
+        _ensure_windows_app_identity()
+        try:
+            return run(
+                None if args.connect == "local" else args.connect,
+                port=args.port or _fast_admin_port(),
+            )
+        except (RuntimeError, ValueError) as exc:
+            _report_startup_failure(str(exc))
+            return 4
 
     # Desktop boot: CLASSIC path (proven + GUI-safe). The serve-first bootstrap
     # + static-shell + boot-splash (the black-screen fix) live in

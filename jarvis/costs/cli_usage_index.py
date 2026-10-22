@@ -166,6 +166,15 @@ user brings their own key — the ``cost`` OpenCode itself computed. Read
 with a timestamp cursor instead of a byte offset; the message id is the
 identity. Not a subscription: the recorded cost is the bill."""
 
+AGENT_HERMES = "hermes-cli"
+"""Hermes Agent (Nous Research). One SQLite store, ``$HERMES_HOME/state.db``
+(``~/.hermes``; ``%LOCALAPPDATA%\\hermes`` on Windows). Usage is kept PER
+SESSION, not per call: the ``sessions`` row carries running totals in the
+Anthropic convention (``input_tokens`` EXCLUDES ``cache_read_tokens`` and
+``cache_write_tokens``), the model, the cwd, and the cost Hermes itself
+computed. Read with a last-activity cursor; the session id is the identity,
+so a session that kept going is re-read and its row updated in place."""
+
 AGENTS: tuple[str, ...] = (
     AGENT_CLAUDE,
     AGENT_CODEX,
@@ -173,6 +182,7 @@ AGENTS: tuple[str, ...] = (
     AGENT_AGY,
     AGENT_GROK,
     AGENT_OPENCODE,
+    AGENT_HERMES,
 )
 
 #: Every coding harness the workspace registry can open, mapped to the
@@ -188,6 +198,7 @@ COST_READER_FOR_HARNESS: dict[str, str] = {
     "antigravity": AGENT_AGY,
     "grok-build": AGENT_GROK,
     "opencode": AGENT_OPENCODE,
+    "hermes": AGENT_HERMES,
     # GLM runs the Claude Code binary against z.ai with the same config
     # directory, so its sessions land in ~/.claude and are read — and priced —
     # as Claude Code. Attributing them to z.ai needs a config dir of their own
@@ -658,6 +669,22 @@ def _opencode_roots(home: Path | None) -> list[Path]:
     return _dedup_paths(roots)
 
 
+def _hermes_roots(home: Path | None) -> list[Path]:
+    """``HERMES_HOME`` when set, else the installer's default for this OS."""
+    if home is not None:
+        return [home / ".hermes"]
+    roots: list[Path] = []
+    override = os.environ.get("HERMES_HOME", "").strip()
+    if override:
+        roots.append(Path(override).expanduser())
+    # Only Windows sets LOCALAPPDATA, and there the installer defaults to it.
+    local = os.environ.get("LOCALAPPDATA", "").strip()
+    if local:
+        roots.append(Path(local) / "hermes")
+    roots.append(Path.home() / ".hermes")
+    return _dedup_paths(roots)
+
+
 def _grok_roots(home: Path | None) -> list[Path]:
     """``GROK_HOME`` when set, the default, and every managed account."""
     if home is not None:
@@ -693,6 +720,8 @@ _LAYOUTS: tuple[tuple[str, str], ...] = (
     (AGENT_GROK, "sessions/*/*/updates.jsonl"),
     # OpenCode: the one SQLite store.
     (AGENT_OPENCODE, "opencode.db"),
+    # Hermes Agent: the one SQLite store.
+    (AGENT_HERMES, "state.db"),
 )
 
 
@@ -705,6 +734,8 @@ def _roots_for(agent: str, home: Path | None) -> list[Path]:
         return _grok_roots(home)
     if agent == AGENT_OPENCODE:
         return _opencode_roots(home)
+    if agent == AGENT_HERMES:
+        return _hermes_roots(home)
     if agent == AGENT_AGY:
         return _antigravity_roots(home)
     return _kimi_roots(home)
@@ -1513,10 +1544,77 @@ def _scan_opencode(cand: _Candidate, start: int) -> _FileScan:
     )
 
 
+def _scan_hermes(cand: _Candidate, start: int) -> _FileScan:
+    """Read Hermes Agent's session totals. ``start`` is the newest last-activity
+    time (ms) already indexed; each session that moved since is one row, keyed
+    by its id, so its running totals replace the earlier ones."""
+    rows: list[_Row | _PricedRow] = []
+    newest = start
+    failed = False
+    try:
+        conn = sqlite3.connect(_sqlite_uri(cand.path), uri=True, timeout=_DB_TIMEOUT_S)
+    except sqlite3.Error as exc:
+        log.warning("cli usage index: %s not readable (%s)", cand.path, exc)
+        return _FileScan(
+            rows=[], offset=start, cursor=_Cursor(), bytes_read=0, reason="error", failed=True
+        )
+    try:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute(
+            "SELECT id, model, cwd, input_tokens, output_tokens, cache_read_tokens, "
+            "cache_write_tokens, reasoning_tokens, "
+            "COALESCE(actual_cost_usd, estimated_cost_usd) AS cost, "
+            "CAST(COALESCE(last_activity_at, ended_at, started_at) * 1000 AS INTEGER) AS ts "
+            "FROM sessions WHERE CAST(COALESCE(last_activity_at, ended_at, started_at) "
+            "* 1000 AS INTEGER) > ? ORDER BY ts",
+            (start,),
+        ):
+            ts_ms = _int(row["ts"])
+            newest = max(newest, ts_ms)
+            tokens_in = _int(row["input_tokens"]) + _int(row["cache_write_tokens"])
+            tokens_out = _int(row["output_tokens"]) or _int(row["reasoning_tokens"])
+            tokens_cached = _int(row["cache_read_tokens"])
+            if tokens_in + tokens_out + tokens_cached <= 0:
+                continue
+            cwd = str(row["cwd"] or "")
+            base: _Row = (
+                cand.agent,
+                str(row["id"]),
+                cand.key,
+                str(row["id"]),
+                ts_ms,
+                str(row["model"] or ""),
+                tokens_in,
+                tokens_out,
+                tokens_cached,
+                cwd,
+                _clip(Path(cwd).name) if cwd else "",
+            )
+            # Hermes prices its own calls; without a figure the model's list
+            # price applies, like every other harness.
+            cost = row["cost"]
+            rows.append((*base, float(cost)) if cost is not None else base)
+    except sqlite3.Error as exc:
+        log.warning("cli usage index: %s query failed (%s)", cand.path, exc)
+        failed = True
+    finally:
+        conn.close()
+    return _FileScan(
+        rows=rows,
+        offset=max(newest, cand.size),
+        cursor=_Cursor(),
+        bytes_read=cand.size,
+        reason="eof",
+        failed=failed,
+    )
+
+
 def _scan(cand: _Candidate, start: int, cursor: _Cursor, deadline: float) -> _FileScan:
     """Read one transcript from ``start`` and return the turns it added."""
     if cand.agent == AGENT_OPENCODE:
         return _scan_opencode(cand, start)
+    if cand.agent == AGENT_HERMES:
+        return _scan_hermes(cand, start)
     if cand.agent == AGENT_AGY:
         return _scan_antigravity(cand, start)
     rows: list[_Row | _PricedRow] = []
@@ -2116,6 +2214,7 @@ __all__ = [
     "AGENT_CLAUDE",
     "AGENT_CODEX",
     "AGENT_GROK",
+    "AGENT_HERMES",
     "AGENT_KIMI",
     "AGENT_OPENCODE",
     "COST_READER_FOR_HARNESS",

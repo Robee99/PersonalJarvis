@@ -12,7 +12,8 @@ spec + token into a claude-cli `mcpServers` entry:
 * ``transport: "stdio"``  -> ``{"command", "args", "env"}`` (token resolved
   into the env_template / argv placeholders).
 * ``transport: "http"``   -> ``{"type": "http", "url", "headers"}`` (token
-  resolved into the Authorization bearer header).
+  resolved into the Authorization bearer header); ``"sse"`` likewise with
+  ``"type": "sse"``.
 * ``transport: "rest_wrapper"`` (or anything else) -> skipped: it is not a
   real MCP server claude-cli can speak to.
 
@@ -39,10 +40,18 @@ def _resolve_placeholders(value: str, replacements: dict[str, str]) -> str:
     return out
 
 
-def _token_replacements(plugin_id: str, access_token: str) -> dict[str, str]:
+def _token_replacements(
+    plugin_id: str, access_token: str, instance_url: str = ""
+) -> dict[str, str]:
     base = f"plugin_{plugin_id}_access_token"
     # Catalog uses both bare ($x) and braced (${x}) placeholder forms.
-    return {f"${{{base}}}": access_token, f"${base}": access_token}
+    out = {f"${{{base}}}": access_token, f"${base}": access_token}
+    if instance_url:
+        # A self-hosted service's address (saved beside the token at connect)
+        # reaches its MCP server the same way the token does.
+        url_key = f"plugin_{plugin_id}_instance_url"
+        out.update({f"${{{url_key}}}": instance_url, f"${url_key}": instance_url})
+    return out
 
 
 def _stdio_entry(spec: dict[str, Any], repl: dict[str, str]) -> dict[str, Any] | None:
@@ -69,7 +78,8 @@ def _http_entry(spec: dict[str, Any], repl: dict[str, str]) -> dict[str, Any] | 
     url = spec.get("url")
     if not url:
         return None
-    entry: dict[str, Any] = {"type": "http", "url": str(url)}
+    kind = "sse" if str(spec.get("transport") or "").lower() == "sse" else "http"
+    entry: dict[str, Any] = {"type": kind, "url": str(url)}
     header_template = spec.get("auth_header_template")
     if header_template:
         resolved = _resolve_placeholders(str(header_template), repl)
@@ -106,7 +116,9 @@ def assemble_claude_mcp_servers(
         if tokens is None:
             continue  # not connected
 
-        repl = _token_replacements(plugin.id, tokens.access)
+        repl = _token_replacements(
+            plugin.id, tokens.access, str(tokens.extra.get("instance_url") or "")
+        )
         transport = str(spec.get("transport") or "").lower()
         if transport == "stdio":
             entry = _stdio_entry(spec, repl)
@@ -117,10 +129,10 @@ def assemble_claude_mcp_servers(
                 entry.setdefault("env", {})["JARVIS_CONNECTOR_AUTH_TYPE"] = (
                     "oauth" if tokens.extra.get("client_id") else "pat"
                 )
-        elif transport == "http":
+        elif transport in ("http", "sse"):
             entry = _http_entry(spec, repl)
         else:
-            # rest_wrapper / sse / unknown -> not a claude-cli MCP server
+            # rest_wrapper / unknown -> not a claude-cli MCP server
             entry = None
 
         if entry is not None:

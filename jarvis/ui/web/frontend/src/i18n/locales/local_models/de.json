@@ -263,16 +263,15 @@
       "setup_skipped_no_pick": "kein installiertes Modell passt und der Katalog hat keine Empfehlung",
       "setup_error": "Einrichtung abgebrochen: {message}",
       "setup_brain_hint": "{server} ist eingerichtet, aber {brain} antwortet weiterhin.",
-      "setup_brain_button": "{server} zum aktiven Gehirn machen",
-      "setup_brain_switched": "{server} ist jetzt das aktive Gehirn.",
-      "setup_brain_failed": "Das Gehirn konnte nicht umgestellt werden: {message}",
       "resident_title": "Wenn jede Aufgabe gleichzeitig geladen ist",
       "resident_fits": "{total} von {gb} GB",
       "resident_over": "{total} von {gb} GB — mehr, als die Karte fasst; Ollama wechselt zwischen Anruf und Chat",
       "resident_unknown": "{total} insgesamt — Grafikspeicher unbekannt",
       "resident_context": "Kontext (Schätzung)",
       "resident_context_short": "Kontext",
-      "resident_reserve": "Reserve für Sprache rein/raus"
+      "resident_reserve": "Reserve für Sprache rein/raus",
+      "setup_brain_open": "Gehirn in Einstellungen › Modell wählen",
+      "brain_suggest": "{server} als Gehirn nutzen?"
     },
     "installed": {
       "title": "Installierte Modelle",
@@ -310,7 +309,7 @@
       "subtitle": "Welcher Download für welche Aufgabe antwortet. Ein Knopf pro Zeile.",
       "loading": "Rollen werden gelesen…",
       "other_brain": "Ollama ist nicht dein aktives Gehirn — gerade antwortet {brain}. Diese Plätze werden trotzdem gefüllt, sie warten nur, bis sie dran sind.",
-      "other_brain_link": "Gehirn unter API-Schlüssel wechseln",
+      "other_brain_link": "Gehirn in Einstellungen › Modell wechseln",
       "discovery": "Jarvis wählt den kleinsten passenden Download.",
       "follows_chat": "Wird auf der eigenen Karte gesetzt.",
       "not_installed": "nicht installiert",

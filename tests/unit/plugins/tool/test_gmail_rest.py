@@ -307,3 +307,29 @@ async def test_get_message_caps_a_long_body():
     body = result.output["body"]
     assert len(body) <= _GMAIL_BODY_CHAR_CAP + 100  # cap + short truncation marker
     assert "truncated" in body
+
+
+@pytest.mark.asyncio
+async def test_create_draft_composes_into_drafts_and_sends_nothing():
+    import json
+
+    seen: list[tuple[str, dict]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content)))
+        return httpx.Response(200, json={"id": "d1", "message": {"id": "m9"}})
+
+    tool = GmailRestTool(
+        access_token_provider=lambda: "at_123",
+        transport=httpx.MockTransport(handler),
+    )
+    result = await tool.execute(
+        {"action": "create_draft", "to": "a@b.com", "subject": "Hi", "body": "Hello"}, None
+    )
+    assert result.success and result.output["id"] == "d1"
+    [(path, body)] = seen
+    assert path.endswith("/drafts") and "send" not in path
+    decoded = base64.urlsafe_b64decode(body["message"]["raw"]).decode()
+    assert "To: a@b.com" in decoded and "Hello" in decoded
+    assert tool.risk_tier_for_args({"action": "create_draft"}) == "monitor"
+    assert tool.risk_tier_for_args({"action": "send_message"}) == "ask"

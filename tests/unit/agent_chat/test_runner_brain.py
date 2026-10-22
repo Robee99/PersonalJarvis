@@ -14,11 +14,13 @@ from typing import Any
 
 import pytest
 
-from jarvis.agent_chat import runner_brain
+from jarvis.agent_chat import runner_api, runner_brain
 from jarvis.agent_chat.events import make_event
 from jarvis.agent_chat.service import AgentChatService
 from jarvis.agent_chat.store import AgentChatStore
+from jarvis.agent_chat.tool_catalog import ToolChoice
 from jarvis.core.bus import EventBus
+from jarvis.core.protocols import BrainDelta
 from tests.fakes.fake_brain_manager import FakeBrainManager
 
 
@@ -49,6 +51,30 @@ def _jarvis_session(svc: AgentChatService, tmp_path: Path, **over: Any):
     }
     kwargs.update(over)
     return svc.create_session(**kwargs)
+
+
+def test_explicit_mcp_request_selects_the_matching_operation() -> None:
+    class _Tool:
+        def __init__(self, description: str) -> None:
+            self.description = description
+
+    choices = [ToolChoice(
+        id="mcp:time", label="Time", description="Time utilities", category="mcp",
+        group="time", tool_names=("time/get_current_time", "time/convert_time"),
+    )]
+    tools = {
+        "time/get_current_time": _Tool("Get the current time in a timezone"),
+        "time/convert_time": _Tool("Convert a time between timezones"),
+    }
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time in Asia/Kolkata", choices, tools
+    ) == "time/get_current_time"
+    assert runner_brain._explicit_selected_mcp_tool(
+        "What is the current time?", choices, tools
+    ) == ""
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time", choices * 2, tools
+    ) == ""
 
 
 @pytest.fixture
@@ -162,6 +188,70 @@ async def test_a_jarvis_turn_runs_on_the_brain_with_the_sessions_pick(
     assert override.tool_context["delivery"] == "written"
     assert fake.seen_key == "k-agent", "the Agents-tab key was the turn's credential"
     assert not svc.is_running(session.session_id)
+
+
+async def test_hermes_is_selectable_and_receives_the_main_chat_model_pick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.agent_chat.catalog import HERMES_FREE_MODELS, offers
+    from jarvis.agent_chat.service import resolve_runner
+
+    assert offers("jarvis", "hermes")
+    assert resolve_runner("hermes", surface="jarvis") == "brain"
+    assert resolve_runner("hermes", surface="agent") == "hermes-cli"
+    assert len(HERMES_FREE_MODELS) == 7
+    assert all(m.id.endswith(":free") for m in HERMES_FREE_MODELS)
+    selected = "nous::poolside/laguna-xs-2.1:free"
+    fake = FakeBrainManager()
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model=selected, effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "done"
+    override = fake.calls[0][1]["turn_override"]
+    assert (override.provider, override.model) == ("hermes", selected)
+
+
+async def test_a_provider_down_explanation_is_visible_but_finishes_as_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeBrainManager(reply="The agent could not finish this task.")
+    original = fake.generate
+
+    async def failed(text, **kwargs):
+        reply = await original(text, **kwargs)
+        kwargs["turn_override"].receipt.finish_reason = "error"
+        return reply
+
+    fake.generate = failed
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model="", effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "error"
+    assert any(e["kind"] == "assistant_text" for e in events)
+
+
+async def test_main_chat_fetches_the_brain_catalog_for_the_agent_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.ui.web import agent_chat_routes
+
+    async def no_cli_models():
+        return {}
+
+    monkeypatch.setattr(agent_chat_routes, "_live_cli_models", no_cli_models)
+    monkeypatch.setattr(agent_chat_routes, "_cli_installed", lambda _runner: False)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent_chat=_service(None))))
+    result = await agent_chat_routes.get_catalog(request, surface="jarvis")
+    row = next(p for p in result["providers"] if p["id"] == "hermes")
+    assert row["runner"] == "brain"
+    assert row["models_source"] == "live"
+    assert row["cli_installed"] is None
 
 
 async def test_history_is_the_sessions_own_log_in_prose(
@@ -305,6 +395,12 @@ async def test_the_agent_surface_still_runs_the_api_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
     """A coding-agent session never reaches the brain runner."""
+    async def complete(request):
+        yield BrainDelta(content="API runner reply")
+
+    monkeypatch.setattr(
+        runner_api, "build_brain", lambda *args: SimpleNamespace(complete=complete),
+    )
     fake = FakeBrainManager()
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
     svc = _service(None)

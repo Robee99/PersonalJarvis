@@ -99,6 +99,7 @@ const BRANDS: Record<string, Brand> = {
   antigravity: { palette: BLUE, aliases: ["agy"] },
   ollama: { palette: NEUTRAL, mark: "mono" },
   nvidia: { palette: GREEN },
+  nous: { palette: NEUTRAL, mark: "mono" },
   amd_gpu: { palette: NEUTRAL, mark: "mono", aliases: ["amd-gpu"] },
   agentmail: { palette: NEUTRAL, aliases: ["agent-mail"] },
   groq: { palette: ["#b14628", "#ffaa8e"], mark: "mono" },

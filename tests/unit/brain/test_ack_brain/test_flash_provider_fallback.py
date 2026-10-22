@@ -110,6 +110,15 @@ def test_does_not_change_ack_behavior_when_primary_has_a_flash_adapter(
     assert called is False
 
 
+def test_local_openai_primary_uses_its_own_flash_adapter() -> None:
+    ack_cfg = make_ack_config(provider="follow_brain")
+
+    provider = _build_flash_provider(_jcfg(brain_primary="local-openai"), ack_cfg)
+
+    assert ack_cfg.provider == "local-openai"
+    assert type(provider).__name__ == "LocalOpenAIFlashAck"
+
+
 def _live_jcfg(*, brain_primary: str) -> SimpleNamespace:
     """GPT-Live is the voice: the OpenAI key belongs to the voice call."""
     return SimpleNamespace(

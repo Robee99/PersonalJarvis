@@ -25,9 +25,12 @@ from uuid import uuid4
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from starlette.routing import Match
+from starlette.types import Scope
 
 from jarvis import __version__
 from jarvis.core.branding import CONFIG_FILE_NAME
@@ -78,6 +81,9 @@ _WS_SEND_TIMEOUT_S = 3.0
 # Level samples are disposable animation data. If the socket is busy, discard
 # a sample instead of letting a visual update queue behind functional frames.
 _WS_LEVEL_SEND_TIMEOUT_S = 0.25
+# Society joins its watchers (2 s), then browser owners (17 s). Leave another
+# 3 s for stores and containment cleanup before reporting an incomplete stop.
+_SOCIETY_SHUTDOWN_TIMEOUT_S = 22.0
 
 # How long the realtime transport warm is held back after boot. Warming can
 # spawn a provider's app-server and verify a live account, so it must not
@@ -93,12 +99,74 @@ REALTIME_WARM_TASK_NAME = "realtime-transport-warm"
 _REGISTRY_BOOTSTRAP_STOP_TIMEOUT_S = 5.0
 
 
+def _is_backend_path(path: str) -> bool:
+    """Paths the SPA catch-all must never claim: the API and the sockets."""
+    return path == "/api" or path.startswith(("/api/", "/ws"))
+
+
+class _SpaFallbackRoute(APIRoute):
+    """The SPA catch-all, invisible to API and socket paths.
+
+    A plain ``GET /{full_path:path}`` partially matches EVERY path, so the
+    router answered an unknown ``POST /api/...`` with 405 and ``Allow: GET`` —
+    pointing a client at a GET that does not exist — and a bare ``GET /api``
+    with the SPA's HTML. Declining backend paths lets the router answer
+    honestly: 404 for a route that does not exist, 405 only for a real route
+    asked with the wrong method.
+    """
+
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        if scope.get("type") == "http" and _is_backend_path(scope.get("path", "")):
+            return Match.NONE, {}
+        return super().matches(scope)
+
+
+class MemoryFactBody(BaseModel):
+    """Body of ``POST``/``DELETE /api/memory/facts``.
+
+    Typed so a non-string ``fact`` is a 422 at the boundary instead of an
+    ``AttributeError`` (500) inside the handler.
+    """
+
+    fact: str
+    category: str = "general"
+
+
+def _is_backend_path(path: str) -> bool:
+    """Paths the SPA catch-all must never claim: the API and the sockets."""
+    return path == "/api" or path.startswith(("/api/", "/ws"))
+
+
+class _SpaFallbackRoute(APIRoute):
+    """The SPA catch-all, invisible to API and socket paths.
+
+    A plain ``GET /{full_path:path}`` partially matches EVERY path, so the
+    router answered an unknown ``POST /api/...`` with 405 and ``Allow: GET`` —
+    pointing a client at a GET that does not exist — and a bare ``GET /api``
+    with the SPA's HTML. Declining backend paths lets the router answer
+    honestly: 404 for a route that does not exist, 405 only for a real route
+    asked with the wrong method.
+    """
+
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        if scope.get("type") == "http" and _is_backend_path(scope.get("path", "")):
+            return Match.NONE, {}
+        return super().matches(scope)
+
+
 class WebServer:
     """In-process uvicorn + FastAPI, run by the orchestrator loop."""
 
-    def __init__(self, cfg: JarvisConfig, bus: EventBus | None = None) -> None:
+    def __init__(
+        self, cfg: JarvisConfig, bus: EventBus | None = None, *,
+        defer_feature_routes: bool = False,
+    ) -> None:
+        self._defer_feature_routes = defer_feature_routes
         self.cfg = cfg
-        self._browser_prepare_task: asyncio.Task[None] | None = None
+        # Deferred boot work belongs to this server instance. Explicit handles
+        # let stop() drain it before pytest/asyncio tears the event loop down.
+        self._anyio_pool_warm_task: asyncio.Task[None] | None = None
+        self._deferred_reload_task: asyncio.Task[None] | None = None
         self.bus = bus if bus is not None else get_default_bus()
         self._clients: dict[str, WebSocket] = {}
         self._client_send_locks: dict[str, asyncio.Lock] = {}
@@ -195,6 +263,13 @@ class WebServer:
         runtime_refs.set_mission_tool_auto_approver(self._mission_tool_auto_approver)
         self.app: FastAPI = self._build_app()
         self.app.state.refresh_scheduler = None
+        from jarvis.ui.deferred_setup import DeferredSetup
+
+        self._feature_setup = DeferredSetup(
+            lambda: self._finish_app_setup(self.app), ready=not defer_feature_routes
+        )
+        if not defer_feature_routes:
+            self._publish_app()
 
     async def _forward_delegation_to_chat(self, event: Any) -> None:
         """Persist a result in its originating chat without starting another model turn."""
@@ -328,6 +403,65 @@ class WebServer:
         # Plugin-Tool-Registry — wired marketplace plugins as live brain tools.
         self._setup_plugin_registry(app)
 
+        # Make the config available to the routes (e.g. admin-pass check in
+        # skills_routes). Other routes will use it too going forward.
+        app.state.config = self.cfg
+        app.state.bus = self.bus
+
+        # Voice boot-readiness mirror. WS events are one-shot, so a tab that
+        # connects after warm-up finished would never see VoiceBootStatus.
+        # Persist the latest state on this (long-lived) server instance for
+        # GET /api/voice/status to read — deliberately NOT on app.state, whose
+        # ASGI lifecycle could outrace the bus subscriber on shutdown.
+        #
+        # When the local voice stack is disabled (JARVIS_VOICE=0 — headless,
+        # VPS, browser-mic-only), there is nothing to warm up and the pipeline
+        # never emits VoiceBootStatus, so seed ready=True. Otherwise the
+        # frontend's "starting up" banner would hang forever even though the
+        # user can already type (and use browser voice). A real voice pipeline
+        # starts at ready=False (warmup_start) and flips True via the subscriber
+        # below, so this seed only ever sticks when voice is genuinely off.
+        _voice_disabled = os.environ.get("JARVIS_VOICE", "").strip().lower() in (
+            "0",
+            "off",
+            "false",
+        )
+        self._voice_ready = _voice_disabled
+        # The detail of the last VoiceBootStatus, so a tab that mounts after a
+        # degraded release can tell "voice is off" from "voice is still warming".
+        self._voice_detail = ""
+
+        # Synchronous routes run on anyio's thread pool, which grows ON the
+        # loop and shrinks after ten idle seconds — a start that blocked the
+        # loop for 15 s on 2026-08-27 (BUG-189). Workers stay resident from
+        # here on; a handful is brought up once voice reports ready, below.
+        from jarvis.core.loop_executor import keep_anyio_workers_alive
+
+        keep_anyio_workers_alive()
+        self._anyio_pool_warmed = False
+
+        async def _track_voice_ready(event: VoiceBootStatus) -> None:
+            # A bus subscriber must never raise (AP-18); setting a plain
+            # instance bool cannot fail, and the warm-up below only schedules.
+            self._voice_ready = event.voice_usable
+            self._voice_detail = event.detail
+            if event.ready:
+                self._schedule_anyio_pool_warm()
+
+        self.bus.subscribe(VoiceBootStatus, _track_voice_ready)
+
+        if not self._defer_feature_routes:
+            self._finish_app_setup(app)
+
+        return app
+
+    def _finish_app_setup(self, app: FastAPI) -> None:
+        """Install optional surfaces before any consumer receives this app.
+
+        Desktop defers this work behind local voice warmup. Headless and other
+        callers retain eager construction. The shared bus, skill registry and
+        voice-status subscriber already exist before this method runs.
+        """
         # Sub-agent registry (dashboard feature) — subscribes to the bus immediately.
         try:
             from jarvis.agents import JarvisAgentRegistry
@@ -344,13 +478,16 @@ class WebServer:
         from jarvis.runs.routes import router as runs_router
         from jarvis.runs.runs_ws import router as runs_ws_router
 
+        from .acceptance_routes import router as acceptance_router
         from .agent_accounts_routes import router as agent_accounts_router
         from .agent_chat_routes import router as agent_chat_router
         from .agent_mcp_routes import router as agent_mcp_router
+        from .agent_runtime_routes import router as agent_runtime_router
         from .agentic_ide_git_routes import router as agentic_ide_git_router
         from .agentic_ide_routes import router as agentic_ide_router
         from .antigravity_routes import router as antigravity_router
         from .app_actions_routes import router as app_actions_router
+        from .app_ui_routes import router as app_ui_router
         from .appshot_routes import router as appshot_router
         from .board_routes import (
             board_router as board_meta_router,
@@ -358,6 +495,8 @@ class WebServer:
         from .board_routes import (
             router as board_router,
         )
+        from .brain_map_routes import router as brain_map_router
+        from .browser_profile_routes import router as browser_profile_router
         from .chat_library_routes import router as chat_library_router
         from .chats_routes import router as chats_router
         from .claude_routes import router as claude_router
@@ -369,6 +508,7 @@ class WebServer:
         from .contacts_routes import router as contacts_router
         from .control_routes import router as control_router
         from .costs_routes import router as costs_router
+        from .custom_api_routes import router as custom_api_router
         from .deck_routes import router as deck_router
         from .desktop_routes import router as desktop_router
         from .diagnostics_routes import router as diagnostics_router
@@ -382,15 +522,23 @@ class WebServer:
         from .friends_routes import router as friends_router
         from .frontier_routes import router as frontier_router
         from .grok_build_routes import router as grok_build_router
+        from .hermes_inventory_routes import router as hermes_inventory_router
+        from .holo_routes import api_router as holo_api_router
+        from .holo_routes import router as holo_router
+        from .ide_skills_routes import router as ide_skills_router
+        from .intel_routes import router as intel_router
+        from .jarvisx_routes import router as jarvisx_router
         from .live_routes import router as live_router
-        from .local_voice_routes import router as local_voice_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
         )
         from .local_models_routes import router as local_models_router
+        from .local_server_routes import router as local_server_router
+        from .local_voice_routes import router as local_voice_router
         from .marketplace_publish_routes import router as marketplace_publish_router
         from .marketplace_routes import router as marketplace_router
         from .mcp_routes import router as mcp_router
+        from .mission_billing_routes import router as mission_billing_router
         from .missions_auth import router as missions_auth_router
         from .missions_pty_routes import router as missions_pty_router
         from .missions_routes import router as missions_router
@@ -407,10 +555,13 @@ class WebServer:
         from .preview_routes import router as preview_router
         from .profile_routes import router as profile_router
         from .provider_routes import router as provider_router
+        from .public_data_routes import router as public_data_router
         from .review_routes import router as review_router
         from .routine_hooks_routes import router as routine_hooks_router
+        from .runtime_gateway_routes import router as runtime_gateway_router
         from .screen_context_routes import router as screen_context_router
         from .self_mod_routes import router as self_mod_router
+        from .server_pairing_routes import router as server_pairing_router
         from .sessions_routes import router as sessions_router
         from .settings_routes import router as settings_router
         from .setup_report_routes import router as setup_report_router
@@ -420,10 +571,12 @@ class WebServer:
         from .society_browser_routes import router as society_browser_router
         from .society_figure_routes import router as society_figure_router
         from .society_routes import router as society_router
+        from .soul_routes import router as soul_router
         from .starter_plan_routes import router as starter_plan_router
         from .sub_agents_routes import router as sub_agents_router
         from .tasks_routes import router as tasks_router
         from .telephony_routes import router as telephony_router
+        from .tool_catalog_routes import router as tool_catalog_router
         from .tool_model_routes import router as tool_model_router
         from .tools_routes import router as tools_router
         from .update_routes import router as update_router
@@ -447,6 +600,10 @@ class WebServer:
         # clients this box has, and writing the entry into their config.
         app.include_router(agent_mcp_router)
         app.include_router(tools_router)
+        app.include_router(hermes_inventory_router)
+        app.include_router(tool_catalog_router)
+        app.include_router(local_server_router)
+        app.include_router(acceptance_router)
         app.include_router(tool_model_router)
         # Jarvis' OWN tools, offered outwards over MCP so an agent-chat session
         # drives Jarvis instead of a bare workspace. Key-gated like the rest of
@@ -486,6 +643,7 @@ class WebServer:
         app.include_router(desktop_router)
         app.include_router(profile_router)
         app.include_router(settings_router)
+        app.include_router(soul_router)
         app.include_router(permissions_router)
         # In-app updater (GET status / POST apply). Managed-install only — see
         # jarvis/ui/web/update_routes.py; refuses to self-reset a dev checkout.
@@ -513,6 +671,7 @@ class WebServer:
         app.include_router(commands_router)
         app.include_router(friends_router)
         app.include_router(marketplace_router)
+        app.include_router(custom_api_router)
         app.include_router(marketplace_publish_router)
         app.state.friend_registry = None
         app.state.channel_manager = None
@@ -525,7 +684,8 @@ class WebServer:
         app.state.telephony_manager = TelephonyManager()
         # Browser-microphone voice bridge (B2): /ws/audio — the headless/VPS
         # voice path via the browser's own mic/speaker, no sounddevice. Always
-        # mounted; gated by [browser_voice].enabled (default on) at connect time.
+        # mounted; checked at connect time: realtime mode always serves it,
+        # pipeline mode while [browser_voice].enabled is on (the default).
         from jarvis.browser_voice.route import router as browser_voice_router
 
         app.include_router(browser_voice_router)
@@ -549,6 +709,8 @@ class WebServer:
         # the focused coding mode.
         # Before the IDE router, so its /{…} paths never shadow /git/….
         app.include_router(agentic_ide_git_router)
+        # The Skills tab's library of saved Markdown prompts (/api/agentic-ide/skills/*).
+        app.include_router(ide_skills_router)
         app.include_router(agentic_ide_router)
         # The pane-activity sweep has no bus of its own (the registry is a plain
         # holder by design); this is the one place that holds one, so the sweep
@@ -564,6 +726,7 @@ class WebServer:
         # Contacts section — user-curated address book (pure file store, no Brain dep).
         app.include_router(contacts_router)
         # Settings -> Computers: the user's own servers and local VMs over SSH.
+        app.include_router(server_pairing_router)
         app.include_router(computers_router)
         # Desktop pets — the `pet` overlay style's pets, look and visibility.
         app.include_router(pets_router)
@@ -590,10 +753,22 @@ class WebServer:
         # Appshots: the front window as conversation context, on a shortcut,
         # a button or a spoken request. Captures through Screen Context.
         app.include_router(app_actions_router)
+        # The main window's answers to the app_ui_* tools (AppUiRequest).
+        app.include_router(app_ui_router)
         app.include_router(appshot_router)
+        app.include_router(jarvisx_router)
         # The mission deck's pictures: the last Screen-Context capture (one
         # frame, in memory, TTL) and Computer-Use frames by content hash.
         app.include_router(deck_router)
+        # The HUD's public-data panels: quakes, natural events, space weather,
+        # the ISS and station orbits, from free keyless sources, cached.
+        app.include_router(public_data_router)
+        # World incidents (jarvis.intel): open feeds, one id per incident,
+        # shared by the World panel, both globes and the agent tools.
+        app.include_router(intel_router)
+        # The HOLO hand-gesture deck (MIT page) with orbs from the wiki vault.
+        app.include_router(holo_router)
+        app.include_router(holo_api_router)
         # Voice-session transcription view (sidebar -> "Transcription").
         # Returns 503 as long as app.state.session_store isn't set.
         app.include_router(sessions_router)
@@ -612,6 +787,9 @@ class WebServer:
         app.state.agent_chat = None
         app.state.agent_chat_factory = self._build_agent_chat_service
         app.include_router(agent_chat_router)
+        from .agent_server_routes import router as agent_server_router
+
+        app.include_router(agent_server_router)
         # Agent society (jarvis/society) — the roster, the typed board, the
         # scheduler and the mission bridge. Built on the first /api/society
         # call from the factory (store = data/society.db); nothing opens on
@@ -624,12 +802,32 @@ class WebServer:
 
         set_society_factory(self._build_society_runtime)
         app.include_router(society_router)
+        app.include_router(agent_runtime_router)
+        app.include_router(runtime_gateway_router)
         from .mars_routes import router as mars_router
 
         app.include_router(mars_router)
         app.include_router(society_browser_router)
+        app.include_router(browser_profile_router)
         app.include_router(society_figure_router)
         app.include_router(drop_router)
+        # The Jarvis Verse level system (jarvis/progression): a bus listener
+        # that pays XP for real achievements. Constructing it opens nothing;
+        # start() subscribes it and the ledger opens on the first award.
+        from jarvis.progression import ProgressionService
+
+        from .progression_routes import router as progression_router
+
+        progression_data_dir = Path(
+            getattr(getattr(self.cfg, "memory", None), "data_dir", None) or "data"
+        )
+        self._progression = ProgressionService(
+            progression_data_dir / "progression.db",
+            bus=self.bus,
+            pet_id=lambda: str(getattr(getattr(self.cfg, "ui", None), "pet_id", "") or ""),
+        )
+        app.state.progression = self._progression
+        app.include_router(progression_router)
         # Default: no recorder wired up — _init_session_stack() in start()
         # sets this once it succeeds.
         app.state.session_store = None
@@ -637,6 +835,8 @@ class WebServer:
         # mission WS and PTY then perform their narrower hello-frame auth too.
         app.include_router(missions_auth_router)
         app.include_router(missions_router)
+        # Paid-API fallback switch for missions (Settings; never voice/agents).
+        app.include_router(mission_billing_router)
         app.include_router(missions_ws_router)
         app.include_router(missions_pty_router)
         # Computer-Use run control (deep-dive 2026-07-15, H-09): start/list/
@@ -653,6 +853,27 @@ class WebServer:
         # Forwards WikiPageChanged events from the shared EventBus to
         # subscribed UI clients. WikiWatcher is started in start().
         app.include_router(wiki_ws_router)
+        # Brain map — the project intelligence layer over every store above
+        # (jarvis/memory/brain_map). Building the service opens nothing; the
+        # database opens on the first request or tick (AP-26). The periodic
+        # tick is started in start().
+        try:
+            from jarvis.memory.brain_map.service import (
+                service_from_config,
+                set_shared_service,
+            )
+
+            brain_map = service_from_config(
+                self.cfg, outputs_roots=lambda: getattr(app.state, "outputs_roots", ()) or ()
+            )
+            set_shared_service(brain_map)
+            app.state.brain_map = brain_map
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "Brain map setup failed — /api/brain-map uses the default data dir"
+            )
+            app.state.brain_map = None
+        app.include_router(brain_map_router)
         # ConnectionManager singleton for the global event stream. Attached
         # to MissionBus.subscribe_all() in start().
         app.state.missions_ws_manager = _MissionsConnMgr()
@@ -679,59 +900,21 @@ class WebServer:
             logger.opt(exception=exc).warning("PreviewRegistry setup failed")
             app.state.preview_registry = None
 
-        # Make the config available to the routes (e.g. admin-pass check in
-        # skills_routes). Other routes will use it too going forward.
-        app.state.config = self.cfg
-        app.state.bus = self.bus
-
-        # Voice boot-readiness mirror. WS events are one-shot, so a tab that
-        # connects after warm-up finished would never see VoiceBootStatus.
-        # Persist the latest state on this (long-lived) server instance for
-        # GET /api/voice/status to read — deliberately NOT on app.state, whose
-        # ASGI lifecycle could outrace the bus subscriber on shutdown.
-        #
-        # When the local voice stack is disabled (JARVIS_VOICE=0 — headless,
-        # VPS, browser-mic-only), there is nothing to warm up and the pipeline
-        # never emits VoiceBootStatus, so seed ready=True. Otherwise the
-        # frontend's "starting up" banner would hang forever even though the
-        # user can already type (and use browser voice). A real voice pipeline
-        # starts at ready=False (warmup_start) and flips True via the subscriber
-        # below, so this seed only ever sticks when voice is genuinely off.
-        _voice_disabled = os.environ.get("JARVIS_VOICE", "").strip().lower() in (
-            "0",
-            "off",
-            "false",
-        )
-        self._voice_ready = _voice_disabled
-
-        # Synchronous routes run on anyio's thread pool, which grows ON the
-        # loop and shrinks after ten idle seconds — a start that blocked the
-        # loop for 15 s on 2026-08-27 (BUG-189). Workers stay resident from
-        # here on; a handful is brought up once voice reports ready, below.
-        from jarvis.core.loop_executor import keep_anyio_workers_alive
-
-        keep_anyio_workers_alive()
-        self._anyio_pool_warmed = False
-
-        async def _track_voice_ready(event: VoiceBootStatus) -> None:
-            # A bus subscriber must never raise (AP-18); setting a plain
-            # instance bool cannot fail, and the warm-up below only schedules.
-            self._voice_ready = event.voice_usable
-            if event.ready:
-                self._schedule_anyio_pool_warm()
-
-        self.bus.subscribe(VoiceBootStatus, _track_voice_ready)
-
+        # The SPA catch-all must remain after every API router.
         self._register_static_or_spa(app)
 
-        # Publish the live app for in-process consumers: the app-command brain
-        # tool executes Command-Registry commands through it via ASGI transport
-        # (same routes + validation as the UI, no TCP).
+    def _publish_app(self) -> None:
+        # Deferred construction runs in a thread, but publication belongs to
+        # the owner loop after prepare() checks its stopping fence. A late
+        # builder must never publish an app whose teardown has already begun.
         from jarvis.core import runtime_refs
 
-        runtime_refs.set_web_app(app)
+        runtime_refs.set_web_app(self.app)
 
-        return app
+    async def prepare_app(self) -> None:
+        """Complete the route graph before ASGI publication or service startup."""
+        await self._feature_setup.prepare()
+        self._publish_app()
 
     #: Breathing room between "voice is ready" and bringing anyio's workers
     #: up. Ready is the end of the heavy boot work, not of the box's — the
@@ -762,7 +945,9 @@ class WebServer:
                 return
             logger.info("anyio worker pool warmed: {} thread(s) resident", resident)
 
-        asyncio.create_task(_warm(), name="anyio-pool-warm")
+        self._anyio_pool_warm_task = asyncio.create_task(
+            _warm(), name="anyio-pool-warm"
+        )
 
     async def _voice_ready_watchdog(self, deadline_s: float = 45.0) -> None:
         """Release boot waiters after a failed warm-up without promising speech.
@@ -795,6 +980,7 @@ class WebServer:
         # Set the endpoint mirror first so /api/voice/status is correct even if
         # the bus publish below fails; the WS event then updates live tabs.
         self._voice_ready = False
+        self._voice_detail = "watchdog_timeout"
         try:
             await self.bus.publish(VoiceBootStatus(ready=True, detail="watchdog_timeout"))
         except Exception as exc:  # noqa: BLE001 — mirror already set; never crash
@@ -812,6 +998,8 @@ class WebServer:
             from jarvis.board.aggregator import BoardAggregator
             from jarvis.board.bio_brain import BIO_TIMEOUT_S, resolve_bio_brain
             from jarvis.board.evaluator import AchievementEvaluator
+            from jarvis.board.insights import BoardInsights
+            from jarvis.board.insights import default_sources as insight_sources
             from jarvis.board.profile import BioGenerator, BioStore
             from jarvis.board.scheduler import BioScheduler
             from jarvis.board.store import BoardStore
@@ -834,6 +1022,13 @@ class WebServer:
                 sessions_db_path=sessions_db_path,
             )
             store = BoardStore(db_path=db_path)
+            insights = BoardInsights(
+                insight_sources(
+                    data_dir=Path(self.cfg.memory.data_dir),
+                    sessions_db=sessions_db_path,
+                    board_db=db_path,
+                )
+            )
             evaluator = AchievementEvaluator(db_path=db_path, bus=self.bus)
             bio_store = BioStore(db_path=db_path)
 
@@ -885,6 +1080,7 @@ class WebServer:
             self._bio_generator = bio_generator
             app.state.board_aggregator = aggregator
             app.state.board_store = store
+            app.state.board_insights = insights
             app.state.achievement_evaluator = evaluator
             app.state.bio_generator = bio_generator
             app.state.bio_store = bio_store
@@ -903,6 +1099,7 @@ class WebServer:
             self._bio_generator = None
             app.state.board_aggregator = None
             app.state.board_store = None
+            app.state.board_insights = None
             app.state.achievement_evaluator = None
             app.state.bio_generator = None
             app.state.bio_store = None
@@ -1046,9 +1243,6 @@ class WebServer:
             # browser can paint after the full FastAPI app has already taken
             # over, so the live app must accept the same POST as an idempotent
             # no-op instead of returning FastAPI's 405 Method Not Allowed.
-            from jarvis.society.browser.install import start_install
-            browser_data = Path(getattr(self.cfg.memory, "data_dir", None) or "data")
-            start_install(browser_data)
             return Response(status_code=204)
 
         @app.get("/api/config")
@@ -1120,7 +1314,10 @@ class WebServer:
             late-connecting UI would miss it. The value is maintained by the bus
             subscriber in ``_build_app`` on the server instance.
             """
-            return {"ready": bool(getattr(self, "_voice_ready", False))}
+            return {
+                "ready": bool(getattr(self, "_voice_ready", False)),
+                "detail": str(getattr(self, "_voice_detail", "")),
+            }
 
         async def _jarvis_agent_status_snapshot() -> dict[str, Any]:
             """Jarvis-Agent bridge status for the settings view (Wave 3).
@@ -1360,10 +1557,12 @@ class WebServer:
                 codex_connected = False
                 codex_installed = False
             try:
-                codex_key = bool(
-                    get_secret(
-                        "codex_openai_api_key",
-                        env_fallback="CODEX_OPENAI_API_KEY",
+                codex_key = await asyncio.to_thread(
+                    lambda: bool(
+                        get_secret(
+                            "codex_openai_api_key",
+                            env_fallback="CODEX_OPENAI_API_KEY",
+                        )
                     )
                 )
             except Exception:  # noqa: BLE001
@@ -1416,7 +1615,9 @@ class WebServer:
             except Exception:  # noqa: BLE001
                 antigravity_connected = False
             try:
-                antigravity_key = bool(get_jarvis_agent_secret("gemini"))
+                antigravity_key = await asyncio.to_thread(
+                    lambda: bool(get_jarvis_agent_secret("gemini"))
+                )
             except Exception:  # noqa: BLE001
                 antigravity_key = False
             antigravity_ready = (
@@ -1506,6 +1707,41 @@ class WebServer:
                 }
             )
 
+            # Hermes Agent is a DIRECT worker too (HermesDirectWorker over
+            # ``hermes -z``). It brings its own providers and keys, so the
+            # installed launcher is the readiness Jarvis can see.
+            try:
+                from jarvis.missions.workers.hermes_direct_worker import (
+                    resolve_hermes_binary,
+                )
+
+                hermes_ready = resolve_hermes_binary() is not None
+            except Exception:  # noqa: BLE001
+                # Same reading as the Grok Build row: unknown is "not ready" on
+                # this overview, never a page that fails to load.
+                hermes_ready = False
+            mapping_rows.append(
+                {
+                    "jarvis": "hermes",
+                    "openclaw": "hermes (direct)",
+                    "env_var": "Hermes config",
+                    "env_fallback": None,
+                    "key_set": hermes_ready,
+                    "api_key_set": False,
+                    "dedicated_key_set": False,
+                    "shared_key_set": False,
+                    "oauth_connected": False,
+                    "credential_source": "none",
+                    "secret_key": None,
+                    "dashboard_url": None,
+                    "credential_help": None,
+                    "is_active_brain": primary == "hermes",
+                    # Usually an API key or a local server, as configured in Hermes.
+                    "billing": "api",
+                    "label": "Hermes Agent",
+                }
+            )
+
             return {
                 "configured": oc_cfg is not None,
                 "enabled": bool(oc_cfg.enabled) if oc_cfg else False,
@@ -1562,15 +1798,15 @@ class WebServer:
                 return {"ok": False, "error": "memory read failed. " + LOG_HINT, "data": {}}
 
         @app.post("/api/memory/facts")
-        async def add_memory_fact(payload: dict[str, Any]) -> dict[str, Any]:
+        async def add_memory_fact(payload: MemoryFactBody) -> dict[str, Any]:
             """User-driven add from the UI."""
             from jarvis.core.config import DATA_DIR
             from jarvis.memory import CORE_MEMORY_FILENAME, CoreMemory
 
             from .error_text import LOG_HINT
 
-            fact = (payload.get("fact") or "").strip()
-            category = (payload.get("category") or "general").strip()
+            fact = payload.fact.strip()
+            category = payload.category.strip() or "general"
             if not fact:
                 return {"ok": False, "error": "fact is missing"}
             try:
@@ -1582,15 +1818,15 @@ class WebServer:
                 return {"ok": False, "error": "memory write failed. " + LOG_HINT}
 
         @app.delete("/api/memory/facts")
-        async def delete_memory_fact(payload: dict[str, Any]) -> dict[str, Any]:
+        async def delete_memory_fact(payload: MemoryFactBody) -> dict[str, Any]:
             """User-driven remove from the UI."""
             from jarvis.core.config import DATA_DIR
             from jarvis.memory import CORE_MEMORY_FILENAME, CoreMemory
 
             from .error_text import LOG_HINT
 
-            fact = (payload.get("fact") or "").strip()
-            category = (payload.get("category") or "general").strip()
+            fact = payload.fact.strip()
+            category = payload.category.strip() or "general"
             if not fact:
                 return {"ok": False, "error": "fact is missing"}
             try:
@@ -1935,6 +2171,27 @@ class WebServer:
                     source_layer="ui.web.ws",
                 )
             )
+        except WebSocketDisconnect:
+            # A reply frame (pong, terminal.spawned) hit a closed socket — that
+            # is the receive loop's business, not a failed command.
+            raise
+        except Exception as exc:  # noqa: BLE001 — one bad frame must not end the session
+            # A handler failing on one frame (a malformed terminal.resize, a
+            # PTY write error) used to escape into _handle_ws, which closed the
+            # whole UI event socket. Report it and keep the connection.
+            action = raw.get("action") if frame_type == "command" else None
+            logger.opt(exception=exc).warning(
+                "WS frame handler failed", frame_type=frame_type, action=action
+            )
+            await self.bus.publish(
+                ErrorOccurred(
+                    layer="ui.web.ws",
+                    error_type="CommandFailed" if frame_type == "command" else "FrameFailed",
+                    message=f"{action or frame_type} failed: {type(exc).__name__}",
+                    recoverable=True,
+                    source_layer="ui.web.ws",
+                )
+            )
 
     async def _handle_command(
         self,
@@ -2213,12 +2470,11 @@ class WebServer:
             # up in a loop-stall stack (2026-08-26, BUG-189).
             return await asyncio.to_thread(self._spa_index_response)
 
-        @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
         async def _spa_fallback(
             full_path: str,
         ) -> FileResponse | HTMLResponse | JSONResponse:
-            if full_path.startswith("api/") or full_path.startswith("ws"):
-                return JSONResponse({"detail": "Not Found"}, status_code=404)
+            # API and socket paths never reach this handler: _SpaFallbackRoute
+            # declines them, so the router answers 404 / 405 itself.
             try:
                 target = (DIST_DIR / full_path).resolve()
                 dist_root = DIST_DIR.resolve()
@@ -2233,6 +2489,15 @@ class WebServer:
             if PurePosixPath(full_path).suffix.lower() in ASSET_SUFFIXES:
                 return JSONResponse({"detail": "Not Found"}, status_code=404)
             return await asyncio.to_thread(self._spa_index_response)
+
+        app.router.add_api_route(
+            "/{full_path:path}",
+            _spa_fallback,
+            methods=["GET"],
+            include_in_schema=False,
+            response_model=None,
+            route_class_override=_SpaFallbackRoute,
+        )
 
     def _spa_index_response(self) -> FileResponse | HTMLResponse:
         # An index.html whose own entry bundle is not on disk is worse than no
@@ -2382,7 +2647,7 @@ class WebServer:
                 if registry is None or self._refresh_scheduler_stopping:
                     return
                 task = asyncio.create_task(
-                    registry.refresh_plugin(plugin_id),
+                    registry.refresh_credentials(plugin_id),
                     name=f"plugin-refresh:{plugin_id}",
                 )
                 self._refresh_registry_tasks.add(task)
@@ -2569,6 +2834,7 @@ class WebServer:
 
         _attach_permission_bus(self.bus, asyncio.get_running_loop())
 
+        await self.prepare_app()
         import uvicorn
 
         # Boot profiling (opt-in via JARVIS_BOOT_PROFILE=1; zero behavior change
@@ -2720,6 +2986,39 @@ class WebServer:
                 "Jarvis learning loop init failed — Jarvis will not learn this run"
             )
 
+        # Brain map tick: a task that SLEEPS first, then runs one deterministic
+        # incremental pass every few minutes in a worker thread. Rules only —
+        # no model, no provider, nothing that can bill a key. Off the boot path.
+        try:
+            from jarvis.memory.brain_map.service import BrainMapService, tick_loop
+
+            brain_map = getattr(self.app.state, "brain_map", None)
+            if isinstance(brain_map, BrainMapService):
+                self._brain_map_task = asyncio.create_task(
+                    tick_loop(brain_map), name="brain-map-tick"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "Brain map tick init failed — the map updates only on reindex"
+            )
+
+        # The British "Jarvis" voice: when the local voice speaks already and
+        # its optional Kokoro voice is missing, fetch it in the background (a
+        # free 330 MB download; English answers switch to it once it is there).
+        try:
+            tts_provider = str(getattr(getattr(self.cfg, "tts", None), "provider", "") or "")
+            if tts_provider in ("piper-local", "piper"):
+                from jarvis.speech.local_install import fetch_missing_extras
+
+                self._jarvis_voice_task = asyncio.create_task(
+                    asyncio.to_thread(fetch_missing_extras, "piper-local"),
+                    name="jarvis-voice-fetch",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.opt(exception=exc).warning(
+                "British voice fetch did not start; English keeps the Piper voice"
+            )
+
         # Reconcile the derived FTS5 index after readiness. This repairs stale
         # rows after a vault switch without extending the startup critical path.
         try:
@@ -2798,6 +3097,14 @@ class WebServer:
                 self._board_evaluator.attach()
             except Exception as exc:  # noqa: BLE001
                 logger.opt(exception=exc).warning("AchievementEvaluator.attach() failed")
+
+        # Level system on the bus: pays XP for finished turns, tasks and quests.
+        progression = getattr(self, "_progression", None)
+        if progression is not None:
+            try:
+                progression.attach()
+            except Exception as exc:  # noqa: BLE001 - levels are optional, the app is not
+                logger.opt(exception=exc).warning("ProgressionService.attach() failed")
 
         # Bio scheduler — subscribes to achievement unlocks only. It starts no
         # task and generates nothing here; the brain is resolved per
@@ -2884,18 +3191,9 @@ class WebServer:
         # transport for it.
         self._schedule_realtime_transport_warm()
         self._schedule_appshot_shortcut()
-        # Defer provisioning until the boot chain returns control to the server.
-        # Only the install is prepared here: a Chromium costs hundreds of MB,
-        # so an agent's browser launches when the agent first uses it or the
-        # person opens its view, never pre-warmed at boot.
-        async def prepare_browser() -> None:
-            from jarvis.society.browser import install
-            data_dir = Path(getattr(self.cfg.memory, "data_dir", None) or "data")
-            try:
-                install.start_install(data_dir)
-            except Exception:
-                logger.debug("Browser preparation deferred after failure", exc_info=True)
-        self._browser_prepare_task = asyncio.create_task(prepare_browser(), name="browser-prepare")
+        # Browser provisioning includes a Chromium probe and may need Linux
+        # system libraries. Leave it to explicit browser use/setup; boot and
+        # shell-paint acknowledgements must keep headless installations usable.
         # Existing Mars work recovers with zero clients. The deferred helper
         # performs its existence probe and runtime composition after boot yields.
         from .mars_routes import schedule_mars_resume
@@ -3165,6 +3463,18 @@ class WebServer:
             self._missions_resweep_task = asyncio.create_task(
                 periodic_recovery_sweep(result["manager"].store),
                 name="mission-recovery-resweep",
+            )
+
+            # Missions parked in WAITING_CAPACITY resume from their checkpoint
+            # once their own subscription has capacity again — never on another
+            # provider or a paid key (jarvis/missions/capacity.py). Primary
+            # instance only, like the sweep: two instances must not both
+            # resume one mission.
+            from jarvis.missions.capacity import capacity_resume_loop
+
+            self._missions_resume_task = asyncio.create_task(
+                capacity_resume_loop(result["kontrollierer"].resume_waiting_missions),
+                name="mission-capacity-resume",
             )
 
     async def _init_wiki_integration(self) -> None:
@@ -3827,6 +4137,28 @@ class WebServer:
         return not pending
 
     async def stop(self) -> None:
+        from jarvis.core import runtime_refs
+
+        appshot_task = getattr(self, "_appshot_shortcut_task", None)
+        if appshot_task is not None:
+            appshot_task.cancel()
+            await asyncio.gather(appshot_task, return_exceptions=True)
+            self._appshot_shortcut_task = None
+        try:
+            from jarvis.appshot.hotkey import stop_appshot_shortcut
+
+            await stop_appshot_shortcut()
+        except Exception:
+            logger.opt(exception=True).warning("Appshot helpers failed to stop")
+
+        if runtime_refs.get_web_app() is self.app:
+            runtime_refs.set_web_app(None)
+        # A cancelled setup waiter cannot stop its worker thread. Join it
+        # before closing board/stores/subscriptions that it may still create.
+        try:
+            await self._feature_setup.stop()
+        except Exception as exc:  # noqa: BLE001 -- close partial setup too
+            logger.opt(exception=exc).warning("Application feature setup failed during shutdown")
         # Fence lazy creation even when no Society owner exists yet. The shared
         # brain factory and HTTP surface can still be called while shutdown awaits.
         self.app.state.society_stopping = True
@@ -3843,17 +4175,23 @@ class WebServer:
             mars_shutdown_failure = type(exc).__name__
             logger.warning("Mars station cleanup incomplete ({})", mars_shutdown_failure)
         registry_bootstraps_stopped = await self._stop_registry_bootstraps()
-        if self._browser_prepare_task is not None:
-            self._browser_prepare_task.cancel()
-            await asyncio.gather(self._browser_prepare_task, return_exceptions=True)
-            self._browser_prepare_task = None
+        # A short-lived server can stop before these delayed boot helpers run.
+        # Own and drain them here instead of leaving asyncio.run()/pytest to
+        # discover them during loop teardown. Stop the deferred registry reload
+        # before its registries are closed below so shutdown cannot race a scan.
+        for attr in ("_anyio_pool_warm_task", "_deferred_reload_task"):
+            task = getattr(self, attr, None)
+            setattr(self, attr, None)
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         society = getattr(self.app.state, "society", None)
         society_shutdown_failure: str | None = None
         if society is not None:
             try:
                 # The runtime owns delivery tasks, subscriptions and SQLite as
                 # well as the browser. Leaving its store open prevents exit.
-                await asyncio.wait_for(society.close(), timeout=5.0)
+                await asyncio.wait_for(society.close(), timeout=_SOCIETY_SHUTDOWN_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 -- finish independent cleanup below
                 society_shutdown_failure = type(exc).__name__
                 logger.warning("Society runtime cleanup incomplete ({})", society_shutdown_failure)
@@ -3967,6 +4305,12 @@ class WebServer:
                 await self._bio_scheduler.stop()
             except Exception as exc:  # noqa: BLE001
                 logger.opt(exception=exc).debug("BioScheduler.stop(): {}", exc)
+        progression = getattr(self, "_progression", None)
+        if progression is not None:
+            try:
+                progression.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.opt(exception=exc).debug("ProgressionService.close(): {}", exc)
         if self._board_evaluator is not None:
             try:
                 self._board_evaluator.close()
@@ -4018,6 +4362,17 @@ class WebServer:
                 pass
             self._missions_resweep_task = None
 
+        # The resume timer stops here; a mission it already resumed runs in its
+        # own task and is finalized by cancel_all_running below.
+        resume_task = getattr(self, "_missions_resume_task", None)
+        if resume_task is not None:
+            resume_task.cancel()
+            try:
+                await asyncio.wait_for(resume_task, timeout=2.0)
+            except (TimeoutError, asyncio.CancelledError):  # expected while stopping the timer
+                pass
+            self._missions_resume_task = None
+
         cleanup_task = getattr(self, "_missions_cleanup_task", None)
         if cleanup_task is not None:
             cleanup_task.cancel()
@@ -4038,6 +4393,17 @@ class WebServer:
             except TimeoutError:
                 logger.warning("retention_task: did not stop within 2s — may be blocking on I/O")
             self._screenshot_retention_task = None
+
+        # Brain map tick: cancel the loop; a pass already in its worker thread
+        # finishes its current short transaction on its own.
+        brain_map_task = getattr(self, "_brain_map_task", None)
+        if brain_map_task is not None:
+            brain_map_task.cancel()
+            try:
+                await asyncio.wait_for(brain_map_task, timeout=2.0)
+            except (TimeoutError, asyncio.CancelledError):  # cancelled, or busy in its thread
+                logger.debug("brain map tick stopped")
+            self._brain_map_task = None
 
         # Flush + close the flight-recorder audit log so the last buffered events
         # reach disk before shutdown (it otherwise auto-flushes every ~1s).

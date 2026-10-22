@@ -5,7 +5,9 @@ switching the active screen). The brain calls it when the user asks to open or
 show a section ("zeig die Socials", "open settings", "show the agents"). It
 publishes a :class:`~jarvis.core.events.NavigateSidebar` event; the frontend
 listener (``useWebSocket.ts``) switches the active section when ``section`` is a
-known ``SectionId`` and otherwise no-ops gracefully.
+known ``SectionId`` and otherwise no-ops gracefully. An optional ``then`` label
+is clicked inside the opened section afterwards, through the same window round
+trip the ``app_ui_*`` tools use (``jarvis/core/app_ui_bridge.py``).
 
 A direct safe-gated UI action, never a spawn — it never enters a worker tool-set
 (AP-5/AP-14). ``KNOWN`` mirrors the frontend ``SECTION_IDS`` (store/events.ts);
@@ -16,8 +18,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from jarvis.core.app_ui_bridge import AppUiBridge
 from jarvis.core.events import NavigateSidebar
 from jarvis.core.protocols import ToolResult
+
+#: How long the ``then`` click may wait for the new section to render (a lazily
+#: loaded view can take a moment on first open).
+THEN_WAIT_MS = 3000
 
 # Canonical section ids — mirror of SECTION_IDS in
 # jarvis/ui/web/frontend/src/store/events.ts (parity-tested).
@@ -30,7 +37,6 @@ KNOWN: frozenset[str] = frozenset(
         "docs",
         "mcps",
         "sessions",
-        "run_inspector",
         # Spend & Tokens.
         "costs",
         "clis",
@@ -40,8 +46,6 @@ KNOWN: frozenset[str] = frozenset(
         "profile",
         "memory",
         "apikeys",
-        # Local models: the Ollama server, installed models and the catalogue.
-        "local-models",
         # Computers: the user's servers and local VMs, reached over SSH.
         "computers",
         "settings",
@@ -49,13 +53,10 @@ KNOWN: frozenset[str] = frozenset(
         "telephony-setup",
         "socials",
         "taskbar",
-        "contacts",
         "feedback",
         "agent-instructions",
         # Appshots: the shortcut and destination for showing the front window.
         "appshots",
-        # Jarvis actions: which app actions Jarvis may run, ask for or never run.
-        "jarvis-actions",
         "dictionary",
         "dictation",
         "voice-shortcuts",
@@ -76,12 +77,30 @@ KNOWN: frozenset[str] = frozenset(
         "pets",
         # Keyboard shortcuts: every shortcut in one place, with a key tester.
         "shortcuts",
+        # The HUD: the mission deck as a section of its own.
+        "deck",
+        # The memory orb: notes, skills, tools and apps as one live map.
+        "orb",
+        # The tool armory: every app the assistant can reach, as cards.
+        "armory",
+        # God's Eye View: the globe with public geospatial feeds.
+        "world-intelligence",
+        # The HUD's Intelligence screen: public world events on one map.
+        "intelligence",
+        # The HUD's Orbital screen: the ISS, stations, space weather, NEOs.
+        "orbital",
+        # The HUD's Live screen: news channels and every public camera.
+        "live-feeds",
+        # The HUD's Ghost screen: every public sensor on one fusion map.
+        "ghost",
     }
 )
 
 # Natural-language aliases (DE + EN) → canonical id. The router usually passes an
 # id from the schema enum; this is the safety net for spoken labels/synonyms.
 _ALIASES: dict[str, str] = {
+    # Retired inspection links open the saved conversation archive.
+    "run_inspector": "sessions",
     # Agentic IDE — the spoken forms people reach for. "agentic" is a mouthful
     # in every supported language, so the plain-words variants matter more here
     # than for sections whose label is already a common noun.
@@ -171,8 +190,6 @@ _ALIASES: dict[str, str] = {
     "notizen": "memory",
     "notiz": "memory",
     "wiki": "memory",
-    "local models": "local-models",
-    "local-models": "local-models",
     "computers": "computers",
     "servers": "computers",
     "vps": "computers",
@@ -182,11 +199,6 @@ _ALIASES: dict[str, str] = {
     "virtuelle maschinen": "computers",  # i18n-allow: input vocab
     "ordenadores": "computers",  # i18n-allow: input vocab
     "servidores": "computers",  # i18n-allow: input vocab
-    "local model": "local-models",
-    "ollama": "local-models",
-    "lokale modelle": "local-models",  # i18n-allow: input vocab
-    "lokale models": "local-models",  # i18n-allow: input vocab
-    "modelos locales": "local-models",  # i18n-allow: input vocab
     "api keys": "apikeys",
     "api-keys": "apikeys",
     "api key": "apikeys",
@@ -207,8 +219,6 @@ _ALIASES: dict[str, str] = {
     "ergebnisse": "visualization",  # i18n-allow: input vocab
     "resultados": "visualization",  # i18n-allow: input vocab
     "appshot": "appshots",
-    "jarvis actions": "jarvis-actions",
-    "jarvis aktionen": "jarvis-actions",  # i18n-allow: speech-input vocabulary
     "app shots": "appshots",
     "app shot": "appshots",
     "task bar": "taskbar",
@@ -232,11 +242,6 @@ _ALIASES: dict[str, str] = {
     "visualización": "visualization",  # i18n-allow: input vocab
     "visualizaciones": "visualization",  # i18n-allow: input vocab
     "gráficos": "visualization",  # i18n-allow: input vocab
-    "contact": "contacts",
-    "kontakt": "contacts",
-    "kontakte": "contacts",
-    "address book": "contacts",
-    "adressbuch": "contacts",
     # "Extensions" is the merged sidebar entry fronting skills + plugins + clis
     # + mcps. The bare name lands on the Skills tab; "tools" lands on the Tools
     # tab (which defaults to Plugins). The underlying section ids are unchanged.
@@ -273,6 +278,63 @@ _ALIASES: dict[str, str] = {
     "claves de entrada de voz": "voice-api-keys",  # i18n-allow: input vocab
     # The marketplace. "store"/"shop" are the words people actually reach for,
     # and none of these names anything else in the app.
+    "hud": "deck",
+    "mission deck": "deck",
+    "deck": "deck",
+    "memory orb": "orb",
+    "orb": "orb",
+    "brain map": "orb",
+    "tool armory": "armory",
+    "armory": "armory",
+    "armoury": "armory",
+    "world intelligence": "world-intelligence",
+    "god's eye view": "world-intelligence",
+    "gods eye view": "world-intelligence",
+    # The screen's own short name, as people say it ("open God's Eye").
+    "god's eye": "world-intelligence",
+    "gods eye": "world-intelligence",
+    "intelligence": "intelligence",
+    "world events": "intelligence",
+    "event map": "intelligence",
+    "orbital": "orbital",
+    "orbit": "orbital",
+    "space weather": "orbital",
+    "iss": "orbital",
+    "space station": "orbital",
+    # The HUD's rail, by the words on it and the words people use for it.
+    "command": "deck",
+    "command center": "deck",
+    "command centre": "deck",
+    "command screen": "deck",
+    "home screen": "deck",
+    "main screen": "deck",
+    "intel": "intelligence",
+    "intel screen": "intelligence",
+    "world": "world-intelligence",
+    "world screen": "world-intelligence",
+    "world map": "world-intelligence",
+    "globe": "world-intelligence",
+    "space": "orbital",
+    "space view": "orbital",
+    "satellites": "orbital",
+    "live": "live-feeds",
+    "live feeds": "live-feeds",
+    "live news": "live-feeds",
+    "live tv": "live-feeds",
+    "news": "live-feeds",
+    "news channels": "live-feeds",
+    "ai news": "live-feeds",
+    "finance news": "live-feeds",
+    "business news": "live-feeds",
+    "ghost": "ghost",
+    "ghost mode": "ghost",
+    "sensor fusion": "ghost",
+    "cctv": "ghost",
+    "cctvs": "ghost",
+    "cameras": "ghost",
+    "camera wall": "ghost",
+    "city cameras": "ghost",
+    "traffic cameras": "ghost",
     "market": "marketplace",
     "market place": "marketplace",
     "store": "marketplace",
@@ -330,8 +392,9 @@ class NavigateTool:
         "Open/switch the desktop app to a sidebar section (the UI screen the user "
         "sees). Use when the user asks to show or open a section — 'zeig die "
         "Socials', 'open settings', 'show the agents', 'geh zu den Aufgaben'. Pass "
-        "the section id in 'section'. Do NOT use it for anything other than moving "
-        "the UI."
+        "the section id in 'section'. To go further inside it ('settings, the Model "
+        "page'), pass the tab or button words in 'then', or call app_ui_snapshot "
+        "next. Do NOT use it for anything other than moving the UI."
     )
     schema: dict[str, Any] = {
         "type": "object",
@@ -342,13 +405,21 @@ class NavigateTool:
                 "description": (
                     "The sidebar section id to open (e.g. 'socials', 'settings', 'agents')."
                 ),
-            }
+            },
+            "then": {
+                "type": "string",
+                "description": (
+                    "Optional: the words on a tab, sub-page or button to click once "
+                    "the section is open, e.g. 'Model'."
+                ),
+            },
         },
         "required": ["section"],
     }
 
-    def __init__(self, bus: Any) -> None:
+    def __init__(self, bus: Any, bridge: AppUiBridge | None = None) -> None:
         self._bus = bus
+        self._bridge = bridge or AppUiBridge(bus, source_layer="brain.tool.navigate")
 
     @classmethod
     def known_sections(cls) -> set[str]:
@@ -368,7 +439,36 @@ class NavigateTool:
         await self._bus.publish(
             NavigateSidebar(section=section, source_layer="brain.tool.navigate")
         )
+        then = " ".join(str(args.get("then") or "").split())
+        if not then:
+            return ToolResult(
+                success=True,
+                output={"section": section, "summary": f"Opened the {section} section."},
+            )
+        # The section is open either way; the click is reported honestly on its
+        # own, so a missing tab never reads as a failed navigation.
+        reply = await self._bridge.request("click", label=then, wait_ms=THEN_WAIT_MS)
+        if reply.ok:
+            clicked = reply.result.get("clicked") or {}
+            name = str(clicked.get("name") or then)
+            return ToolResult(
+                success=True,
+                output={
+                    "section": section,
+                    "clicked": name,
+                    "summary": f"Opened the {section} section and clicked {name!r}.",
+                },
+            )
         return ToolResult(
             success=True,
-            output={"section": section, "summary": f"Opened the {section} section."},
+            output={
+                "section": section,
+                "clicked": None,
+                "then_error": reply.error,
+                "no_window": reply.no_window,
+                "summary": (
+                    f"Opened the {section} section, but could not click {then!r}: "
+                    f"{reply.error} Call app_ui_snapshot to see what is there."
+                ),
+            },
         )

@@ -51,6 +51,11 @@ describe("detectKeyFormat", () => {
     expect(detectKeyFormat("nvapi-abc123def456")?.kind).toBe("nvidia");
   });
 
+  it("recognizes a Nous Portal key (sk-nous-) before the generic OpenAI sk-", () => {
+    expect(detectKeyFormat("sk-nous-abc123def456")?.kind).toBe("nous");
+    expect(detectKeyFormat("sk-nous-abc123def456")?.label).toBe("Nous Portal API key");
+  });
+
   it("recognizes xAI, Cartesia, ElevenLabs and Groq keys", () => {
     expect(detectKeyFormat("xai-abc123")?.kind).toBe("xai");
     expect(detectKeyFormat("sk_car_abc123")?.kind).toBe("cartesia");
@@ -71,6 +76,8 @@ describe("expectedKindForSecret", () => {
     expect(expectedKindForSecret("openai_api_key")).toBe("openai");
     expect(expectedKindForSecret("codex_openai_api_key")).toBe("openai");
     expect(expectedKindForSecret("nvidia_api_key")).toBe("nvidia");
+    expect(expectedKindForSecret("nous_api_key")).toBe("nous");
+    expect(expectedKindForSecret("jarvis_agent_nous_api_key")).toBe("nous");
     expect(expectedKindForSecret("grok_api_key")).toBe("xai");
     expect(expectedKindForSecret("cartesia_api_key")).toBe("cartesia");
     expect(expectedKindForSecret("elevenlabs_api_key")).toBe("elevenlabs");
@@ -99,6 +106,13 @@ describe("keyMatchesSecret", () => {
     const r = keyMatchesSecret("openai_api_key", "sk-ant-api03-xyz");
     expect(r.match).toBe(false);
     expect(r.detected?.kind).toBe("anthropic");
+  });
+
+  it("confirms a Nous Portal key in its slot and flags it in the OpenAI field", () => {
+    expect(keyMatchesSecret("nous_api_key", "sk-nous-abc123").match).toBe(true);
+    const r = keyMatchesSecret("openai_api_key", "sk-nous-abc123");
+    expect(r.match).toBe(false);
+    expect(r.detected?.kind).toBe("nous");
   });
 
   it("stays neutral (match=true) when the slot has no known format", () => {

@@ -29,11 +29,10 @@ _OUTPUT_RATE = 24_000
 _READY_TIMEOUT_S = 180.0
 _SELFTEST_TIMEOUT_S = 120.0
 _RESTART_BACKOFF_S = (1.0, 5.0, 30.0)
-#: Core load from a warm disk (plan section 7: core ready <= 15 s); scales the
-#: "about N s" a refused call hears while the engine loads.
-_WARM_LOAD_S = 15.0
 #: Measured default for every machine class with an accelerator (plan 12.3).
 DEFAULT_LLM = "qwen3.5:4b"
+#: Where ``scripts/local_llm_lab.py serve`` and its sign-in task listen.
+LLAMA_SERVER_URL = "http://127.0.0.1:11435"
 #: Core models the engine cannot start without (``jarvis.voice_engine.models``).
 CORE_MODELS = ("silero-vad-v6", "smart-turn-v3.2", "parakeet-tdt-0.6b-v3-int8")
 #: What a refused call hears and sees, per output language. ``native.py``
@@ -51,12 +50,12 @@ _REFUSALS: dict[str, dict[str, str]] = {
               "Ajustes.",  # i18n-allow
     },
     "loading": {
-        "en": "Local voice is still loading ({percent} %). Please try again in about "
-              "{eta} seconds.",
-        "de": "Die lokale Stimme lädt noch ({percent} %). Versuch es in "  # i18n-allow
-              "etwa {eta} Sekunden noch einmal.",  # i18n-allow
-        "es": "La voz local aún se está cargando ({percent} %). Vuelve a "  # i18n-allow
-              "intentarlo en unos {eta} segundos.",  # i18n-allow
+        "en": "Local voice is still loading ({percent} %). The Local voice card "
+              "in Settings shows its progress.",
+        "de": "Die lokale Stimme lädt noch ({percent} %). Die Karte Lokale "  # i18n-allow
+              "Stimme in den Einstellungen zeigt den Fortschritt.",  # i18n-allow
+        "es": "La voz local aún se está cargando ({percent} %). La tarjeta "  # i18n-allow
+              "Voz local de los Ajustes muestra el progreso.",  # i18n-allow
     },
     "failed": {
         "en": "Local voice could not start. The Local voice card in Settings shows why.",
@@ -140,6 +139,8 @@ class EngineSettings:
     tts_options: dict[str, Any] = field(default_factory=dict)
     llm_model: str = DEFAULT_LLM
     llm_base_url: str = "http://127.0.0.1:11434"
+    # "ollama", or "openai" for an OpenAI-compatible server (llama-server).
+    llm_api: str = "ollama"
 
     @classmethod
     def from_config(cls, cfg: Any) -> EngineSettings:
@@ -160,6 +161,16 @@ class EngineSettings:
 
         home = pick("home", os.environ.get("JARVIS_VOICE_ENGINE_HOME") or None)
         recorded = _setup_record(home)
+        llm_api = "openai" if pick("llm_api", "ollama") == "openai" else "ollama"
+        if llm_api == "openai":
+            # The same server the local brain answers with, unless the card
+            # names another one: one llama-server, one resident model.
+            served_url, served_model = _local_openai_server(cfg)
+            llm_model = str(pick("llm_model", served_model))
+            llm_base_url = str(pick("llm_base_url", served_url))
+        else:
+            llm_model = str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM))
+            llm_base_url = str(pick("llm_base_url", _ollama_root()))
         return cls(
             python=str(pick("python", os.environ.get("JARVIS_VOICE_ENGINE_PYTHON")
                             or _default_python(home))),
@@ -168,14 +179,16 @@ class EngineSettings:
             languages=list(pick("languages", ["de", "en"])),
             tts=str(pick("tts", "pocket")),
             tts_options=dict(pick("tts_options", {})),
-            llm_model=str(pick("llm_model", recorded.get("llm_model") or DEFAULT_LLM)),
-            llm_base_url=str(pick("llm_base_url", _ollama_root())),
+            llm_model=llm_model,
+            llm_base_url=llm_base_url,
+            llm_api=llm_api,
         )
 
     def configure_message(self) -> dict[str, Any]:
         return {"type": "configure", "languages": self.languages, "tts": self.tts,
                 "tts_options": self.tts_options,
-                "llm": {"model": self.llm_model, "base_url": self.llm_base_url}}
+                "llm": {"model": self.llm_model, "base_url": self.llm_base_url,
+                        "api": self.llm_api}}
 
 
 def _engine_home(home: str | None) -> Path:
@@ -225,6 +238,17 @@ def _ollama_root() -> str:
     except Exception:  # noqa: BLE001 - an unreadable config keeps the vendor default
         log.debug("local voice: Ollama root unresolved; using the default", exc_info=True)
         return "http://127.0.0.1:11434"
+
+
+def _local_openai_server(cfg: Any) -> tuple[str, str]:
+    """Base URL and model of the ``local-openai`` brain card, else the lab's
+    llama-server default (``scripts/local_llm_lab.py``) and the served model."""
+    brain = getattr(cfg, "brain", None)
+    providers = getattr(brain, "providers", None) or {}
+    entry = providers.get("local-openai") if isinstance(providers, dict) else None
+    url = str(getattr(entry, "base_url", "") or "") or LLAMA_SERVER_URL
+    model = str(getattr(entry, "model", "") or "")
+    return url, model
 
 
 def _current_config() -> Any:
@@ -277,6 +301,8 @@ class _Engine:
         self._next_slot = 1
         self._failures = 0
         self._starting: asyncio.Task[None] | None = None
+        self._launching: asyncio.Task[Any] | None = None
+        self._load_watchdog: asyncio.Task[None] | None = None
         self._selftests: list[asyncio.Future[dict[str, Any]]] = []
 
     async def ensure_started(self) -> None:
@@ -293,14 +319,40 @@ class _Engine:
                 extra=_worker_extra_env(home),
             )
             stderr = home / "worker.log"
-            client = EngineClient(settings.python, env=env, stderr_path=stderr)
-            self.phase, self.stage, self.reason = "starting", "process", ""
+            client = EngineClient(settings.python, env=env, stderr_path=stderr, ordered=True)
+            self.phase, self.stage, self.reason, self.progress = "starting", "process", "", 0.0
             self._ready.clear()
-            await client.start()
+            self._launching = asyncio.current_task()
+            try:
+                await client.start()
+                await client.send(settings.configure_message())
+            except BaseException as exc:
+                await client.close()
+                self.phase = "stopped" if isinstance(exc, asyncio.CancelledError) else "failed"
+                self.reason = f"The local voice engine did not start: {exc}"
+                self._ready.set()
+                raise
+            finally:
+                self._launching = None
             self._client = client
             self._router = asyncio.get_running_loop().create_task(self._route_messages(client))
-            self._audio_router = asyncio.get_running_loop().create_task(self._route_audio(client))
-            await client.send(settings.configure_message())
+            self._load_watchdog = asyncio.get_running_loop().create_task(
+                self._watch_loading(client))
+
+    async def _watch_loading(self, client: Any) -> None:
+        """A stalled native load is terminal; retry starts a fresh process."""
+        try:
+            await asyncio.wait_for(self._ready.wait(), _READY_TIMEOUT_S)
+        except TimeoutError:
+            if self._client is not client:
+                return
+            stage = self.stage or "process"
+            await self.stop()
+            self.phase = "failed"
+            self.reason = (f"The local voice timed out while loading {stage}. "
+                           "Run the self-test on the Local voice card to retry.")
+            log.warning("%s", self.reason)
+            self._ready.set()
 
     def start_soon(self) -> None:
         """Start the worker in the background; a caller never waits for it."""
@@ -311,7 +363,7 @@ class _Engine:
     async def _start_logged(self) -> None:
         try:
             await self.ensure_started()
-        except (OSError, RuntimeError, TimeoutError) as exc:
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
             log.warning("local voice engine did not start: %s", exc)
             self.phase = "failed"
             self.reason = f"The local voice engine did not start: {exc}"
@@ -346,6 +398,11 @@ class _Engine:
     async def _route_messages(self, client: Any) -> None:
         while True:
             message = await client.messages.get()
+            if not isinstance(message, dict):
+                session = self._slots.get(message.slot)
+                if session is not None:
+                    session._deliver_audio(message.pcm)
+                continue
             kind = message.get("type")
             if kind == "_exited":
                 await self._on_exit()
@@ -365,6 +422,12 @@ class _Engine:
                 if self.phase in ("ready", "failed"):
                     self._failures = 0 if self.phase == "ready" else self._failures
                     self._ready.set()
+                if self.phase == "failed":
+                    # Retrying a failed self-test must create fresh native
+                    # engines, not reuse the same unusable loaded process.
+                    self._client = None
+                    await client.close()
+                    return
                 continue
             session = self._sessions.get(str(message.get("session", "")))
             if session is not None:
@@ -385,7 +448,12 @@ class _Engine:
             session._deliver({"type": "_engine_exited"})
         self._sessions.clear()
         self._slots.clear()
-        self._client = None
+        client, self._client = self._client, None
+        for task in (self._audio_router, self._load_watchdog):
+            if task is not None:
+                task.cancel()
+        if client is not None:
+            await client.close()
         self._failures += 1
         self.phase = "failed" if self._failures >= len(_RESTART_BACKOFF_S) else "stopped"
         self.reason = self.reason or "The local voice engine stopped."
@@ -427,10 +495,18 @@ class _Engine:
         self._slots.pop(session.slot, None)
 
     async def stop(self) -> None:
+        current = asyncio.current_task()
+        for task in (self._starting, self._launching, self._load_watchdog):
+            if task is not None and task is not current and not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         client, self._client = self._client, None
         for task in (self._router, self._audio_router):
             if task is not None:
                 task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         if client is not None:
             await client.close()
         self.phase = "stopped"
@@ -591,7 +667,7 @@ class LocalVoiceProvider:
         previous = cls._engine
         if previous is None or previous.settings != settings:
             cls._engine = _Engine(settings)
-            if previous is not None and previous._client is not None:
+            if previous is not None:
                 # Changed settings (a new voice or model) start a new worker;
                 # the old one must not linger with its models loaded.
                 try:
@@ -605,6 +681,16 @@ class LocalVoiceProvider:
     def shared_engine(cls, cfg: Any = None) -> _Engine:
         """The engine this app's calls use, for the card's status and self-test."""
         return cls._shared(EngineSettings.from_config(cfg))
+
+    @classmethod
+    async def verify_activation(cls, cfg: Any) -> None:
+        """Selecting the card starts the engine, so the first call finds it loaded.
+
+        Never refuses: the card must stay selectable before setup, because
+        setup runs from that card. Without an installed engine nothing starts.
+        """
+        if cls.external_login_ready(cfg):
+            cls._shared(EngineSettings.from_config(cfg)).start_soon()
 
     @classmethod
     async def prespawn_transport(cls, cfg: Any) -> bool:
@@ -624,7 +710,7 @@ class LocalVoiceProvider:
     async def can_open_duplex_session(self) -> bool:
         """Answer at once from the worker's state; never wait for it to load.
 
-        A call during warm-up hears why and roughly how long within a second
+        A call during warm-up hears why and where to see progress within a second
         (plan section 4.9); the start itself runs in the background.
         """
         settings = self._settings or EngineSettings.from_config(None)
@@ -642,9 +728,8 @@ class LocalVoiceProvider:
             log.warning("local voice refused a call: %s", engine.reason or "engine failed")
             self.duplex_unavailable_reason = refusal("failed", self.language)
         else:
-            eta_s = max(1, round((1.0 - engine.progress) * _WARM_LOAD_S))
             self.duplex_unavailable_reason = refusal(
-                "loading", self.language, percent=int(engine.progress * 100), eta=eta_s
+                "loading", self.language, percent=int(engine.progress * 100)
             )
         return False
 

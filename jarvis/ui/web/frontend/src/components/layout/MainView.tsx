@@ -13,14 +13,15 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ViewErrorBoundary } from "@/components/ViewErrorBoundary";
 import { DetachedViewPlaceholder } from "@/components/layout/DetachedViewPlaceholder";
-import { SETTINGS_HUB_IDS } from "@/components/layout/navGroups";
+import { SETTINGS_HUB_IDS, isHudSection } from "@/components/layout/navGroups";
+import { detachedWindowFor } from "@/lib/sectionWindows";
 // Type-only, so the section's chunk stays split out of the entry bundle.
 import type { AgenticIdeViewProps } from "@/views/AgenticIdeView";
 // The default section is the one view that must be on screen the moment React
 // mounts, so it stays statically linked into the entry chunk. Every other view
-// is code-split below. `ChatsSurface` picks the mission deck or the classic
-// chat view from the stored preference — both travel in the entry chunk because
-// either one can be the very first thing painted.
+// is code-split below. `ChatsSurface` is the HUD — the memory orb, the voice
+// orb and the chat on one screen — and it answers to "chats", "deck" and "orb"
+// alike (navGroups.HUD_SECTION_IDS).
 import { ChatsSurface } from "@/views/ChatsSurface";
 
 /**
@@ -65,6 +66,9 @@ function lazyPropView<P>(
 const SettingsHubDialog = lazyPropView<{ onClose: () => void }>(SETTINGS_HUB_IDS, () =>
   import("@/views/SettingsHubView").then((m) => ({ default: m.SettingsHubDialog })),
 );
+const SettingsHubView = lazy(() =>
+  import("@/views/SettingsHubView").then((m) => ({ default: m.SettingsHubView })),
+);
 // The Agents section is the society (MASTERPLAN §4.1): stage + agents rail +
 // model cards. The board it replaced is the society's stage until the island
 // lands, loaded by SocietyView itself.
@@ -85,7 +89,7 @@ const isSettingsHub = (section: string) =>
 // replacing it.
 const isOverlaySection = (section: string) => isPluginArea(section) || isSettingsHub(section);
 
-const PluginsDialog = lazyPropView<{ onClose: () => void; area: PluginArea; onAreaChange: (area: PluginArea) => void }>(["plugins", "mcps", "skills"], () =>
+const PluginsDialog = lazyPropView<{ onClose: () => void; area: PluginArea; standalone?: boolean; onAreaChange: (area: PluginArea) => void }>(["plugins", "mcps", "skills"], () =>
   import("@/views/PluginsDialog").then((m) => ({ default: m.PluginsDialog })),
 );
 // The prop type is named rather than inferred: inferring it from the loader's
@@ -103,13 +107,11 @@ const ClisHubView = lazyView(["clis", "cli-test-hub"], () =>
 const DocsView = lazyView(["docs"], () =>
   import("@/views/DocsView").then((m) => ({ default: m.DocsView })),
 );
+const ArmoryView = lazyPropView<{ armory?: boolean }>(["armory"], () =>
+  import("@/views/PluginsView").then((m) => ({ default: m.PluginsView })),
+);
 const BoardView = lazyView(["board"], () =>
   import("@/views/BoardView").then((m) => ({ default: m.BoardView })),
-);
-const RunInspectorView = lazyView(["run_inspector"], () =>
-  import("@/views/RunInspectorView").then((m) => ({
-    default: m.RunInspectorView,
-  })),
 );
 // Dictation + Dictionary + Shortcuts + Language + Voice API keys are merged
 // behind the one "{name} Voice" sidebar entry. Only the hub is split out here —
@@ -127,6 +129,23 @@ const MarketplaceView = lazyView(["marketplace"], () =>
   import("@/views/MarketplaceView").then((m) => ({
     default: m.MarketplaceView,
   })),
+);
+const WorldIntelligenceView = lazyView(["world-intelligence"], () =>
+  import("@/views/WorldIntelligenceView").then((m) => ({
+    default: m.WorldIntelligenceView,
+  })),
+);
+const IntelligenceView = lazyView(["intelligence"], () =>
+  import("@/views/IntelligenceView").then((m) => ({ default: m.IntelligenceView })),
+);
+const OrbitalView = lazyView(["orbital"], () =>
+  import("@/views/OrbitalView").then((m) => ({ default: m.OrbitalView })),
+);
+const LiveView = lazyView(["live-feeds"], () =>
+  import("@/views/LiveView").then((m) => ({ default: m.LiveView })),
+);
+const GhostView = lazyView(["ghost"], () =>
+  import("@/views/GhostView").then((m) => ({ default: m.GhostView })),
 );
 
 /** Quiet time before a loading section admits it is loading. */
@@ -259,7 +278,14 @@ export function MainView() {
     isOverlaySection(active) ? "chats" : active,
   );
   if (!isOverlaySection(active) && backgroundSection !== active) setBackgroundSection(active);
-  const displayed = isOverlaySection(active) ? backgroundSection : active;
+  const activeDetached = !solo ? detachedWindowFor(active, detachedViews) : undefined;
+  const displayed = isOverlaySection(active) && !activeDetached ? backgroundSection : active;
+  const displayedDetached = !solo ? detachedWindowFor(displayed, detachedViews) : undefined;
+  const soloOverlay = solo && isOverlaySection(active);
+  // The HUD answers to three ids. Switching between them ("open chat" while
+  // the HUD is up) must not remount it — the board, the orbs and the chat
+  // would all start over — so its boundary and Suspense are keyed on one name.
+  const viewKey = isHudSection(displayed) ? "chats" : displayed;
 
   /*
    * While a coding view lives in a detached solo window, THIS (non-solo)
@@ -274,7 +300,7 @@ export function MainView() {
     detachedViews.some((v) => (CODING_SECTION_IDS as readonly string[]).includes(v));
 
   const stickyActive =
-    (CODING_SECTION_IDS as readonly string[]).includes(displayed) && !codingDetached;
+    (CODING_SECTION_IDS as readonly string[]).includes(displayed) && !codingDetached && !soloOverlay;
   const [stickyMounted, setStickyMounted] = useState(stickyActive);
   useEffect(() => {
     if (stickyActive) setStickyMounted(true);
@@ -285,13 +311,9 @@ export function MainView() {
     if (codingDetached) setStickyMounted(false);
   }, [codingDetached]);
 
-  if (codingDetached && (CODING_SECTION_IDS as readonly string[]).includes(displayed) && !isOverlaySection(active)) {
-    return <DetachedViewPlaceholder view={displayed} />;
-  }
-
   return (
     <>
-      {stickyMounted && (
+      {stickyMounted && !codingDetached && !soloOverlay && (
         <div
           className={cn("h-full w-full", !stickyActive && "hidden")}
           data-testid="sticky-agentic-ide"
@@ -318,32 +340,32 @@ export function MainView() {
           </ViewErrorBoundary>
         </div>
       )}
-      {!stickyActive && (
+      {!stickyActive && !soloOverlay && (
         <ViewErrorBoundary
-          viewName={displayed}
-          resetKey={displayed}
+          viewName={viewKey}
+          resetKey={viewKey}
           onRecover={() => setActive("chats")}
         >
           {/* Keyed on the active section so switching away from a still-loading
               view cannot leave the previous section's fallback on screen. */}
-          <Suspense key={displayed} fallback={<ViewLoadingFallback />}>
-            {codingDetached && (CODING_SECTION_IDS as readonly string[]).includes(displayed)
-              ? <DetachedViewPlaceholder view={displayed} />
+          <Suspense key={viewKey} fallback={<ViewLoadingFallback />}>
+            {displayedDetached
+              ? <DetachedViewPlaceholder view={displayedDetached} />
               : <SwitchOnActiveSection active={displayed} />}
           </Suspense>
         </ViewErrorBoundary>
       )}
-      {isPluginArea(active) && (
+      {isPluginArea(active) && !activeDetached && (
         <ViewErrorBoundary viewName="plugins" resetKey="plugins" onRecover={() => setActive(backgroundSection)}>
           <Suspense fallback={null}>
-            <PluginsDialog area={active} onAreaChange={setActive} onClose={() => setActive(backgroundSection)} />
+            <PluginsDialog standalone={solo} area={active} onAreaChange={setActive} onClose={() => setActive(backgroundSection)} />
           </Suspense>
         </ViewErrorBoundary>
       )}
-      {isSettingsHub(active) && (
+      {isSettingsHub(active) && !activeDetached && (
         <ViewErrorBoundary viewName="settings" resetKey="settings" onRecover={() => setActive(backgroundSection)}>
           <Suspense fallback={null}>
-            <SettingsHubDialog onClose={() => setActive(backgroundSection)} />
+            {solo ? <SettingsHubView /> : <SettingsHubDialog onClose={() => setActive(backgroundSection)} />}
           </Suspense>
         </ViewErrorBoundary>
       )}
@@ -353,7 +375,12 @@ export function MainView() {
 
 function SwitchOnActiveSection({ active }: { active: string }) {
   switch (active) {
+    // The HUD — chat, voice orb and memory orb together. The old chat and
+    // memory-orb ids land on it as well, so deep links and voice navigation
+    // that name them still arrive somewhere real.
     case "chats":
+    case "deck":
+    case "orb":
       return <ChatsSurface />;
     case "agents":
       return <SocietyView />;
@@ -365,10 +392,11 @@ function SwitchOnActiveSection({ active }: { active: string }) {
       return <DocsView />;
     case "sessions":
       return <SessionsView />;
-    case "run_inspector":
-      return <RunInspectorView />;
     case "board":
       return <BoardView />;
+    // The same plugin catalog and connect flows as Plugins, laid out as cards.
+    case "armory":
+      return <ArmoryView armory />;
     case "memory":
       return <WikiView />;
     // The merged voice section: Dictation (default landing) + Dictionary +
@@ -390,6 +418,17 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     // place, installable without leaving the app.
     case "marketplace":
       return <MarketplaceView />;
+    case "world-intelligence":
+      return <WorldIntelligenceView />;
+    // The HUD's public-data screens, reached from the Stark rail.
+    case "intelligence":
+      return <IntelligenceView />;
+    case "orbital":
+      return <OrbitalView />;
+    case "live-feeds":
+      return <LiveView />;
+    case "ghost":
+      return <GhostView />;
     // Deliberately nothing: the coding workspace is rendered by the STICKY
     // branch in `MainView` above, which keeps it mounted across section
     // changes. This switch is not rendered at all while one of those ids is
