@@ -260,6 +260,38 @@ class Swapper:
             await asyncio.sleep(1.0)
         raise RuntimeError(f"{name} did not become ready in {LOAD_TIMEOUT_S:.0f}s")
 
+    async def adopt_running(self, name: str) -> bool:
+        """Recover a matching backend after a proxy restart without allocating weights."""
+        if not await self.healthy(name):
+            return False
+        assert self.session is not None
+        async with self.session.get(
+            f"http://127.0.0.1:{BACK[name]}/props", timeout=aiohttp.ClientTimeout(total=3)
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"cannot verify existing {name} backend")
+            properties = await response.json()
+        context = (properties.get("default_generation_settings") or {}).get("n_ctx")
+        if properties.get("model_alias") != MODEL_ID[name] or context != CTX[name]:
+            raise RuntimeError(f"existing {name} backend has incompatible identity or context")
+        for other in BACK:
+            if other != name and await self.healthy(other):
+                raise RuntimeError("multiple model backends are loaded; refusing adoption")
+        self.active = name
+        self.last_used[name] = time.monotonic()
+        log.info("adopted existing %s backend with context %s", name, context)
+        return True
+
+    async def restore_main_backend(self) -> bool:
+        """Keep recovery endpoints available when startup adoption is refused."""
+        try:
+            return await self.adopt_running(MAIN)
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "could not adopt existing main backend; recovery endpoints remain available"
+            )
+            return False
+
     def start_gemma(self) -> None:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         args = [
@@ -505,6 +537,8 @@ class Swapper:
     async def ensure(self, name: str) -> None:
         async with self.lock:
             if self.active == name and await self.healthy(name):
+                return
+            if self.active is None and await self.adopt_running(name):
                 return
             # Never pull the model out from under a request that is running.
             while any(count for profile, count in self.inflight.items() if profile != name):  # noqa: ASYNC110
@@ -862,6 +896,7 @@ async def main() -> None:
     if closed:
         log.warning("closed a duplicate model server at start: %s", closed.replace("\n", "; "))
     swapper.session = aiohttp.ClientSession()
+    await swapper.restore_main_backend()
     runners = []
     for name, port in FRONT.items():
         app = web.Application(client_max_size=256 * 1024 * 1024)
@@ -885,7 +920,7 @@ async def main() -> None:
         FRONT[QWEN_VL],
         FRONT[UI_VENUS],
     )
-    # Cold start: neither model is loaded until first request.
+    # Recover a surviving main backend; otherwise stay cold until first request.
     await swapper.idle_loop()
 
 

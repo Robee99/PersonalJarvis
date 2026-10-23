@@ -112,6 +112,85 @@ def test_qwen_vl_memory_guard_refuses_without_stopping_active_model(
     assert instance.active == swap.GEMMA
 
 
+@pytest.mark.parametrize(
+    "alias,context,other,expected",
+    [
+        ("qwen3-vl-8b", 65536, False, None),
+        ("different-model", 65536, False, "identity or context"),
+        ("qwen3-vl-8b", 32768, False, "identity or context"),
+        ("qwen3-vl-8b", 65536, True, "multiple model backends"),
+    ],
+)
+def test_adopts_only_matching_exclusive_loaded_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    alias: str,
+    context: int,
+    other: bool,
+    expected: str | None,
+) -> None:
+    swap = _load(monkeypatch)
+    monkeypatch.setattr(swap.aiohttp, "ClientTimeout", lambda **_kwargs: None, raising=False)
+    instance = swap.Swapper()
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def json(self):
+            return {"model_alias": alias, "default_generation_settings": {"n_ctx": context}}
+
+    class Session:
+        def get(self, url, **_kwargs):
+            assert url == "http://127.0.0.1:11449/props"
+            return Response()
+
+    async def healthy(name):
+        return name == swap.QWEN_VL or (other and name == swap.GEMMA)
+
+    instance.session = Session()
+    monkeypatch.setattr(instance, "healthy", healthy)
+    monkeypatch.setattr(
+        swap, "available_mib", lambda: pytest.fail("loaded model needs no new allocation")
+    )
+    monkeypatch.setattr(
+        instance, "start_profile", lambda _name: pytest.fail("must not duplicate model")
+    )
+    monkeypatch.setattr(
+        instance, "stop_profile", lambda _name: pytest.fail("must not stop loaded model")
+    )
+    if expected:
+        with pytest.raises(RuntimeError, match=expected):
+            asyncio.run(instance.ensure(swap.QWEN_VL))
+        assert instance.active is None
+    else:
+        asyncio.run(instance.ensure(swap.QWEN_VL))
+        assert instance.active == swap.QWEN_VL
+        assert instance.last_used[swap.QWEN_VL] > 0
+
+
+@pytest.mark.parametrize("error", [RuntimeError("wrong identity"), TimeoutError("props timeout")])
+def test_startup_adoption_failure_keeps_recovery_available(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    swap = _load(monkeypatch)
+    instance = swap.Swapper()
+
+    async def refused(_name):
+        raise error
+
+    monkeypatch.setattr(instance, "adopt_running", refused)
+    assert asyncio.run(instance.restore_main_backend()) is False
+    assert instance.active is None
+    assert "recovery endpoints remain available" in caplog.text
+
+
 def test_qwen_vl_launch_is_validated_and_uses_optimized_loopback_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
