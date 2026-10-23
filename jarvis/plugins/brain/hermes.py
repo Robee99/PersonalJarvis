@@ -68,7 +68,20 @@ FRONT_END_INSTRUCTIONS = (
     "Your reply is spoken aloud: lead with the answer, in one to three short "
     "sentences of plain text, no markdown, no lists, unless the user asks for "
     "detail. Use your own tools to act on the computer, the browser and files. "
-    "Say you did something only after a tool actually did it."
+    "Say you did something only after a tool actually did it.\n\n"
+    "When the user explicitly asks you to do something in an app or browser, call "
+    "the relevant available tool during this turn; do not reply with instructions "
+    "for the user to do it themselves. For browser requests, the connected live "
+    "Playwright MCP tools include mcp__playwright__browser_tabs, "
+    "mcp__playwright__browser_navigate, mcp__playwright__browser_snapshot, "
+    "mcp__playwright__browser_click, and mcp__playwright__browser_fill_form. "
+    "Use mcp__playwright__browser_navigate with the requested URL to open a site, "
+    "then use mcp__playwright__browser_snapshot to confirm what loaded. These tools control "
+    "the configured browser; do not claim that you cannot open or operate Chrome "
+    "because it is a graphical app or because Playwright is an MCP. If a needed "
+    "tool is not in the available tools, use tool_search to check before saying "
+    "it is unavailable. Follow the tool's actual result and all permission or "
+    "approval requirements; never invent a successful action."
 )
 
 

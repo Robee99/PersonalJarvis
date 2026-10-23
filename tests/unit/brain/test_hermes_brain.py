@@ -128,6 +128,16 @@ def test_hermes_gets_the_conversation_not_jarvis_tool_rules() -> None:
     assert [m["content"] for m in messages[1:]] == [f"turn {i}" for i in range(18, 30)]
 
 
+def test_browser_action_requests_must_use_the_connected_live_mcp_tools() -> None:
+    system = build_messages(_req("open Chrome and navigate to the requested site"))[0]["content"]
+
+    assert "call the relevant available tool during this turn" in system
+    assert "mcp__playwright__browser_navigate" in system
+    assert "mcp__playwright__browser_snapshot to confirm" in system
+    assert "do not claim that you cannot open or operate Chrome" in system
+    assert "Follow the tool's actual result and all permission or approval requirements" in system
+
+
 @pytest.mark.asyncio
 async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() -> None:
     server = FakeHermesServer(
