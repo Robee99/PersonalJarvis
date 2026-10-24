@@ -215,8 +215,9 @@ def surface_suffix(scope: dict[str, Any]) -> str:
     """
     path = scope.get("path") or ""
     root = scope.get("root_path") or ""
-    if root and path.startswith(root):
-        path = path[len(root) :]
+    mount = root.rstrip("/")
+    if mount and (path == mount or path.startswith(mount + "/")):
+        path = path[len(mount) :]
     return path.strip("/")
 
 

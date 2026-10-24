@@ -21,10 +21,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jarvis.ui.web.agent_mcp_routes import router
-from jarvis.ui.web.mcp_server_routes import MCPMount, build_mcp_asgi_app
+from jarvis.ui.web.mcp_server_routes import (
+    MCPMount,
+    _surface_for,
+    build_mcp_asgi_app,
+    surface_suffix,
+)
 
 #: A stateless Streamable HTTP request needs both content types offered.
 _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
+
+
+def test_surface_suffix_requires_a_path_segment_boundary() -> None:
+    root = "/api/control/mcp"
+    assert surface_suffix({"path": f"{root}/agents", "root_path": root}) == "agents"
+    assert _surface_for({"path": f"{root}agents", "root_path": root}) is None
 
 
 def _mounted_app() -> FastAPI:

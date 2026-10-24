@@ -13,9 +13,12 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 import yaml
+from fastapi import HTTPException
 
+from jarvis.core import http_guard
 from jarvis.ui.web import skills_routes as routes
 
 _NO_STATE = (
@@ -157,6 +160,41 @@ async def test_import_accepts_a_skill_written_for_another_agent(
     assert detail["state"] == "draft"
     assert detail["portable"] is True
     assert set(detail["ignored_fields"]) == {"allowed-tools", "model"}
+
+
+@pytest.mark.parametrize("redirect", ["/SKILL.md", "http://127.0.0.1:47821/api/private"])
+@pytest.mark.asyncio
+async def test_import_uses_real_http_guard_for_redirects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, redirect: str
+) -> None:
+    sent: list[str] = []
+
+    async def resolve(host: str, port: int) -> list[str]:
+        return ["93.184.216.34"]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": redirect})
+        return httpx.Response(200, text=_NO_STATE)
+
+    # Keep the endpoint, real AsyncClient, redirect logic and security transport;
+    # replace only DNS and the inner network transport with offline fakes.
+    monkeypatch.setattr(http_guard, "_resolve_public_addresses", resolve)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kwargs: httpx.MockTransport(respond))
+    monkeypatch.setattr(routes, "user_skills_dir", lambda: tmp_path)
+    body = routes.SkillImportBody(input="https://origin.example/start")
+    if redirect.startswith("http:"):
+        with pytest.raises(HTTPException) as error:
+            await routes.import_skill(body, _request(_Registry()))
+        assert error.value.status_code == 400
+        assert not (tmp_path / "remote-skill").exists()
+        assert len(sent) == 1
+    else:
+        detail = await routes.import_skill(body, _request(_Registry()))
+        assert detail["state"] == "draft"
+        assert (tmp_path / "remote-skill" / "SKILL.md").is_file()
+        assert len(sent) == 2
 
 
 @pytest.mark.asyncio
