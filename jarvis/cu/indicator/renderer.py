@@ -24,6 +24,7 @@ import sys
 import threading
 from collections import deque
 from contextlib import suppress
+from pathlib import Path
 
 from PySide6.QtCore import (
     QByteArray,
@@ -31,6 +32,7 @@ from PySide6.QtCore import (
     QObject,
     QRectF,
     Qt,
+    QTimer,
     QVariantAnimation,
     Signal,
     Slot,
@@ -529,6 +531,56 @@ class _PointWindow(QWidget):
         painter.drawText(pill, int(Qt.AlignmentFlag.AlignCenter), self._label)
 
 
+class _WatchWindow(QWidget):
+    """A leased, capture-excluded face card above the real desktop."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(192, 56)
+        self.dark = False
+        self.face = QImage(
+            str(Path(__file__).resolve().parents[2] / "ui/web/dist/jarvis-gigi-256.png")
+        )
+        self.lease = QTimer(self)
+        self.lease.setSingleShot(True)
+        self.lease.timeout.connect(self.hide)
+
+    def refresh(self, dark: bool) -> bool:
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return False
+        self.dark = dark
+        area = screen.availableGeometry()
+        self.move(area.right() - self.width() - 12, area.top() + 12)
+        self.show()
+        harden_window(int(self.winId()))
+        exclude_from_capture(int(self.winId()))
+        self.lease.start(12_000)
+        self.update()
+        return True
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor("#202024" if self.dark else "#fafafa"))
+        painter.setPen(QPen(QColor("#bfa746"), 1))
+        painter.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 12, 12)
+        if not self.face.isNull():
+            painter.drawImage(QRectF(9, 9, 38, 38), self.face)
+        painter.setPen(QColor("#f7f7f7" if self.dark else "#202024"))
+        painter.setFont(QFont("Segoe UI", 10))
+        painter.drawText(QRectF(54, 8, 130, 36), Qt.AlignmentFlag.AlignVCenter, "Watching screen")
+
+
 class Renderer(QObject):
     """Owns the per-monitor windows, the animations, and the IPC slots."""
 
@@ -538,6 +590,7 @@ class Renderer(QObject):
         self._windows: list[_GlowWindow] = []
         self._snaps: list[_SnapWindow] = []
         self._points: list[_PointWindow] = []
+        self._watch_window: _WatchWindow | None = None
         self._hint = ""
         self._active = False  # "show" was requested and not yet "hide"
         self._blanked = False  # capture guard currently hiding the border
@@ -599,6 +652,9 @@ class Renderer(QObject):
                     self._snap(payload)
                 elif cmd == protocol.CMD_POINT:
                     self._point(payload)
+                elif cmd == protocol.CMD_WATCH:
+                    if not self._watch(payload):
+                        continue
                 elif cmd == protocol.CMD_QUIT:
                     _ack(cmd)
                     self._app.quit()
@@ -612,6 +668,16 @@ class Renderer(QObject):
             self._processing_commands = False
 
     # -- commands ----------------------------------------------------------
+    def _watch(self, payload: dict) -> bool:
+        if not payload.get("visible"):
+            if self._watch_window is not None:
+                self._watch_window.lease.stop()
+                self._watch_window.hide()
+            return True
+        if self._watch_window is None:
+            self._watch_window = _WatchWindow()
+        return self._watch_window.refresh(bool(payload.get("dark")))
+
     def _show(self, hint: str) -> None:
         self._hint = hint
         self._active = True
@@ -674,6 +740,8 @@ class Renderer(QObject):
             self._points.remove(win)
 
     def _blank(self) -> None:
+        if self._watch_window is not None:
+            self._watch_window.hide()
         # A resting thumbnail or an arrow must never end up inside the next capture.
         for effect in [*self._snaps, *self._points]:
             effect.finish_now()
@@ -684,6 +752,8 @@ class Renderer(QObject):
             win.hide()
 
     def _unblank(self) -> None:
+        if self._watch_window is not None and self._watch_window.lease.isActive():
+            self._watch_window.show()
         if not self._active or not self._blanked:
             return
         self._blanked = False

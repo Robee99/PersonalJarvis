@@ -42,6 +42,7 @@ import { GigiMark } from "@/components/GigiMark";
 import { useVoiceModeSwitch } from "@/components/home/assistantStatus";
 import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { getLiveVision } from "@/lib/liveVision";
 
 /**
  * The composer — the front page's one control for talking to Jarvis by
@@ -245,6 +246,16 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
   async function onSend() {
     const sessionAtSend = activeSessionId;
     const content = value.trim();
+    const eyes = getLiveVision();
+    const relief = surface === "jarvis" && eyes.relieve(content);
+    let vision;
+    try {
+      const frames = surface === "jarvis" && !relief ? eyes.forQuestion(content) : [];
+      if (frames.length) vision = { frames, silent: new URLSearchParams(location.search).get("mute") === "1" };
+    } catch (error) {
+      setAttachError(error instanceof Error ? error.message : String(error));
+      return;
+    }
     if (await commands.execute(content)) return;
     // A message may be files alone: dropping a screenshot and pressing Enter
     // is a complete gesture, and refusing it would be the composer insisting
@@ -263,7 +274,9 @@ export function AgentComposer({ autoFocus = false }: { autoFocus?: boolean }) {
         content,
         attached,
         [...new Set(selected.map((row) => row.id))],
+        vision,
       );
+    else if (vision) await send(content, attached, [], vision);
     else await send(content, attached);
     if (sessionAtSend && store.getState().activeSessionId !== sessionAtSend) return;
     if (store.getState().lastError) {

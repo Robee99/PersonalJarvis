@@ -412,6 +412,7 @@ class WebServer:
         from .review_routes import router as review_router
         from .routine_hooks_routes import router as routine_hooks_router
         from .screen_context_routes import router as screen_context_router
+        from .live_vision_routes import router as live_vision_router
         from .self_mod_routes import router as self_mod_router
         from .sessions_routes import router as sessions_router
         from .settings_routes import router as settings_router
@@ -591,6 +592,7 @@ class WebServer:
         # machine with no display, so `jarvis api screen-context status` is a
         # valid capability probe everywhere.
         app.include_router(screen_context_router)
+        app.include_router(live_vision_router)
         # Appshots: the front window as conversation context, on a shortcut,
         # a button or a spoken request. Captures through Screen Context.
         app.include_router(app_actions_router)

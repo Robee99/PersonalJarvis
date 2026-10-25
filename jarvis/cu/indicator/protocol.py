@@ -36,9 +36,10 @@ CMD_UNBLANK = "unblank"
 CMD_QUIT = "quit"
 CMD_SNAP = "snap"
 CMD_POINT = "point"
+CMD_WATCH = "watch"
 
 ALL_COMMANDS = frozenset(
-    {CMD_SHOW, CMD_HIDE, CMD_BLANK, CMD_UNBLANK, CMD_QUIT, CMD_SNAP, CMD_POINT}
+    {CMD_SHOW, CMD_HIDE, CMD_BLANK, CMD_UNBLANK, CMD_QUIT, CMD_SNAP, CMD_POINT, CMD_WATCH}
 )
 
 #: Sidecar exit code when no usable GUI stack exists (PySide6 missing or
@@ -92,6 +93,7 @@ __all__ = [
     "CMD_SHOW",
     "CMD_SNAP",
     "CMD_UNBLANK",
+    "CMD_WATCH",
     "EXIT_NO_GUI",
     "decode_ack",
     "decode_command",

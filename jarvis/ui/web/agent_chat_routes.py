@@ -73,6 +73,7 @@ from jarvis.agent_chat.service import (
 )
 from jarvis.agent_chat.surface_kits import kit_for
 from jarvis.agent_chat.tools import shell_label
+from jarvis.vision.live_inputs import LiveVisionFrame
 
 log = logging.getLogger(__name__)
 
@@ -223,6 +224,9 @@ class MessageBody(BaseModel):
     #: message; the wire shape of ``drop_analysis.DropAnalysis``.
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     tool_choices: list[str] = Field(default_factory=list, max_length=24)
+    vision_frames: list[LiveVisionFrame] = Field(default_factory=list, max_length=2)
+    vision_nudge: bool = False
+    vision_silent: bool = False
 
 
 class ApprovalBody(BaseModel):
@@ -681,12 +685,7 @@ async def get_provider_health(
     now = time.monotonic()
     version = (ledger_version(), secret_generation())
     cached = _health_cache.get(surface)
-    if (
-        cached
-        and not refresh
-        and cached[1] == version
-        and (now - cached[0]) < _HEALTH_TTL_S
-    ):
+    if cached and not refresh and cached[1] == version and (now - cached[0]) < _HEALTH_TTL_S:
         return ProviderHealthResponse(providers=cached[2], checked_at=cached[0], cached=True)
 
     from jarvis.ui.web.provider_routes import _resolve_cfg
@@ -770,18 +769,20 @@ def _title_jarvis_chats(request: Request, svc: Any, rows: list[dict[str, Any]]) 
             return texts
 
         updated = int(row.get("updated_ms") or 0)
-        requests.append(chat_titles.TitleRequest(
-            kind=chat_titles.KIND_TYPED,
-            conv_id=sid,
-            version=str(int(row.get("message_count") or 0)),
-            message_count=int(row.get("message_count") or 0),
-            updated_ms=updated,
-            settled=not row.get("running")
-            and now - updated >= chat_titles.TYPED_SETTLE_S * 1000,
-            seed=str(row.get("title") or ""),
-            loader=load,
-            auto_title=_title_from,
-        ))
+        requests.append(
+            chat_titles.TitleRequest(
+                kind=chat_titles.KIND_TYPED,
+                conv_id=sid,
+                version=str(int(row.get("message_count") or 0)),
+                message_count=int(row.get("message_count") or 0),
+                updated_ms=updated,
+                settled=not row.get("running")
+                and now - updated >= chat_titles.TYPED_SETTLE_S * 1000,
+                seed=str(row.get("title") or ""),
+                loader=load,
+                auto_title=_title_from,
+            )
+        )
     if not requests:
         return
     try:
@@ -992,7 +993,19 @@ async def post_message(session_id: str, body: MessageBody, request: Request) -> 
     token = client_timezone.set(body.timezone)
     try:
         turn_id = await svc.send(
-            session_id, body.text, body.attachments, tool_choices=body.tool_choices
+            session_id,
+            body.text,
+            body.attachments,
+            tool_choices=body.tool_choices,
+            **(
+                {
+                    "vision_frames": body.vision_frames,
+                    "vision_nudge": body.vision_nudge,
+                    "vision_silent": body.vision_silent,
+                }
+                if body.vision_frames or body.vision_nudge
+                else {}
+            ),
         )
     except NoSuchSession as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc

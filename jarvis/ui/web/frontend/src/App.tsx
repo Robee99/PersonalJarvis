@@ -1,4 +1,5 @@
 import { useSocietyShell } from "@/store/societyShell";
+import { VisionControls } from "@/components/agentchat/VisionControls";
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
 
 import { isSectionId, useEventStore } from "@/store/events";
@@ -345,6 +346,7 @@ export default function App() {
           </div>
         </main>
         <ToastLayer />
+        <VisionControls />
         <CommandActivityLayer />
         <EditContextMenu />
         <ZoomIndicator />
@@ -415,6 +417,7 @@ export default function App() {
       </main>
 
       <ToastLayer />
+      <VisionControls />
       <CommandActivityLayer />
       {/* Right-click Cut/Copy/Paste. The desktop WebView ships with its own
           context menu disabled, so without this there is no mouse-driven paste

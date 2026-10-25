@@ -1,0 +1,210 @@
+import { useEffect, useRef, useState } from "react";
+import { Camera, Monitor, Eye, Pause, Square } from "lucide-react";
+import { getLiveVision, PostureNudgeGate, thumbnail, WATCH_INTERVAL_MS, type VisionSource } from "@/lib/liveVision";
+import { LocalPostureTracker } from "@/lib/localPosture";
+import { useAgentChatStore } from "@/store/agentChat";
+import { useEventStore } from "@/store/events";
+import { runningTurn } from "./reduce";
+
+const muted = () => new URLSearchParams(location.search).get("mute") === "1";
+const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+/** One shared controller survives the chat/voice view switch; never opens audio. */
+export function VisionControls() {
+  const eyes = getLiveVision();
+  const [, rerender] = useState(0);
+  const [expanded, setExpanded] = useState(false);
+  const [problem, setProblem] = useState("");
+  const [tracking, setTracking] = useState("");
+  const [notice, setNotice] = useState("");
+  const sessionId = useAgentChatStore(s => s.activeSessionId);
+  const previousSession = useRef(sessionId);
+  const generation = useRef(0);
+  const inFlight = useRef(false);
+  const owner = useRef(crypto.randomUUID());
+  const sequence = useRef(0);
+  const cameraOn = eyes.state.webcam === "on";
+  const active = cameraOn || eyes.state.screen === "on";
+  const watching = eyes.watching;
+  const sourceSignature = (["screen", "webcam"] as const).filter(source => eyes.state[source] === "on").join(",");
+  const provider = useAgentChatStore(s => s.activeSession?.provider ?? s.draft.provider);
+  const model = useAgentChatStore(s => s.activeSession?.model ?? s.draft.model);
+
+  async function desktopIndicator(visible: boolean) {
+    const response = await fetch("/api/live-vision/watch-indicator", { method: "POST", keepalive: !visible,
+      signal: visible ? AbortSignal.timeout(2500) : undefined,
+      headers: { "content-type": "application/json" }, body: JSON.stringify({
+        client_id: owner.current, visible, dark: document.documentElement.classList.contains("dark"),
+      }) });
+    const body = await response.json() as { available: boolean; detail: string };
+    if (!response.ok || visible && !body.available) throw new Error(body.detail || "Desktop indicator unavailable");
+  }
+
+  async function announce(kind: "ears-off" | "head-down" | "slouched" | "absent") {
+    const response = await fetch("/api/live-vision/notice", { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ kind, silent: muted() }) });
+    if (!response.ok) throw new Error("Vision announcement could not be delivered");
+    const body = await response.json() as { text: string };
+    setNotice(body.text);
+  }
+  useEffect(() => {
+    const changed = () => rerender(n => n+1);
+    const unload = () => eyes.dispose();
+    window.addEventListener("jarvis-live-vision", changed);
+    window.addEventListener("pagehide", unload);
+    return () => { generation.current++; window.removeEventListener("jarvis-live-vision", changed);
+      window.removeEventListener("pagehide", unload); eyes.dispose(); };
+  }, [eyes]);
+  useEffect(() => {
+    if (previousSession.current && previousSession.current !== sessionId) { generation.current++; eyes.dispose(); }
+    previousSession.current = sessionId;
+  }, [eyes, sessionId]);
+  useEffect(() => {
+    if (!sessionId) return;
+    const sources = sourceSignature ? sourceSignature.split(",") : [];
+    let disposed = false;
+    const register = async (enabled: boolean) => {
+      const response = await fetch("/api/live-vision/register", { method: "POST", keepalive: !enabled,
+        headers: { "content-type": "application/json" }, body: JSON.stringify({
+          conversation_id: sessionId, client_id: owner.current, sources: enabled ? sources : [],
+          sequence: ++sequence.current,
+          quiet_for_ms: Math.min(180_000, Math.max(0, eyes.quietUntil-Date.now())),
+        }) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { detail?: string };
+        throw new Error(body.detail || "Live visual registration failed");
+      }
+    };
+    if (sources.length) void register(true).catch(error => {
+      if (!disposed) { eyes.dispose(); setProblem(errorText(error)); }
+    });
+    const timer = sources.length ? setInterval(() => void register(true).catch(error => {
+      if (!disposed) { eyes.dispose(); setProblem(errorText(error)); }
+    }), WATCH_INTERVAL_MS) : undefined;
+    return () => { disposed = true; if (timer) clearInterval(timer);
+      void register(false).catch(error => console.info("Visual source stop:", error)); };
+  }, [eyes, sessionId, sourceSignature, provider, model, eyes.quietUntil]);
+  useEffect(() => {
+    type FrameRequest = { request_id: string; conversation_id: string; client_id: string; sources: VisionSource[] };
+    const frameRequest = (event: Event) => {
+      const request = (event as CustomEvent<FrameRequest>).detail;
+      if (request.client_id !== owner.current || request.conversation_id !== useAgentChatStore.getState().activeSessionId) return;
+      let frames;
+      let error = "";
+      try { frames = request.sources.map(source => eyes.capture(source)); }
+      catch (failure) { error = errorText(failure).slice(0, 200); }
+      void fetch("/api/live-vision/frames", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request_id: request.request_id, conversation_id: request.conversation_id,
+          client_id: owner.current, frames: frames ?? [], error }) }).then(async response => {
+        if (!response.ok) throw new Error("Fresh visual frame was refused or expired");
+      }).catch(failure => setProblem(errorText(failure)));
+    };
+    const quietRequest = (event: Event) => {
+      const request = (event as CustomEvent<FrameRequest>).detail;
+      if (request.client_id === owner.current && request.conversation_id === useAgentChatStore.getState().activeSessionId) {
+        eyes.relieve("give me a minute");
+      }
+    };
+    window.addEventListener("jarvis-vision-frame-request", frameRequest);
+    window.addEventListener("jarvis-vision-quiet-request", quietRequest);
+    return () => { window.removeEventListener("jarvis-vision-frame-request", frameRequest);
+      window.removeEventListener("jarvis-vision-quiet-request", quietRequest); };
+  }, [eyes]);
+  useEffect(() => {
+    if (!watching) return;
+    const timer = setInterval(() => {
+      rerender(value => value+1);
+      void desktopIndicator(true).catch(error => { eyes.disableWatch(); setProblem(errorText(error)); });
+    }, WATCH_INTERVAL_MS);
+    return () => { clearInterval(timer); void desktopIndicator(false).catch(error => console.info("Watch indicator stop:", error)); };
+  }, [eyes, watching]);
+
+  useEffect(() => {
+    let disposed = false;
+    let tracker: LocalPostureTracker | undefined;
+    const posture = new PostureNudgeGate();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    if (cameraOn) {
+      setTracking("Checking local posture assets…");
+      void LocalPostureTracker.create().then(value => {
+        if (disposed) { value.close(); return; }
+        tracker = value; setTracking("Local posture tracking on");
+        timer = setInterval(() => {
+          const video = eyes.videos.webcam;
+          if (!video || video.readyState < 2 || Date.now() < eyes.quietUntil) return;
+          try {
+            const kind = posture.sample(value.sample(video, performance.now()), Date.now());
+            if (kind) { posture.accepted(Date.now()); void announce(kind).catch(error => setProblem(errorText(error))); }
+          } catch (error) { setTracking(errorText(error)); if (timer) clearInterval(timer); }
+        }, 200);
+      }).catch(error => { if (!disposed) setTracking(errorText(error)); });
+    } else setTracking("");
+    return () => { disposed = true; if (timer) clearInterval(timer); tracker?.close(); };
+  }, [cameraOn, eyes]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const chat = useAgentChatStore.getState();
+      const video = eyes.videos.screen;
+      if (!eyes.watching || !video || inFlight.current || Date.now() < eyes.quietUntil ||
+          chat.busy || runningTurn(chat.timeline) || !chat.activeSessionId) return;
+      try {
+        if (!eyes.watch.sample(thumbnail(video), Date.now())) return;
+        const epoch = generation.current;
+        inFlight.current = true;
+        void chat.send("Screen Watch: this display has been unchanged for at least sixty seconds. " +
+          "Use only the supplied current screen image to offer one brief, useful suggestion about what I might be stuck on. " +
+          "If the image gives no useful evidence, say so. Do not take actions.", [], [],
+          { frames: [eyes.capture("screen")], nudge: true, silent: muted() }).then(result => {
+            if (epoch === generation.current && result === "sent") eyes.watch.accepted(Date.now());
+          }).catch(error => setProblem(errorText(error))).finally(() => { inFlight.current = false; });
+      } catch (error) { setProblem(errorText(error)); }
+    }, WATCH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [eyes]);
+
+  async function toggle(source: VisionSource) {
+    setProblem(""); setNotice("");
+    if (eyes.state[source] !== "off") { if (source === "screen") generation.current++; eyes.stop(source); return; }
+    try {
+      await eyes.start(source);
+      if (eyes.videos[source] && useEventStore.getState().voiceState === "idle") await announce("ears-off");
+    } catch (error) { setProblem(errorText(error)); }
+  }
+  async function watch() {
+    setProblem("");
+    if (eyes.watching) { generation.current++; eyes.disableWatch(); return; }
+    const epoch = generation.current;
+    try {
+      if (eyes.state.screen !== "on") await eyes.start("screen");
+      eyes.enableWatch();
+      await desktopIndicator(true);
+      if (epoch !== generation.current || !eyes.watching) await desktopIndicator(false);
+    } catch (error) { eyes.disableWatch(); setProblem(errorText(error)); }
+  }
+  const button = "inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary";
+  return <aside className="fixed right-3 top-12 z-[90] max-w-xs rounded-xl border border-border bg-background p-2 text-foreground shadow-lg" aria-label="Jarvis eyes">
+    <button type="button" onClick={() => setExpanded(!expanded)} className={button} aria-expanded={expanded}>
+      <Eye size={14} /> {eyes.watching ? "Watching screen" : active ? "Eyes on" : "Eyes"}
+      {active && <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Visual input active" />}
+    </button>
+    {(expanded || active) && <div className="mt-2 space-y-2">
+      <div className="flex flex-wrap gap-1">
+        <button type="button" className={button} aria-pressed={cameraOn} onClick={() => void toggle("webcam")}><Camera size={14} /> Webcam {eyes.state.webcam}</button>
+        <button type="button" className={button} aria-pressed={eyes.state.screen === "on"} onClick={() => void toggle("screen")}><Monitor size={14} /> Share screen {eyes.state.screen}</button>
+        <button type="button" className={button} aria-pressed={eyes.watching} onClick={() => void watch()}><Eye size={14} /> Watch {eyes.watching ? "on" : "off"}</button>
+        <button type="button" className={button} onClick={() => eyes.relieve("give me a minute")}><Pause size={14} /> Quiet 3 min</button>
+        <button type="button" className={button} onClick={() => { generation.current++; eyes.dispose(); }}><Square size={14} /> Stop all</button>
+      </div>
+      {(["webcam", "screen"] as const).filter(s => eyes.state[s] === "on").map(source =>
+        <div key={source}><div className="text-xs text-muted-foreground">{source === "webcam" ? "Webcam — you" : "Shared display — desktop/window"}</div>
+          <video muted autoPlay playsInline aria-label={`${source} preview`} className="max-h-28 w-full rounded-md object-contain"
+            ref={element => { if (element) { element.srcObject = eyes.videos[source]?.srcObject ?? null; } }} /></div>)}
+      {eyes.watching && <div className="flex items-center gap-2 text-xs"><img src="/jarvis-gigi-256.png" alt="Jarvis" className="h-7 w-7 rounded-full" /> Comparing locally every 5 seconds</div>}
+      {Date.now() < eyes.quietUntil && <p className="text-xs">Nudges paused for three minutes</p>}
+      {tracking && <p className="text-xs text-muted-foreground">{tracking}</p>}
+      {notice && <p className="text-xs" role="status">{notice}</p>}
+      {problem && <p className="text-xs" role="alert">{problem}</p>}
+    </div>}
+  </aside>;
+}

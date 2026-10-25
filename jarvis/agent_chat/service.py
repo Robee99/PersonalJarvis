@@ -170,7 +170,14 @@ class _OpenQuestion:
     """
 
     __slots__ = (
-        "answers", "closing", "delivered", "result", "session_id", "specs", "turn_id", "wake",
+        "answers",
+        "closing",
+        "delivered",
+        "result",
+        "session_id",
+        "specs",
+        "turn_id",
+        "wake",
     )
 
     def __init__(
@@ -578,6 +585,9 @@ class AgentChatService:
         attachments: list[dict[str, Any]] | None = None,
         *,
         tool_choices: list[str] | None = None,
+        vision_frames: list[Any] | None = None,
+        vision_nudge: bool = False,
+        vision_silent: bool = False,
         incoming: IncomingMessage | None = None,
         direct_user: bool = True,
         read_only: bool = False,
@@ -655,6 +665,20 @@ class AgentChatService:
             raise SessionBusy(session_id)
         kit = kit_for(session.surface)
         text = text.strip()
+        vision_images = ()
+        if vision_frames or vision_nudge:
+            from jarvis.vision.live_inputs import decode_frames, require_local_vision
+
+            if session.surface != "jarvis" or not vision_frames:
+                raise ValueError("Live eyes require fresh frames in the Jarvis chat")
+            require_local_vision(session.provider)
+            if any(frame.source == "screen" for frame in vision_frames):
+                from jarvis.core.config import load_config
+
+                policy = load_config().screen_context
+                if not policy.enabled or policy.denylist or policy.sensitive_patterns:
+                    raise ValueError("Screen privacy settings prevent live sharing; use an appshot")
+            vision_images = decode_frames(vision_frames)
         attached = chat_attachments.to_analysis(attachments)
         if not text and not attached:
             raise ValueError("empty message")
@@ -798,7 +822,9 @@ class AgentChatService:
 
             completion = (
                 TurnCompletion(
-                    self, handle, origin.user_text,
+                    self,
+                    handle,
+                    origin.user_text,
                     allow_correction=origin.direct_user and not read_only,
                     context=prompt,
                 )
@@ -807,7 +833,8 @@ class AgentChatService:
             )
             run_handle = (
                 replace(handle, emit=completion.emit, request_approval=completion.ask)
-                if completion is not None else handle
+                if completion is not None
+                else handle
             )
 
             async def run_attempt(run_prompt: str) -> None:
@@ -823,6 +850,18 @@ class AgentChatService:
                             bridge=self._bridge_for(bus),
                             always_allowed=self.always_allowed(session_id),
                             **({"tool_choices": selected} if selected else {}),
+                            **(
+                                {
+                                    "vision_images": vision_images,
+                                    "vision_nudge": vision_nudge,
+                                    "vision_silent": vision_silent,
+                                    "vision_sources": tuple(
+                                        frame.source for frame in vision_frames
+                                    ),
+                                }
+                                if vision_images
+                                else {}
+                            ),
                         )
                 elif supports_cli_runner(runner):
                     from jarvis.agent_chat.tool_catalog import selection_briefing
@@ -899,7 +938,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": None,
                         },
@@ -919,7 +959,8 @@ class AgentChatService:
                             "usage": completion.usage if completion is not None else {},
                             **(
                                 {"cost_usd": completion.cost}
-                                if completion and completion.cost is not None else {}
+                                if completion and completion.cost is not None
+                                else {}
                             ),
                             "error": f"{type(exc).__name__}: {exc}",
                         },
@@ -1325,7 +1366,8 @@ class AgentChatService:
     def undelivered_questions(self, session_id: str, turn_id: str) -> list[str]:
         """Cards whose answers have not reached the runner, including just-answered ones."""
         return [
-            qid for qid, q in self._questions.items()
+            qid
+            for qid, q in self._questions.items()
             if q.session_id == session_id and q.turn_id == turn_id and not q.delivered
         ]
 
