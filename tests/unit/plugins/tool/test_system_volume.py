@@ -69,3 +69,58 @@ async def test_no_speaker_is_an_honest_error() -> None:
     result = await SystemVolumeTool(opener=_Broken).execute({"action": "get"}, None)  # type: ignore[arg-type]
     assert not result.success
     assert result.error == "No speaker is connected."
+
+
+class _Speakers:
+    def __init__(self, endpoint: _Endpoint) -> None:
+        self.EndpointVolume = endpoint  # noqa: N815 - pycaw name
+
+
+def _fake_com(
+    monkeypatch: pytest.MonkeyPatch, endpoint: _Endpoint, init_error: int | None
+) -> list[str]:
+    import sys
+    import types
+
+    calls: list[str] = []
+
+    def _init() -> None:
+        calls.append("init")
+        if init_error is not None:
+            exc = OSError("Cannot change thread mode after it is set")
+            exc.winerror = init_error  # type: ignore[attr-defined]
+            raise exc
+
+    comtypes = types.ModuleType("comtypes")
+    comtypes.CoInitialize = _init  # type: ignore[attr-defined]
+    comtypes.CoUninitialize = lambda: calls.append("uninit")  # type: ignore[attr-defined]
+    pycaw_pkg = types.ModuleType("pycaw")
+    pycaw = types.ModuleType("pycaw.pycaw")
+    pycaw.AudioUtilities = types.SimpleNamespace(GetSpeakers=lambda: _Speakers(endpoint))  # type: ignore[attr-defined]
+    pycaw.IAudioEndpointVolume = object  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "comtypes", comtypes)
+    monkeypatch.setitem(sys.modules, "pycaw", pycaw_pkg)
+    monkeypatch.setitem(sys.modules, "pycaw.pycaw", pycaw)
+    monkeypatch.setattr(sys, "platform", "win32")
+    return calls
+
+
+def test_unmute_works_on_a_thread_whose_com_mode_is_already_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jarvis.plugins.tool.system_volume import apply
+
+    endpoint = _Endpoint(level=1.0, muted=True)
+    calls = _fake_com(monkeypatch, endpoint, init_error=-2147417850)
+
+    assert apply("unmute", None) == "Volume is 100%."
+    assert calls == ["init"]  # not ours to uninitialise
+
+
+def test_other_com_start_failures_still_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.plugins.tool.system_volume import apply
+
+    _fake_com(monkeypatch, _Endpoint(), init_error=-2147024891)
+
+    with pytest.raises(OSError):
+        apply("get", None)

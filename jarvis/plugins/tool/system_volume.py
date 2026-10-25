@@ -26,6 +26,10 @@ _ACTIONS = ("get", "set", "up", "down", "mute", "unmute")
 DEFAULT_STEP = 10
 
 
+#: CoInitialize on a thread whose COM apartment is already set the other way.
+_RPC_E_CHANGED_MODE = -2147417850
+
+
 class VolumeUnavailable(RuntimeError):
     """No default speaker could be reached."""
 
@@ -39,8 +43,15 @@ class _CoreAudio:
         import comtypes  # noqa: PLC0415 - Windows only, lazy
         from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume  # noqa: PLC0415
 
-        comtypes.CoInitialize()
-        self._initialised = True
+        try:
+            comtypes.CoInitialize()
+            self._initialised = True
+        except OSError as exc:
+            # Live 2026-10-25: "unmute" on a worker thread where another tool had
+            # already started COM in the other mode raised RPC_E_CHANGED_MODE.
+            # COM is usable there; it is just not ours to uninitialise.
+            if getattr(exc, "winerror", None) != _RPC_E_CHANGED_MODE:
+                raise
         speakers = AudioUtilities.GetSpeakers()
         if speakers is None:
             raise VolumeUnavailable("No speaker is connected.")
