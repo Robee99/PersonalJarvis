@@ -20,6 +20,7 @@ import difflib
 
 import pytest
 
+from jarvis.screen_context import uitext
 from jarvis.screen_context.uitext import (
     UNREADABLE_MARK,
     ocr_engine_status,
@@ -35,6 +36,16 @@ FIXTURES = [
     ("Download complete - 3 files", 22, (240, 244, 248), (10, 60, 120)),
     ("Settings > Privacy > Microphone", 24, (255, 255, 255), (0, 0, 0)),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _real_windows_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This gate measures the real engines, Windows' own included.
+
+    The package conftest switches Windows OCR off for the engine-fake tests;
+    the skip below was decided with it on, so the gate scored 0.0 without it.
+    """
+    monkeypatch.setattr(uitext, "_WINDOWS_OCR_FAILURE", None)
 
 
 def _engine_available() -> bool:
