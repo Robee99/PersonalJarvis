@@ -2813,6 +2813,12 @@ class ScreenContextConfig(BaseModel):
     #: (§3), so this only does anything when a local OCR engine is present.
     ocr_enabled: bool = False
 
+    #: Windows' built-in OCR (Windows.Media.Ocr) reads a screen whose
+    #: accessibility text is sparse even with ``ocr_enabled`` off: it ships
+    #: with Windows, needs no download and read a full screen in 54 ms on the
+    #: PC. Read by ``ScreenContextService``; ``false`` turns it off.
+    windows_ocr: bool = True
+
 
 class AppshotConfig(BaseModel):
     """Top-level ``[appshot]`` config — show the assistant the front window.

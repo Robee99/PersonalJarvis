@@ -178,15 +178,20 @@ def _lines(items: list[_Item]) -> list[list[_Item]]:
     return [sorted(line, key=lambda i: (i.cx, i.order)) for line in lines]
 
 
-def layout(nodes: Iterable[Any], *, max_chars: int) -> ScreenParse:
-    """The screen as tab-separated lines with ``{{n. text}}`` entities."""
+def layout(nodes: Iterable[Any], *, max_chars: int, first_index: int = 1) -> ScreenParse:
+    """The screen as tab-separated lines with ``{{n. text}}`` entities.
+
+    ``first_index`` continues a numbering already on the page, so OCR text
+    added under the accessibility text never reuses one of its numbers.
+    """
     entities: list[Entity] = []
 
     def tag(kind: str, text: str) -> str:
         if len(entities) >= _MAX_ENTITIES:
             return text
-        entities.append(Entity(len(entities) + 1, kind, text))
-        return f"{{{{{len(entities)}. {text}}}}}"
+        index = first_index + len(entities)
+        entities.append(Entity(index, kind, text))
+        return f"{{{{{index}. {text}}}}}"
 
     def render(item: _Item) -> str:
         if item.kind is not None:
@@ -225,6 +230,14 @@ def layout(nodes: Iterable[Any], *, max_chars: int) -> ScreenParse:
     return ScreenParse(text=kept, entities=shown, truncated=truncated)
 
 
+_ENTITY_MARK = re.compile(r"\{\{(\d+)\. ")
+
+
+def last_entity_index(text: str) -> int:
+    """The highest ``{{n. `` number in ``text``, 0 when it has none."""
+    return max((int(m.group(1)) for m in _ENTITY_MARK.finditer(text)), default=0)
+
+
 #: The line that teaches the model the notation, once per screen.
 ENTITY_LEGEND = (
     "Lines keep the screen's layout (tabs separate things side by side). "
@@ -235,4 +248,11 @@ ENTITY_LEGEND = (
 )
 
 
-__all__ = ["ENTITY_LEGEND", "Entity", "ScreenParse", "is_placed", "layout"]
+__all__ = [
+    "ENTITY_LEGEND",
+    "Entity",
+    "ScreenParse",
+    "is_placed",
+    "last_entity_index",
+    "layout",
+]

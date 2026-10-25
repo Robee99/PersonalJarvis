@@ -16,10 +16,18 @@ OCR therefore runs only when all three hold simultaneously:
 That last condition is why OCR is not a dependency. The base install stays
 torch-free (AGENTS.md §3), so this module *probes* for a backend and degrades
 with a named reason when there is none — it never pulls one in.
+
+Windows is the exception to "the user enabled it": Windows ships its own OCR
+engine (Windows.Media.Ocr), which read a whole 1536x864 screen in 54 ms on the
+PC (2026-10-25), so a sparse screen is read with it even with the OCR switch
+off. That switch still governs the slower optional engines. For Nemotron 3.5
+Bolt E4B, which cannot see an image, this text is all it gets of a game, a
+picture, or an app with no accessibility layer.
 """
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -250,6 +258,10 @@ class OcrSupplement:
 
     text: str = ""
     regions: tuple[OcrTextRegion, ...] = ()
+    #: The lines the model may read (low-confidence words masked) with their
+    #: boxes, for the laid-out form (``ocr_layout``). ``regions`` keeps every
+    #: word for redaction; these never carry a word the model may not quote.
+    lines: tuple[OcrTextRegion, ...] = ()
     degradation: Degradation | None = None
     #: Mean word confidence (0-100) of the recognised words, when the engine
     #: reports one. ``None`` means the engine gave no confidence at all.
@@ -282,6 +294,92 @@ class _OcrWord:
     confidence: float | None
     bounds: tuple[int, int, int, int]
     line: tuple[int, ...]
+
+
+_WINDOWS_OCR_ENGINE: Any = None
+#: Why Windows' OCR cannot run in this process; set once, then skipped.
+_WINDOWS_OCR_FAILURE: str | None = None
+
+
+def _windows_ocr_engine() -> Any:
+    """Windows' built-in OCR engine for the user's languages, or None."""
+    global _WINDOWS_OCR_ENGINE, _WINDOWS_OCR_FAILURE  # noqa: PLW0603 - one lazy engine per process
+    if _WINDOWS_OCR_ENGINE is not None:
+        return _WINDOWS_OCR_ENGINE
+    if _WINDOWS_OCR_FAILURE is not None or sys.platform != "win32":
+        return None
+    try:
+        from winrt.windows.media.ocr import OcrEngine  # noqa: PLC0415 - Windows only
+    except ImportError as exc:  # the WinRT OCR wheels are absent: try the next engine
+        _WINDOWS_OCR_FAILURE = f"not installed ({exc})"
+        return None
+    try:
+        engine = OcrEngine.try_create_from_user_profile_languages()
+    except OSError as exc:  # WinRT activation failed: try the next engine
+        _WINDOWS_OCR_FAILURE = f"{type(exc).__name__}: {exc}"
+        log.warning("screen_context: Windows OCR could not start (%s).", _WINDOWS_OCR_FAILURE)
+        return None
+    if engine is None:
+        # No OCR language pack for any of the user's languages.
+        _WINDOWS_OCR_FAILURE = "no OCR language is installed"
+        log.info("screen_context: Windows OCR has no language for this user's languages.")
+        return None
+    _WINDOWS_OCR_ENGINE = engine
+    return engine
+
+
+def windows_ocr_ready() -> bool:
+    """Whether Windows' built-in OCR can read a screen in this process."""
+    return _windows_ocr_engine() is not None
+
+
+def _windows_ocr_words(image: Any) -> list[_OcrWord] | None:
+    """Words from Windows.Media.Ocr, or None off Windows or without it.
+
+    The engine reports no confidence, so nothing is masked; each OCR line
+    keeps its own index so the lines group as the engine read them.
+    """
+    engine = _windows_ocr_engine()
+    if engine is None:
+        return None
+    import asyncio  # noqa: PLC0415
+
+    from winrt.windows.graphics.imaging import (  # noqa: PLC0415 - Windows only
+        BitmapPixelFormat,
+        SoftwareBitmap,
+    )
+    from winrt.windows.storage.streams import DataWriter  # noqa: PLC0415
+
+    rgba = image.convert("RGBA")
+    writer = DataWriter()
+    writer.write_bytes(rgba.tobytes("raw", "BGRA"))
+    # The four-argument overload (premultiplied alpha): PyWinRT 3.2.1 has no
+    # five-argument one ("Invalid parameter count", live on the PC).
+    bitmap = SoftwareBitmap.create_copy_from_buffer(
+        writer.detach_buffer(),
+        BitmapPixelFormat.BGRA8,
+        rgba.width,
+        rgba.height,
+    )
+
+    async def _recognize() -> Any:
+        return await engine.recognize_async(bitmap)
+
+    # Runs on a worker thread (asyncio.to_thread), which has no event loop.
+    result = asyncio.run(_recognize())
+    words: list[_OcrWord] = []
+    for line_index, line in enumerate(result.lines):
+        for word in line.words:
+            rect = word.bounding_rect
+            words.append(
+                _OcrWord(
+                    text=str(word.text),
+                    confidence=None,
+                    bounds=(round(rect.x), round(rect.y), round(rect.width), round(rect.height)),
+                    line=(line_index,),
+                )
+            )
+    return words
 
 
 _RAPIDOCR_ENGINE: Any = None
@@ -381,8 +479,15 @@ def _tesseract_words(image: Any) -> list[_OcrWord] | None:
     return words
 
 
-def _ocr_words(image: Any) -> list[_OcrWord] | None:
-    """Words from the first installed engine: RapidOCR, then Tesseract."""
+def _ocr_words(image: Any, *, windows_only: bool = False) -> list[_OcrWord] | None:
+    """Words from the first installed engine: Windows, RapidOCR, Tesseract.
+
+    ``windows_only`` is the OCR-switch-off path: only the built-in engine,
+    never the slower optional ones the user did not switch on.
+    """
+    words = _windows_ocr_words(image)
+    if words is not None or windows_only:
+        return words
     words = _rapidocr_words(image)
     if words is not None:
         return words
@@ -414,17 +519,15 @@ def _supplement_from_words(words: list[_OcrWord]) -> OcrSupplement:
         readable.setdefault(item.line, []).append(word)
 
     regions: list[OcrTextRegion] = []
-    for line_words in grouped.values():
+    lines: list[OcrTextRegion] = []
+    for key, line_words in grouped.items():
         left = min(word[1] for word in line_words)
         top = min(word[2] for word in line_words)
         right = max(word[1] + word[3] for word in line_words)
         bottom = max(word[2] + word[4] for word in line_words)
-        regions.append(
-            OcrTextRegion(
-                text=" ".join(word[0] for word in line_words),
-                bounds=(left, top, right - left, bottom - top),
-            )
-        )
+        bounds = (left, top, right - left, bottom - top)
+        regions.append(OcrTextRegion(text=" ".join(word[0] for word in line_words), bounds=bounds))
+        lines.append(OcrTextRegion(text=" ".join(readable[key]), bounds=bounds))
     confidence = sum(scores) / len(scores) if scores else None
     degradation = None
     if unreadable:
@@ -438,19 +541,43 @@ def _supplement_from_words(words: list[_OcrWord]) -> OcrSupplement:
     return OcrSupplement(
         text="\n".join(" ".join(line) for line in readable.values()),
         regions=tuple(regions),
+        lines=tuple(lines),
         degradation=degradation,
         confidence=confidence,
     )
 
 
-def ocr_supplement_with_regions(image: Any) -> OcrSupplement:
+@dataclass(frozen=True, slots=True)
+class _OcrNode:
+    """An OCR line in the shape ``screen_parse.layout`` reads."""
+
+    name: str
+    bounds: tuple[int, int, int, int]
+    role: str = "Text"
+
+
+def ocr_layout(result: OcrSupplement, *, max_chars: int, first_index: int = 1) -> str:
+    """The OCR lines laid out like the screen, with numbered entities.
+
+    The same ReALM form as the accessibility text: lines in reading order,
+    tabs between things side by side, and a phone number, email or web
+    address marked ``{{n. text}}`` so "call this number" can resolve.
+    """
+    if not result.lines:
+        return result.text
+    nodes = [_OcrNode(name=line.text, bounds=line.bounds) for line in result.lines]
+    return screen_parse.layout(nodes, max_chars=max_chars, first_index=first_index).text
+
+
+def ocr_supplement_with_regions(image: Any, *, windows_only: bool = False) -> OcrSupplement:
     """Run OCR once and retain line boxes for deterministic pixel redaction.
 
-    Engines are optional and probed in order (RapidOCR, then Tesseract); an
-    absent engine is the typed ``OCR_UNAVAILABLE`` outcome, never an error.
+    Engines are optional and probed in order (Windows' own, RapidOCR, then
+    Tesseract); an absent engine is the typed ``OCR_UNAVAILABLE`` outcome,
+    never an error. ``windows_only`` uses the built-in engine alone.
     """
     try:
-        words = _ocr_words(image)
+        words = _ocr_words(image, windows_only=windows_only)
     except Exception as exc:  # noqa: BLE001 - optional binary/backend failures
         log.debug("OCR failed", exc_info=True)
         return _ocr_unavailable(
@@ -514,6 +641,8 @@ def ocr_engine_status() -> tuple[bool, str]:
     import importlib.util  # noqa: PLC0415
     import shutil  # noqa: PLC0415
 
+    if windows_ocr_ready():
+        return True, ""
     rapidocr_problem = _rapidocr_problem()
     if rapidocr_problem is None:
         return True, ""
@@ -532,8 +661,10 @@ __all__ = [
     "aggregate_text",
     "nodes_in_rect",
     "ocr_engine_status",
+    "ocr_layout",
     "ocr_supplement",
     "ocr_supplement_with_regions",
     "read_ui_text",
     "text_is_sparse",
+    "windows_ocr_ready",
 ]

@@ -567,7 +567,7 @@ async def test_ocr_sensitive_line_is_burned_out_of_delivered_pixels(monkeypatch)
     monkeypatch.setattr(
         uitext,
         "ocr_supplement_with_regions",
-        lambda _image: uitext.OcrSupplement(
+        lambda _image, **_kw: uitext.OcrSupplement(
             text="Card 4111 1111 1111 1111",
             regions=(
                 uitext.OcrTextRegion(
@@ -1329,3 +1329,70 @@ def test_a_full_depth_frame_turns_only_the_cut_area_into_8_bit() -> None:
     assert size == (40, 20)
     assert rgb == b"\xff" * (40 * 20 * 3)
     assert master.hdr and master.pixels.shape == (20, 40, 4)
+
+
+class _RecordingOcr:
+    """Stands in for ``uitext.ocr_supplement_with_regions`` and records its calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[bool] = []
+
+    def __call__(self, _image, *, windows_only: bool = False):
+        from jarvis.screen_context import uitext
+
+        self.calls.append(windows_only)
+        line = uitext.OcrTextRegion(text="Call +91 98765 43210", bounds=(10, 10, 180, 20))
+        return uitext.OcrSupplement(text=line.text, regions=(line,), lines=(line,))
+
+
+def _windows_ocr(monkeypatch, *, ready: bool = True) -> _RecordingOcr:
+    from jarvis.screen_context import uitext
+
+    ocr = _RecordingOcr()
+    monkeypatch.setattr(uitext, "ocr_supplement_with_regions", ocr)
+    monkeypatch.setattr(uitext, "windows_ocr_ready", lambda: ready)
+    return ocr
+
+
+async def test_windows_ocr_reads_a_sparse_screen_with_the_ocr_switch_off(monkeypatch) -> None:
+    # Nemotron 3.5 Bolt E4B cannot see the image: this text is its screen.
+    ocr = _windows_ocr(monkeypatch)
+    service = make_service()
+
+    outcome = await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == [True]
+    assert outcome.context.ui_text == "Call {{1. +91 98765 43210}}"
+    assert outcome.context.ui_text_source == "ocr"
+
+
+async def test_windows_ocr_off_in_settings_reads_nothing(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch)
+    service = make_service(settings=ScreenContextSettings(windows_ocr=False))
+
+    await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == []
+
+
+async def test_a_screen_with_enough_accessibility_text_is_not_ocred(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch)
+    reader = FakeTextReader(
+        FakeObservation(
+            [FakeNode(name="A full paragraph of real accessibility text on the screen")]
+        )
+    )
+    service = make_service(ui_text_reader=reader)
+
+    await service.capture_for_turn("look at this window", locale="en")
+
+    assert ocr.calls == []
+
+
+async def test_the_ocr_switch_still_runs_every_engine(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch, ready=False)
+    service = make_service(settings=ScreenContextSettings(ocr_enabled=True))
+
+    await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == [False]

@@ -38,7 +38,7 @@ from uuid import UUID, uuid4
 
 from jarvis.platform import screen_access
 from jarvis.screen_context import intent as intent_module
-from jarvis.screen_context import redaction, uitext
+from jarvis.screen_context import redaction, screen_parse, uitext
 from jarvis.screen_context.last_frame import LastFrameMirror, get_last_frame_mirror
 from jarvis.screen_context.models import (
     CaptureTarget,
@@ -113,6 +113,9 @@ class ScreenContextSettings:
     deck_preview_s: float = 120.0
     #: OCR is a supplement, off unless the user asks for it.
     ocr_enabled: bool = False
+    #: Windows' built-in OCR fills in a sparse screen even with ``ocr_enabled``
+    #: off: it ships with Windows and reads a screen in about 60 ms.
+    windows_ocr: bool = True
     #: ``[computer_use].main_monitor``-style override for the last-resort pick.
     main_monitor: str = "primary"
 
@@ -1104,10 +1107,20 @@ class ScreenContextService:
         # pixels even when accessibility already returned enough model text.
         # OCR text itself supplements only genuinely sparse accessibility.
         ocr_region_hits = ()
-        if self._settings.ocr_enabled:
+        # Switched off, OCR still fills a sparse screen when Windows' own
+        # engine is there (no download, about 60 ms); the optional engines
+        # wait for the switch.
+        windows_only = (
+            not self._settings.ocr_enabled
+            and self._settings.windows_ocr
+            and uitext.text_is_sparse(scrubbed_text, image_size=raw_size)
+            and await asyncio.to_thread(uitext.windows_ocr_ready)
+        )
+        if self._settings.ocr_enabled or windows_only:
             ocr_result = await asyncio.to_thread(
                 uitext.ocr_supplement_with_regions,
                 image,
+                windows_only=windows_only,
             )
             if ocr_result.degradation is not None:
                 degradations.append(ocr_result.degradation)
@@ -1126,8 +1139,15 @@ class ScreenContextService:
                     scrubbed_text,
                     image_size=raw_size,
                 ):
+                    # Laid out with numbered entities, numbered on from the
+                    # accessibility text's (ReALM, see screen_parse).
+                    ocr_text = uitext.ocr_layout(
+                        ocr_result,
+                        max_chars=max(0, self._settings.max_text_chars - len(scrubbed_text)),
+                        first_index=screen_parse.last_entity_index(scrubbed_text) + 1,
+                    )
                     ocr_scrubbed, ocr_hits = redaction.scrub_text(
-                        ocr_result.text,
+                        ocr_text,
                         self._patterns,
                     )
                     scrubbed_text = (
@@ -1600,6 +1620,7 @@ def settings_from_config(cfg: Any) -> ScreenContextSettings:
         ttl_s=float(getattr(block, "ttl_s", 120.0)),
         deck_preview_s=float(getattr(block, "deck_preview_s", 120.0)),
         ocr_enabled=bool(getattr(block, "ocr_enabled", False)),
+        windows_ocr=bool(getattr(block, "windows_ocr", True)),
         main_monitor=main_monitor,
     )
 

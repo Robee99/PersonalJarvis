@@ -342,6 +342,11 @@ desktop = [
     "winrt-Windows.Media.Capture>=3.2; sys_platform == 'win32'",
     "winrt-Windows.Media.MediaProperties>=3.2; sys_platform == 'win32'",
     "winrt-Windows.Storage.Streams>=3.2; sys_platform == 'win32'",
+    # Windows' own OCR engine (jarvis/screen_context/uitext.py): reads the
+    # screen when an app exposes no accessibility text, about 60 ms a screen
+    # on the PC, with nothing to download.
+    "winrt-Windows.Graphics.Imaging>=3.2; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr>=3.2; sys_platform == 'win32'",
     "pystray>=0.19",
     "pywebview>=5.3",
     # macOS Computer-Use keyboard actuation and Windows AppShot key events.
