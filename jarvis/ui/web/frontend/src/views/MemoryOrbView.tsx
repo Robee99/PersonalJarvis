@@ -64,6 +64,7 @@ import {
 import { isTextEntryTarget } from "@/lib/shortcutOverlayTrigger";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
+import { useRailStore } from "@/store/rail";
 
 import { MemoryOrbImport } from "./MemoryOrbImport";
 
@@ -250,6 +251,15 @@ export function MemoryOrbView({
     [],
   );
   const tracking = useHandTracking(handController, handDeps);
+  // HOLO on the rail starts and stops the hands; the map's own toggle still
+  // works on its own. Closing the map turns HOLO off (StarkShell).
+  const holo = useRailStore((s) => s.holo);
+  const trackingRef = useRef(tracking);
+  trackingRef.current = tracking;
+  useEffect(() => {
+    if (holo) trackingRef.current.start();
+    else if (trackingRef.current.status !== "off") trackingRef.current.stop();
+  }, [holo]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<ForceGraphMethods<DrawNode> | undefined>(undefined);
   const graph3dRef = useRef<MemoryGraph3DHandle | null>(null);

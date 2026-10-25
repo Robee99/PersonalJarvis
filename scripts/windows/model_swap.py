@@ -55,7 +55,25 @@ QWEN_VL_SNAP = Path(
 )
 #: Qwen-Server.ps1's protected profile: WorkingSetLimitMiB 8704 plus 1024 headroom.
 QWEN_RAM_NEEDED_MIB = 8704 + 1024
-QWEN_VL_RAM_NEEDED_MIB = 6144
+QWEN_VL_RAM_NEEDED_MIB = 3072  # measured 2026-10-20: ~2 GB resident at 64k; Roberto approved 3072
+HF_HUB = Path(r"C:\Users\rober\.cache\huggingface\hub")
+NEMOTRON_DIR = (
+    HF_HUB
+    / "models--unsloth--NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF"
+    / "snapshots"
+    / "b738967d6da3441a7d1c71fcec15e49e32e16ecd"
+)
+GEMMA_4B_DIR = (
+    HF_HUB
+    / "models--unsloth--gemma-4-E4B-it-qat-GGUF"
+    / "snapshots"
+    / "8c5a9e4fd5482e2be20fe0bf013b4c262a8f4265"
+)
+#: The 4B profiles run all layers on the GPU with a q8_0 KV cache (one model at
+#: a time on the 8 GB card): Gemma 4 E4B at 256k measured 44 t/s, 7.5 GB VRAM
+#: (2026-10-25). Host RAM still holds the mmap'd weights.
+NEMOTRON_RAM_NEEDED_MIB = 5120
+GEMMA_4B_RAM_NEEDED_MIB = 5120
 UI_VENUS_DIR = Path(r"C:\Users\rober\Downloads\UI-Venus-2-9B")
 #: UI-Venus runs fully on the GPU without mmap; RAM holds the runtime only.
 UI_VENUS_RAM_NEEDED_MIB = 3072
@@ -63,16 +81,25 @@ QWEN_IDLE_S = 180.0
 LOAD_TIMEOUT_S = 420.0
 
 GEMMA, QWEN, QWEN_VL, UI_VENUS = "gemma", "qwen", "qwen3-vl", "ui-venus"
-FRONT = {GEMMA: 11438, QWEN: 11437, QWEN_VL: 11440, UI_VENUS: 11441}
-BACK = {GEMMA: 11448, QWEN: 11447, QWEN_VL: 11449, UI_VENUS: 11451}
+NEMOTRON, GEMMA_4B = "nemotron", "gemma4b"
+FRONT = {
+    GEMMA: 11438, QWEN: 11437, QWEN_VL: 11440, UI_VENUS: 11441, NEMOTRON: 11442, GEMMA_4B: 11443
+}
+BACK = {
+    GEMMA: 11448, QWEN: 11447, QWEN_VL: 11449, UI_VENUS: 11451, NEMOTRON: 11452, GEMMA_4B: 11453
+}
 MODEL_ID = {
     GEMMA: "gemma-4-12b-qat",
     QWEN: "qwen",
     QWEN_VL: "qwen3-vl-8b",
     UI_VENUS: "ui-venus-2-9b",
+    NEMOTRON: "nemotron-4b",
+    GEMMA_4B: "gemma-4b-qat",
 }
 #: The context window each profile is started with (its -c / --ctx-size).
-CTX = {GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384}
+CTX = {
+    GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384, NEMOTRON: 150000, GEMMA_4B: 256000
+}
 #: Windows the main brain may be restarted with from the JARVIS context slider.
 #: Up to 65536 every layer and the KV cache fit in this 8 GB card. Above it
 #: (owner's request 2026-10-19, untested) layers move to the CPU to make room
@@ -85,10 +112,9 @@ QWEN_VL_LAYER_MIB = 115
 
 
 def qwen_vl_cpu_layer_mib() -> int:
-    """RAM the layers moved off the GPU take at the current window."""
-    return (36 - QWEN_VL_NGL.get(CTX[QWEN_VL], 36)) * QWEN_VL_LAYER_MIB
-
-
+    if CTX[QWEN_VL] not in QWEN_VL_NGL:
+        return 0
+    return (36 - QWEN_VL_NGL[CTX[QWEN_VL]]) * QWEN_VL_LAYER_MIB
 #: At or below this window the vision encoder (mmproj, ~1.1 GB) fits in VRAM
 #: next to the KV cache, so screenshots are read on the GPU instead of the CPU.
 VISION_GPU_MAX_CTX = 32768
@@ -116,8 +142,6 @@ def _save_settings() -> None:
     SETTINGS.write_text(
         json.dumps({"ctx": {p: CTX[p] for p in CTX_CHOICES}}, indent=2), encoding="utf-8"
     )
-
-
 #: Where a finished completion reports its size: llama-server's timings
 #: (cache_n + prompt_n + predicted_n), or the OpenAI usage block.
 _TIMINGS_RE = re.compile(
@@ -183,20 +207,27 @@ def close_strays(own_pid: int = 0) -> str:
     """
     fronts = ",".join(str(p) for p in FRONT.values())
     gemma_backend = BACK[GEMMA]
-    return _ps(
-        "$fronts=@(" + fronts + ");"
-        "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | ForEach-Object {"
-        " $p=$_; if ($p.ProcessId -eq " + str(own_pid) + ") { return };"
-        " $line=$p.CommandLine;"
-        " $onFront=$false; foreach($port in $fronts){"
-        " if($line -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)')){$onFront=$true} };"
-        " $gemma=$line -like '*gemma-4-12B-it-qat*';"
-        f" $ownBack=$line -match ('--port(?:\\s+|=){gemma_backend}(?:\\s|$)');"
-        " if ($onFront -or ($gemma -and -not $ownBack)) {"
-        "  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue;"
-        "  'closed ' + $p.ProcessId + ' command=' + $line } }",
-        timeout=20,
-    ).strip()
+    try:
+        return _ps(
+            "$fronts=@(" + fronts + ");"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | ForEach-Object {"
+            " $p=$_; if ($p.ProcessId -eq " + str(own_pid) + ") { return };"
+            " $line=$p.CommandLine;"
+            " $onFront=$false; foreach($port in $fronts){"
+            " if($line -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)')){$onFront=$true} };"
+            " $gemma=$line -like '*gemma-4-12B-it-qat*';"
+            f" $ownBack=$line -match ('--port(?:\\s+|=){gemma_backend}(?:\\s|$)');"
+            " if ($onFront -or ($gemma -and -not $ownBack)) {"
+            "  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue;"
+            "  'closed ' + $p.ProcessId + ' command=' + $line } }",
+            timeout=8,
+        ).strip()
+    except subprocess.TimeoutExpired:
+        # WMI/CIM can stall during a busy Windows session. A stale-process
+        # sweep is maintenance, not a reason to terminate the model gateway.
+        # Keep the proxy alive and make the skipped cleanup explicit in logs.
+        log.warning("model process sweep timed out; leaving processes untouched")
+        return ""
 
 
 def single_instance() -> bool:
@@ -229,6 +260,8 @@ class Swapper:
         self.gemma_proc: subprocess.Popen | None = None
         self.qwen_vl_proc: subprocess.Popen | None = None
         self.ui_venus_proc: subprocess.Popen | None = None
+        self.nemotron_proc: subprocess.Popen | None = None
+        self.gemma_4b_proc: subprocess.Popen | None = None
         self.session: aiohttp.ClientSession | None = None
         #: The newest agent turn's context fill, for the HUD's context meter.
         self.context: dict[str, object] | None = None
@@ -254,11 +287,45 @@ class Swapper:
                 GEMMA: self.gemma_proc,
                 QWEN_VL: self.qwen_vl_proc,
                 UI_VENUS: self.ui_venus_proc,
+                NEMOTRON: self.nemotron_proc,
+                GEMMA_4B: self.gemma_4b_proc,
             }.get(name)
             if proc is not None and proc.poll() is not None:
                 raise RuntimeError(f"{name} exited with code {proc.returncode} while loading")
             await asyncio.sleep(1.0)
         raise RuntimeError(f"{name} did not become ready in {LOAD_TIMEOUT_S:.0f}s")
+
+    async def adopt_running(self, name: str) -> bool:
+        """Recover a matching backend after a proxy restart without allocating weights."""
+        if not await self.healthy(name):
+            return False
+        assert self.session is not None
+        async with self.session.get(
+            f"http://127.0.0.1:{BACK[name]}/props", timeout=aiohttp.ClientTimeout(total=3)
+        ) as response:
+            if response.status != 200:
+                raise RuntimeError(f"cannot verify existing {name} backend")
+            properties = await response.json()
+        context = (properties.get("default_generation_settings") or {}).get("n_ctx")
+        if properties.get("model_alias") != MODEL_ID[name] or context != CTX[name]:
+            raise RuntimeError(f"existing {name} backend has incompatible identity or context")
+        for other in BACK:
+            if other != name and await self.healthy(other):
+                raise RuntimeError("multiple model backends are loaded; refusing adoption")
+        self.active = name
+        self.last_used[name] = time.monotonic()
+        log.info("adopted existing %s backend with context %s", name, context)
+        return True
+
+    async def restore_main_backend(self) -> bool:
+        """Keep recovery endpoints available when startup adoption is refused."""
+        try:
+            return await self.adopt_running(MAIN)
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "could not adopt existing main backend; recovery endpoints remain available"
+            )
+            return False
 
     def start_gemma(self) -> None:
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -482,6 +549,131 @@ class Swapper:
         )
         self.ui_venus_proc = None
 
+    def start_nemotron(self) -> None:
+        model = NEMOTRON_DIR / "NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf"
+        missing = [str(path) for path in (RUNTIME, model) if not path.is_file()]
+        if missing:
+            raise FileNotFoundError("Nemotron startup files are missing: " + ", ".join(missing))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        args = [
+            str(RUNTIME),
+            "-m",
+            str(model),
+            "--alias",
+            MODEL_ID[NEMOTRON],
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(BACK[NEMOTRON]),
+            "-c",
+            str(CTX[NEMOTRON]),
+            "-np",
+            "1",
+            "-fa",
+            "on",
+            "--rope-scaling",
+            "yarn",
+            "--rope-scale",
+            "1.953125",
+            "-ngl",
+            "99",
+            "-t",
+            "8",
+            "--jinja",
+            "--no-ui",
+            "--offline",
+            "--log-file",
+            rf"C:\models\nemotron-server-{stamp}.log",
+        ]
+        self.nemotron_proc = subprocess.Popen(  # noqa: S603
+            args,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def stop_nemotron(self) -> None:
+        if self.nemotron_proc and self.nemotron_proc.poll() is None:
+            self.nemotron_proc.terminate()
+            try:
+                self.nemotron_proc.wait(20)
+            except subprocess.TimeoutExpired:
+                self.nemotron_proc.kill()
+        _ps(
+            "$port=" + str(BACK[NEMOTRON]) + ";"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
+            "Where-Object { $_.CommandLine -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)') } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            timeout=20,
+        )
+        self.nemotron_proc = None
+
+    def start_gemma_4b(self) -> None:
+        model = GEMMA_4B_DIR / "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+        mmproj = GEMMA_4B_DIR / "mmproj-F16.gguf"
+        missing = [str(path) for path in (RUNTIME, model) if not path.is_file()]
+        if missing:
+            raise FileNotFoundError("Gemma 4B startup files are missing: " + ", ".join(missing))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        args = [
+            str(RUNTIME),
+            "-m",
+            str(model),
+            "--mmproj",
+            str(mmproj),
+            "--alias",
+            MODEL_ID[GEMMA_4B],
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(BACK[GEMMA_4B]),
+            "-c",
+            str(CTX[GEMMA_4B]),
+            "-np",
+            "1",
+            "-fa",
+            "on",
+            "--rope-scaling",
+            "yarn",
+            "--rope-scale",
+            "1.953125",
+            "-ngl",
+            "99",
+            "-ctk",
+            "q8_0",
+            "-ctv",
+            "q8_0",
+            "-t",
+            "8",
+            "--jinja",
+            "--no-ui",
+            "--offline",
+            "--log-file",
+            rf"C:\models\gemma4b-server-{stamp}.log",
+        ]
+        self.gemma_4b_proc = subprocess.Popen(  # noqa: S603
+            args,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def stop_gemma_4b(self) -> None:
+        if self.gemma_4b_proc and self.gemma_4b_proc.poll() is None:
+            self.gemma_4b_proc.terminate()
+            try:
+                self.gemma_4b_proc.wait(20)
+            except subprocess.TimeoutExpired:
+                self.gemma_4b_proc.kill()
+        _ps(
+            "$port=" + str(BACK[GEMMA_4B]) + ";"
+            "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | "
+            "Where-Object { $_.CommandLine -match ('--port(?:\\s+|=)' + $port + '(?:\\s|$)') } | "
+            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+            timeout=20,
+        )
+        self.gemma_4b_proc = None
+
     def stop_profile(self, name: str) -> None:
         if name == GEMMA:
             self.stop_gemma()
@@ -491,6 +683,10 @@ class Swapper:
             self.stop_qwen_vl()
         elif name == UI_VENUS:
             self.stop_ui_venus()
+        elif name == NEMOTRON:
+            self.stop_nemotron()
+        elif name == GEMMA_4B:
+            self.stop_gemma_4b()
 
     def start_profile(self, name: str) -> None:
         if name == GEMMA:
@@ -501,10 +697,16 @@ class Swapper:
             self.start_qwen_vl()
         elif name == UI_VENUS:
             self.start_ui_venus()
+        elif name == NEMOTRON:
+            self.start_nemotron()
+        elif name == GEMMA_4B:
+            self.start_gemma_4b()
 
     async def ensure(self, name: str) -> None:
         async with self.lock:
             if self.active == name and await self.healthy(name):
+                return
+            if self.active is None and await self.adopt_running(name):
                 return
             # Never pull the model out from under a request that is running.
             while any(count for profile, count in self.inflight.items() if profile != name):  # noqa: ASYNC110
@@ -532,6 +734,24 @@ class Swapper:
                 if projected < UI_VENUS_RAM_NEEDED_MIB:
                     raise MemoryError(
                         f"UI-Venus needs {UI_VENUS_RAM_NEEDED_MIB} MiB free RAM; "
+                        f"only about {projected} MiB would be free. "
+                        "The active model keeps the turn."
+                    )
+            elif name == NEMOTRON:
+                freed = _working_set_mib(BACK[self.active]) if self.active in BACK else 0
+                projected = available_mib() + freed
+                if projected < NEMOTRON_RAM_NEEDED_MIB:
+                    raise MemoryError(
+                        f"Nemotron needs {NEMOTRON_RAM_NEEDED_MIB} MiB free RAM; "
+                        f"only about {projected} MiB would be free. "
+                        "The active model keeps the turn."
+                    )
+            elif name == GEMMA_4B:
+                freed = _working_set_mib(BACK[self.active]) if self.active in BACK else 0
+                projected = available_mib() + freed
+                if projected < GEMMA_4B_RAM_NEEDED_MIB:
+                    raise MemoryError(
+                        f"Gemma 4B needs {GEMMA_4B_RAM_NEEDED_MIB} MiB free RAM; "
                         f"only about {projected} MiB would be free. "
                         "The active model keeps the turn."
                     )
@@ -618,11 +838,8 @@ class Swapper:
                         "requested": ctx if ctx is not None else window,
                         "vision_on_gpu": name == QWEN_VL and self.vision_on_gpu(),
                         "seconds": round(time.monotonic() - started, 1),
-                        **(
-                            {"error": f"{ctx} did not load ({last_error}); kept {window}"}
-                            if ctx is not None and window != ctx
-                            else {}
-                        ),
+                        **({"error": f"{ctx} did not load ({last_error}); kept {window}"}
+                           if ctx is not None and window != ctx else {}),
                     }
             CTX[name] = previous
             raise RuntimeError(f"{name} did not come back: {last_error}")
@@ -862,6 +1079,7 @@ async def main() -> None:
     if closed:
         log.warning("closed a duplicate model server at start: %s", closed.replace("\n", "; "))
     swapper.session = aiohttp.ClientSession()
+    await swapper.restore_main_backend()
     runners = []
     for name, port in FRONT.items():
         app = web.Application(client_max_size=256 * 1024 * 1024)
@@ -879,11 +1097,14 @@ async def main() -> None:
                 await asyncio.sleep(1.0)
         runners.append(runner)
     log.info(
-        "model-swap listening: gemma %s, qwen %s, qwen3-vl %s, ui-venus %s",
+        "model-swap listening: gemma %s, qwen %s, qwen3-vl %s, ui-venus %s, "
+        "nemotron %s, gemma4b %s",
         FRONT[GEMMA],
         FRONT[QWEN],
         FRONT[QWEN_VL],
         FRONT[UI_VENUS],
+        FRONT[NEMOTRON],
+        FRONT[GEMMA_4B],
     )
     # Cold start: neither model is loaded until first request.
     await swapper.idle_loop()

@@ -54,7 +54,8 @@ def test_stray_cleanup_avoids_slow_listener_enumeration(monkeypatch: pytest.Monk
     assert "11440" in captured["command"]
     assert "Get-CimInstance Win32_Process" in captured["command"]
     assert "Get-NetTCPConnection" not in captured["command"]
-    assert captured["timeout"] == 20
+    # A stalled CIM query is logged and skipped, never fatal to the gateway.
+    assert captured["timeout"] == 8
 
 
 def test_qwen_vl_transition_stops_other_profiles_before_starting_target(
@@ -84,6 +85,8 @@ def test_qwen_vl_transition_stops_other_profiles_before_starting_target(
         ("stop", swap.GEMMA),
         ("stop", swap.QWEN),
         ("stop", swap.UI_VENUS),
+        ("stop", swap.NEMOTRON),
+        ("stop", swap.GEMMA_4B),
         ("start", swap.QWEN_VL),
     ]
     assert instance.active == swap.QWEN_VL

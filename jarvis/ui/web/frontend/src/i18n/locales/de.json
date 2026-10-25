@@ -8647,5 +8647,73 @@
       "follow": "ISS folgen",
       "unavailable": "3D ist hier nicht möglich, daher wird der HUD-Globus gezeigt."
     }
+  },
+  "rail": {
+    "label": "Assistenten-Leiste",
+    "fold": "Leiste einklappen",
+    "unfold": "Leiste ausklappen",
+    "figure": "Figur im Ring",
+    "no_model": "Kein Modell",
+    "on": "an",
+    "off": "aus",
+    "shown": "sichtbar",
+    "hidden": "versteckt",
+    "eyes": "Augen",
+    "watch": "Wache",
+    "holo": "Holo",
+    "avatar": {
+      "ring": "Ring",
+      "cube": "Würfel",
+      "face": "Gesicht"
+    },
+    "state": {
+      "idle": "Bereit",
+      "connecting": "Verbindet",
+      "listening": "Hört zu",
+      "thinking": "Denkt",
+      "speaking": "Spricht",
+      "paused": "Pausiert",
+      "error": "Fehler"
+    },
+    "line": {
+      "idle": "in Bereitschaft…",
+      "connecting": "verbindet…",
+      "listening": "hört zu…",
+      "thinking": "denkt nach…",
+      "speaking": "spricht…",
+      "paused": "pausiert",
+      "error": "etwas ist schiefgelaufen"
+    },
+    "screen_share": "Bildschirm teilen",
+    "screen_stop": "Teilen beenden",
+    "quiet": "3 Min. Ruhe",
+    "stop_all": "Alles stoppen",
+    "vision": {
+      "webcam": "Webcam: du",
+      "screen": "Geteilter Bildschirm",
+      "comparing": "Vergleicht lokal alle 5 Sekunden",
+      "paused": "Hinweise für drei Minuten pausiert",
+      "checking": "Lokale Haltungsdateien werden geprüft…",
+      "tracking": "Lokale Haltungserkennung an"
+    },
+    "focus": {
+      "label": "Fokus",
+      "deferred": "Geh an deine Arbeit; das erste Fenster, in dem du bleibst, wird das Ziel.",
+      "locked": "Fixiert auf {target}",
+      "stats": "noch {left} · {drifts} Abschweifungen · {pct}% beim Ziel",
+      "lock": "Auf dieses Fenster fixieren",
+      "stop": "Fokus beenden",
+      "voice": "Per Stimme: „thirty minutes on this“, „lock on this tab“, „stop focus“."
+    },
+    "reflex": {
+      "label": "Reflex",
+      "title": "Sofort beantwortet, ohne Modell",
+      "volume": "volume 40",
+      "mute": "mute",
+      "brightness": "brightness 60",
+      "window": "maximize Notepad",
+      "website": "open youtube.com",
+      "focus": "twenty minutes on this"
+    }
   }
 }

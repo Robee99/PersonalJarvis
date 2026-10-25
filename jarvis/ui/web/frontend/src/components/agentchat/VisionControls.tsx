@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { Camera, Monitor, Eye, Pause, Square } from "lucide-react";
 import { getLiveVision, PostureNudgeGate, thumbnail, WATCH_INTERVAL_MS, type VisionSource } from "@/lib/liveVision";
 import { LocalPostureTracker } from "@/lib/localPosture";
 import { useAgentChatStore } from "@/store/agentChat";
 import { useEventStore } from "@/store/events";
 import { runningTurn } from "./reduce";
+import { JarvisRail } from "@/components/rail/JarvisRail";
+import { useT } from "@/i18n";
 
 const muted = () => new URLSearchParams(location.search).get("mute") === "1";
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /** One shared controller survives the chat/voice view switch; never opens audio. */
 export function VisionControls() {
+  const t = useT();
   const eyes = getLiveVision();
   const [, rerender] = useState(0);
-  const [expanded, setExpanded] = useState(false);
-  const [problem, setProblem] = useState("");
+    const [problem, setProblem] = useState("");
   const [tracking, setTracking] = useState("");
   const [notice, setNotice] = useState("");
   const sessionId = useAgentChatStore(s => s.activeSessionId);
@@ -24,7 +25,6 @@ export function VisionControls() {
   const owner = useRef(crypto.randomUUID());
   const sequence = useRef(0);
   const cameraOn = eyes.state.webcam === "on";
-  const active = cameraOn || eyes.state.screen === "on";
   const watching = eyes.watching;
   const sourceSignature = (["screen", "webcam"] as const).filter(source => eyes.state[source] === "on").join(",");
   const provider = useAgentChatStore(s => s.activeSession?.provider ?? s.draft.provider);
@@ -125,10 +125,10 @@ export function VisionControls() {
     const posture = new PostureNudgeGate();
     let timer: ReturnType<typeof setInterval> | undefined;
     if (cameraOn) {
-      setTracking("Checking local posture assets…");
+      setTracking(t("rail.vision.checking"));
       void LocalPostureTracker.create().then(value => {
         if (disposed) { value.close(); return; }
-        tracker = value; setTracking("Local posture tracking on");
+        tracker = value; setTracking(t("rail.vision.tracking"));
         timer = setInterval(() => {
           const video = eyes.videos.webcam;
           if (!video || video.readyState < 2 || Date.now() < eyes.quietUntil) return;
@@ -182,29 +182,23 @@ export function VisionControls() {
       if (epoch !== generation.current || !eyes.watching) await desktopIndicator(false);
     } catch (error) { eyes.disableWatch(); setProblem(errorText(error)); }
   }
-  const button = "inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-secondary";
-  return <aside className="fixed right-3 top-12 z-[90] max-w-xs rounded-xl border border-border bg-background p-2 text-foreground shadow-lg" aria-label="Jarvis eyes">
-    <button type="button" onClick={() => setExpanded(!expanded)} className={button} aria-expanded={expanded}>
-      <Eye size={14} /> {eyes.watching ? "Watching screen" : active ? "Eyes on" : "Eyes"}
-      {active && <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label="Visual input active" />}
-    </button>
-    {(expanded || active) && <div className="mt-2 space-y-2">
-      <div className="flex flex-wrap gap-1">
-        <button type="button" className={button} aria-pressed={cameraOn} onClick={() => void toggle("webcam")}><Camera size={14} /> Webcam {eyes.state.webcam}</button>
-        <button type="button" className={button} aria-pressed={eyes.state.screen === "on"} onClick={() => void toggle("screen")}><Monitor size={14} /> Share screen {eyes.state.screen}</button>
-        <button type="button" className={button} aria-pressed={eyes.watching} onClick={() => void watch()}><Eye size={14} /> Watch {eyes.watching ? "on" : "off"}</button>
-        <button type="button" className={button} onClick={() => eyes.relieve("give me a minute")}><Pause size={14} /> Quiet 3 min</button>
-        <button type="button" className={button} onClick={() => { generation.current++; eyes.dispose(); }}><Square size={14} /> Stop all</button>
-      </div>
-      {(["webcam", "screen"] as const).filter(s => eyes.state[s] === "on").map(source =>
-        <div key={source}><div className="text-xs text-muted-foreground">{source === "webcam" ? "Webcam — you" : "Shared display — desktop/window"}</div>
-          <video muted autoPlay playsInline aria-label={`${source} preview`} className="max-h-28 w-full rounded-md object-contain"
-            ref={element => { if (element) { element.srcObject = eyes.videos[source]?.srcObject ?? null; } }} /></div>)}
-      {eyes.watching && <div className="flex items-center gap-2 text-xs"><img src="/jarvis-gigi-256.png" alt="Jarvis" className="h-7 w-7 rounded-full" /> Comparing locally every 5 seconds</div>}
-      {Date.now() < eyes.quietUntil && <p className="text-xs">Nudges paused for three minutes</p>}
-      {tracking && <p className="text-xs text-muted-foreground">{tracking}</p>}
-      {notice && <p className="text-xs" role="status">{notice}</p>}
-      {problem && <p className="text-xs" role="alert">{problem}</p>}
-    </div>}
-  </aside>;
+  const quiet = Date.now() < eyes.quietUntil;
+  const live = (["webcam", "screen"] as const).filter(s => eyes.state[s] === "on");
+  const detail = live.length || eyes.watching || quiet || tracking || notice || problem ? <>
+    {live.map(source =>
+      <div key={source}><div className="text-muted-foreground">{t(source === "webcam" ? "rail.vision.webcam" : "rail.vision.screen")}</div>
+        <video muted autoPlay playsInline aria-label={t(source === "webcam" ? "rail.vision.webcam" : "rail.vision.screen")} className="max-h-28 w-full rounded-md object-contain"
+          ref={element => { if (element) { element.srcObject = eyes.videos[source]?.srcObject ?? null; } }} /></div>)}
+    {eyes.watching && <div className="flex items-center gap-2"><img src="/jarvis-gigi-256.png" alt="" className="h-7 w-7 rounded-full" /> {t("rail.vision.comparing")}</div>}
+    {quiet && <p>{t("rail.vision.paused")}</p>}
+    {tracking && <p className="text-muted-foreground">{tracking}</p>}
+    {notice && <p role="status">{notice}</p>}
+    {problem && <p role="alert">{problem}</p>}
+  </> : null;
+  return <JarvisRail vision={{
+    webcam: cameraOn, screen: eyes.state.screen === "on", watching: eyes.watching,
+    onEyes: () => void toggle("webcam"), onScreen: () => void toggle("screen"), onWatch: () => void watch(),
+    onQuiet: () => eyes.relieve("give me a minute"), onStopAll: () => { generation.current++; eyes.dispose(); },
+    detail,
+  }} />;
 }

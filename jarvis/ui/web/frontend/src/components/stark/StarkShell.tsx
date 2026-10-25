@@ -11,6 +11,7 @@ import { requestVoiceHangup } from "@/lib/voiceApi";
 import { readCity } from "@/components/stark/WeatherGlobe";
 import { useVoiceToggles } from "@/components/deck/HudControls";
 import type { FullMapRequest } from "@/components/deck/HudMemoryPanel";
+import { useRailStore } from "@/store/rail";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -75,6 +76,21 @@ export function StarkShell({
   children: ReactNode;
 }) {
   const [fullMap, setFullMap] = useState<FullMapRequest | null>(null);
+  // HOLO on the rail: hands steer the brain map, so the map opens for them.
+  const holo = useRailStore((s) => s.holo);
+  useEffect(() => {
+    if (holo) setFullMap((open) => open ?? { mode: "memory" });
+  }, [holo]);
+  // Over the map the rail shows its own ring; over the HUD the big orb does.
+  const mapOpen = fullMap !== null;
+  useEffect(() => {
+    useRailStore.getState().setMapOpen(mapOpen);
+    return () => useRailStore.getState().setMapOpen(false);
+  }, [mapOpen]);
+  const closeMap = () => {
+    setFullMap(null);
+    useRailStore.getState().setHolo(false);
+  };
   return (
     <div
       className={cn("stark-hud flex h-full min-h-0 flex-col font-hud lg:flex-row", className)}
@@ -85,7 +101,7 @@ export function StarkShell({
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <StarkHeader subtitle={subtitle} aside={aside} badge={badge} />
         <div className="relative flex min-h-0 flex-1 flex-col">{children}</div>
-        {fullMap && <FullMemoryMap request={fullMap} onClose={() => setFullMap(null)} />}
+        {fullMap && <FullMemoryMap request={fullMap} onClose={closeMap} />}
       </div>
     </div>
   );

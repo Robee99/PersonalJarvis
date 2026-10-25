@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import { VisionControls } from "./VisionControls";
 import { getLiveVision } from "@/lib/liveVision";
 
@@ -7,7 +9,12 @@ const chat = vi.hoisted(() => ({ activeSessionId: "chat-a", activeSession: null,
   draft: { provider: "local-openai", model: "vision" }, busy: false, timeline: { items: [] }, send: vi.fn(async () => "sent") }));
 vi.mock("@/store/agentChat", () => ({ useAgentChatStore: Object.assign(
   (selector: (state: typeof chat) => unknown) => selector(chat), { getState: () => chat }) }));
-vi.mock("@/store/events", () => ({ useEventStore: { getState: () => ({ voiceState: "idle" }) } }));
+const events = vi.hoisted(() => ({ voiceState: "idle", brainModel: "gemma-4b-qat", brainProvider: "local-openai",
+  assistantName: "Jarvis", activeSection: "chats", setActiveSection: () => {} }));
+vi.mock("@/store/events", () => ({ useEventStore: Object.assign(
+  (selector: (state: typeof events) => unknown) => selector(events), { getState: () => events }) }));
+const render = (ui: ReactElement) => rtlRender(
+  <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>);
 
 function stream() {
   const track = { stop: vi.fn(), addEventListener: vi.fn(), getSettings: () => ({ displaySurface: "monitor" }) };
@@ -35,30 +42,27 @@ describe("the real eyes controls", () => {
     render(<VisionControls />);
     expect(media.getUserMedia).not.toHaveBeenCalled();
     expect(media.getDisplayMedia).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Eyes" }));
-    fireEvent.click(screen.getByRole("button", { name: /Webcam off/ }));
-    await screen.findByRole("button", { name: /Webcam on/ });
+    fireEvent.click(screen.getByTestId("rail-eyes"));
+    await waitFor(() => expect(screen.getByTestId("rail-eyes").getAttribute("aria-pressed")).toBe("true"));
     expect(media.getUserMedia).toHaveBeenCalledWith({ video: { facingMode: "user" }, audio: false });
-    fireEvent.click(screen.getByRole("button", { name: /Share screen off/ }));
-    await screen.findByRole("button", { name: /Share screen on/ });
-    fireEvent.click(screen.getByRole("button", { name: /Webcam on/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Share screen" }));
+    await screen.findByRole("button", { name: "Stop sharing" });
+    fireEvent.click(screen.getByTestId("rail-eyes"));
     expect(camera.track.stop).toHaveBeenCalledOnce();
     expect(display.track.stop).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /Share screen on/ }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Stop sharing" }).getAttribute("aria-pressed")).toBe("true");
   });
   it("reports unavailable local posture tracking while leaving webcam vision usable", async () => {
-    render(<VisionControls />); fireEvent.click(screen.getByRole("button", { name: "Eyes" }));
-    fireEvent.click(screen.getByRole("button", { name: /Webcam off/ }));
+    render(<VisionControls />); fireEvent.click(screen.getByTestId("rail-eyes"));
     await screen.findByText("Local landmark assets unavailable");
     expect(getLiveVision().state.webcam).toBe("on");
     const notices = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/notice"));
     expect(JSON.parse(String(notices[0][1]?.body)).silent).toBe(true);
   });
   it("releases both sources when the controls unmount", async () => {
-    const view = render(<VisionControls />); fireEvent.click(screen.getByRole("button", { name: "Eyes" }));
-    fireEvent.click(screen.getByRole("button", { name: /Webcam off/ }));
+    const view = render(<VisionControls />); fireEvent.click(screen.getByTestId("rail-eyes"));
     await waitFor(() => expect(getLiveVision().state.webcam).toBe("on"));
-    fireEvent.click(screen.getByRole("button", { name: /Share screen off/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Share screen" }));
     await waitFor(() => expect(getLiveVision().state.screen).toBe("on"));
     view.unmount();
     expect(camera.track.stop).toHaveBeenCalledOnce(); expect(display.track.stop).toHaveBeenCalledOnce();

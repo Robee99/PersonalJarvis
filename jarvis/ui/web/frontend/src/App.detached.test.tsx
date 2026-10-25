@@ -56,6 +56,7 @@ vi.mock("@/components/voice/BrowserRealtimeControl", () => ({
   hasEmbeddedDesktopBridge: () => false,
 }));
 vi.mock("@/components/ToastLayer", () => ({ ToastLayer: () => null }));
+vi.mock("@/components/agentchat/VisionControls", () => ({ VisionControls: () => null }));
 vi.mock("@/components/EditContextMenu", () => ({ EditContextMenu: () => null }));
 vi.mock("@/components/JarvisDock", () => ({ JarvisDock: () => null }));
 vi.mock("@/components/CliConnectPoller", () => ({ CliConnectPoller: () => null }));

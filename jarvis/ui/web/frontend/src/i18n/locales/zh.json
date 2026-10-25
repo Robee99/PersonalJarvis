@@ -8741,5 +8741,73 @@
       "follow": "跟随国际空间站",
       "unavailable": "此处无法绘制 3D，因此显示 HUD 地球。"
     }
+  },
+  "rail": {
+    "label": "助手侧栏",
+    "fold": "收起侧栏",
+    "unfold": "展开侧栏",
+    "figure": "环中形象",
+    "no_model": "无模型",
+    "on": "开",
+    "off": "关",
+    "shown": "显示",
+    "hidden": "隐藏",
+    "eyes": "眼睛",
+    "watch": "守望",
+    "holo": "全息",
+    "avatar": {
+      "ring": "环",
+      "cube": "立方",
+      "face": "脸"
+    },
+    "state": {
+      "idle": "待命",
+      "connecting": "连接中",
+      "listening": "聆听中",
+      "thinking": "思考中",
+      "speaking": "说话中",
+      "paused": "已暂停",
+      "error": "错误"
+    },
+    "line": {
+      "idle": "待命中…",
+      "connecting": "连接中…",
+      "listening": "聆听中…",
+      "thinking": "思考中…",
+      "speaking": "说话中…",
+      "paused": "已暂停",
+      "error": "出了点问题"
+    },
+    "screen_share": "共享屏幕",
+    "screen_stop": "停止共享",
+    "quiet": "安静 3 分钟",
+    "stop_all": "全部停止",
+    "vision": {
+      "webcam": "摄像头：你",
+      "screen": "共享的屏幕",
+      "comparing": "每 5 秒在本地比较一次",
+      "paused": "提醒已暂停三分钟",
+      "checking": "正在检查本地姿态文件…",
+      "tracking": "本地姿态跟踪已开启"
+    },
+    "focus": {
+      "label": "专注",
+      "deferred": "去做你的工作吧；你停留的第一个窗口会成为目标。",
+      "locked": "已锁定 {target}",
+      "stats": "剩余 {left} · 走神 {drifts} 次 · {pct}% 在目标上",
+      "lock": "锁定此窗口",
+      "stop": "结束专注",
+      "voice": "语音：“thirty minutes on this”、“lock on this tab”、“stop focus”。"
+    },
+    "reflex": {
+      "label": "反射",
+      "title": "无需模型，立即回应",
+      "volume": "volume 40",
+      "mute": "mute",
+      "brightness": "brightness 60",
+      "window": "maximize Notepad",
+      "website": "open youtube.com",
+      "focus": "twenty minutes on this"
+    }
   }
 }

@@ -8741,5 +8741,73 @@
       "follow": "Follow ISS",
       "unavailable": "This screen cannot draw 3D here, so the HUD globe is shown."
     }
+  },
+  "rail": {
+    "label": "Assistant rail",
+    "fold": "Fold the rail",
+    "unfold": "Unfold the rail",
+    "figure": "Figure in the ring",
+    "no_model": "No model",
+    "on": "on",
+    "off": "off",
+    "shown": "shown",
+    "hidden": "hidden",
+    "eyes": "Eyes",
+    "watch": "Watch",
+    "holo": "Holo",
+    "avatar": {
+      "ring": "Ring",
+      "cube": "Cube",
+      "face": "Face"
+    },
+    "state": {
+      "idle": "Idle",
+      "connecting": "Connecting",
+      "listening": "Listening",
+      "thinking": "Thinking",
+      "speaking": "Speaking",
+      "paused": "Paused",
+      "error": "Error"
+    },
+    "line": {
+      "idle": "standing by…",
+      "connecting": "connecting…",
+      "listening": "listening…",
+      "thinking": "thinking…",
+      "speaking": "speaking…",
+      "paused": "paused",
+      "error": "something went wrong"
+    },
+    "screen_share": "Share screen",
+    "screen_stop": "Stop sharing",
+    "quiet": "Quiet 3 min",
+    "stop_all": "Stop all",
+    "vision": {
+      "webcam": "Webcam: you",
+      "screen": "Shared display",
+      "comparing": "Comparing locally every 5 seconds",
+      "paused": "Nudges paused for three minutes",
+      "checking": "Checking local posture files…",
+      "tracking": "Local posture tracking on"
+    },
+    "focus": {
+      "label": "Focus",
+      "deferred": "Go to your work; the first window you stay in becomes the target.",
+      "locked": "Locked on {target}",
+      "stats": "{left} left · {drifts} drifts · {pct}% on target",
+      "lock": "Lock on this window",
+      "stop": "End focus",
+      "voice": "By voice: “thirty minutes on this”, “lock on this tab”, “stop focus”."
+    },
+    "reflex": {
+      "label": "Reflex",
+      "title": "Answered at once, without a model",
+      "volume": "volume 40",
+      "mute": "mute",
+      "brightness": "brightness 60",
+      "window": "maximize Notepad",
+      "website": "open youtube.com",
+      "focus": "twenty minutes on this"
+    }
   }
 }

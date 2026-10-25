@@ -8647,5 +8647,73 @@
       "follow": "Seguir la ISS",
       "unavailable": "Aquí no se puede dibujar en 3D, así que se muestra el globo HUD."
     }
+  },
+  "rail": {
+    "label": "Barra del asistente",
+    "fold": "Plegar la barra",
+    "unfold": "Desplegar la barra",
+    "figure": "Figura del anillo",
+    "no_model": "Sin modelo",
+    "on": "activado",
+    "off": "desactivado",
+    "shown": "visible",
+    "hidden": "oculto",
+    "eyes": "Ojos",
+    "watch": "Vigilar",
+    "holo": "Holo",
+    "avatar": {
+      "ring": "Anillo",
+      "cube": "Cubo",
+      "face": "Cara"
+    },
+    "state": {
+      "idle": "En espera",
+      "connecting": "Conectando",
+      "listening": "Escuchando",
+      "thinking": "Pensando",
+      "speaking": "Hablando",
+      "paused": "En pausa",
+      "error": "Error"
+    },
+    "line": {
+      "idle": "en espera…",
+      "connecting": "conectando…",
+      "listening": "escuchando…",
+      "thinking": "pensando…",
+      "speaking": "hablando…",
+      "paused": "en pausa",
+      "error": "algo salió mal"
+    },
+    "screen_share": "Compartir pantalla",
+    "screen_stop": "Dejar de compartir",
+    "quiet": "Silencio 3 min",
+    "stop_all": "Detener todo",
+    "vision": {
+      "webcam": "Cámara: tú",
+      "screen": "Pantalla compartida",
+      "comparing": "Compara en local cada 5 segundos",
+      "paused": "Avisos en pausa durante tres minutos",
+      "checking": "Comprobando los archivos de postura locales…",
+      "tracking": "Seguimiento de postura local activado"
+    },
+    "focus": {
+      "label": "Foco",
+      "deferred": "Ve a tu trabajo; la primera ventana en la que te quedes será el objetivo.",
+      "locked": "Fijado en {target}",
+      "stats": "quedan {left} · {drifts} distracciones · {pct}% en el objetivo",
+      "lock": "Fijar en esta ventana",
+      "stop": "Terminar foco",
+      "voice": "Por voz: “thirty minutes on this”, “lock on this tab”, “stop focus”."
+    },
+    "reflex": {
+      "label": "Reflejo",
+      "title": "Respondido al instante, sin modelo",
+      "volume": "volume 40",
+      "mute": "mute",
+      "brightness": "brightness 60",
+      "window": "maximize Notepad",
+      "website": "open youtube.com",
+      "focus": "twenty minutes on this"
+    }
   }
 }
