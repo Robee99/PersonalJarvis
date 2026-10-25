@@ -23,6 +23,7 @@ before; the switch changes only which schemas go on the wire.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -52,6 +53,26 @@ DEFAULT_CORE: tuple[str, ...] = (
     "remember",
     "memory_chats",
     "run-skill",
+)
+
+#: The browser tools a web job uses, in the order it uses them. Live
+#: 2026-10-25 "use the browser" matched every ``browser_*`` name equally and
+#: switched on close/emulate_media/evaluate, so Gemma had no way to open a page
+#: and fell back to ``computer_use``, which clicked the wrong app.
+BROWSER_HANDS: tuple[str, ...] = (
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_fill_form",
+    "browser_wait_for",
+)
+#: Words that mean the job happens on a web page.
+_WEB_WORDS = re.compile(
+    r"\b(browser|website|web\s*site|web\s*page|webpage|online|shop\w*|store|stores|"
+    r"price\w*|cheap\w*|afford\w*|grocer\w*|order|checkout|form|forms|url|"
+    r"chrome|edge|firefox)\b|https?://|\.(com|in|org|net|io)\b",
+    re.IGNORECASE,
 )
 
 #: Tools the request names directly, best first.
@@ -122,7 +143,10 @@ class ToolSwitch:
     ) -> list[str]:
         """The turn's opening surface: core, the request's own tools, gates' picks."""
         relevant = self._rank(self._tools, query, _RELEVANT_LIMIT) if query else []
-        self.switch_on([ENABLE_TOOLS, *core, *keep, *relevant, *self._siblings(query, relevant)])
+        hands = self._browser_hands(query, relevant)
+        self.switch_on(
+            [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *self._siblings(query, relevant)]
+        )
         return relevant
 
     def enable_for(self, request: str, names: Iterable[str] = ()) -> list[str]:
@@ -130,8 +154,27 @@ class ToolSwitch:
         exact = [n for n in names if n in self._tools]
         hidden = {n: t for n, t in self._tools.items() if n not in self._on}
         ranked = self._rank(hidden, request, _ENABLE_LIMIT) if request and hidden else []
-        found = list(dict.fromkeys([*exact, *ranked, *self._siblings(request, ranked)]))
-        return self.switch_on(found[: _ENABLE_LIMIT + len(exact)])
+        hands = [n for n in self._browser_hands(request, ranked) if n in hidden]
+        found = list(dict.fromkeys([*exact, *hands, *ranked, *self._siblings(request, ranked)]))
+        return self.switch_on(found[: _ENABLE_LIMIT + len(exact) + len(hands)])
+
+    def _browser_hands(self, query: str, relevant: list[str]) -> list[str]:
+        """Navigate, read, click and type for a web job, from every browser server.
+
+        A web job is a request in web words, or one whose matches include a
+        ``browser_*`` tool.
+        """
+        web = bool(query and _WEB_WORDS.search(query)) or any(
+            n.rsplit("/", 1)[-1].startswith("browser_") for n in relevant
+        )
+        if not web:
+            return []
+        return [
+            name
+            for hand in BROWSER_HANDS
+            for name, tool in self._tools.items()
+            if server_of(name, tool) and name.rsplit("/", 1)[-1] == hand
+        ]
 
     def _siblings(self, query: str, relevant: list[str]) -> list[str]:
         """A relevant MCP tool brings its server's best-matching companions."""

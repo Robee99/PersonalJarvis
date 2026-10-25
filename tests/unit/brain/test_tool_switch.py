@@ -90,6 +90,39 @@ def test_a_turn_opens_with_core_request_tools_and_server_siblings() -> None:
     assert len(on) < len(tools) // 3
 
 
+def test_a_web_job_gets_the_browser_hands_even_when_every_browser_name_matches() -> None:
+    # Live 2026-10-25: "use the browser" switched on close/emulate_media/
+    # evaluate, never navigate or snapshot, and Gemma fell back to computer_use.
+    tools = _registry()
+    for verb in ("emulate_media", "evaluate", "drop", "find", "fill_form", "wait_for"):
+        name = f"playwright/browser_{verb}"
+        tools[name] = _Tool(name, "Browser tool", is_mcp_tool=True)
+    switch = _switch(tools)
+
+    switch.open_turn("use the browser", core=())
+
+    hands = {"navigate", "snapshot", "click", "type", "fill_form", "wait_for"}
+    assert {f"playwright/browser_{v}" for v in hands} <= set(switch.visible())
+
+
+def test_a_shopping_request_opens_the_browser_without_naming_it() -> None:
+    tools = _registry()
+    switch = _switch(tools)
+
+    switch.open_turn("cheapest 1kg chicken across grocery stores", core=())
+
+    assert {"playwright/browser_navigate", "playwright/browser_snapshot"} <= set(switch.visible())
+
+
+def test_a_request_with_no_web_words_gets_no_browser() -> None:
+    tools = _registry()
+    switch = _switch(tools)
+
+    switch.open_turn("turn the volume down", core=())
+
+    assert not any(name.startswith("playwright/") for name in switch.visible())
+
+
 @pytest.mark.asyncio
 async def test_enable_tools_switches_on_what_the_job_describes() -> None:
     tools = _registry()
