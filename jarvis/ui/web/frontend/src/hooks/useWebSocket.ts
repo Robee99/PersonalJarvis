@@ -147,6 +147,11 @@ export function useWebSocket(): void {
         const parsed = WSEventEnvelope.safeParse(raw);
         if (!parsed.success) return;
         const env = parsed.data;
+        if (env.event_name === "LiveVisionFrameRequested") {
+          window.dispatchEvent(new CustomEvent("jarvis-vision-frame-request", { detail: env.payload }));
+        } else if (env.event_name === "LiveVisionQuietRequested") {
+          window.dispatchEvent(new CustomEvent("jarvis-vision-quiet-request", { detail: env.payload }));
+        }
 
         pushEvent({
           id: `${env.timestamp_ns}-${env.trace_id.slice(0, 8)}`,

@@ -1,4 +1,4 @@
-"""Isolated, source-scoped Cognee bridge for authorized wiki memory.
+"""Isolated, source-scoped Cognee bridge for authorized memory.
 
 Cognee is deliberately not imported by the Jarvis process. Each bounded JSON
 request runs in a separately configured Python environment; native wiki/FTS
@@ -210,8 +210,158 @@ class CogneeMemoryAdapter:
                 "source_id": source_id,
                 "source_path": resolved.relative_to(self._vault_root).as_posix(),
                 "content": content,
+                "source_type": "wiki",
             },
         )
+
+    @staticmethod
+    def render_conversation(messages: list[dict[str, Any]]) -> str:
+        """Build a compact, provenance-preserving transcript from safe roles."""
+        parts: list[str] = []
+        total_chars = 0
+        for message in messages[-300:]:
+            role = str(message.get("role", ""))
+            text = str(message.get("text", "")).strip()
+            if role not in {"user", "assistant"} or not text:
+                continue
+            text = text[:12_000]
+            timestamp = str(message.get("timestamp_ns", ""))
+            parts.append(f"[{timestamp}] {role}: {text}")
+            total_chars += len(parts[-1])
+            if total_chars >= 100_000:
+                break
+        return "\n\n".join(parts)[:100_000]
+
+    async def index_conversation(
+        self, thread_id: str, messages: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Index one user-selected conversation thread with a stable source id."""
+        thread_id = str(thread_id).strip()
+        if not thread_id or len(thread_id) > 256:
+            raise ValueError("a valid conversation thread id is required")
+        content = self.render_conversation(messages)
+        if not content:
+            raise ValueError("conversation has no user or assistant messages to index")
+        thread_key = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()
+        source_id = hashlib.sha256(f"conversation:{thread_id}".encode()).hexdigest()
+        source_path = f"conversations/{thread_key}.md"
+        from jarvis.memory.wiki.secret_guard import contains_secret
+
+        if contains_secret(content):
+            if self.enabled:
+                # If an already-indexed transcript was edited to contain
+                # sensitive text, revoke its old derived chunks before
+                # refusing the new version.
+                await asyncio.to_thread(
+                    self._request,
+                    {
+                        "op": "forget",
+                        "source_id": source_id,
+                        "source_path": source_path,
+                        "source_type": "conversation",
+                    },
+                )
+            raise ValueError("sensitive content is excluded from semantic indexing")
+        content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        root = _resolve_data_root(str(self._config.data_dir or "").strip())
+        state_db = root / "source-state.sqlite3"
+        if state_db.is_file():
+            try:
+                with sqlite3.connect(state_db, timeout=2) as conn:
+                    existing = conn.execute(
+                        "SELECT content_hash,status,source_type FROM sources WHERE source_id=?",
+                        (source_id,),
+                    ).fetchone()
+                if existing == (content_hash, "active", "conversation"):
+                    return {"indexed": False, "unchanged": True, "source_id": source_id,
+                            "source_path": source_path, "content_hash": content_hash}
+            except sqlite3.Error:
+                # The isolated worker owns schema migration and reports any
+                # genuine store failure through the normal request boundary.
+                pass
+        return await asyncio.to_thread(
+            self._request,
+            {
+                "op": "index",
+                "source_id": source_id,
+                "source_path": source_path,
+                "source_type": "conversation",
+                "source_ref": thread_id,
+                "content": content,
+            },
+        )
+
+    async def forget_conversation(self, thread_id: str) -> dict[str, Any]:
+        thread_id = str(thread_id).strip()
+        if not thread_id or len(thread_id) > 256:
+            raise ValueError("a valid conversation thread id is required")
+        thread_key = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()
+        source_id = hashlib.sha256(f"conversation:{thread_id}".encode()).hexdigest()
+        return await asyncio.to_thread(
+            self._request,
+            {
+                "op": "forget",
+                "source_id": source_id,
+                "source_path": f"conversations/{thread_key}.md",
+                "source_type": "conversation",
+            },
+        )
+
+    def list_conversation_sources(self) -> list[dict[str, str]]:
+        """List only active conversation source identities for reconciliation."""
+        if not self.enabled:
+            return []
+        configured_data = str(self._config.data_dir or "").strip()
+        state_db = _resolve_data_root(configured_data) / "source-state.sqlite3"
+        if not state_db.is_file():
+            return []
+        try:
+            with sqlite3.connect(state_db, timeout=2) as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+                required = {"source_id", "source_path", "content_hash", "status"}
+                typed = {"source_type", "source_ref"}
+                if not required.issubset(columns) or (
+                    typed & columns and not typed.issubset(columns)
+                ):
+                    raise CogneeUnavailable(
+                        "Cognee source state could not be checked safely: "
+                        "incomplete source registry schema"
+                    )
+                # Before conversation support, every record was a wiki note.
+                # Recognize that complete legacy schema without hiding damage.
+                if not typed & columns:
+                    return []
+                rows = conn.execute(
+                    "SELECT source_id,source_path,source_ref,content_hash "
+                    "FROM sources WHERE status='active' AND source_type='conversation'"
+                ).fetchall()
+        except sqlite3.Error as exc:
+            raise CogneeUnavailable(
+                f"Cognee source state could not be checked safely: {exc}"
+            ) from exc
+        return [
+            {
+                "source_id": str(row[0]),
+                "source_path": str(row[1]),
+                "thread_id": str(row[2]),
+                "content_hash": str(row[3]),
+            }
+            for row in rows
+        ]
+
+    async def search_conversations(self, query: str, *, k: int = 5) -> list[dict[str, Any]]:
+        if not query.strip():
+            return []
+        result = await asyncio.to_thread(
+            self._request,
+            {
+                "op": "search",
+                "query": query.strip(),
+                "k": max(1, min(int(k), 10)),
+                "source_types": ["conversation"],
+            },
+        )
+        return list(result.get("results", []))
 
     async def search(self, query: str, *, k: int = 5) -> list[dict[str, Any]]:
         if not query.strip():
@@ -227,6 +377,7 @@ class CogneeMemoryAdapter:
                 "query": query.strip(),
                 "k": max(1, min(int(k), 10)),
                 "deny_source_ids": denied_sources,
+                "source_types": ["wiki"],
             },
         )
         return list(result.get("results", []))
@@ -247,9 +398,14 @@ class CogneeMemoryAdapter:
             return []
         try:
             with sqlite3.connect(state_db, timeout=2) as conn:
-                rows = conn.execute(
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+                query = (
                     "SELECT source_id,source_path,content_hash FROM sources WHERE status='active'"
-                ).fetchall()
+                )
+                # Registries created before conversation support contain only wiki sources.
+                if "source_type" in columns:
+                    query += " AND source_type='wiki'"
+                rows = conn.execute(query).fetchall()
         except sqlite3.Error as exc:
             raise CogneeUnavailable(
                 f"Cognee source state could not be checked safely: {exc}"
@@ -288,9 +444,12 @@ class CogneeMemoryAdapter:
             return []
         try:
             with sqlite3.connect(state_db, timeout=2) as conn:
-                rows = conn.execute(
-                    "SELECT source_id,source_path FROM sources WHERE status='active'"
-                ).fetchall()
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(sources)")}
+                query = "SELECT source_id,source_path FROM sources WHERE status='active'"
+                # Apply secret checks before the worker migrates a legacy wiki registry.
+                if "source_type" in columns:
+                    query += " AND source_type='wiki'"
+                rows = conn.execute(query).fetchall()
         except sqlite3.Error as exc:
             raise CogneeUnavailable(
                 f"Cognee source state could not be checked safely: {exc}"
@@ -330,6 +489,7 @@ class CogneeMemoryAdapter:
                 "op": "forget",
                 "source_id": source_id,
                 "source_path": resolved.relative_to(self._vault_root).as_posix(),
+                "source_type": "wiki",
             },
         )
 

@@ -78,6 +78,7 @@ from jarvis.agent_chat.service import (
 from jarvis.agent_chat.surface_kits import kit_for
 from jarvis.agent_chat.tools import shell_label
 from jarvis.society.credentials import CredentialError
+from jarvis.vision.live_inputs import LiveVisionFrame
 
 log = logging.getLogger(__name__)
 
@@ -260,6 +261,10 @@ class MessageBody(BaseModel):
     #: message; the wire shape of ``drop_analysis.DropAnalysis``.
     attachments: list[dict[str, Any]] = Field(default_factory=list)
     tool_choices: list[str] = Field(default_factory=list, max_length=24)
+    #: Fresh webcam / screen frames for this one turn; never stored.
+    vision_frames: list[LiveVisionFrame] = Field(default_factory=list, max_length=2)
+    vision_nudge: bool = False
+    vision_silent: bool = False
 
 
 class ApprovalBody(BaseModel):
@@ -1207,9 +1212,22 @@ async def post_message(session_id: str, body: MessageBody, request: Request) -> 
     try:
         # A created agent's chat queues a message behind its running turn
         # instead of refusing it; every other chat answers 409 as before.
-        turn_id, queue_id = await send_or_queue(
-            svc, session_id, body.text, body.attachments, tool_choices=body.tool_choices
-        )
+        if body.vision_frames or body.vision_nudge:
+            # Live frames belong to this moment: they run now or not at all,
+            # never from a queue after the picture has moved on.
+            turn_id, queue_id = await svc.send(
+                session_id,
+                body.text,
+                body.attachments,
+                tool_choices=body.tool_choices,
+                vision_frames=body.vision_frames,
+                vision_nudge=body.vision_nudge,
+                vision_silent=body.vision_silent,
+            ), ""
+        else:
+            turn_id, queue_id = await send_or_queue(
+                svc, session_id, body.text, body.attachments, tool_choices=body.tool_choices
+            )
     except NoSuchSession as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
     except QueueFull as exc:

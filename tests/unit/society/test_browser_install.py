@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+
 from jarvis.society.browser import install
 
 
@@ -39,6 +40,9 @@ def installer(monkeypatch, tmp_path):
             )
         return ""
 
+    from jarvis.society.browser import bootstrap
+
+    monkeypatch.setattr(bootstrap, "ensure_uv", lambda _root: Path("test-uv"))
     monkeypatch.setattr(install, "_run", run)
     monkeypatch.setattr(install, "managed_python_request", lambda *_: "3.12")
     monkeypatch.setattr(install.sys, "frozen", False, raising=False)
@@ -141,3 +145,37 @@ def test_lock_identity_survives_platform_line_endings(installer, monkeypatch, tm
     assert install.is_installed(data)
     copy.write_bytes(original + b"# changed dependency manifest\n")
     assert not install.is_installed(data)
+
+
+@pytest.mark.parametrize(
+    ("version", "frozen", "python_request", "reuse_host"),
+    [
+        ((3, 11), False, "3.12", False),
+        ((3, 12), False, "3.12", True),
+        ((3, 13), False, "3.12", True),
+        ((3, 14), False, "3.12", False),
+        ((3, 12), True, "3.12", False),
+        ((3, 12), False, "cpython-3.12-windows-x86_64-none", False),
+    ],
+)
+def test_locked_browser_dependencies_use_a_compatible_python(
+    installer, monkeypatch, version, frozen, python_request, reuse_host
+):
+    data, _, _, _ = installer
+    monkeypatch.setattr(install.sys, "version_info", (*version, 0, "final", 0))
+    monkeypatch.setattr(install.sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(install, "managed_python_request", lambda *_: python_request)
+    seen = []
+    original = install._run
+
+    def record(cmd, **kwargs):
+        seen.append(cmd)
+        return original(cmd, **kwargs)
+
+    monkeypatch.setattr(install, "_run", record)
+    install.ensure_installed(data)
+    first = seen[0]
+    if reuse_host:
+        assert first[:3] == [install.sys.executable, "-m", "venv"]
+    else:
+        assert first[:4] == [Path("test-uv"), "venv", "--python", python_request]

@@ -178,7 +178,7 @@ export interface AgentChatStore {
   openSession: (sessionId: string) => void;
   removeSession: (sessionId: string) => Promise<void>;
   /** Send the sentence, with whatever files the composer is holding for it. */
-  send: (text: string, attachments?: ChatAttachment[], toolChoices?: string[], onSessionCreated?: (session: AgentChatSession) => void) => Promise<void | "sent" | "failed" | "stale">;
+  send: (text: string, attachments?: ChatAttachment[], toolChoices?: string[], onSessionCreated?: (session: AgentChatSession) => void, vision?: import("@/lib/agentChatApi").VisionSendOptions) => Promise<void | "sent" | "failed" | "stale">;
   /** Stop the running turn; `via` names the control that asked, for the log. */
   cancel: (via?: string) => Promise<void>;
   /**
@@ -801,7 +801,7 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
         void get().loadSessions();
       },
 
-      send: async (text, attachments = [], toolChoices = [], onSessionCreated) => {
+      send: async (text, attachments = [], toolChoices = [], onSessionCreated, vision) => {
         const content = text.trim();
         // A message may be files alone — dropping a screenshot and pressing
         // Enter is a complete gesture — but never nothing at all.
@@ -849,7 +849,8 @@ export function createAgentChatStore(surface: AgentChatSurface, draftNamespace =
             }
           }
           const sid = lane.sessionId;
-          await sendAgentChatMessage(sid, content, attachments, toolChoices);
+          if (vision) await sendAgentChatMessage(sid, content, attachments, toolChoices, vision);
+          else await sendAgentChatMessage(sid, content, attachments, toolChoices);
           if (surface === "jarvis") writeDraft(DRAFT_KEY, st.draft);
           if (get().activeSessionId === sid) void get().loadSessions();
           return isVisible() ? "sent" as const : "stale" as const;

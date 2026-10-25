@@ -458,11 +458,18 @@ export async function fetchAgentChatSession(
   );
 }
 
+export interface VisionSendOptions {
+  frames: import("./liveVision").LiveVisionFrame[];
+  nudge?: boolean;
+  silent?: boolean;
+}
+
 export async function sendAgentChatMessage(
   sessionId: string,
   text: string,
   attachments: ChatAttachment[] = [],
   toolChoices: string[] = [],
+  vision?: VisionSendOptions,
 ): Promise<{ turn_id: string }> {
   const result = await json<{ turn_id: string }>(
     await fetch(`/api/agent-chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -472,6 +479,7 @@ export async function sendAgentChatMessage(
         text,
         attachments,
         ...(toolChoices.length ? { tool_choices: toolChoices } : {}),
+        ...(vision ? { vision_frames: vision.frames, vision_nudge: !!vision.nudge, vision_silent: !!vision.silent } : {}),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     }),

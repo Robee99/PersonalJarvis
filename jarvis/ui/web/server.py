@@ -529,6 +529,7 @@ class WebServer:
         from .intel_routes import router as intel_router
         from .jarvisx_routes import router as jarvisx_router
         from .live_routes import router as live_router
+        from .live_vision_routes import router as live_vision_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
         )
@@ -608,13 +609,15 @@ class WebServer:
         # Jarvis' OWN tools, offered outwards over MCP so an agent-chat session
         # drives Jarvis instead of a bare workspace. Key-gated like the rest of
         # the Control API; mounted raw because the transport streams.
-        from jarvis.ui.web.mcp_server_routes import build_mcp_asgi_app
+        from jarvis.ui.web.mcp_server_routes import MCPMount, build_mcp_asgi_app
 
         # ONE mount, two surfaces, dispatched inside on the rest of the path:
         # "" is Jarvis' own tools, "/agents" is the agent ecosystem. A second
         # Starlette mount on the longer path would never match a request
         # without a trailing slash — see mcp_server_routes._surface_for.
-        app.mount("/api/control/mcp", build_mcp_asgi_app())
+        app.router.routes.append(
+            MCPMount("/api/control/mcp", app=build_mcp_asgi_app())
+        )
         # Event-loop diagnostics (read-only) — names the owner of an AP-20
         # cancellation busy-loop from inside the loop; see diagnostics_routes.
         app.include_router(diagnostics_router)
@@ -750,6 +753,7 @@ class WebServer:
         # machine with no display, so `jarvis api screen-context status` is a
         # valid capability probe everywhere.
         app.include_router(screen_context_router)
+        app.include_router(live_vision_router)
         # Appshots: the front window as conversation context, on a shortcut,
         # a button or a spoken request. Captures through Screen Context.
         app.include_router(app_actions_router)

@@ -330,6 +330,49 @@ async def test_blind_provider_is_skipped_for_a_screen_turn(
 
 
 @pytest.mark.asyncio
+async def test_live_webcam_does_not_trigger_an_unrelated_desktop_capture(monkeypatch):
+    _patch_screen(monkeypatch, TurnScreenContext(status="clarify", question="Which desktop?"))
+    manager, recorder = _manager()
+    trace = uuid4()
+    manager.inject_images_for_turn(trace, (ImageBlock(
+        mime="image/jpeg", data_b64="ZmFrZQ==", source_hash="webcam:test"),))
+    answer = await manager.generate("look at me", trace_id=trace, use_history=False)
+    assert answer == "grounded answer"
+    assert len(recorder.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_override", [False, True])
+async def test_voice_uses_fresh_frames_from_the_bound_chat_and_releases_them(monkeypatch, existing_override):
+    from jarvis.vision import live_bridge
+    from jarvis.brain.turn_override import TurnOverride
+    from tests.unit.vision.test_live_inputs import frame
+
+    bridge = live_bridge.LiveVisionBridge()
+    bridge.voice_session = lambda: "voice-chat"
+    bridge.register("voice-chat", "window-a", ("webcam",), "local-openai", "vision-model")
+    monkeypatch.setattr(live_bridge, "bridge", bridge)
+    manager, recorder = _manager()
+    manager._build_fallback_chain = BrainManager._build_fallback_chain.__get__(manager)
+    picked = []
+    def seeing(provider, model, **_kwargs):
+        picked.append((provider, model))
+        return _FakeBrain(vision=True)
+    manager._get_brain = seeing
+    async def answer(event):
+        bridge.deliver(event.request_id, "voice-chat", "window-a", [frame("webcam")])
+    manager._bus.subscribe(live_bridge.LiveVisionFrameRequested, answer)
+    _patch_screen(monkeypatch, TurnScreenContext(status="clarify", question="Wrong desktop?"))
+    result = await manager.generate("look at me", allow_voice_confirm=True, use_history=False,
+        turn_override=TurnOverride(provider="openai", model="metered") if existing_override else None)
+    assert result == "grounded answer"
+    assert recorder.calls[0]["images"][0].source_hash.startswith("webcam:")
+    assert manager._pending_turn_images == {}
+    assert bridge.pending_count == 0
+    assert ("local-openai", "vision-model") in picked
+
+
+@pytest.mark.asyncio
 async def test_no_vision_provider_returns_an_honest_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

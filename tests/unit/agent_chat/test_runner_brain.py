@@ -24,6 +24,53 @@ from jarvis.core.protocols import BrainDelta
 from tests.fakes.fake_brain_manager import FakeBrainManager
 
 
+async def test_live_webcam_reaches_selected_turn_without_persisting_pixels(tmp_path, monkeypatch, no_cli):
+    import base64
+    import io
+    import time
+    from PIL import Image
+    from jarvis.brain.manager import BrainManager
+    from jarvis.vision.live_inputs import LiveVisionFrame
+
+    class SeeingBrain(FakeBrainManager):
+        inject_images_for_turn = BrainManager.inject_images_for_turn
+        discard_images_for_turn = BrainManager.discard_images_for_turn
+        async def generate(self, text, **kwargs):
+            self.received = self._pending_turn_images[kwargs["trace_id"]]
+            return await super().generate(text, **kwargs)
+
+    data = io.BytesIO(); Image.new("RGB", (80, 60), "green").save(data, "JPEG")
+    encoded = base64.b64encode(data.getvalue()).decode()
+    bus = EventBus(); fake = SeeingBrain(bus=bus)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(bus)
+    session = _jarvis_session(svc, tmp_path, provider="local-openai", model="local-vision")
+    queue = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "look at me", vision_frames=[LiveVisionFrame(
+        source="webcam", data_b64=encoded, captured_at_ms=time.time()*1000)], vision_nudge=True,
+        vision_silent=True)
+    events = await _drain(queue, "turn_finished")
+    assert events[-1]["payload"]["status"] == "done"
+    assert fake.received[0].data_b64 == encoded
+    override = fake.calls[0][1]["turn_override"]
+    assert "webcam" in override.system_extra
+    assert override.tool_filter({"dangerous": object()}) == {}
+    assert override.max_turns == 1
+    assert fake._pending_turn_images == {}
+    import json
+    assert encoded not in json.dumps(events)
+    assert encoded not in json.dumps(svc.store.list_events(session.session_id))
+
+
+async def test_live_frames_refuse_a_metered_provider_before_starting_a_turn(tmp_path, no_cli):
+    from jarvis.vision.live_inputs import LiveVisionFrame
+    svc = _service(None); session = _jarvis_session(svc, tmp_path)
+    with pytest.raises(ValueError, match="local model"):
+        await svc.send(session.session_id, "look at me", vision_frames=[LiveVisionFrame(
+            source="webcam", data_b64="x", captured_at_ms=1)])
+    assert not svc.is_running(session.session_id)
+
+
 async def _drain(q: asyncio.Queue, until_kind: str, wait_s: float = 5.0) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     async with asyncio.timeout(wait_s):

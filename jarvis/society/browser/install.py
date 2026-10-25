@@ -286,9 +286,12 @@ def ensure_installed(
         _set(data_dir, phase="installing", percent=5, error="", detail="Preparing browser runtime")
         try:
             request = managed_python_request(sys.platform, platform.machine())
+            # The locked Windows numpy release requires Python >= 3.12.
+            # JARVIS itself still supports 3.11; use the isolated managed
+            # interpreter there rather than changing the host environment.
             if (
                 not getattr(sys, "frozen", False)
-                and (3, 11) <= sys.version_info[:2] < (3, 14)
+                and (3, 12) <= sys.version_info[:2] < (3, 14)
                 and request == "3.12"
             ):
                 _run([sys.executable, "-m", "venv", str(runtime)], env=env)

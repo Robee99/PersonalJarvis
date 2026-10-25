@@ -159,9 +159,7 @@ class CUIndicatorController:
         self._bus.subscribe(CUControlStarted, self._on_started)
         self._bus.subscribe(CUControlEnded, self._on_ended)
         self._bus.subscribe(ScreenCaptureAnnounced, self._on_screen_announced)
-        self._bus.subscribe(
-            ScreenCaptureIndicatorDismissed, self._on_screen_dismissed
-        )
+        self._bus.subscribe(ScreenCaptureIndicatorDismissed, self._on_screen_dismissed)
 
     async def _on_started(self, event: Any) -> None:
         del event
@@ -212,11 +210,7 @@ class CUIndicatorController:
     # ------------------------------------------------------------- activation
     async def _activate(self) -> None:
         esc_armed = self._arm_escape() and await self._esc_claims_key()
-        hint = (
-            _ESC_HINTS.get(_resolve_hint_language(), _ESC_HINTS["en"])
-            if esc_armed
-            else ""
-        )
+        hint = _ESC_HINTS.get(_resolve_hint_language(), _ESC_HINTS["en"]) if esc_armed else ""
         await self._show_border(hint=hint, required=False, pointer=True)
 
     async def _show_border(self, *, hint: str, required: bool, pointer: bool = False) -> bool:
@@ -469,6 +463,26 @@ class CUIndicatorController:
             self._schedule_idle_quit()
             return shown
 
+    async def watch_badge(self, *, visible: bool, dark: bool = False) -> bool:
+        """Refresh a short lease on the desktop watch card; never arm CU or Esc."""
+        if visible and not self._border_capability()[0]:
+            return False
+        async with self._lock:
+            if visible:
+                self._snap_until = max(self._snap_until, time.monotonic() + 12.0)
+                await asyncio.to_thread(self._spawn_sidecar)
+            if self._proc is None:
+                return not visible
+            shown = await asyncio.to_thread(
+                self._send_and_wait,
+                protocol.CMD_WATCH,
+                _SHOW_ACK_TIMEOUT_S,
+                visible=visible,
+                dark=dark,
+            )
+            self._schedule_idle_quit()
+            return shown
+
     # ---------------------------------------------------------- point at
     async def point(self, *, monitor: list[int], rect: list[float], label: str) -> tuple[bool, str]:
         """Draw the glowing arrow at one element without clicking it.
@@ -648,15 +662,11 @@ class CUIndicatorController:
             if not display_present():
                 return False, "no display on this host (headless)"
             if is_wayland():
-                return False, (
-                    "Wayland session (no always-on-top overlay surface)"
-                )
+                return False, ("Wayland session (no always-on-top overlay surface)")
         except Exception:  # noqa: BLE001
             return False, "platform probes unavailable"
         if importlib.util.find_spec("PySide6") is None:
-            return False, (
-                "PySide6 not installed (install the [desktop] extra)"
-            )
+            return False, ("PySide6 not installed (install the [desktop] extra)")
         from jarvis.platform.qt_sidecar import (  # noqa: PLC0415
             missing_system_library,
         )
@@ -692,8 +702,8 @@ class CUIndicatorController:
             if not self._sidecar_warned:
                 self._sidecar_warned = True
                 log.warning(
-                    "[cu-indicator] sidecar spawn failed — border disabled "
-                    "for this session.", exc_info=True,
+                    "[cu-indicator] sidecar spawn failed — border disabled for this session.",
+                    exc_info=True,
                 )
             return
         threading.Thread(
@@ -735,8 +745,7 @@ class CUIndicatorController:
             return True
         except Exception:  # noqa: BLE001
             log.info(
-                "[cu-indicator] sidecar pipe broke — border disabled for the "
-                "rest of this mission."
+                "[cu-indicator] sidecar pipe broke — border disabled for the rest of this mission."
             )
             with self._stdin_lock:
                 self._proc = None
@@ -835,7 +844,8 @@ class CUIndicatorController:
             self._esc_ready = asyncio.Event()
             self._esc_holds_key = False
             self._esc_task = asyncio.get_running_loop().create_task(
-                self._esc_watch(), name="cu-indicator-esc",
+                self._esc_watch(),
+                name="cu-indicator-esc",
             )
         return True
 
@@ -894,8 +904,7 @@ class CUIndicatorController:
                         continue
                     if self_input.esc_recently_synthesized():
                         log.debug(
-                            "[cu-indicator] ignoring Esc synthesized by the "
-                            "CU engine itself."
+                            "[cu-indicator] ignoring Esc synthesized by the CU engine itself."
                         )
                         continue
                     self._cancel_all_missions()
@@ -904,7 +913,8 @@ class CUIndicatorController:
         except Exception:  # noqa: BLE001
             log.warning(
                 "[cu-indicator] Escape listener failed — cancel via voice/"
-                "tray/kill-hotkey still works.", exc_info=True,
+                "tray/kill-hotkey still works.",
+                exc_info=True,
             )
         finally:
             # Whatever happened, release a pill that is waiting on the answer;

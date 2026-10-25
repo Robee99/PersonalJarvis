@@ -83,7 +83,7 @@ def https_only_async() -> dict[str, Any]:
 # Public-destination guard: for a URL the USER pasted (not a registry entry),
 # plain http is fine, but the fetch runs server-side, so it must never reach
 # the loopback API, the LAN, or a cloud metadata endpoint. It runs as a
-# REQUEST hook, so every redirect hop is checked before it is sent.
+# transport, so every redirect hop is checked before it is sent.
 # ---------------------------------------------------------------------------
 
 
@@ -102,7 +102,7 @@ def _is_public_ip(value: str) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-async def _check_public_request(request: httpx.Request, schemes: frozenset[str]) -> None:
+async def _public_addresses(request: httpx.Request, schemes: frozenset[str]) -> list[str]:
     url = request.url
     if url.scheme not in schemes:
         raise BlockedDestination(f"refusing a {url.scheme!r} URL")
@@ -117,30 +117,89 @@ async def _check_public_request(request: httpx.Request, schemes: frozenset[str])
     if literal_ok is not None:
         if not literal_ok:
             raise BlockedDestination(f"refusing non-public address {host}")
-        return
+        return [host]
     port = url.port or (443 if url.scheme == "https" else 80)
+    return await _resolve_public_addresses(host, port)
+
+
+def _pinned_request(request: httpx.Request, address: str) -> httpx.Request:
+    # Only the transport's copy uses the pinned IP. The client's request keeps
+    # its origin for cookie scoping, redirect resolution and response URLs.
+    url = request.url
+    headers = request.headers.copy()
+    headers["host"] = url.netloc.decode("ascii")
+    extensions = dict(request.extensions)
+    extensions["sni_hostname"] = url.raw_host.decode("ascii")
+    return httpx.Request(
+        request.method,
+        url.copy_with(host=address),
+        headers=headers,
+        stream=request.stream,
+        extensions=extensions,
+    )
+
+
+async def _resolve_public_addresses(host: str, port: int) -> list[str]:
+    """Resolve a hostname once and reject it unless every answer is public."""
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError as exc:
         raise BlockedDestination(f"cannot resolve {host}") from exc
-    addresses = {info[4][0] for info in infos}
+    addresses = list(dict.fromkeys(info[4][0] for info in infos))
     # Every address must be public: a name that resolves to both a public and a
     # private address could otherwise be connected to on the private one.
     if not addresses or not all(_is_public_ip(str(a)) for a in addresses):
         raise BlockedDestination(f"refusing {host}: it resolves to a non-public address")
+    return addresses
 
 
-def public_only_async(*, schemes: tuple[str, ...] = ("https",)) -> dict[str, Any]:
+class _PublicOnlyTransport(httpx.AsyncBaseTransport):
+    """Validate every destination and pin only the request sent to the wire."""
+
+    def __init__(
+        self, schemes: frozenset[str], transport: httpx.AsyncBaseTransport | None
+    ) -> None:
+        self._schemes = schemes
+        # Pinned IPs may be shared by unrelated virtual hosts. Do not reuse an
+        # IP-keyed TLS connection across original hostnames. This fetch path is
+        # an occasional user-triggered import, so opening a socket per hop is
+        # preferable to risking a connection established for another TLS name.
+        self._transport = transport if transport is not None else httpx.AsyncHTTPTransport(
+            # The transport honors configured certificate authorities only;
+            # environment proxy discovery belongs to the outer AsyncClient.
+            trust_env=True, limits=httpx.Limits(max_keepalive_connections=0)
+        )
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        addresses = await _public_addresses(request, self._schemes)
+        for address in addresses[:-1]:
+            try:
+                return await self._transport.handle_async_request(_pinned_request(request, address))
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                # Connection setup failed before the request body was sent.
+                # Another address from the same validated DNS snapshot may be
+                # reachable (for example, IPv4 on a host without IPv6 routing).
+                continue
+        return await self._transport.handle_async_request(_pinned_request(request, addresses[-1]))
+
+    async def aclose(self) -> None:
+        await self._transport.aclose()
+
+
+def public_only_async(
+    *,
+    schemes: tuple[str, ...] = ("https",),
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> dict[str, Any]:
     """``httpx.AsyncClient`` kwargs that refuse non-public destinations.
 
     Every request — the first and each redirect hop — must use one of
-    ``schemes`` and resolve only to globally routable addresses. The lookup
-    happens just before httpx connects; this narrows but does not fully close a
-    DNS-rebinding window, which is acceptable for a user-initiated download.
+    ``schemes`` and resolve only to globally routable addresses. Hostnames are
+    pinned to the validated IP only inside the transport, retaining the original
+    Host, TLS SNI, redirect origin and cookie scope. Environment proxies are
+    disabled because a proxy could resolve the hostname independently. Tests
+    may supply a fake inner ``transport`` without opening a socket.
     """
     allowed = frozenset(s.lower() for s in schemes)
 
-    async def _hook(request: httpx.Request) -> None:
-        await _check_public_request(request, allowed)
-
-    return {"event_hooks": {"request": [_hook]}}
+    return {"transport": _PublicOnlyTransport(allowed, transport), "trust_env": False}

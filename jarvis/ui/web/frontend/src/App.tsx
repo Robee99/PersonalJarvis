@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from "react";
+import { VisionControls } from "@/components/agentchat/VisionControls";
 
 import { isSectionId, useEventStore, type SectionId } from "@/store/events";
 import { useWebSocket } from "@/hooks/useWebSocket";
@@ -344,6 +345,7 @@ export default function App() {
           </div>
         </main>
         <ToastLayer />
+        <VisionControls />
         <CommandActivityLayer />
         {/* Only this window's own "Edit" opens it here; the card's request
             goes to the main window (handleAppshotEditRequest). */}
@@ -426,6 +428,7 @@ export default function App() {
       </main>
 
       <ToastLayer />
+      <VisionControls />
       <CommandActivityLayer />
       {/* The appshot editor, over whatever is open (a click on the appshot
           card in the screen corner opens it). */}

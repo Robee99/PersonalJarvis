@@ -67,6 +67,7 @@ CMD_CARD_STATUS = "card_status"
 CMD_POINTER_PRESS = "pointer_press"
 #: A glowing arrow at one element, never a click (teach mode).
 CMD_POINT = "point"
+CMD_WATCH = "watch"
 
 ALL_COMMANDS = frozenset(
     {
@@ -83,6 +84,7 @@ ALL_COMMANDS = frozenset(
         CMD_CARD_STATUS,
         CMD_POINTER_PRESS,
         CMD_POINT,
+        CMD_WATCH,
     }
 )
 
@@ -179,6 +181,7 @@ __all__ = [
     "EVENT_CARD_ACTION",
     "EVENT_SNAP_OPEN",
     "CMD_UNBLANK",
+    "CMD_WATCH",
     "EXIT_NO_GUI",
     "MAX_CARDS",
     "decode_ack",
