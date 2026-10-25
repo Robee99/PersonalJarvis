@@ -361,13 +361,22 @@ def list_skills_brief(request: Request) -> dict[str, Any]:
     install, which the tool-result cap slices mid-JSON. This one carries name,
     state, a one-line description and what starts the skill; nothing else.
     Declared BEFORE ``/{name}`` so "brief" is never read as a skill name.
+
+    Built-in skills nobody switched on are named in one list, not described:
+    54 described skills overran that cap on the owner's PC (2026-10-25) and
+    Gemma, reading a slice, called switched-off Gmail and Calendar skills
+    "active". ``summary`` says first which skills are on.
     """
     from jarvis.skills import prefs
 
     reg = _require_registry(request)
     skills: list[Skill] = _sort_by_order(reg.list(), prefs.load_order())
     out: list[dict[str, Any]] = []
+    off_builtin: list[str] = []
     for s in skills:
+        if s.state.value == "validated" and _is_builtin(s.name):
+            off_builtin.append(s.name)
+            continue
         fm = s.frontmatter
         starts: list[str] = []
         for t in fm.triggers if fm else ():
@@ -387,7 +396,21 @@ def list_skills_brief(request: Request) -> dict[str, Any]:
                 "starts": starts,
             }
         )
-    return {"skills": out, "total": len(out)}
+    on = [entry["name"] for entry in out if entry["state"] == "active"]
+    summary = (
+        f"{len(on)} skill(s) switched on: {', '.join(on)}." if on else "No skill is switched on."
+    )
+    if off_builtin:
+        summary += (
+            f" {len(off_builtin)} built-in skill(s) are installed but switched off "
+            "(listed in switched_off_builtin); the user can turn one on by name."
+        )
+    return {
+        "summary": summary,
+        "skills": out,
+        "switched_off_builtin": off_builtin,
+        "total": len(out) + len(off_builtin),
+    }
 
 
 @router.post("")

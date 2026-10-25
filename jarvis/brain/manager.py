@@ -344,6 +344,28 @@ def _provider_display_name(provider: str) -> str:
     return pid.replace("-", " ").replace("_", " ").title() or "the configured provider"
 
 
+_USER_FOLDERS: str | None = None
+
+
+def _user_folders_directive() -> str:
+    """Where the user's named folders really are, for file tools.
+
+    A bare "Downloads" reached the filesystem server as a relative path and was
+    read under its own start folder (live 2026-10-25). Read once: known
+    folders do not move while the app runs.
+    """
+    global _USER_FOLDERS  # noqa: PLW0603 - a once-per-process cache
+    if _USER_FOLDERS is None:
+        from jarvis.platform.user_dirs import named_folders  # noqa: PLC0415
+
+        listed = "; ".join(f"{name} = {path}" for name, path in named_folders().items())
+        _USER_FOLDERS = (
+            f"USER FOLDERS on this computer: {listed}. When the user names one of "
+            "these folders, pass its full path to file tools, never the bare name."
+        )
+    return _USER_FOLDERS
+
+
 def _provider_identity_directive(provider: str, model: str | None, name: str) -> str:
     """Authoritative, anti-guessing self-identity line for the system prompt.
 
@@ -1735,7 +1757,21 @@ def _evidence_answer_is_unverified(
         return False
     if required_tool in (executed or set()):
         return False
+    if required_tool == "run_shell" and any(
+        _LOCAL_OUTCOME_EQUIVALENT.search(name) for name in (executed or set())
+    ):
+        return False
     return bool((response_text or "").strip())
+
+
+#: Connected-server tools that reach the same file/system outcome as the
+#: mandated run_shell. Live 2026-10-25 the filesystem MCP wrote and read the
+#: file, and the answer was still replaced with "the command never ran".
+_LOCAL_OUTCOME_EQUIVALENT = re.compile(
+    r"^(filesystem|windows-desktop|desktop-commander|desktop_commander)/"
+    r"\w*(file|directory|folder|powershell|shell|process|move|search|edit|list)\w*$",
+    re.IGNORECASE,
+)
 
 
 # A concrete particular — something the answer could only have if it had the
@@ -4914,6 +4950,7 @@ class BrainManager:
             )
             if compact else _TOOL_ROUTING_RULES
         )
+        parts.append(_user_folders_directive())
 
         # The honest tool list (PR-05). This used to render the
         # CapabilityRegistry under the header "REGISTRIERTE WERKZEUGE
@@ -12121,10 +12158,21 @@ class BrainManager:
         # Negations, questions and conditions never match and reach the brain.
         if not screen_context.has_image:
             from jarvis.platform.brightness import brightness_reflex
-            from jarvis.platform.pc_reflex import url_reflex, volume_reflex, window_reflex
+            from jarvis.platform.pc_reflex import (
+                url_reflex,
+                volume_reflex,
+                window_list_reflex,
+                window_reflex,
+            )
 
             reflex_reply = None
-            for reflex in (brightness_reflex, volume_reflex, window_reflex, url_reflex):
+            for reflex in (
+                brightness_reflex,
+                volume_reflex,
+                window_reflex,
+                window_list_reflex,
+                url_reflex,
+            ):
                 reflex_reply = await asyncio.to_thread(reflex, user_text)
                 if reflex_reply is not None:
                     break

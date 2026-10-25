@@ -46,7 +46,13 @@ _CONDITION = re.compile(
 )
 _PLEASE = r"(?:(?:please|jarvis|hey\s+jarvis|ok(?:ay)?|can\s+you|could\s+you)[,\s]+)*"
 _TAIL = r"(?:[,\s]+(?:please|thanks?|thank\s+you|jarvis|now))*[.!\s]*$"
-_VOL = r"(?:the\s+)?(?:system\s+|master\s+|computer\s+|pc\s+|laptop\s+)?(?:volume|sound)"
+#: "the volume", "my computer's volume", "the PC sound". The battery ask "Set my
+#: computer's volume to 35 percent" missed the reflex, and Gemma answered
+#: "Setting it now" with no call (live 2026-10-25).
+_VOL = (
+    r"(?:(?:the|my)\s+)?(?:(?:system|master|computer|pc|laptop)(?:'s|s)?\s+)?"
+    r"(?:volume|sound)"
+)
 _PCT = r"(\d{1,3})\s*(?:%|percent|per\s+cent)?"
 
 #: How far "louder" / "volume up" move without a number (matches system_volume).
@@ -206,11 +212,22 @@ def volume_reflex(text: str) -> str | None:
         return "I couldn't reach Windows' volume control, so I can't confirm any change."
 
 
+#: Resizing a window that is not open has one honest answer. Live 2026-10-25,
+#: "Maximize the Notepad window" with no Notepad open went to Gemma, which
+#: answered about notes. "close downloads" or "focus chat" may mean a tab or a
+#: folder, so those still go to the brain.
+_NOT_OPEN_IS_THE_ANSWER = frozenset({"maximize", "minimize", "restore"})
+
+
+def _spoken(window: str) -> str:
+    return window.title() if len(window) > 3 else window.upper()
+
+
 def window_reflex(text: str) -> str | None:
     """The reply for a plain window command on Windows, else ``None``.
 
-    A window that cannot be found returns ``None``: "close the downloads" may
-    mean a browser tab or a folder, and the brain can look.
+    A window that cannot be found returns ``None`` for close and focus: "close
+    the downloads" may mean a browser tab or a folder, and the brain can look.
     """
     command = parse_window_command(text)
     if command is None or sys.platform != "win32":
@@ -223,17 +240,50 @@ def window_reflex(text: str) -> str | None:
         result = change(
             command.action, command.window, program_only=command.action == "close"
         )
-    except (LookupError, ValueError):
+    except LookupError:
+        if command.action in _NOT_OPEN_IS_THE_ANSWER:
+            return f"I can't find an open {_spoken(command.window)} window, so nothing changed."
+        return None
+    except ValueError:
         return None
     except (OSError, RuntimeError) as exc:
         log.warning("window reflex failed: %s", exc)
         return None
-    name = command.window.title() if len(command.window) > 3 else command.window.upper()
+    name = _spoken(command.window)
     if command.action == "close" and result.state != "closed":
         return f"I asked {name} to close; it is still open, it may be asking to save."
     if command.action == "focus" and result.state != "minimized":
         return f"{name} is in front."
     return f"{name} is {_STATE_WORDS.get(result.state, result.state)}."
+
+
+_W_LIST = re.compile(
+    rf"^\s*{_PLEASE}(?:(?:which|what)\s+(?:apps|programs|applications|windows)"
+    r"(?:\s+and\s+(?:apps|programs|applications|windows))?\s+(?:are|do\s+i\s+have)\s+"
+    r"(?:open|running)|list\s+(?:the\s+|my\s+|all\s+)?(?:open\s+)?(?:apps|windows|programs)"
+    r"|(?:show|tell)\s+me\s+(?:the\s+|my\s+)?open\s+(?:apps|windows|programs))"
+    r"(?:\s+(?:on\s+(?:my|the)\s+(?:desktop|screen|computer|pc)|right\s+now|now))*"
+    r"[?.!\s]*$",
+    re.IGNORECASE,
+)
+
+
+def window_list_reflex(text: str) -> str | None:
+    """The open windows, read from Windows, for a plain "which windows are open?".
+
+    Live 2026-10-25 Gemma answered "Which apps and windows are open on my
+    desktop right now?" with "I don't keep a history of your activity" while
+    window_control's list was one call away.
+    """
+    if not _W_LIST.match(text or "") or sys.platform != "win32":
+        return None
+    from jarvis.plugins.tool.window_control import apply  # noqa: PLC0415
+
+    try:
+        return apply("list", "")
+    except (OSError, RuntimeError) as exc:
+        log.warning("window list reflex failed: %s", exc)
+        return None
 
 
 _TLD = r"(?:com|org|net|io|in|co|dev|ai|app|gg|tv|me|de|es|uk)"

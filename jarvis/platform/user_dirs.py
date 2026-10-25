@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 _DOWNLOADS_ID = (0x374DE290, 0x123F, 0x4565, (0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B))
 #: FOLDERID_Pictures {33E28130-4E1E-4676-835A-98395C3BC3BB}.
 _PICTURES_ID = (0x33E28130, 0x4E1E, 0x4676, (0x83, 0x5A, 0x98, 0x39, 0x5C, 0x3B, 0xC3, 0xBB))
+#: FOLDERID_Desktop {B4BFCC3A-DB2C-424C-B029-7FE99A87C641}.
+_DESKTOP_ID = (0xB4BFCC3A, 0xDB2C, 0x424C, (0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41))
+#: FOLDERID_Documents {FDD39AD0-238F-46AF-ADB4-6C85480369C7}.
+_DOCUMENTS_ID = (0xFDD39AD0, 0x238F, 0x46AF, (0xAD, 0xB4, 0x6C, 0x85, 0x48, 0x03, 0x69, 0xC7))
 
 
 def downloads_dir() -> Path:
@@ -52,6 +56,47 @@ def pictures_dir() -> Path | None:
     if found is None and not _xdg_names_home("PICTURES"):
         return Path.home() / "Pictures"
     return found
+
+
+def _known(windows_id: tuple[int, int, int, tuple[int, ...]], xdg: str, plain: str) -> Path:
+    fallback = Path.home() / plain
+    try:
+        if sys.platform == "win32":
+            return windows_known_folder(windows_id) or fallback
+        if sys.platform == "darwin":
+            return fallback
+        return xdg_user_dir(xdg) or fallback
+    except Exception:  # noqa: BLE001 - a probe failure means "use the plain folder"
+        log.debug("user-dirs: %s folder probe failed", plain, exc_info=True)
+        return fallback
+
+
+def desktop_dir() -> Path:
+    """The user's Desktop folder, also when OneDrive moved it."""
+    return _known(_DESKTOP_ID, "DESKTOP", "Desktop")
+
+
+def documents_dir() -> Path:
+    """The user's Documents folder, also when OneDrive moved it."""
+    return _known(_DOCUMENTS_ID, "DOCUMENTS", "Documents")
+
+
+def named_folders() -> dict[str, Path]:
+    """The folders people name by word: "my Downloads", "the desktop".
+
+    Live 2026-10-25 "List the files in my Downloads folder" reached the
+    filesystem server as the relative path "Downloads", which it read under
+    its own start folder (OneDrive\\Desktop\\Downloads) and found empty.
+    """
+    folders = {
+        "Downloads": downloads_dir(),
+        "Desktop": desktop_dir(),
+        "Documents": documents_dir(),
+    }
+    pictures = pictures_dir()
+    if pictures is not None:
+        folders["Pictures"] = pictures
+    return folders
 
 
 def xdg_user_dir(name: str) -> Path | None:
@@ -120,4 +165,12 @@ def windows_known_folder(folder: tuple[int, int, int, tuple[int, ...]]) -> Path 
         ole32.CoTaskMemFree(out)
 
 
-__all__ = ["downloads_dir", "pictures_dir", "windows_known_folder", "xdg_user_dir"]
+__all__ = [
+    "desktop_dir",
+    "documents_dir",
+    "downloads_dir",
+    "named_folders",
+    "pictures_dir",
+    "windows_known_folder",
+    "xdg_user_dir",
+]

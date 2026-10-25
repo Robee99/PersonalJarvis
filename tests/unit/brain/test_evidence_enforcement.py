@@ -153,3 +153,24 @@ def test_confabulated_tool_behaviour_is_still_replaced():
     ):
         assert _answer_claims_unverified_data(answer) is True, answer
         assert _read_replacement(answer) is not None, answer
+
+
+def test_a_file_tool_from_a_connected_server_fulfils_the_shell_mandate() -> None:
+    # Live 2026-10-25: filesystem/write_file wrote the file and the answer was
+    # still replaced with "the command never ran".
+    for tool in (
+        "filesystem/write_file",
+        "filesystem/read_text_file",
+        "windows-desktop/FileSystem",
+        "windows-desktop/PowerShell",
+    ):
+        assert not _evidence_answer_is_unverified(
+            "run_shell", {tool}, "Done, the file is written.", suppressed=False
+        )
+    assert _evidence_answer_is_unverified(
+        "run_shell", {"search_web"}, "Done, the file is written.", suppressed=False
+    )
+    # Another mandate is not satisfied by a file tool.
+    assert _evidence_answer_is_unverified(
+        "contact-upsert", {"filesystem/write_file"}, "Saved.", suppressed=False
+    )

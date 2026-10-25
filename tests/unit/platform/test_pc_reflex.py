@@ -31,6 +31,9 @@ from jarvis.plugins.tool.window_control import WindowResult
         ("mute", VolumeCommand("mute")),
         ("mute the sound", VolumeCommand("mute")),
         ("unmute.", VolumeCommand("unmute")),
+        ("Set my computer's volume to 35 percent.", VolumeCommand("set", 35)),
+        ("turn my pc volume down", VolumeCommand("down", 10)),
+        ("mute my laptop's sound", VolumeCommand("mute")),
     ],
 )
 def test_plain_volume_commands_match(text: str, expected: VolumeCommand) -> None:
@@ -112,6 +115,55 @@ def test_window_not_found_goes_to_the_brain(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
     monkeypatch.setattr(wc, "change", missing)
     assert pc_reflex.window_reflex("close downloads") is None
+
+
+def test_resizing_a_window_that_is_not_open_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    import jarvis.plugins.tool.window_control as wc
+
+    def missing(action: str, target: str, **kw: object) -> WindowResult:
+        raise LookupError(target)
+
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(wc, "change", missing)
+    assert pc_reflex.window_reflex("Maximize the Notepad window.") == (
+        "I can't find an open Notepad window, so nothing changed."
+    )
+    assert pc_reflex.window_reflex("focus chat") is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Which apps and windows are open on my desktop right now?",
+        "what windows are open",
+        "list the open windows",
+        "show me my open apps",
+        "Jarvis, which programs are running?",
+    ],
+)
+def test_asking_which_windows_are_open_reads_them_from_windows(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    import jarvis.plugins.tool.window_control as wc
+
+    seen: list[tuple[str, str]] = []
+
+    def listed(action: str, target: str) -> str:
+        seen.append((action, target))
+        return "Open windows: Calculator; Untitled - Notepad"
+
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(wc, "apply", listed)
+    assert pc_reflex.window_list_reflex(text) == "Open windows: Calculator; Untitled - Notepad"
+    assert seen == [("list", "")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["which window should I close?", "what apps are open in my browser tabs", "open notepad"],
+)
+def test_other_window_questions_go_to_the_brain(text: str) -> None:
+    assert pc_reflex.window_list_reflex(text) is None
 
 
 def test_volume_reply_is_the_read_back(monkeypatch: pytest.MonkeyPatch) -> None:

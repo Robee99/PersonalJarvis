@@ -129,6 +129,21 @@ _FAILED_DIRECTIVE = (
 _PROMISE = re.compile(
     r"\b(i will|i'll|i am going to|i'm going to|let me|i shall|next,? i)\b", re.IGNORECASE
 )
+# Live 2026-10-25 "Set my computer's volume to 35 percent" was answered
+# "Setting the volume to 35 percent now" with system_volume offered and no call
+# made. A first answer that announces an action while no tool ran gets one
+# nudge; a turn that needs no action answers again without the promise.
+_UNDONE_DIRECTIVE = (
+    "[retry] You announced an action but no tool ran, so nothing happened. If "
+    "the request needs an action, call the tool now. If it needs none, answer "
+    "again without saying you are doing something."
+)
+_ANNOUNCED = re.compile(
+    r"(?:^|[.!?]\s+)(?:(?:ok(?:ay)?|sure|certainly|right away|of course),?\s+(?:sir,?\s+)?)?"
+    r"(?:(?:i will|i'll|i am going to|i'm going to|let me)\s+(?!know\b)[a-z]+|[a-z]+ing)\b"
+    r"[^.!?\n]{0,60}\b(?:now|for you|right away)\b",
+    re.IGNORECASE,
+)
 
 # A provider can repeat the exact same text-serialized call after receiving its
 # result. The action must remain exactly-once, but the turn must not end on an
@@ -1132,16 +1147,25 @@ class ToolUseLoop:
                     self._append_steer(current_messages, late)
                     continue
                 promised = bool(failed_call and _PROMISE.search(agg.text or ""))
-                if (refused_call or promised) and not retry_nudged and not deadline_forced:
+                undone = bool(
+                    not tool_log and tools_payload and _ANNOUNCED.search(agg.text or "")
+                )
+                if (
+                    (refused_call or promised or undone)
+                    and not retry_nudged
+                    and not deadline_forced
+                ):
                     retry_nudged = True
+                    reason = "refused" if refused_call else "failed" if promised else "unmade"
                     log.info(
-                        "tool_use_loop: a %s call was answered in words; sent back once",
-                        "refused" if refused_call else "failed",
+                        "tool_use_loop: a %s call was answered in words; sent back once", reason
                     )
                     directive = (
                         _RETRY_DIRECTIVE + refused_call
                         if refused_call
                         else _FAILED_DIRECTIVE + failed_call
+                        if promised
+                        else _UNDONE_DIRECTIVE
                     )
                     current_messages.append(BrainMessage(role="assistant", content=agg.text))
                     current_messages.append(BrainMessage(role="user", content=directive))

@@ -60,3 +60,30 @@ def test_windows_asks_the_known_folder_api() -> None:
     downloads = user_dirs.downloads_dir()
     assert downloads.is_absolute()
     assert user_dirs.windows_known_folder(user_dirs._DOWNLOADS_ID) == downloads  # noqa: SLF001
+
+
+def test_the_named_folders_follow_the_os(linux_home) -> None:
+    home = linux_home(
+        'XDG_DOWNLOAD_DIR="$HOME/Descargas"\nXDG_DESKTOP_DIR="$HOME/Escritorio"\n'
+        'XDG_DOCUMENTS_DIR="$HOME/Documentos"\nXDG_PICTURES_DIR="$HOME"\n'
+    )
+    assert user_dirs.named_folders() == {
+        "Downloads": home / "Descargas",
+        "Desktop": home / "Escritorio",
+        "Documents": home / "Documentos",
+    }
+
+
+def test_the_prompt_names_each_folder_by_its_full_path(
+    linux_home, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.brain import manager
+
+    home = linux_home('XDG_DOWNLOAD_DIR="$HOME/Descargas"\n')
+    monkeypatch.setattr(manager, "_USER_FOLDERS", None)
+
+    line = manager._user_folders_directive()
+
+    assert f"Downloads = {home / 'Descargas'}" in line
+    assert f"Desktop = {home / 'Desktop'}" in line
+    assert "never the bare name" in line

@@ -483,3 +483,20 @@ def test_brief_listing_carries_state_and_starts_only(skills_root: Path) -> None:
     assert set(by_name["alpha"]) == {"name", "state", "is_builtin", "description", "starts"}
     # /{name} still resolves real names, and "brief" is not one of them.
     assert client.get("/api/skills/alpha").status_code == 200
+
+
+def test_brief_names_switched_off_builtins_and_says_what_is_on(skills_root: Path) -> None:
+    """54 described skills overran the tool-result cap on the owner's PC and the
+    model called switched-off built-ins "active" (2026-10-25)."""
+    _make_skill(skills_root, "plugin-gmail")
+    _make_skill(skills_root, "memory-save", state="active")
+    _make_skill(skills_root, "my-own")
+    client, _reg = _client(skills_root)
+
+    body = client.get("/api/skills/brief").json()
+
+    assert body["switched_off_builtin"] == ["plugin-gmail"]
+    assert {s["name"] for s in body["skills"]} == {"memory-save", "my-own"}
+    assert body["summary"].startswith("1 skill(s) switched on: memory-save.")
+    assert "1 built-in skill(s) are installed but switched off" in body["summary"]
+    assert body["total"] == 3

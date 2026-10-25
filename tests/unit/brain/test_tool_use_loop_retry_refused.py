@@ -146,3 +146,76 @@ async def test_a_failed_call_reported_plainly_ends_the_turn() -> None:
 
     assert executor.calls == 1
     assert "could not check" in out.text
+
+
+class _VolumeTool:
+    name = "system_volume"
+    schema: dict[str, Any] = {}
+    description = "volume"
+
+
+class _AnnouncingBrain:
+    """Says it is setting the volume, and calls the tool only when told no tool ran."""
+
+    def __init__(self, *, chat: bool = False) -> None:
+        self.requests: list[BrainRequest] = []
+        self._chat = chat
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        last = req.messages[-1]
+        if last.role == "tool":
+            yield BrainDelta(content="The volume is 35%.")
+        elif str(last.content).startswith("[retry]"):
+            if self._chat:
+                yield BrainDelta(content="Good evening, Sir.")
+            else:
+                call = {"id": "v1", "name": "system_volume", "input": {"action": "set"}}
+                yield BrainDelta(tool_call=call)
+                yield BrainDelta(finish_reason="tool_use")
+                return
+        else:
+            yield BrainDelta(content="Setting the volume to 35 percent now.")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_an_action_announced_with_no_call_is_sent_back_once() -> None:
+    brain = _AnnouncingBrain()
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    out = await loop.run([BrainMessage(role="user", content="set my volume to 35")])
+
+    assert executor.calls == 1
+    assert out.text == "The volume is 35%."
+
+
+class _GreetingBrain:
+    def __init__(self) -> None:
+        self.requests: list[BrainRequest] = []
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        yield BrainDelta(content="Good evening, Sir. Let me know if you need anything.")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_a_plain_answer_with_no_call_is_not_sent_back() -> None:
+    brain = _GreetingBrain()
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    out = await loop.run([BrainMessage(role="user", content="hello")])
+
+    assert len(brain.requests) == 1
+    assert out.text.startswith("Good evening")
+
+
+async def test_a_turn_that_needs_no_action_answers_again_without_the_promise() -> None:
+    brain = _AnnouncingBrain(chat=True)
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    out = await loop.run([BrainMessage(role="user", content="hello")])
+
+    assert executor.calls == 0
+    assert out.text == "Good evening, Sir."
