@@ -50,6 +50,7 @@ from jarvis.brain import provider_health_ledger as _health_ledger
 # ONE canonical billing/budget/quota marker list, shared with the test-badge
 # classifier (provider_test.classify_provider_error) so the live fallback chain and
 # the API-Keys badge can never disagree on "out of credits / over budget" (AP-22).
+from jarvis.brain.price_compare import COMPARE_PRICES, ComparePricesTool
 from jarvis.brain.provider_test import BILLING_LIMIT_MARKERS
 from jarvis.brain.spawn_gate import effort_warrants_delegation
 from jarvis.brain.tool_switch import (
@@ -4033,6 +4034,8 @@ class BrainManager:
         if not wants_switch(mode, tool_count=len(tools), context_window=window, local=local):
             return None
         surface = dict(tools)
+        if "playwright/browser_navigate" in surface and "playwright/browser_evaluate" in surface:
+            surface.setdefault(COMPARE_PRICES, ComparePricesTool(surface))
         switch = ToolSwitch(surface, _relevant_tool_names)
         surface[ENABLE_TOOLS] = EnableToolsTool(switch)
         core = getattr(self._config.brain, "tool_switch_core", None) or DEFAULT_CORE

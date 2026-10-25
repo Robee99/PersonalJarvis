@@ -114,13 +114,24 @@ def test_a_shopping_request_opens_the_browser_without_naming_it() -> None:
     assert {"playwright/browser_navigate", "playwright/browser_snapshot"} <= set(switch.visible())
 
 
+def test_a_shopping_request_gets_the_one_call_price_comparison_first() -> None:
+    tools = _registry()
+    tools["compare_prices"] = _Tool("compare_prices", "Compare grocery prices across stores")
+    switch = _switch(tools)
+
+    switch.open_turn("cheapest 1kg chicken across grocery stores", core=())
+
+    assert switch.is_on("compare_prices")
+
+
 def test_a_web_job_leaves_screen_clicking_off() -> None:
     # Live 2026-10-25 Gemma had both and chose computer_use for a web page.
     tools = _registry()
     tools["computer_use"] = _Tool("computer_use", "Open the browser and click on screen")
     switch = _switch(tools)
 
-    switch.open_turn("open bigbasket.com in the browser", core=())
+    # The manager keeps computer_use on every turn it is registered for.
+    switch.open_turn("open bigbasket.com in the browser", core=(), keep=("computer_use",))
 
     assert "playwright/browser_navigate" in switch.visible()
     assert not switch.is_on("computer_use")

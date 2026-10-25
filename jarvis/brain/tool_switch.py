@@ -148,8 +148,10 @@ class ToolSwitch:
         hands = self._browser_hands(query, relevant)
         if hands and _WEB_WORDS.search(query):
             # With both on, Gemma picked screen clicking for a web page (live
-            # 2026-10-25) and the browser tools never ran.
+            # 2026-10-25) and the browser tools never ran. The manager keeps
+            # computer_use whenever it is registered, so it leaves keep too.
             relevant = [n for n in relevant if n != SCREEN_HANDS]
+            keep = [n for n in keep if n != SCREEN_HANDS]
         self.switch_on(
             [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *self._siblings(query, relevant)]
         )
@@ -177,7 +179,9 @@ class ToolSwitch:
         )
         if not web:
             return []
-        return [
+        # The one-call store walk (price_compare.py) comes first when it is here.
+        own = [n for n in ("compare_prices",) if n in self._tools and _WEB_WORDS.search(query)]
+        return own + [
             name
             for hand in BROWSER_HANDS
             for name, tool in self._tools.items()
