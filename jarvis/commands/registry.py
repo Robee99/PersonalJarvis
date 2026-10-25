@@ -763,7 +763,10 @@ def _build_registry() -> tuple[AppCommand, ...]:
         AppCommand(
             id="tts-volume-set",
             title="Set voice volume",
-            description="Set the text-to-speech output volume (0.0 to 1.0).",
+            description=(
+                "Set how loud the assistant's own speaking voice is (0.0 to 1.0). Not the "
+                "computer's volume: use system_volume for that."
+            ),
             method="PUT",
             path="/api/settings/tts-volume",
             params={

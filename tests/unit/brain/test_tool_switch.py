@@ -124,6 +124,20 @@ def test_a_shopping_request_gets_the_one_call_price_comparison_first() -> None:
     assert switch.is_on("compare_prices")
 
 
+def test_the_computer_volume_never_reaches_the_voice_volume_setting() -> None:
+    # Live 2026-10-25 "set the system volume to 30 percent" turned the
+    # assistant's own voice down instead.
+    tools = _registry()
+    tools["tts-volume-set"] = _Tool("tts-volume-set", "Set voice volume of speech")
+    switch = _switch(tools)
+
+    switch.open_turn("set the system volume to 30 percent", core=())
+    assert not switch.is_on("tts-volume-set")
+
+    switch.open_turn("make your voice volume quieter", core=())
+    assert switch.is_on("tts-volume-set")
+
+
 def test_a_web_job_leaves_screen_clicking_off() -> None:
     # Live 2026-10-25 Gemma had both and chose computer_use for a web page.
     tools = _registry()

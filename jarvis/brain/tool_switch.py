@@ -67,6 +67,12 @@ BROWSER_HANDS: tuple[str, ...] = (
     "browser_fill_form",
     "browser_wait_for",
 )
+#: Tools a request only gets when it says one of these words. Live 2026-10-25
+#: "set the system volume to 30 percent" ran tts-volume-set and turned the
+#: assistant's own voice down while the computer stayed as loud.
+_ONLY_WHEN_SAID: dict[str, re.Pattern[str]] = {
+    "tts-volume-set": re.compile(r"\b(voice|speak\w*|talk\w*|your)\b", re.IGNORECASE),
+}
 #: Pixel-level desktop control, left off for a web job the browser can do.
 SCREEN_HANDS = "computer_use"
 #: Words that mean the job happens on a web page.
@@ -145,6 +151,9 @@ class ToolSwitch:
     ) -> list[str]:
         """The turn's opening surface: core, the request's own tools, gates' picks."""
         relevant = self._rank(self._tools, query, _RELEVANT_LIMIT) if query else []
+        relevant = [
+            n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
+        ]
         hands = self._browser_hands(query, relevant)
         if hands and _WEB_WORDS.search(query):
             # With both on, Gemma picked screen clicking for a web page (live

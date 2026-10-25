@@ -243,7 +243,7 @@ Set the phrase that wakes Jarvis up.
 
 ## `tts-volume-set` — Set voice volume
 
-Set the text-to-speech output volume (0.0 to 1.0).
+Set how loud the assistant's own speaking voice is (0.0 to 1.0). Not the computer's volume: use system_volume for that.
 
 - **Endpoint:** `PUT /api/settings/tts-volume`
 - **Arguments:** `volume` (number; required); `persist` (boolean; optional)
