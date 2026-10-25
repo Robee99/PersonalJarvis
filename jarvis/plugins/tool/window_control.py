@@ -52,11 +52,17 @@ def _candidates(target: str, *, program_only: bool = False) -> list[Any]:
     titled = [w for w in list_windows() if (w.title or "").strip() and w.handle]
     if not needle:
         return titled
+    # A Store app's window belongs to ApplicationFrameHost, not to the app's
+    # own process, whose hidden window ignores WM_CLOSE: "close Calculator"
+    # answered "it is still open" (live 2026-10-25). A window titled exactly
+    # the name is that frame; a title merely containing it is not trusted for
+    # program_only, so a browser tab "chat - ..." is never closed for "chat".
+    exact = [w for w in titled if w.title.strip().lower() == needle]
     by_title = [] if program_only else [w for w in titled if needle in w.title.lower()]
     by_program = [w for w in titled if needle.replace(" ", "") in _process_name(w.pid)]
     seen: set[int] = set()
     out = []
-    for w in by_title + by_program:
+    for w in exact + by_title + by_program:
         if w.handle not in seen:
             seen.add(w.handle)
             out.append(w)

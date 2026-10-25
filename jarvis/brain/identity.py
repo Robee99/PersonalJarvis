@@ -56,12 +56,15 @@ def name_directive(name: str) -> str:
             "provider."
         )
     others = "" if name.casefold() == "jarvis" else ", as Jarvis"
+    # The quoted example and "sign as" used to sit here; Gemma 4 E4B opened
+    # every reply with "I'm Jarvis, your assistant in Personal Jarvis." and
+    # ended it with "Jarvis", jokes and file lists included (live 2026-10-25).
     return (
         f"YOUR NAME IS {name.upper()}. You are {name}, the user's personal assistant. "
-        f"{PRODUCT_NAME} is the name of the app you run inside, not your name. When asked "
-        f"who or what you are, answer as {name} (for example: \"I'm {name}, your assistant "
-        f"in {PRODUCT_NAME}\") and sign as {name}; never introduce yourself as "
-        f"{PRODUCT_NAME}{others} or by a model or provider name."
+        f"{PRODUCT_NAME} is the name of the app you run inside, not your name. Only when "
+        f"asked who or what you are, say you are {name}; never introduce yourself as "
+        f"{PRODUCT_NAME}{others} or by a model or provider name. Do not introduce "
+        "yourself or sign your other replies: answer the request straight away."
     )
 
 

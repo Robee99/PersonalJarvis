@@ -286,6 +286,67 @@ def window_list_reflex(text: str) -> str | None:
         return None
 
 
+_FACT_ASK = (
+    r"^\s*(?:(?:hey\s+)?jarvis[,\s]+)?"
+    r"(?:how\s+much|what(?:'s|\s+is)|how's|check|tell\s+me)\b"
+)
+_DISK_ASK = re.compile(
+    _FACT_ASK + r"[^?]{0,40}\b(?:free|available|left)\b[^?]{0,20}\b(?:space|storage)\b"
+    r"|" + _FACT_ASK + r"[^?]{0,40}\b(?:space|storage)\b[^?]{0,30}\b(?:free|left|available)\b",
+    re.IGNORECASE,
+)
+_DRIVE = re.compile(r"\b([a-z])\s*(?::|\s+drive\b)", re.IGNORECASE)
+_BATTERY_ASK = re.compile(
+    _FACT_ASK + r"[^?]{0,30}\bbattery\b(?:\s+(?:level|percentage|percent|charge|life|status))?"
+    r"\s*(?:at|now|right\s+now)?\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _gb(n: int) -> str:
+    return f"{n / 1024**3:.0f} GB" if n >= 10 * 1024**3 else f"{n / 1024**3:.1f} GB"
+
+
+def system_facts_reflex(text: str) -> str | None:
+    """Free disk space and battery level, read from the machine.
+
+    Live 2026-10-25 Gemma answered "How much free space is on my C drive?"
+    with "I do not have a registered tool", and nothing answered the battery.
+    Both are one read; only a plain question about either matches.
+    """
+    if len((text or "").split()) > 14:
+        return None
+    if _DISK_ASK.search(text or ""):
+        import os  # noqa: PLC0415
+        import shutil  # noqa: PLC0415
+
+        m = _DRIVE.search(text)
+        if m:
+            root = f"{m.group(1).upper()}:\\" if sys.platform == "win32" else "/"
+        else:
+            root = os.environ.get("SystemDrive", "C:") + "\\" if sys.platform == "win32" else "/"
+        try:
+            usage = shutil.disk_usage(root)
+        except OSError as exc:
+            log.warning("disk reflex: %s unreadable: %s", root, exc)
+            return f"I couldn't read the {root} drive."
+        name = f"the {root.rstrip(chr(92))} drive" if sys.platform == "win32" else "the disk"
+        return f"{_gb(usage.free)} free of {_gb(usage.total)} on {name}."
+    if _BATTERY_ASK.search(text or ""):
+        try:
+            import psutil  # noqa: PLC0415
+
+            battery = psutil.sensors_battery()
+        except (ImportError, OSError, RuntimeError) as exc:
+            log.warning("battery reflex failed: %s", exc)
+            return None
+        if battery is None:
+            return "This computer reports no battery."
+        state = "charging" if battery.power_plugged else "on battery"
+        return f"The battery is at {battery.percent:.0f} percent, {state}."
+    return None
+
+
 _TLD = r"(?:com|org|net|io|in|co|dev|ai|app|gg|tv|me|de|es|uk)"
 _DOMAIN = rf"((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+{_TLD})(/[^\s]*)?"
 _URL_OPEN = re.compile(

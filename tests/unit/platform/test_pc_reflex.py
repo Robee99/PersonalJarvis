@@ -264,3 +264,46 @@ def test_several_volume_orders_run_in_turn(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(sv, "apply", apply)
     assert pc_reflex.volume_reflex("unmute and set volume to 50") == "after set"
     assert ran == [("unmute", None), ("set", 50)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "How much free space is on my C drive?",
+        "what's the free space on c:",
+        "how much storage is left?",
+    ],
+)
+def test_free_disk_space_is_read_from_the_disk(monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    import shutil
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(shutil, "disk_usage", lambda root: usage(512 * 1024**3, 0, 81 * 1024**3))
+
+    assert pc_reflex.system_facts_reflex(text).startswith("81 GB free of 512 GB on ")
+
+
+def test_the_battery_level_is_read_from_the_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections import namedtuple
+
+    import psutil
+
+    battery = namedtuple("battery", "percent secsleft power_plugged")
+    monkeypatch.setattr(psutil, "sensors_battery", lambda: battery(73.0, 0, True))
+
+    assert pc_reflex.system_facts_reflex("What is my laptop's battery level?") == (
+        "The battery is at 73 percent, charging."
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "how do I free up space on my phone so that apps stop crashing all the time",
+        "what battery should I buy for my car",
+        "open the battery settings",
+    ],
+)
+def test_other_disk_and_battery_talk_goes_to_the_brain(text: str) -> None:
+    assert pc_reflex.system_facts_reflex(text) is None

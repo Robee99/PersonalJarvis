@@ -125,3 +125,12 @@ def test_a_gpt_live_call_carries_the_standing_instructions(tmp_path: Path, monke
     assert text.startswith("YOUR NAME IS GEORGE")
     assert "(from George.md)" in text
     assert "Call me Ruben. Answer in German." in text
+
+
+def test_the_name_directive_gives_no_opening_line_to_copy() -> None:
+    # Gemma opened every reply with the quoted example (live 2026-10-25).
+    text = name_directive("Jarvis")
+
+    assert "your assistant in" not in text
+    assert "sign as" not in text
+    assert "Do not introduce yourself or sign your other replies" in text
