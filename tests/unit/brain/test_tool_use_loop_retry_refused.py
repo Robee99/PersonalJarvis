@@ -11,6 +11,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
+import pytest
+
 from jarvis.brain.tool_use_loop import ToolUseLoop
 from jarvis.core.protocols import BrainDelta, BrainMessage, BrainRequest, ToolResult
 from jarvis.safety.tool_executor import INVALID_ARGUMENTS_PREFIX
@@ -239,3 +241,62 @@ async def test_the_retry_after_a_refusal_leaves_the_choice_to_the_model() -> Non
     await loop.run([BrainMessage(role="user", content="cheapest chicken")])
 
     assert all(r.tool_choice is None for r in brain.requests)
+
+
+class _SaysThenCalls:
+    """Answers ``first`` with no call, then calls the browser tool when told no tool ran."""
+
+    def __init__(self, first: str) -> None:
+        self.requests: list[BrainRequest] = []
+        self._first = first
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        last = req.messages[-1]
+        if last.role == "tool":
+            yield BrainDelta(content="YouTube is open.")
+        elif str(last.content).startswith("[retry]"):
+            call = {"id": "b1", "name": "system_volume", "input": {"action": "get"}}
+            yield BrainDelta(tool_call=call)
+            yield BrainDelta(finish_reason="tool_use")
+            return
+        else:
+            yield BrainDelta(content=self._first)
+        yield BrainDelta(finish_reason="stop")
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        # Live 2026-10-25 on the installed build, both with no call made.
+        "Opening youtube.com now.",
+        "Opening the specified page in the browser and filling the form fields.",
+    ],
+)
+async def test_announced_browser_actions_are_sent_back(first: str) -> None:
+    brain = _SaysThenCalls(first)
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    await loop.run([BrainMessage(role="user", content="open youtube.com in the browser")])
+
+    assert executor.calls == 1
+    assert brain.requests[1].tool_choice == "required"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Playing music helps many people focus.",
+        "The weather in Bengaluru today is overcast.",
+        "I am Jarvis.",
+    ],
+)
+async def test_plain_statements_are_not_sent_back(answer: str) -> None:
+    brain = _SaysThenCalls(answer)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    out = await loop.run([BrainMessage(role="user", content="tell me something")])
+
+    assert len(brain.requests) == 1
+    assert out.text == answer

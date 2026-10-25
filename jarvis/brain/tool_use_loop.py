@@ -138,10 +138,23 @@ _UNDONE_DIRECTIVE = (
     "the request needs an action, call the tool now. If it needs none, answer "
     "again without saying you are doing something."
 )
+# Live 2026-10-25 on the installed build, Gemma answered "Opening youtube.com
+# now." and "Opening the specified page in the browser and filling the form
+# fields ..." with no call. A dot inside a word (a web address) does not end
+# the sentence, and a sentence that opens with an action verb's -ing form is
+# an announcement with or without "now".
+_ACTION_GERUNDS = (
+    "opening|launching|starting|playing|pausing|setting|turning|muting|unmuting|"
+    "filling|typing|clicking|pressing|navigating|closing|minimi[sz]ing|maximi[sz]ing|"
+    "creating|writing|saving|sending|deleting|moving|searching|downloading"
+)
 _ANNOUNCED = re.compile(
-    r"(?:^|[.!?]\s+)(?:(?:ok(?:ay)?|sure|certainly|right away|of course),?\s+(?:sir,?\s+)?)?"
+    r"(?:^|[.!?]\s+)(?:(?:ok(?:ay)?|sure|certainly|right away|of course|on it),?\s+(?:sir,?\s+)?)?"
+    r"(?:"
     r"(?:(?:i will|i'll|i am going to|i'm going to|let me)\s+(?!know\b)[a-z]+|[a-z]+ing)\b"
-    r"[^.!?\n]{0,60}\b(?:now|for you|right away)\b",
+    r"(?:[^.!?\n]|\.(?=\w)){0,60}\b(?:now|for you|right away)\b"
+    rf"|(?:{_ACTION_GERUNDS})\s+(?:the|a|an|your|my|it|this|that|\w+\.\w+)\b"
+    r")",
     re.IGNORECASE,
 )
 
