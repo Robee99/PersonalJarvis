@@ -67,6 +67,8 @@ BROWSER_HANDS: tuple[str, ...] = (
     "browser_fill_form",
     "browser_wait_for",
 )
+#: Pixel-level desktop control, left off for a web job the browser can do.
+SCREEN_HANDS = "computer_use"
 #: Words that mean the job happens on a web page.
 _WEB_WORDS = re.compile(
     r"\b(browser|website|web\s*site|web\s*page|webpage|online|shop\w*|store|stores|"
@@ -144,6 +146,10 @@ class ToolSwitch:
         """The turn's opening surface: core, the request's own tools, gates' picks."""
         relevant = self._rank(self._tools, query, _RELEVANT_LIMIT) if query else []
         hands = self._browser_hands(query, relevant)
+        if hands and _WEB_WORDS.search(query):
+            # With both on, Gemma picked screen clicking for a web page (live
+            # 2026-10-25) and the browser tools never ran.
+            relevant = [n for n in relevant if n != SCREEN_HANDS]
         self.switch_on(
             [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *self._siblings(query, relevant)]
         )
@@ -155,6 +161,8 @@ class ToolSwitch:
         hidden = {n: t for n, t in self._tools.items() if n not in self._on}
         ranked = self._rank(hidden, request, _ENABLE_LIMIT) if request and hidden else []
         hands = [n for n in self._browser_hands(request, ranked) if n in hidden]
+        if hands and _WEB_WORDS.search(request):
+            ranked = [n for n in ranked if n != SCREEN_HANDS]
         found = list(dict.fromkeys([*exact, *hands, *ranked, *self._siblings(request, ranked)]))
         return self.switch_on(found[: _ENABLE_LIMIT + len(exact) + len(hands)])
 

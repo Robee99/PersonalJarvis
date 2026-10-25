@@ -114,6 +114,28 @@ def test_a_shopping_request_opens_the_browser_without_naming_it() -> None:
     assert {"playwright/browser_navigate", "playwright/browser_snapshot"} <= set(switch.visible())
 
 
+def test_a_web_job_leaves_screen_clicking_off() -> None:
+    # Live 2026-10-25 Gemma had both and chose computer_use for a web page.
+    tools = _registry()
+    tools["computer_use"] = _Tool("computer_use", "Open the browser and click on screen")
+    switch = _switch(tools)
+
+    switch.open_turn("open bigbasket.com in the browser", core=())
+
+    assert "playwright/browser_navigate" in switch.visible()
+    assert not switch.is_on("computer_use")
+
+
+def test_a_desktop_job_still_gets_screen_clicking() -> None:
+    tools = _registry()
+    tools["computer_use"] = _Tool("computer_use", "Click and type in a desktop app on screen")
+    switch = _switch(tools)
+
+    switch.open_turn("click save in the desktop app on screen", core=())
+
+    assert switch.is_on("computer_use")
+
+
 def test_a_request_with_no_web_words_gets_no_browser() -> None:
     tools = _registry()
     switch = _switch(tools)

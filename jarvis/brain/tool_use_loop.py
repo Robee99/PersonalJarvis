@@ -118,6 +118,17 @@ _RETRY_DIRECTIVE = (
     "what you will do: call the tool again now with corrected arguments. "
     "The refusal was: "
 )
+# Live 2026-10-25 Gemma typed into a "Search bar" the page did not have, got an
+# error, and ended the turn on "I will try the next site". A failed call
+# answered with a promise gets the same one nudge.
+_FAILED_DIRECTIVE = (
+    "[retry] Your last tool call failed. Do not describe what you will do: "
+    "take the next step now with a tool call (read the page or screen again "
+    "if you need the right element). The error was: "
+)
+_PROMISE = re.compile(
+    r"\b(i will|i'll|i am going to|i'm going to|let me|i shall|next,? i)\b", re.IGNORECASE
+)
 
 # A provider can repeat the exact same text-serialized call after receiving its
 # result. The action must remain exactly-once, but the turn must not end on an
@@ -978,6 +989,7 @@ class ToolUseLoop:
         tool_log: list[ToolRecord] = []
         #: The last call's schema refusal, while no later call has run.
         refused_call = ""
+        failed_call = ""
         retry_nudged = False
         verify_rounds = 0
         round_no = 0
@@ -1119,15 +1131,20 @@ class ToolUseLoop:
                 if late:
                     self._append_steer(current_messages, late)
                     continue
-                if refused_call and not retry_nudged and not deadline_forced:
+                promised = bool(failed_call and _PROMISE.search(agg.text or ""))
+                if (refused_call or promised) and not retry_nudged and not deadline_forced:
                     retry_nudged = True
                     log.info(
-                        "tool_use_loop: a refused call was answered in words; sent back once"
+                        "tool_use_loop: a %s call was answered in words; sent back once",
+                        "refused" if refused_call else "failed",
+                    )
+                    directive = (
+                        _RETRY_DIRECTIVE + refused_call
+                        if refused_call
+                        else _FAILED_DIRECTIVE + failed_call
                     )
                     current_messages.append(BrainMessage(role="assistant", content=agg.text))
-                    current_messages.append(
-                        BrainMessage(role="user", content=_RETRY_DIRECTIVE + refused_call)
-                    )
+                    current_messages.append(BrainMessage(role="user", content=directive))
                     final_agg.text = ""
                     continue
                 outcome = await self._run_verify(
@@ -1670,6 +1687,11 @@ class ToolUseLoop:
                 ))
                 refusal = str(tool_result_payload.get("error") or "")
                 refused_call = refusal if refusal.startswith(INVALID_ARGUMENTS_PREFIX) else ""
+                failed_call = (
+                    ""
+                    if tool_result_payload.get("success")
+                    else (refusal or str(tool_result_payload.get("output") or ""))[:400]
+                )
                 if self._control is not None:
                     # The verifier's only evidence that something happened.
                     body = tool_result_payload.get("output")
