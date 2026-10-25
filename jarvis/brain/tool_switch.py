@@ -83,6 +83,18 @@ _WEB_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+#: The one-call background app driver (desktop_driver.py) and the raw server it
+#: replaces on the opening surface: Gemma copied example ids out of the raw
+#: CUA tools' descriptions and typed into the wrong control (live 2026-10-25).
+APP_HANDS = "app_control"
+_RAW_APP_SERVER = "cua-driver"
+#: Words that name a desktop app job.
+_APP_WORDS = re.compile(
+    r"\b(app|apps|application|program|window|calculator|calc|notepad|paint|wordpad|"
+    r"settings|file\s+explorer|task\s+manager|button|buttons|press)\b",
+    re.IGNORECASE,
+)
+
 #: Tools the request names directly, best first.
 _RELEVANT_LIMIT = 10
 #: Siblings added per MCP server a relevant tool belongs to.
@@ -161,6 +173,15 @@ class ToolSwitch:
             # computer_use whenever it is registered, so it leaves keep too.
             relevant = [n for n in relevant if n != SCREEN_HANDS]
             keep = [n for n in keep if n != SCREEN_HANDS]
+        if APP_HANDS in self._tools:
+            relevant = [n for n in relevant if not self._is_raw_app_tool(n)]
+            if not hands and _APP_WORDS.search(query or ""):
+                # Asked to use CUA by name, Gemma still chose computer_use,
+                # which fronted Calculator and then hit Notepad's foreground
+                # lock (live 2026-10-25). enable_tools can still bring it back.
+                hands = [APP_HANDS]
+                relevant = [n for n in relevant if n != SCREEN_HANDS]
+                keep = [n for n in keep if n != SCREEN_HANDS]
         self.switch_on(
             [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *self._siblings(query, relevant)]
         )
@@ -190,12 +211,19 @@ class ToolSwitch:
             return []
         # The one-call store walk (price_compare.py) comes first when it is here.
         own = [n for n in ("compare_prices",) if n in self._tools and _WEB_WORDS.search(query)]
+        # CUA Driver's browser tools need a DevTools endpoint prepared first;
+        # the Playwright server's open a page directly.
         return own + [
             name
             for hand in BROWSER_HANDS
             for name, tool in self._tools.items()
-            if server_of(name, tool) and name.rsplit("/", 1)[-1] == hand
+            if server_of(name, tool) not in ("", _RAW_APP_SERVER)
+            and name.rsplit("/", 1)[-1] == hand
         ]
+
+    def _is_raw_app_tool(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return tool is not None and server_of(name, tool) == _RAW_APP_SERVER
 
     def _siblings(self, query: str, relevant: list[str]) -> list[str]:
         """A relevant MCP tool brings its server's best-matching companions."""

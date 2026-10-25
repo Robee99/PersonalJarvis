@@ -309,3 +309,36 @@ def test_manager_puts_a_local_brain_behind_the_switch() -> None:
 def test_manager_leaves_a_frontier_window_alone_and_honours_off() -> None:
     assert _manager()._open_tool_switch(_registry(), _CloudBrain(), "open the browser") is None
     assert _manager("off")._open_tool_switch(_registry(), _LocalBrain(), "browser") is None
+
+
+def _with_cua(tools: dict[str, Any]) -> dict[str, Any]:
+    tools["computer_use"] = _Tool("computer_use", "Click and type in a desktop app on screen")
+    tools["app_control"] = _Tool("app_control", "Press buttons and type in a desktop app")
+    for verb in ("click", "type_text", "get_window_state", "launch_app", "browser_navigate"):
+        name = f"cua-driver/{verb}"
+        tools[name] = _Tool(name, f"{verb} in a desktop app window or browser", is_mcp_tool=True)
+    return tools
+
+
+def test_an_app_job_gets_app_control_instead_of_screen_clicking() -> None:
+    # Live 2026-10-25 Gemma chose computer_use even when told to use CUA, and
+    # copied example window ids out of the raw CUA tools when it had them.
+    tools = _with_cua(_registry())
+    switch = _switch(tools)
+
+    switch.open_turn("open Calculator and press 7 plus 8", core=(), keep=("computer_use",))
+
+    on = set(switch.visible())
+    assert "app_control" in on
+    assert "computer_use" not in on
+    assert not any(name.startswith("cua-driver/") for name in on)
+
+
+def test_a_web_job_never_gets_the_desktop_drivers_browser_tools() -> None:
+    tools = _with_cua(_registry())
+    switch = _switch(tools)
+
+    switch.open_turn("open youtube.com in the browser", core=())
+
+    assert switch.is_on("playwright/browser_navigate")
+    assert not switch.is_on("cua-driver/browser_navigate")
