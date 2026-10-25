@@ -332,7 +332,29 @@ _PROVIDER_DISPLAY_NAMES: dict[str, str] = {
     "antigravity": "Google Antigravity (Gemini)",
     "grok-build": "Grok Build (xAI subscription)",
     "hermes": "Hermes Agent",
+    "local-openai": "the local model server on this computer",
 }
+
+#: "Which AI model are you running on right now?" Live 2026-10-25 Gemma 4 E4B
+#: and Nemotron 3.5 Bolt E4B both answered "I'm Jarvis" and pointed at the app
+#: settings despite the ACTIVE BRAIN MODEL line, so the question is answered
+#: from the chain itself (see generate()).
+_MODEL_ASK = re.compile(
+    r"^\s*(?:(?:hey\s+)?jarvis[,\s]+)?(?:which|what)(?:'s|\s+is)?\s+"
+    r"(?:(?:ai|language|llm|brain)\s+)?(?:model|llm|brain)\s+"
+    r"(?:are\s+you\s+(?:running|using|on|built\s+on)|"
+    r"(?:is\s+)?(?:powering|running)\s+you|do\s+you\s+(?:use|run\s+on))"
+    r"(?:\s+(?:on|right\s+now|now|at\s+the\s+moment|today))*\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _model_answer(provider: str, model: str | None) -> str:
+    """The plain reply to "which model are you running on", from the chain."""
+    label = _provider_display_name(provider)
+    if (model or "").strip():
+        return f"I'm running on {model.strip()}, through {label}."
+    return f"I'm running on {label}'s default model."
 
 
 def _provider_display_name(provider: str) -> str:
@@ -12162,6 +12184,7 @@ class BrainManager:
         # Gemma under Hermes faked maximize with a resize (live 2026-10-12).
         # Negations, questions and conditions never match and reach the brain.
         if not screen_context.has_image:
+            from jarvis.brain.quick_math import solve as math_reflex
             from jarvis.platform.brightness import brightness_reflex
             from jarvis.platform.pc_reflex import (
                 system_facts_reflex,
@@ -12170,8 +12193,6 @@ class BrainManager:
                 window_list_reflex,
                 window_reflex,
             )
-
-            from jarvis.brain.quick_math import solve as math_reflex
 
             reflex_reply = None
             for reflex in (
@@ -12801,6 +12822,19 @@ class BrainManager:
             chain = self._apply_route_deny(self._lead_vision_chain(chain))
         screen_turn_t0 = time.perf_counter() if images else None
 
+        if not images and _MODEL_ASK.match(user_text or ""):
+            live = [
+                (p, m) for p, m in chain
+                if (turn_override is not None or p not in self._dead_providers)
+                and self._rate_tracker.is_available(p, m)
+            ]
+            if live:
+                response_text = _model_answer(*live[0])
+                await self._record_response_side_effects(
+                    user_text=user_text, response_text=response_text,
+                    use_history=use_history, trace_id=trace_uuid,
+                )
+                return response_text
         for idx, (prov_name, model) in enumerate(chain):
             # Skip providers already marked dead in THIS turn.
             # Example: gemini-fast fails with missing_key → gemini-deep would
