@@ -3989,6 +3989,15 @@ class BrainManager:
             **kwargs,
         )
 
+    def _capture_vault_root(self):
+        """The notes vault a capture is written into, or None without one."""
+        wiki = getattr(getattr(self, "_config", None), "wiki_integration", None)
+        if wiki is None or not getattr(wiki, "enabled", False):
+            return None
+        from jarvis.memory.wiki.vault_root import resolve_vault_root
+
+        return resolve_vault_root(wiki.vault_root).path
+
     def _focus_speaker(self):
         """How a focus session speaks a callout: an announcement on the bus."""
         bus = getattr(self, "_bus", None)
@@ -12059,6 +12068,27 @@ class BrainManager:
                 trace_id=turn_trace_id,
             )
             return nav_reply
+
+        # Captures: "remember that ...", "note to self ..." are kept in
+        # MEMORY.md and as a vault note at once, without a model, and a lost
+        # write is said out loud (jarvis/memory/capture.py).
+        if not screen_context.has_image:
+            from jarvis.memory.capture import capture_reflex
+
+            capture_reply = await asyncio.to_thread(
+                capture_reflex,
+                user_text,
+                vault_root=self._capture_vault_root(),
+                honorific=persona_style(getattr(self, "_config", None))[1],
+            )
+            if capture_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=capture_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return capture_reply
 
         # Focus sessions: "thirty minutes on this", "lock on this tab", "stop
         # focus" start, move and end the server-side session without a model
