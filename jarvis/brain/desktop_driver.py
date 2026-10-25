@@ -161,6 +161,17 @@ def find_button(elements: list[dict[str, Any]], name: str) -> dict[str, Any] | N
     return None
 
 
+_OPERATORS = frozenset({"plus", "minus", "multiply by", "divide by"})
+
+
+def _sum_left_open(pressed: list[str]) -> bool:
+    """Whether an operator was pressed and the sum never finished with Equals."""
+    labels = [_norm(label) for label in pressed]
+    if not any(label in _OPERATORS for label in labels):
+        return False
+    return labels[-1] != "equals"
+
+
 def find_editable(elements: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The window's text area: a Document or Edit that takes a value."""
     for role in _EDITABLE_ROLES:
@@ -264,6 +275,17 @@ class AppControlTool:
                 {"pid": pid, "window_id": window_id, "element_token": element["element_token"]},
             )
             done.append(str(element["label"]))
+        if _sum_left_open(done):
+            # Live 2026-10-25 Gemma pressed 1, 2, x, 3 and stopped; the display
+            # still read 3 and it answered "36" from its own arithmetic.
+            equals = find_button(state, "=")
+            if equals is not None:
+                await run_driver(
+                    exe,
+                    "click",
+                    {"pid": pid, "window_id": window_id, "element_token": equals["element_token"]},
+                )
+                done.append(str(equals["label"]))
         if text:
             state = await self._state(exe, pid, window_id)
             await self._type(exe, pid, window_id, state, text)

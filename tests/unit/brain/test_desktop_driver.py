@@ -226,3 +226,19 @@ async def test_without_the_driver_it_says_so(monkeypatch: pytest.MonkeyPatch) ->
     assert not result.success
     assert "CUA Driver is not installed" in (result.error or "")
     assert desktop_driver.app_control_tool() is None
+
+
+async def test_a_sum_left_without_equals_is_finished(driver: _FakeDriver) -> None:
+    # Live 2026-10-25 Gemma pressed 1, 2, x, 3 with no "=" and read no result.
+    result = await AppControlTool(exe="cua").execute(
+        {"app": "Calculator", "press": ["7", "+", "8"]}, None
+    )
+
+    assert result.output == "Calculator: Pressed Seven, Plus, Eight, Equals. Shows: Display is 15"
+
+
+async def test_digits_alone_are_not_followed_by_equals(driver: _FakeDriver) -> None:
+    await AppControlTool(exe="cua").execute({"app": "Calculator", "press": ["7", "8"]}, None)
+
+    clicks = [a["element_token"] for t, a in driver.calls if t == "click"]
+    assert _EQUALS not in clicks
