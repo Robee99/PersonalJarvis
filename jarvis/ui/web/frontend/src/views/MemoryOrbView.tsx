@@ -790,7 +790,7 @@ export function MemoryOrbView({
               </div>
               <p className="mt-1.5 text-[10px] text-slate-500">{fill(t("orb2.memory.legend"), { from })}</p>
               <p className="mt-0.5 text-[10px] text-slate-500" data-testid="memory-orb-colour-legend">
-                {t("orb2.memory.colour_legend")}
+                {t(in3d ? "orb2.memory.colour_legend_3d" : "orb2.memory.colour_legend")}
               </p>
               {sections.list.length > 0 && (
                 <SectionBar

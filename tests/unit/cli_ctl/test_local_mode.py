@@ -17,15 +17,20 @@ from jarvis.cli_ctl.local_mode import LOCAL_PROVIDER, probe_local, run_local_mod
 
 
 class FakeClient:
-    def __init__(self, *, fail: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, *, fail: dict[str, str] | None = None, sessions: list[dict[str, Any]] | None = None
+    ) -> None:
         self.calls: list[tuple[str, str, Any]] = []
         self.fail = fail or {}
+        self.sessions = sessions or []
 
     def request(self, method: str, path: str, *, json: Any = None, **_: Any) -> Any:
         self.calls.append((method, path, json))
         key = f"{method} {path}"
         if key in self.fail:
             raise ApiError(self.fail[key], 409)
+        if method == "GET" and path.startswith("/api/agent-chat/sessions"):
+            return {"sessions": self.sessions}
         return {"ok": True}
 
     def body(self, method: str, path: str) -> Any:
@@ -70,7 +75,7 @@ def test_the_local_brain_answers_and_hermes_and_paid_brains_are_blocked() -> Non
     assert client.body("POST", "/api/brain/switch") == {"provider": LOCAL_PROVIDER, "persist": True}
     assert client.body("PUT", f"/api/providers/{LOCAL_PROVIDER}/model") == {"model": "gemma-4b-qat"}
     policy = client.body("PUT", "/api/brain/route-policy")
-    assert policy["fast"] == {"provider": LOCAL_PROVIDER}
+    assert policy["fast"] == {"provider": LOCAL_PROVIDER, "local": True}
     assert "hermes" in policy["deny_providers"]
     assert set(PAID_BRAIN_PROVIDERS) <= set(policy["deny_providers"])
     assert client.body("POST", "/api/stt/switch")["provider"] == "nemotron-local"
@@ -131,3 +136,20 @@ def test_missing_local_speech_never_enables_an_api_speech_provider() -> None:
     tried = [b["provider"] for _, p, b in client.calls if p in speech]
     assert set(tried) <= {"nemotron-local", "faster-whisper", "piper-local"}
     assert _steps(report)["stt"] == "failed"
+
+
+def test_the_front_page_chat_moves_off_hermes_onto_the_local_brain() -> None:
+    client = FakeClient(
+        sessions=[
+            {"session_id": "a", "surface": "jarvis", "provider": "hermes"},
+            {"session_id": "b", "surface": "jarvis", "provider": LOCAL_PROVIDER},
+        ]
+    )
+
+    report = run_local_mode(client, http_post=FakeServer(), clock=_ticks())
+
+    seat = {"provider": LOCAL_PROVIDER, "model": "gemma-4b-qat", "effort": ""}
+    assert _steps(report)["chat"] == "changed"
+    assert client.body("PUT", "/api/agent-chat/selection") == seat
+    assert client.body("PATCH", "/api/agent-chat/sessions/a") == seat
+    assert "/api/agent-chat/sessions/b" not in client.paths()

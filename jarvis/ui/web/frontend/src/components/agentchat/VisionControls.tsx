@@ -5,6 +5,7 @@ import { useAgentChatStore } from "@/store/agentChat";
 import { useEventStore } from "@/store/events";
 import { runningTurn } from "./reduce";
 import { JarvisRail } from "@/components/rail/JarvisRail";
+import { useRailStore } from "@/store/rail";
 import { useT } from "@/i18n";
 
 const muted = () => new URLSearchParams(location.search).get("mute") === "1";
@@ -114,7 +115,7 @@ export function VisionControls() {
     if (!watching) return;
     const timer = setInterval(() => {
       rerender(value => value+1);
-      void desktopIndicator(true).catch(error => { eyes.disableWatch(); setProblem(errorText(error)); });
+      void desktopIndicator(true).catch(() => setNotice(t("rail.vision.no_badge")));
     }, WATCH_INTERVAL_MS);
     return () => { clearInterval(timer); void desktopIndicator(false).catch(error => console.info("Watch indicator stop:", error)); };
   }, [eyes, watching]);
@@ -178,9 +179,22 @@ export function VisionControls() {
     try {
       if (eyes.state.screen !== "on") await eyes.start("screen");
       eyes.enableWatch();
+    } catch (error) { eyes.disableWatch(); setProblem(errorText(error)); return; }
+    // The desktop badge is a courtesy: the browser's own share bar already
+    // shows the screen is shared, so a missing badge never stops the watch.
+    try {
       await desktopIndicator(true);
       if (epoch !== generation.current || !eyes.watching) await desktopIndicator(false);
-    } catch (error) { eyes.disableWatch(); setProblem(errorText(error)); }
+    } catch { setNotice(t("rail.vision.no_badge")); }
+  }
+  /** Everything off at once: both shares, the watch, the pause, the notes, HOLO. */
+  function stopAll() {
+    generation.current++;
+    eyes.quietUntil = 0;
+    eyes.dispose();
+    setProblem(""); setNotice(""); setTracking("");
+    useRailStore.getState().setHolo(false);
+    rerender(n => n+1);
   }
   const quiet = Date.now() < eyes.quietUntil;
   const live = (["webcam", "screen"] as const).filter(s => eyes.state[s] === "on");
@@ -198,7 +212,7 @@ export function VisionControls() {
   return <JarvisRail vision={{
     webcam: cameraOn, screen: eyes.state.screen === "on", watching: eyes.watching,
     onEyes: () => void toggle("webcam"), onScreen: () => void toggle("screen"), onWatch: () => void watch(),
-    onQuiet: () => eyes.relieve("give me a minute"), onStopAll: () => { generation.current++; eyes.dispose(); },
+    onQuiet: () => eyes.relieve("give me a minute"), onStopAll: stopAll,
     detail,
   }} />;
 }

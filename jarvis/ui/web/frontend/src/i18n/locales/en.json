@@ -7957,6 +7957,10 @@
       "view_2d": "2D",
       "view_no_webgl": "3D needs WebGL, which this machine cannot provide.",
       "colour_legend": "Each memory has its own colour; memories in one section share a hue. Families and sections are grey.",
+      "colour_legend_3d": "Gold spheres are topic hubs. Lines join each memory to its hub and to memories with related names.",
+      "forces": "Forces",
+      "repel": "Repel",
+      "link_length": "Link length",
       "sections": "{count} sections",
       "section_prev": "Previous section ([)",
       "section_next": "Next section (])",
@@ -7970,6 +7974,7 @@
       "retry": "Try again",
       "use_mouse": "Use the mouse",
       "turn_off": "Turn hands off",
+      "guide_hide": "Hide guide",
       "fallback": "Mouse, keyboard and touch keep working.",
       "privacy": "Camera frames are read in this window and never leave this device.",
       "status": {
@@ -8786,6 +8791,7 @@
       "webcam": "Webcam: you",
       "screen": "Shared display",
       "comparing": "Comparing locally every 5 seconds",
+      "no_badge": "Watching. The desktop badge is unavailable; the browser's share bar shows the screen is shared.",
       "paused": "Nudges paused for three minutes",
       "checking": "Checking local posture files…",
       "tracking": "Local posture tracking on"

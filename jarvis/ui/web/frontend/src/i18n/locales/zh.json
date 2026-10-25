@@ -7957,6 +7957,10 @@
       "view_2d": "2D",
       "view_no_webgl": "3D 需要 WebGL，此设备无法提供。",
       "colour_legend": "每条记忆都有自己的颜色；同一分区的记忆共用一个色调。类别和分区显示为灰色。",
+      "colour_legend_3d": "金色球体是主题中心。连线把每条记忆连到它的主题，以及名称相关的记忆。",
+      "forces": "力度",
+      "repel": "排斥",
+      "link_length": "连线长度",
       "sections": "{count} 个分区",
       "section_prev": "上一个分区（[）",
       "section_next": "下一个分区（]）",
@@ -7970,6 +7974,7 @@
       "retry": "重试",
       "use_mouse": "使用鼠标",
       "turn_off": "关闭手势",
+      "guide_hide": "隐藏指南",
       "fallback": "鼠标、键盘和触控仍然可用。",
       "privacy": "摄像头画面只在此窗口中读取，绝不会离开这台设备。",
       "status": {
@@ -8786,6 +8791,7 @@
       "webcam": "摄像头：你",
       "screen": "共享的屏幕",
       "comparing": "每 5 秒在本地比较一次",
+      "no_badge": "正在观察。桌面标记不可用；浏览器的共享栏会显示屏幕正在共享。",
       "paused": "提醒已暂停三分钟",
       "checking": "正在检查本地姿态文件…",
       "tracking": "本地姿态跟踪已开启"

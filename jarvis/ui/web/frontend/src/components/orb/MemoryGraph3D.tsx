@@ -1,8 +1,10 @@
 /**
- * The memory orb's map in space: shaded spheres for every memory, family
- * cores and section branch points with their names, thin links, and a slow
- * turn. Cores and branch points are neutral; each memory has its own colour
- * (`lib/orbSections.ts`).
+ * The memory orb's map in space, laid out as a constellation
+ * (`constellation` in `lib/orbGraph3d.ts`): gold topic hubs with their
+ * names, each memory a sphere in its section's colour joined to its hub and
+ * to memories with related names by thin lines, a starfield behind, and a
+ * slow turn. Clicking a memory flies to it and lights its neighbours; the
+ * Forces sliders set how far apart everything sits.
  *
  * Every node object is built once per data generation and then changed in
  * place (colour, size, label), so hovering, picking or searching never makes
@@ -20,32 +22,39 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type RefObject,
 } from "react";
 import ForceGraph3D from "react-force-graph-3d";
 import type { ForceGraphMethods, NodeObject } from "react-force-graph-3d";
 import {
+  AdditiveBlending,
   AmbientLight,
+  BufferGeometry,
   Color,
   DirectionalLight,
+  Float32BufferAttribute,
   FogExp2,
   Group,
   Mesh,
   MeshPhongMaterial,
   PointLight,
+  Points,
+  PointsMaterial,
   SphereGeometry,
 } from "three";
 import SpriteText from "three-spritetext";
 
 import { useGraphAwake, type GraphEngineApi } from "@/hooks/useGraphAwake";
+import { useT } from "@/i18n";
 import { useWebglSurface } from "@/hooks/useWebglSurface";
 import type { OrbGroup, OrbLink, OrbNode } from "@/lib/orbGraph";
-import { SECTION_LABEL, SECTION_NEUTRAL, sectionFrameIds, type OrbSections } from "@/lib/orbSections";
+import { SECTION_NEUTRAL, sectionFrameIds, type OrbSections } from "@/lib/orbSections";
 import {
   buildSceneGraph,
+  constellation,
   labelledHubs,
   familyRadius,
-  sphereRadius,
   type SceneLink,
   type SceneNode,
 } from "@/lib/orbGraph3d";
@@ -87,20 +96,55 @@ interface NodeParts {
   extra: SpriteText | null;
 }
 
-const BACKDROP = "#05070b";
-const FOG = 0x070a10;
+const BACKDROP = "#04060a";
+const FOG = 0x05080d;
 const DIM = new Color("#1a212c");
-const LINK_NOTE = "rgba(91, 212, 164, 0.42)";
-const LINK_SOURCE = "rgba(223, 140, 255, 0.4)";
-const LINK_FAMILY = "rgba(160, 172, 190, 0.14)";
-const LINK_SECTION = "rgba(160, 172, 190, 0.3)";
-const LINK_HOVER = "rgba(158, 236, 205, 0.9)";
-const LINK_FADED = "rgba(91, 212, 164, 0.03)";
+/** Topic hubs and family cores. */
+const HUB = "#f2b33d";
+const HUB_LABEL = "#e8edf5";
+const LINK_NOTE = "rgba(91, 212, 164, 0.5)";
+const LINK_SOURCE = "rgba(223, 140, 255, 0.45)";
+const LINK_SPOKE = "rgba(64, 196, 140, 0.24)";
+const LINK_NEAR = "rgba(64, 196, 140, 0.1)";
+const LINK_HOVER = "rgba(158, 236, 205, 0.95)";
+const LINK_FADED = "rgba(91, 212, 164, 0.025)";
+/** Hub names kept on at rest; the rest show theirs on hover. */
+const NAMED_HUBS = 28;
+/** Slider defaults: charge -(10 + 1.4 * repel), link length x (0.4 + linkLength / 50). */
+const REPEL_DEFAULT = 55;
+const LINK_DEFAULT = 40;
 /** Degrees per second at the OrbitControls' speed of 1 is 6; this is ~2.4. */
 const TURN_SPEED = 0.4;
 const FLY_MS = 1100;
 
-const sphere = new SphereGeometry(1, 22, 16);
+const sphere = new SphereGeometry(1, 18, 12);
+
+/** Faint stars far behind the map: decoration, one draw call. */
+function starfield(radius: number): Points {
+  const count = 2400;
+  const positions: number[] = [];
+  for (let i = 0; i < count; i++) {
+    // Evenly over a far shell (a Fibonacci lattice), at jittered depths.
+    const y = 1 - (2 * (i + 0.5)) / count;
+    const ring = Math.sqrt(1 - y * y);
+    const a = i * Math.PI * (3 - Math.sqrt(5));
+    const d = radius * (4 + ((i * 7919) % 100) / 40);
+    positions.push(Math.cos(a) * ring * d, y * d, Math.sin(a) * ring * d);
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  const material = new PointsMaterial({
+    color: 0x9fb4d8,
+    size: 1.3,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+    blending: AdditiveBlending,
+    fog: false,
+  });
+  return new Points(geometry, material);
+}
 
 function endpoint(end: unknown): string {
   return typeof end === "object" && end !== null ? String((end as { id?: unknown }).id ?? "") : String(end ?? "");
@@ -116,22 +160,29 @@ function makeLabel(text: string, colour: string, height: number, weight = "500")
   return sprite;
 }
 
-/** Neutral for a core or a branch point; the memory's own colour otherwise. */
+/** Gold for a hub; the section's colour for a memory, so a topic reads as one colour. */
 function colourOf(node: SceneNode, sections: OrbSections): string {
-  if (node.core || node.branch) return SECTION_NEUTRAL;
-  return sections.colourOf.get(node.id) ?? SECTION_NEUTRAL;
+  if (node.core || node.branch) return HUB;
+  return (node.section && sections.byId.get(node.section)?.colour) || SECTION_NEUTRAL;
+}
+
+/** A hub grows with its members, a memory with its links. */
+function radiusOf(node: SceneNode): number {
+  if (node.core || node.branch) return Math.min(30, 14 + Math.sqrt(node.degree) * 1.2);
+  return Math.min(13, 7.5 + Math.sqrt(node.degree) * 1.2);
 }
 
 /** Space between a sphere and the name under it. */
 function labelGap(node: SceneNode): number {
-  return node.core ? 5 : node.branch ? 4 : 3;
+  return node.core || node.branch ? 10 : 7;
 }
 
 const LINK_COLOUR: Record<SceneLink["kind"], string> = {
   note: LINK_NOTE,
   source: LINK_SOURCE,
-  family: LINK_FAMILY,
-  section: LINK_SECTION,
+  family: LINK_SPOKE,
+  section: LINK_SPOKE,
+  near: LINK_NEAR,
 };
 
 export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>(function MemoryGraph3D(
@@ -153,7 +204,13 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
   },
   ref,
 ) {
+  const t = useT();
   const graphRef = useRef<ForceGraphMethods<SceneNode, SceneLink> | undefined>(undefined);
+  const [repel, setRepel] = useState(REPEL_DEFAULT);
+  const [linkLength, setLinkLength] = useState(LINK_DEFAULT);
+  /** The memory or hub whose neighbourhood is lit; follows a pick from outside too. */
+  const [litId, setLitId] = useState<string | null>(null);
+  useEffect(() => setLitId(pickedId), [pickedId]);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const { generation } = useWebglSurface(hostRef);
   useGraphAwake(graphRef as unknown as RefObject<GraphEngineApi | undefined>);
@@ -163,10 +220,44 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     [],
   );
 
-  const data = useMemo(() => buildSceneGraph(nodes, links, Math.random, sections), [nodes, links, sections]);
+  const data = useMemo(
+    () => constellation(buildSceneGraph(nodes, links, Math.random, sections), sections),
+    [nodes, links, sections],
+  );
   const radius = familyRadius(nodes.length);
   const parts = useRef(new Map<string, NodeParts>());
   const hubs = useMemo(() => labelledHubs(data.nodes), [data]);
+  // The biggest topic hubs keep their names on; hundreds at once is a wall of text.
+  const named = useMemo(
+    () =>
+      new Set(
+        data.nodes
+          .filter((n) => n.core || n.branch)
+          .sort((a, b) => b.degree - a.degree || a.id.localeCompare(b.id))
+          .slice(0, NAMED_HUBS)
+          .map((n) => n.id),
+      ),
+    [data],
+  );
+  const neighbours = useMemo(() => {
+    const out = new Map<string, Set<string>>();
+    const add = (a: string, b: string) => {
+      const set = out.get(a);
+      if (set) set.add(b);
+      else out.set(a, new Set([b]));
+    };
+    for (const l of data.links) {
+      const a = endpoint(l.source);
+      const b = endpoint(l.target);
+      add(a, b);
+      add(b, a);
+    }
+    return out;
+  }, [data]);
+  const lit = useMemo(() => {
+    if (!litId) return null;
+    return new Set([litId, ...(neighbours.get(litId) ?? [])]);
+  }, [litId, neighbours]);
   const groupLabelRef = useRef(groupLabel);
   groupLabelRef.current = groupLabel;
 
@@ -189,13 +280,13 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
   const nodeObject = useCallback((raw: NodeObject<SceneNode>) => {
     const node = raw as Node3D;
     const colour = colourOf(node, sections);
-    const r = sphereRadius(node);
+    const r = radiusOf(node);
     const marker = node.core || node.branch;
     const material = new MeshPhongMaterial({
       color: colour,
-      shininess: marker ? 70 : 45,
+      shininess: 40,
       specular: new Color("#3a4656"),
-      emissive: new Color(colour).multiplyScalar(marker ? 0.22 : 0.12),
+      emissive: new Color(colour).multiplyScalar(marker ? 0.35 : 0.28),
       transparent: true,
       opacity: 1,
     });
@@ -205,12 +296,12 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     holder.add(mesh);
     let label: SpriteText | null = null;
     if (node.core) {
-      label = makeLabel(groupLabelRef.current(node.group), SECTION_LABEL, 4.2, "700");
-    } else if (node.branch) {
+      label = makeLabel(groupLabelRef.current(node.group), HUB_LABEL, 26, "700");
+    } else if (node.branch && named.has(node.id)) {
       const title = sections.byId.get(node.id)?.title ?? groupLabelRef.current(node.group);
-      label = makeLabel(title, SECTION_LABEL, 3, "600");
+      label = makeLabel(title, HUB_LABEL, 22, "600");
     } else if (hubs.has(node.id) && node.node) {
-      label = makeLabel(node.node.label, "#a3adbd", 2.6);
+      label = makeLabel(node.node.label, "#a3adbd", 11);
     }
     if (label) {
       label.position.set(0, -(r + labelGap(node)), 0);
@@ -218,7 +309,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     }
     parts.current.set(node.id, { mesh, holder, label, extra: null });
     return holder;
-  }, [hubs, sections]);
+  }, [hubs, named, sections]);
 
   // Colour, size and labels follow hover, pick and search without a rebuild.
   useEffect(() => {
@@ -227,88 +318,103 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       if (!p) continue;
       const own = node.node;
       const isHit = own ? hitIds.has(own.id) : false;
-      const dim = searching && hitIds.size > 0 && !isHit;
-      const active = node.branch === true && node.id === activeSectionId;
+      const dim = (searching && hitIds.size > 0 && !isHit) || (lit !== null && !lit.has(node.id));
+      const active = node.branch === true && (node.id === activeSectionId || node.id === litId);
       const focus = (own !== undefined && (own.id === hoverId || own.id === pickedId)) || active;
       const base = new Color(colourOf(node, sections));
       const off = own !== undefined && !own.live;
       p.mesh.material.color.copy(dim ? DIM : base);
-      const glow = node.core || node.branch ? 0.22 : 0.12;
-      p.mesh.material.emissive.copy(base).multiplyScalar(dim ? 0 : focus ? 0.55 : glow);
+      const glow = node.core || node.branch ? 0.35 : 0.28;
+      p.mesh.material.emissive.copy(base).multiplyScalar(dim ? 0 : focus ? 0.7 : glow);
       // Off (a disabled skill, a server that is off) is half there.
-      p.mesh.material.opacity = dim ? 0.35 : off ? 0.45 : 1;
-      const r = sphereRadius(node) * (active ? 1.3 : focus ? 1.6 : isHit ? 1.3 : 1);
+      p.mesh.material.opacity = dim ? 0.22 : off ? 0.45 : 1;
+      const r = radiusOf(node) * (active ? 1.3 : focus ? 1.6 : isHit ? 1.3 : 1);
       p.mesh.scale.setScalar(r);
       if (p.label) {
         p.label.visible = !dim;
         // A new colour redraws the label's texture, so only on a change.
-        const ink = active ? "#ffffff" : node.core || node.branch ? SECTION_LABEL : "#a3adbd";
+        const ink = active ? "#ffffff" : node.core || node.branch ? HUB_LABEL : "#a3adbd";
         if (p.label.color !== ink) p.label.color = ink;
         p.label.position.y = -(r + labelGap(node));
       }
-      const wantExtra = own !== undefined && !p.label && (focus || (isHit && hitIds.size <= 40));
-      if (wantExtra && !p.extra && own) {
-        p.extra = makeLabel(own.label, "#e6eefb", 3, "600");
+      // A lit neighbourhood names everyone in it, as long as it stays readable.
+      const litName = lit !== null && lit.has(node.id) && lit.size <= 40;
+      const wantExtra = !p.label && (focus || litName || (own !== undefined && isHit && hitIds.size <= 40));
+      const name = own?.label ?? (node.branch ? sections.byId.get(node.id)?.title : null) ?? null;
+      if (wantExtra && !p.extra && name) {
+        p.extra = makeLabel(name, "#e6eefb", node.branch ? 22 : 12, "600");
         p.holder.add(p.extra);
       }
-      if (p.extra) p.extra.position.set(0, -(r + 3.5), 0);
+      if (p.extra) p.extra.position.set(0, -(r + 6), 0);
       if (p.extra) p.extra.visible = wantExtra;
     }
-  }, [data, sections, activeSectionId, hitIds, searching, hoverId, pickedId, generation]);
+  }, [data, sections, activeSectionId, hitIds, searching, hoverId, pickedId, lit, litId, generation]);
 
   const linkColor = useCallback(
     (link: SceneLink) => {
       const s = endpoint(link.source);
-      const t = endpoint(link.target);
-      if (hoverId !== null && (s === hoverId || t === hoverId)) return LINK_HOVER;
-      if (searching && hitIds.size > 0 && !hitIds.has(s) && !hitIds.has(t)) return LINK_FADED;
+      const e = endpoint(link.target);
+      if (hoverId !== null && (s === hoverId || e === hoverId)) return LINK_HOVER;
+      if (litId !== null) return s === litId || e === litId ? LINK_HOVER : LINK_FADED;
+      if (searching && hitIds.size > 0 && !hitIds.has(s) && !hitIds.has(e)) return LINK_FADED;
       return LINK_COLOUR[link.kind];
     },
-    [hitIds, hoverId, searching],
+    [hitIds, hoverId, litId, searching],
   );
 
-  // Lights for shaded spheres, fog for depth, forces for a cloud with room in
-  // it. Set again on a rebuilt scene, which starts from the library defaults.
+  // Lights, fog for depth and the starfield, set once per scene (a rebuilt
+  // scene starts from the library defaults).
   const configured = useRef(-1);
   const configure = useCallback(() => {
     const graph = graphRef.current;
     if (!graph || configured.current === generation) return;
     configured.current = generation;
-    const key = new DirectionalLight(0xffffff, 2.4);
+    const key = new DirectionalLight(0xffffff, 2.2);
     key.position.set(1, 1.4, 1.2);
-    const rim = new PointLight(0x5bd4a4, 1.2, 0, 0);
+    const rim = new PointLight(0x5bd4a4, 1.1, 0, 0);
     rim.position.set(-radius * 2, -radius, -radius * 2);
-    graph.lights([new AmbientLight(0x8fa3c0, 0.9), key, rim]);
-    graph.scene().fog = new FogExp2(FOG, 0.24 / (radius * 1.4));
-    const charge = graph.d3Force("charge") as { strength?: (v: number) => void; distanceMax?: (v: number) => void } | undefined;
-    charge?.strength?.(-42);
-    charge?.distanceMax?.(radius * 0.9);
-    const link = graph.d3Force("link") as
-      | { distance?: (f: (l: SceneLink) => number) => void; strength?: (f: (l: SceneLink) => number) => void }
-      | undefined;
-    link?.distance?.((l) =>
-      l.kind === "family" ? 18 + radius * 0.1 : l.kind === "section" ? 9 + radius * 0.05 : l.kind === "source" ? 26 : 22,
-    );
-    // A member with no link of its own hangs close to its core or branch
-    // point; one that is linked lets its links pull it, but a section keeps
-    // a firmer hold than a family, and a link into another section pulls
-    // only lightly (it is still drawn), so each section stays one cluster.
-    const degree = new Map(data.nodes.map((n) => [n.id, n.degree]));
-    const sectionOf = new Map(data.nodes.map((n) => [n.id, n.section]));
-    link?.strength?.((l) => {
-      const linked = (degree.get(endpoint(l.source)) ?? 0) > 0;
-      if (l.kind === "family") return linked ? 0.25 : 0.6;
-      if (l.kind === "section") return linked ? 0.6 : 0.9;
-      return sectionOf.get(endpoint(l.source)) === sectionOf.get(endpoint(l.target)) ? 0.4 : 0.02;
-    });
+    graph.lights([new AmbientLight(0x8fa3c0, 1), key, rim]);
+    graph.scene().fog = new FogExp2(FOG, 0.1 / (radius * 1.4));
+    graph.scene().add(starfield(radius));
     const controls = graph.controls() as { autoRotate?: boolean; autoRotateSpeed?: number };
     controls.autoRotate = !reduced;
     controls.autoRotateSpeed = TURN_SPEED;
+  }, [generation, radius, reduced]);
+
+  // Forces: hubs push apart, a memory sits on a short line from its hub, and a
+  // name-sharing link is long and weak, so it draws topics together without
+  // packing them into one ball. The sliders change these live, once the
+  // engine has its layout (the first tick).
+  const applied = useRef("");
+  const applyForces = useCallback(() => {
+    const graph = graphRef.current;
+    const want = `${generation}|${repel}|${linkLength}`;
+    if (!graph || applied.current === want) return;
+    applied.current = want;
+    const charge = graph.d3Force("charge") as { strength?: (v: number) => void; distanceMax?: (v: number) => void } | undefined;
+    charge?.strength?.(-(10 + repel * 1.4));
+    charge?.distanceMax?.(radius * 4);
+    const scale = 0.4 + linkLength / 50;
+    const link = graph.d3Force("link") as
+      | { distance?: (f: (l: SceneLink) => number) => void; strength?: (f: (l: SceneLink) => number) => void }
+      | undefined;
+    link?.distance?.((l) => scale * (l.kind === "near" ? 60 : l.kind === "section" || l.kind === "family" ? 20 : 30));
+    link?.strength?.((l) => (l.kind === "near" ? 0.015 : l.kind === "section" || l.kind === "family" ? 0.8 : 0.3));
     graph.d3ReheatSimulation();
-  }, [data, generation, radius, reduced]);
+  }, [generation, repel, linkLength, radius]);
+  const ticked = useRef(-1);
+  const onTick = useCallback(() => {
+    configure();
+    ticked.current = generation;
+    applyForces();
+  }, [configure, applyForces, generation]);
+  useEffect(() => {
+    if (ticked.current === generation) applyForces();
+  }, [applyForces, generation]);
 
   useEffect(() => {
     configured.current = -1;
+    applied.current = "";
   }, [data]);
 
   /**
@@ -334,7 +440,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       const reach = placed
         .map((n) => Math.hypot((n.x ?? 0) - centre.x, (n.y ?? 0) - centre.y, (n.z ?? 0) - centre.z))
         .sort((a, b) => a - b);
-      const r = Math.max(only ? 30 : 60, reach[Math.min(reach.length - 1, Math.floor(reach.length * (only ? 1 : 0.95)))] ?? 0);
+      const r = Math.max(only ? 30 : 60, reach[Math.min(reach.length - 1, Math.floor(reach.length * (only ? 1 : 0.6)))] ?? 0);
       const camera = graph.camera() as { position: { x: number; y: number; z: number }; fov?: number };
       const half = (((camera.fov ?? 40) * Math.PI) / 180) / 2;
       const horizontal = Math.atan(Math.tan(half) * (width / Math.max(height, 1)));
@@ -367,7 +473,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       const cam = graph.camera().position;
       const away = { x: cam.x - at.x, y: cam.y - at.y, z: cam.z - at.z };
       const len = Math.hypot(away.x, away.y, away.z) || 1;
-      const d = Math.max(120, radius * 2);
+      const d = 260;
       graph.cameraPosition(
         { x: at.x + (away.x / len) * d, y: at.y + (away.y / len) * d, z: at.z + (away.z / len) * d },
         at,
@@ -382,7 +488,7 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
   // Frame once the cloud has spread, and again when it has settled.
   useEffect(() => {
     if (!data.nodes.length) return;
-    const timers = [400, 1800, 4200].map((ms) => window.setTimeout(() => fit(), ms));
+    const timers = [400, 1800, 4200, 8000].map((ms) => window.setTimeout(() => fit(), ms));
     return () => timers.forEach(window.clearTimeout);
   }, [data, fit, generation, width, height]);
 
@@ -404,10 +510,10 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
         linkOpacity={1}
         linkWidth={0}
         enableNodeDrag={false}
-        warmupTicks={60}
-        cooldownTicks={reduced ? 120 : 400}
-        d3VelocityDecay={0.45}
-        onEngineTick={configure}
+        warmupTicks={30}
+        cooldownTicks={reduced ? 120 : 300}
+        d3VelocityDecay={0.4}
+        onEngineTick={onTick}
         onNodeHover={(node) => {
           const own = (node as Node3D | null)?.node ?? null;
           onHover(own);
@@ -416,22 +522,58 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
         onNodeClick={(node) => {
           const n = node as Node3D;
           if (n.core) {
+            setLitId(n.id);
             fit(new Set(data.nodes.filter((m) => m.group === n.group).map((m) => m.id)));
             return;
           }
           const section = n.branch ? sections.byId.get(n.id) : undefined;
           if (section) {
+            setLitId(n.id);
             fit(sectionFrameIds(section));
             onSection?.(section.id);
             return;
           }
           if (n.node) {
+            setLitId(n.id);
             onPick(n.node);
             focus(n.id);
           }
         }}
-        onBackgroundClick={() => onPick(null)}
+        onBackgroundClick={() => {
+          setLitId(null);
+          onPick(null);
+        }}
       />
+      <div
+        className="absolute bottom-4 left-4 w-44 rounded-lg border border-white/10 bg-black/55 px-3 py-2 text-[10px] text-slate-300 backdrop-blur"
+        data-testid="memory-orb-forces"
+      >
+        <p className="mb-1 font-mono uppercase tracking-[0.18em] text-slate-500">{t("orb2.memory.forces")}</p>
+        <label className="flex items-center justify-between gap-2">
+          <span>{t("orb2.memory.repel")}</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={repel}
+            onChange={(e) => setRepel(Number(e.target.value))}
+            className="w-20 accent-emerald-400"
+            data-testid="memory-orb-repel"
+          />
+        </label>
+        <label className="mt-1 flex items-center justify-between gap-2">
+          <span>{t("orb2.memory.link_length")}</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={linkLength}
+            onChange={(e) => setLinkLength(Number(e.target.value))}
+            className="w-20 accent-emerald-400"
+            data-testid="memory-orb-link-length"
+          />
+        </label>
+      </div>
     </div>
   );
 });

@@ -205,7 +205,11 @@ def test_vision_reads_a_vision_model_name_when_the_server_declares_nothing(monke
     )
     assert LocalOpenAIBrain(model="qwen3-vl-8b").supports_vision is True
     assert LocalOpenAIBrain(model="gemma-3-12b-it").supports_vision is True
+    # Size written onto the family (the owner's swapper alias, 2026-10-25).
+    assert LocalOpenAIBrain(model="gemma-4b-qat").supports_vision is True
+    assert LocalOpenAIBrain(model="gemma3:4b").supports_vision is True
     assert LocalOpenAIBrain(model="qwen3-8b").supports_vision is False
+    assert LocalOpenAIBrain(model="gemma-2b").supports_vision is False
 
 
 def test_a_server_that_declares_text_only_outranks_the_name(monkeypatch) -> None:

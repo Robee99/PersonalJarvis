@@ -222,3 +222,35 @@ def test_context_meter_reads_the_final_stream_chunk(monkeypatch: pytest.MonkeyPa
     assert swap.context_used(b'"usage":{"prompt_tokens":900,"completion_tokens":30}') == 930
     assert swap.context_used(b"data: [DONE]") is None
     assert swap.CTX[swap.QWEN_VL] == 65536
+
+
+class _Request:
+    def __init__(self, body: bytes, method: str = "POST") -> None:
+        self.method = method
+        self._body = body
+
+    async def read(self) -> bytes:
+        return self._body
+
+
+def test_the_gemma_front_also_answers_for_nemotron_by_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swap = _load(monkeypatch)
+    nemotron = f'{{"model": "{swap.MODEL_ID[swap.NEMOTRON]}"}}'.encode()
+
+    assert swap.MAIN == swap.GEMMA_4B
+    assert asyncio.run(swap.routed(swap.GEMMA_4B, _Request(nemotron))) == swap.NEMOTRON
+    assert asyncio.run(swap.routed(swap.GEMMA_4B, _Request(b'{"model": "x"}'))) == swap.GEMMA_4B
+    assert asyncio.run(swap.routed(swap.GEMMA_4B, _Request(b"not json"))) == swap.GEMMA_4B
+    # Other fronts keep their own profile whatever the request names.
+    assert asyncio.run(swap.routed(swap.QWEN_VL, _Request(nemotron))) == swap.QWEN_VL
+
+
+def test_only_profiles_started_with_a_vision_encoder_say_they_see(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    swap = _load(monkeypatch)
+
+    assert swap.GEMMA_4B in swap.SEEING
+    assert swap.NEMOTRON not in swap.SEEING

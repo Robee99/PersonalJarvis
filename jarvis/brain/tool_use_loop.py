@@ -41,7 +41,11 @@ from jarvis.core.protocols import (
     Tool,
 )
 from jarvis.core.turn_language import resolve_output_language, resolve_turn_language
-from jarvis.safety.tool_executor import VOICE_CONFIRM_SENTINEL, ToolExecutor
+from jarvis.safety.tool_executor import (
+    INVALID_ARGUMENTS_PREFIX,
+    VOICE_CONFIRM_SENTINEL,
+    ToolExecutor,
+)
 
 from .iteration_budget import IterationBudget
 from .loop_control import (
@@ -104,6 +108,15 @@ _STEER_PREFIX = (
 _VERIFY_DIRECTIVE = (
     "[verification] Your answer was checked against what you actually did. "
     "Fix this, then answer the person again in full:\n"
+)
+
+# A small local model (Gemma 4 E4B, live 2026-10-25) answers a refused call
+# with "I will try again" and no call, which ended the turn on a promise.
+# One nudge per turn sends it back to the tool.
+_RETRY_DIRECTIVE = (
+    "[retry] Your last tool call was refused before it ran. Do not describe "
+    "what you will do: call the tool again now with corrected arguments. "
+    "The refusal was: "
 )
 
 # A provider can repeat the exact same text-serialized call after receiving its
@@ -963,6 +976,9 @@ class ToolUseLoop:
         deadline_forced = False
         seen_call_ids: set[str] = set()
         tool_log: list[ToolRecord] = []
+        #: The last call's schema refusal, while no later call has run.
+        refused_call = ""
+        retry_nudged = False
         verify_rounds = 0
         round_no = 0
 
@@ -1102,6 +1118,17 @@ class ToolUseLoop:
                 late = self._drain_steer()
                 if late:
                     self._append_steer(current_messages, late)
+                    continue
+                if refused_call and not retry_nudged and not deadline_forced:
+                    retry_nudged = True
+                    log.info(
+                        "tool_use_loop: a refused call was answered in words; sent back once"
+                    )
+                    current_messages.append(BrainMessage(role="assistant", content=agg.text))
+                    current_messages.append(
+                        BrainMessage(role="user", content=_RETRY_DIRECTIVE + refused_call)
+                    )
+                    final_agg.text = ""
                     continue
                 outcome = await self._run_verify(
                     user_utterance or _last_user_text(current_messages),
@@ -1641,6 +1668,8 @@ class ToolUseLoop:
                     tool_call_id=call_id,
                     name=tool_name,
                 ))
+                refusal = str(tool_result_payload.get("error") or "")
+                refused_call = refusal if refusal.startswith(INVALID_ARGUMENTS_PREFIX) else ""
                 if self._control is not None:
                     # The verifier's only evidence that something happened.
                     body = tool_result_payload.get("output")

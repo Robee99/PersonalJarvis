@@ -82,6 +82,10 @@ export function HandToggle({
   const on = status !== "off";
   const busy = BUSY.has(status);
   const problem = HAND_PROBLEMS.includes(status);
+  // While the hands work, the panel folds to one line so it never covers the
+  // map (owner, 2026-10-25); the gesture guide opens on request.
+  const [guide, setGuide] = useState(false);
+  const folded = status === "live" && !guide;
   return (
     <div className={cn("relative", className)}>
       <button
@@ -107,7 +111,24 @@ export function HandToggle({
           )}
         />
       </button>
-      {on && (
+      {on && folded && (
+        <div
+          role="status"
+          data-testid="orb-hands-status"
+          className="pointer-events-auto absolute right-0 top-11 z-20 flex items-center gap-2 whitespace-nowrap rounded-full border border-border bg-background/80 px-3 py-1 text-[11px] text-foreground backdrop-blur"
+        >
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-info">{t("orb2.hands.status.live")}</span>
+          <button
+            type="button"
+            data-testid="orb-hands-guide-open"
+            onClick={() => setGuide(true)}
+            className="rounded-full px-2 py-0.5 hover:bg-info/15"
+          >
+            {t("orb2.hands.guide_title")}
+          </button>
+        </div>
+      )}
+      {on && !folded && (
         <div
           role="status"
           data-testid="orb-hands-status"
@@ -124,6 +145,16 @@ export function HandToggle({
             </div>
           )}
           <div className="mt-2 flex flex-wrap gap-1.5">
+            {status === "live" && (
+              <button
+                type="button"
+                data-testid="orb-hands-guide-close"
+                onClick={() => setGuide(false)}
+                className="rounded-full bg-info/15 px-2.5 py-1 text-foreground hover:bg-info/25"
+              >
+                {t("orb2.hands.guide_hide")}
+              </button>
+            )}
             {status === "files-missing" && (
               <button
                 type="button"

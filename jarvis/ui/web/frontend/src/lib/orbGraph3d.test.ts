@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { OrbNode } from "@/lib/orbGraph";
 import {
   buildSceneGraph,
+  constellation,
   coreId,
   familyAnchors,
   labelledHubs,
+  nearLinks,
   sectionRing,
   sphereRadius,
 } from "@/lib/orbGraph3d";
@@ -130,5 +132,58 @@ describe("labelledHubs", () => {
     expect(hubs.has("n29")).toBe(true);
     expect(hubs.has("n13")).toBe(false);
     expect(hubs.has("family:wiki")).toBe(false);
+  });
+});
+
+describe("constellation", () => {
+  const groups = {
+    communities: [
+      { id: "topic:chicken", title: "chicken · protein", level: 2, parent: null },
+      { id: "topic:tiny", title: "tiny", level: 2, parent: null },
+      { id: "area:x#~loose", title: "Loose notes", level: 2, parent: null },
+    ],
+    leaves: [
+      ...["c1", "c2", "c3", "c4"].map((slug) => ({ id: `note:${slug}`, community: "topic:chicken" })),
+      { id: "note:t1", community: "topic:tiny" },
+      ...["l1", "l2"].map((slug) => ({ id: `note:${slug}`, community: "area:x#~loose" })),
+    ],
+  };
+  const nodes: OrbNode[] = [
+    note("c1", { label: "Chicken breast protein" }),
+    note("c2", { label: "Chicken curry macros" }),
+    note("c3", { label: "Grilled chicken" }),
+    note("c4", { label: "Protein shake" }),
+    note("t1", { label: "Turmeric milk" }),
+    note("l1", { label: "Turmeric benefits" }),
+    note("l2", { label: "Laptop fans" }),
+  ];
+
+  it("gives a topic big enough a hub, and hangs nothing off a family core, a loose pile or a tiny topic", () => {
+    const sections = buildSections(nodes, groups);
+    const scene = constellation(buildSceneGraph(nodes, [], () => 0.5, sections), sections);
+    const hubs = scene.nodes.filter((n) => n.core || n.branch).map((n) => n.id);
+    expect(hubs).toEqual(["section:wiki|topic:chicken"]);
+    expect(scene.links.filter((l) => l.kind === "section").map((l) => l.source).sort()).toEqual(
+      ["wiki:c1", "wiki:c2", "wiki:c3", "wiki:c4"],
+    );
+    expect(scene.links.some((l) => l.kind === "family")).toBe(false);
+    for (const n of scene.nodes) expect(n.fx).toBeUndefined();
+  });
+
+  it("links memories across sections when their names share a rare word", () => {
+    // Rarity is against the whole map: a word two names in a few hundred share.
+    const filler = Array.from({ length: 320 }, (_, i) => note(`f${i}`, { label: `Filler${i}` }));
+    const all = [...nodes, ...filler];
+    const sections = buildSections(all, groups);
+    const scene = constellation(buildSceneGraph(all, [], () => 0.5, sections), sections);
+    expect(scene.links).toContainEqual({ source: "wiki:t1", target: "wiki:l1", kind: "near" });
+    expect(scene.links.some((l) => l.kind === "near" && (l.source === "wiki:l2" || l.target === "wiki:l2"))).toBe(false);
+  });
+
+  it("starts at most one name link per memory and never repeats a pair", () => {
+    const members = buildSceneGraph(nodes, [], () => 0.5).nodes.filter((n) => n.node);
+    const links = nearLinks(members);
+    const keys = links.map((l) => [l.source, l.target].sort().join("|"));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

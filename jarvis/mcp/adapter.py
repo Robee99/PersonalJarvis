@@ -247,6 +247,8 @@ class MCPToolAdapter:
         self._annotations: dict[str, Any] = (
             dict(raw_annotations) if isinstance(raw_annotations, dict) else {}
         )
+        #: The server marks the tool as only reading (``readOnlyHint``).
+        self.read_only: bool = self._annotations.get("readOnlyHint") is True
 
         # Register with the global CapabilityRegistry so the voice path
         # knows this MCP tool exists and resolve_intent can match it.

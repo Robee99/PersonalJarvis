@@ -7952,6 +7952,10 @@
       "view_2d": "2D",
       "view_no_webgl": "3D necesita WebGL, que este equipo no puede ofrecer.",
       "colour_legend": "Cada recuerdo tiene su propio color; los recuerdos de una sección comparten un tono. Las familias y las secciones son grises.",
+      "colour_legend_3d": "Las esferas doradas son los temas principales. Las líneas unen cada recuerdo con su tema y con recuerdos de nombre parecido.",
+      "forces": "Fuerzas",
+      "repel": "Repulsión",
+      "link_length": "Longitud de enlace",
       "sections": "{count} secciones",
       "section_prev": "Sección anterior ([)",
       "section_next": "Sección siguiente (])",
@@ -7965,6 +7969,7 @@
       "retry": "Reintentar",
       "use_mouse": "Usar el ratón",
       "turn_off": "Desactivar manos",
+      "guide_hide": "Ocultar guía",
       "fallback": "El ratón, el teclado y la pantalla táctil siguen funcionando.",
       "privacy": "Las imágenes de la cámara se leen en esta ventana y nunca salen de este equipo.",
       "status": {
@@ -8692,6 +8697,7 @@
       "webcam": "Cámara: tú",
       "screen": "Pantalla compartida",
       "comparing": "Compara en local cada 5 segundos",
+      "no_badge": "Observando. La insignia de escritorio no está disponible; la barra de compartir del navegador muestra que la pantalla se comparte.",
       "paused": "Avisos en pausa durante tres minutos",
       "checking": "Comprobando los archivos de postura locales…",
       "tracking": "Seguimiento de postura local activado"

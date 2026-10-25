@@ -443,6 +443,32 @@ def _describe_error(error: Any) -> str:
     return f"field '{where}' does not match any allowed form"
 
 
+def drop_undeclared_args(tool: Tool, args: Any) -> Any:
+    """``args`` without the fields a READ-ONLY tool's strict schema does not declare.
+
+    Small local models embellish calls (Gemma 4 E4B, live 2026-10-25: a
+    ``scale`` field on Playwright's ``browser_snapshot``), and a strict
+    schema refused the whole call. A call that only reads loses nothing by
+    running without the made-up field. A tool that acts keeps the refusal: an
+    unexpected ``bcc`` on a send must not be quietly dropped.
+    """
+    schema = getattr(tool, "schema", None)
+    if getattr(tool, "read_only", False) is not True or not isinstance(args, dict):
+        return args
+    if not isinstance(schema, dict) or schema.get("additionalProperties") is not False:
+        return args
+    declared = schema.get("properties")
+    if not isinstance(declared, dict):
+        return args
+    extras = [key for key in args if key not in declared]
+    if not extras:
+        return args
+    log.info(
+        "dropped undeclared field(s) %s from a call to read-only %s", _names(extras), tool.name
+    )
+    return {key: value for key, value in args.items() if key in declared}
+
+
 def validate_tool_args(tool: Tool, args: Any) -> str | None:
     """Check ``args`` against ``tool.schema``; the reason it fails, or ``None``.
 
@@ -699,6 +725,7 @@ class ToolExecutor:
         # 0. Arguments must match the tool's schema before anything is
         # evaluated, approved or run. Nothing has happened yet, so the caller
         # may correct the call and try again.
+        args = drop_undeclared_args(tool, args)
         invalid = await self._refuse_invalid_args(tool, args, tid)
         if invalid is not None:
             return invalid

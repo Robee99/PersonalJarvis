@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { providerOffered, readLocalScope } from "@/lib/localOnly";
 
 export type AuthMode = "api_key" | "codex" | "antigravity" | "claude_cli" | "grok_build" | "none";
 // Mirror of provider_spec.Tier. "dictation" is the odd one out and deliberately
@@ -329,7 +330,10 @@ async function fetchProvidersOnce(): Promise<ProviderDescriptor[]> {
   // `undefined`: every consumer maps or filters this, so one malformed
   // payload would take the whole provider console down with a TypeError
   // instead of showing the honest "no providers" state.
-  const list = Array.isArray(data?.providers) ? data.providers : [];
+  const all = Array.isArray(data?.providers) ? data.providers : [];
+  // Local-only mode leaves out cloud and paid cards (lib/localOnly.ts).
+  const scope = await readLocalScope();
+  const list = all.filter((p) => p.active || providerOffered(scope, p.id, p.billing));
   lastGood = list;
   return list;
 }

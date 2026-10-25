@@ -347,7 +347,11 @@ class SearchWebTool:
             },
             "max_results": {"type": "integer", "default": 5},
         },
-        "required": ["query"],
+        # ``query`` OR ``queries``: small local models (Gemma 4 E4B, live
+        # 2026-10-25) send only ``queries`` for a research question, and a
+        # required ``query`` refused every such call before it ran.
+        # ``execute`` reports a call that carries neither.
+        "required": [],
     }
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:

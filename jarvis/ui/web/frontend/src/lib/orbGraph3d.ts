@@ -20,10 +20,14 @@
  * Pure, so the shape of the scene is testable without WebGL.
  */
 import type { OrbGroup, OrbLink, OrbNode } from "@/lib/orbGraph";
-import { buildSections, type OrbSections } from "@/lib/orbSections";
+import { buildSections, type OrbSection, type OrbSections } from "@/lib/orbSections";
 
-/** A real wikilink, a community's source note, a spoke to a family core, a spoke to a section's branch point. */
-export type SceneLinkKind = "note" | "source" | "family" | "section";
+/**
+ * A real wikilink, a community's source note, a spoke to a family core, a
+ * spoke to a section's branch point, or two memories whose names share a rare
+ * word (`constellation`).
+ */
+export type SceneLinkKind = "note" | "source" | "family" | "section" | "near";
 
 export interface SceneNode {
   id: string;
@@ -241,4 +245,124 @@ export function labelledHubs(nodes: readonly SceneNode[]): Set<string> {
       .slice(0, MAX_HUB_LABELS)
       .map((n) => n.id),
   );
+}
+
+
+/** A section needs this many memories to get a hub of its own in the constellation. */
+export const HUB_MIN_MEMBERS = 4;
+/**
+ * A section bigger than this is a catch-all (one whole chat export), not a
+ * topic: as a hub it would be one star of hundreds of spokes over the map.
+ */
+export const HUB_MAX_MEMBERS = 140;
+/** Name-sharing links each memory may start. */
+export const NEAR_PER_NODE = 1;
+/** A word in more names than this is too common to say two memories belong together. */
+const NEAR_MAX_SHARE = 30;
+/** Two names must share at least this much rarity (summed log inverse frequency). */
+const NEAR_MIN_SCORE = 5;
+
+const NEAR_STOP = new Set([
+  "about", "after", "again", "analysis", "and", "best", "between", "check", "clarification", "comparison",
+  "create", "explained", "explanation", "first", "from", "guide", "help", "ideas", "into", "list", "make",
+  "more", "need", "overview", "plan", "question", "request", "review", "should", "summary", "than", "that",
+  "their", "there", "these", "this", "tips", "using", "what", "when", "which", "with", "your",
+]);
+
+function nameWords(label: string): string[] {
+  const words = label.toLowerCase().split(/[^\p{L}\p{N}]+/u);
+  return [...new Set(words.filter((w) => w.length >= 4 && !NEAR_STOP.has(w) && !/^\d+$/.test(w)))];
+}
+
+/**
+ * Links between memories whose names share a rare word, at most
+ * `NEAR_PER_NODE` started by each, strongest first. An imported chat export
+ * has no wikilinks at all, so without these its notes float unconnected.
+ */
+export function nearLinks(members: readonly SceneNode[]): SceneLink[] {
+  const words = new Map<string, string[]>();
+  const index = new Map<string, string[]>();
+  for (const n of members) {
+    if (!n.node) continue;
+    const mine = nameWords(n.node.label);
+    words.set(n.id, mine);
+    for (const w of mine) {
+      const list = index.get(w);
+      if (list) list.push(n.id);
+      else index.set(w, [n.id]);
+    }
+  }
+  const total = Math.max(2, words.size);
+  const weight = (w: string) => Math.log(total / (index.get(w)?.length ?? total));
+  const out: SceneLink[] = [];
+  const seen = new Set<string>();
+  for (const [id, mine] of words) {
+    const score = new Map<string, number>();
+    for (const w of mine) {
+      const list = index.get(w)!;
+      if (list.length < 2 || list.length > NEAR_MAX_SHARE) continue;
+      for (const other of list) if (other !== id) score.set(other, (score.get(other) ?? 0) + weight(w));
+    }
+    const best = [...score.entries()]
+      .filter(([, v]) => v >= NEAR_MIN_SCORE)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, NEAR_PER_NODE);
+    for (const [other] of best) {
+      const key = id < other ? `${id}|${other}` : `${other}|${id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ source: id, target: other, kind: "near" });
+    }
+  }
+  return out;
+}
+
+/** The catch-all section of notes no topic claimed: too big and too mixed for one hub. */
+export function isLooseSection(section: Pick<OrbSection, "id">): boolean {
+  return section.id.includes("~loose");
+}
+
+/**
+ * The scene as a constellation (the owner's reference, 2026-10-25: a
+ * force-laid knowledge graph, "clean and neat"). Each section big enough
+ * becomes a hub its memories hang off with visible lines; a family without
+ * sections hangs off its core the same way. Memories whose names share a
+ * rare word are linked across sections, so related topics drift together.
+ * Nothing is pinned and no family core sits over the sections, so the
+ * forces spread the hubs apart instead of packing them round one point.
+ */
+export function constellation(scene: SceneGraph, sections: OrbSections): SceneGraph {
+  const hubs = new Set<string>();
+  const branchIds = new Set<string>();
+  const branched = new Set<OrbGroup>();
+  for (const n of scene.nodes) {
+    if (!n.branch) continue;
+    branchIds.add(n.id);
+    branched.add(n.group);
+    const s = sections.byId.get(n.id);
+    const size = s?.memberIds.length ?? 0;
+    if (s && size >= HUB_MIN_MEMBERS && size <= HUB_MAX_MEMBERS && !isLooseSection(s)) hubs.add(n.id);
+  }
+  const nodes = scene.nodes.filter((n) => (n.branch ? hubs.has(n.id) : n.core ? !branched.has(n.group) : true));
+  const kept = new Set(nodes.map((n) => n.id));
+  const links = scene.links.filter((l) => {
+    if (l.kind === "note" || l.kind === "source") return true;
+    // A branch point's spoke to its family core would pull every hub into one ball.
+    if (l.kind === "family" && branchIds.has(l.source)) return false;
+    return kept.has(l.source) && kept.has(l.target);
+  });
+  const members = nodes.filter((n) => !n.core && !n.branch);
+  links.push(...nearLinks(members));
+  const degree = new Map<string, number>();
+  for (const l of links) {
+    degree.set(l.source, (degree.get(l.source) ?? 0) + 1);
+    degree.set(l.target, (degree.get(l.target) ?? 0) + 1);
+  }
+  for (const n of nodes) {
+    n.degree = degree.get(n.id) ?? 0;
+    delete n.fx;
+    delete n.fy;
+    delete n.fz;
+  }
+  return { nodes, links };
 }

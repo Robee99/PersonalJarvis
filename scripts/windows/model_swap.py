@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
 import logging
 import re
 import subprocess
@@ -104,7 +105,10 @@ CTX = {
 #: Up to 65536 every layer and the KV cache fit in this 8 GB card. Above it
 #: (owner's request 2026-10-19, untested) layers move to the CPU to make room
 #: for the KV cache: prompts get slower and the moved layers need RAM.
-CTX_CHOICES = {QWEN_VL: (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072)}
+CTX_CHOICES = {
+    QWEN_VL: (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072),
+    GEMMA_4B: (32768, 65536, 131072, 256000),
+}
 #: GPU layers per window above 65536 (Qwen3-VL 8B has 36; ~115 MB each and the
 #: turbo KV is ~34.5 KB per token, so 32k more tokens displace ~10 layers).
 QWEN_VL_NGL = {98304: 26, 131072: 16}
@@ -155,7 +159,7 @@ _USAGE_RE = re.compile(
 
 #: The brain Hermes and JARVIS talk to; every other profile hands the GPU back
 #: to it when idle.
-MAIN = QWEN_VL
+MAIN = GEMMA_4B  # owner 2026-10-25: Jarvis runs on Gemma 4 E4B QAT; it stays loaded
 
 logging.basicConfig(
     filename=r"C:\models\model-swap.log",
@@ -307,7 +311,8 @@ class Swapper:
                 raise RuntimeError(f"cannot verify existing {name} backend")
             properties = await response.json()
         context = (properties.get("default_generation_settings") or {}).get("n_ctx")
-        if properties.get("model_alias") != MODEL_ID[name] or context != CTX[name]:
+        # llama-server reports 255999 for -c 256000 under YaRN; one token is the same window.
+        if properties.get("model_alias") != MODEL_ID[name] or abs((context or 0) - CTX[name]) > 1:
             raise RuntimeError(f"existing {name} backend has incompatible identity or context")
         for other in BACK:
             if other != name and await self.healthy(other):
@@ -580,6 +585,8 @@ class Swapper:
             "-t",
             "8",
             "--jinja",
+            "--reasoning",
+            "off",
             "--no-ui",
             "--offline",
             "--log-file",
@@ -646,6 +653,10 @@ class Swapper:
             "-t",
             "8",
             "--jinja",
+            # Voice needs the answer, not a page of thoughts first: with
+            # thinking on, a short reply came back empty (all reasoning).
+            "--reasoning",
+            "off",
             "--no-ui",
             "--offline",
             "--log-file",
@@ -860,6 +871,8 @@ class Swapper:
                 # the RAM guard refused every reload while JARVIS and Chrome ran.
                 # Every other profile hands the GPU back to it after idling.
                 active is not None
+                # Owner 2026-10-25: Gemma stays warm; Nemotron (and every other
+                # profile) is cold until asked for and hands back after idling.
                 and active != MAIN
                 and self.inflight[active] == 0
                 and time.monotonic() - self.last_used[active] > QWEN_IDLE_S
@@ -957,15 +970,52 @@ def context_used(tail: bytes) -> int | None:
     return None
 
 
-def handler_for(name: str):
+#: One address for Jarvis's two small brains (owner 2026-10-25): the Gemma 4B
+#: front also answers for Nemotron, picked by the request's "model".
+SHARED_FRONT = {GEMMA_4B: (GEMMA_4B, NEMOTRON)}
+#: Profiles started with their vision encoder (--mmproj).
+SEEING = {QWEN_VL, UI_VENUS, GEMMA_4B}
+
+
+async def routed(front: str, request: web.Request) -> str:
+    """The profile this request is for: the front's own, or the model it names."""
+    if front not in SHARED_FRONT or request.method != "POST":
+        return front
+    try:
+        wanted = json.loads(await request.read() or b"{}").get("model")
+    except (ValueError, AttributeError):
+        return front
+    for profile in SHARED_FRONT[front]:
+        if wanted == MODEL_ID[profile]:
+            return profile
+    return front
+
+
+def handler_for(front: str):
     async def handle(request: web.Request) -> web.StreamResponse:
         path = request.match_info.get("tail", "")
+        name = await routed(front, request)
         # Probes never load weights: answer them here.
         if request.method == "GET" and path in ("v1/models", "models"):
             return web.json_response(
                 {
                     "object": "list",
-                    "data": [{"id": MODEL_ID[name], "object": "model", "owned_by": "llamacpp"}],
+                    "data": [
+                        {
+                            "id": MODEL_ID[p],
+                            "object": "model",
+                            "owned_by": "llamacpp",
+                            # Jarvis reads image input from here; a two-model
+                            # front cannot be described by one /props answer.
+                            "architecture": {
+                                "input_modalities": (
+                                    ["text", "image"] if p in SEEING else ["text"]
+                                )
+                            },
+                            "supported_parameters": ["tools", "chat_template_kwargs"],
+                        }
+                        for p in SHARED_FRONT.get(front, (front,))
+                    ],
                 }
             )
         if request.method == "GET" and path == "health":

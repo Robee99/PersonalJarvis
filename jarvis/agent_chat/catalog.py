@@ -450,10 +450,38 @@ def rows_for(surface: str) -> tuple[ProviderRow, ...]:
             # be a second assistant with its own memory of the conversation.
             return tuple(row for row in PROVIDER_ROWS if row.id == HERMES_SEAT)
     if kit_for(surface).cli_seats:
-        return tuple(row for row in PROVIDER_ROWS if not row.agent or _ide_has(row.agent))
-    from jarvis.agent_chat.runner_api import supports_api_runner
+        rows = tuple(row for row in PROVIDER_ROWS if not row.agent or _ide_has(row.agent))
+    else:
+        from jarvis.agent_chat.runner_api import supports_api_runner
 
-    return tuple(row for row in PROVIDER_ROWS if supports_api_runner(row.id))
+        rows = tuple(row for row in PROVIDER_ROWS if supports_api_runner(row.id))
+    if surface == "jarvis":
+        rows = tuple(row for row in rows if _jarvis_offers(row))
+    return rows
+
+
+#: The front page's chat rows that run on this machine.
+LOCAL_ROWS: Final[frozenset[str]] = frozenset({"local-openai", "ollama"})
+
+
+def _jarvis_offers(row: ProviderRow) -> bool:
+    """Whether the live route policy lets the front page's chat offer ``row``.
+
+    A denied provider is never offered. In local-only mode (an enabled policy
+    whose fast tier is local, as ``jarvis system local`` sets it; owner,
+    2026-10-25) only the rows that run on this machine are.
+    """
+    from jarvis.brain.route_policy import is_denied
+    from jarvis.core import runtime_refs
+
+    config = getattr(runtime_refs.get_brain_manager(), "_config", None)
+    policy = getattr(getattr(config, "brain", None), "route_policy", None)
+    if policy is None or not getattr(policy, "enabled", False):
+        return True
+    if is_denied(policy, row.id, None):
+        return False
+    fast = getattr(policy, "fast", None)
+    return not getattr(fast, "local", False) or row.id in LOCAL_ROWS
 
 
 def cli_rows() -> tuple[ProviderRow, ...]:

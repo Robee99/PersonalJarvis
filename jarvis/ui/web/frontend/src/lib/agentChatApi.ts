@@ -2,6 +2,7 @@
 // (jarvis/ui/web/agent_chat_routes.py). Shapes mirror jarvis/agent_chat/*
 // one-to-one; nothing here decides behaviour.
 import { createHistoryRequests } from "@/lib/historyRequests";
+import { chatRowOffered, readLocalScope } from "@/lib/localOnly";
 
 export interface CuratedModel {
   id: string;
@@ -279,6 +280,13 @@ export function fetchAgentChatCatalog(
   if (pending) return pending;
   const request = fetch(`/api/agent-chat/catalog${query}`)
     .then((response) => json<AgentChatCatalog>(response, "catalog-failed"))
+    .then(async (catalog) => {
+      // The front page's chat offers only what runs here in local-only mode.
+      if (surface !== "jarvis" || !Array.isArray(catalog.providers)) return catalog;
+      const scope = await readLocalScope();
+      const providers = catalog.providers.filter((row) => chatRowOffered(scope, row.id));
+      return providers.length ? { ...catalog, providers } : catalog;
+    })
     .finally(() => catalogRequests.delete(query));
   catalogRequests.set(query, request);
   return request;

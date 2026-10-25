@@ -149,3 +149,37 @@ async def test_merged_status_stays_honest(
     assert result.success
     assert result.output["status"] == expected
     assert result.output["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_only_variants_passes_validation_and_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gemma 4 E4B sends only ``queries`` for a research question (live
+    2026-10-25); a required ``query`` refused it before the search ran."""
+    from jarvis.safety.tool_executor import validate_tool_args
+
+    seen: list[str] = []
+
+    async def fake_run_search(query, max_results, *, client, searcher=None, apifare_key=""):
+        seen.append(query)
+        hits = [_hit(f"https://{len(seen)}.example")]
+        return SearchOutcome(results=hits, backend="ddg_serp", status="ok")
+
+    monkeypatch.setattr(search_web, "run_search", fake_run_search)
+    tool = search_web.SearchWebTool()
+    args = {"queries": ["chicken curry cut 1kg bigbasket", "chicken curry cut 1kg licious"]}
+
+    assert validate_tool_args(tool, args) is None
+    result = await tool.execute(args, _CTX)
+
+    assert result.success
+    assert seen == args["queries"]
+
+
+@pytest.mark.asyncio
+async def test_a_call_with_neither_query_nor_variants_is_refused_by_the_tool() -> None:
+    result = await search_web.SearchWebTool().execute({}, _CTX)
+
+    assert not result.success
+    assert result.error == "query missing"

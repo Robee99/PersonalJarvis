@@ -7952,6 +7952,10 @@
       "view_2d": "2D",
       "view_no_webgl": "3D braucht WebGL, das dieser Rechner nicht bereitstellen kann.",
       "colour_legend": "Jede Erinnerung hat ihre eigene Farbe; Erinnerungen eines Abschnitts teilen einen Farbton. Familien und Abschnitte sind grau.",
+      "colour_legend_3d": "Goldene Kugeln sind Themen-Knoten. Linien verbinden jede Erinnerung mit ihrem Knoten und mit Erinnerungen ähnlichen Namens.",
+      "forces": "Kräfte",
+      "repel": "Abstoßung",
+      "link_length": "Linienlänge",
       "sections": "{count} Abschnitte",
       "section_prev": "Vorheriger Abschnitt ([)",
       "section_next": "Nächster Abschnitt (])",
@@ -7965,6 +7969,7 @@
       "retry": "Erneut versuchen",
       "use_mouse": "Maus verwenden",
       "turn_off": "Hände ausschalten",
+      "guide_hide": "Anleitung ausblenden",
       "fallback": "Maus, Tastatur und Touch funktionieren weiter.",
       "privacy": "Kamerabilder werden in diesem Fenster gelesen und verlassen nie dieses Gerät.",
       "status": {
@@ -8692,6 +8697,7 @@
       "webcam": "Webcam: du",
       "screen": "Geteilter Bildschirm",
       "comparing": "Vergleicht lokal alle 5 Sekunden",
+      "no_badge": "Beobachtung läuft. Das Desktop-Abzeichen ist nicht verfügbar; die Freigabeleiste des Browsers zeigt, dass der Bildschirm geteilt wird.",
       "paused": "Hinweise für drei Minuten pausiert",
       "checking": "Lokale Haltungsdateien werden geprüft…",
       "tracking": "Lokale Haltungserkennung an"

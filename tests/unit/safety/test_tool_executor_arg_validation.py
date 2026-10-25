@@ -254,3 +254,36 @@ def test_range_limits_are_left_to_the_tool() -> None:
 
     # The tool clamps 120 to its own maximum today; refusing it would break it.
     assert validate_tool_args(_Clamped(), {"timeout_s": 120}) is None  # type: ignore[arg-type]
+
+
+class _ReadOnlySnapshot(_SendMessage):
+    """A strict read-only tool, like Playwright's ``browser_snapshot``."""
+
+    name = "snapshot"
+    read_only = True
+    is_action_tool = False
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {"filename": {"type": "string"}},
+        "additionalProperties": False,
+    }
+
+
+async def test_a_read_only_call_runs_without_the_field_a_small_model_made_up() -> None:
+    executor, _events = _executor()
+    tool = _ReadOnlySnapshot()
+
+    result = await executor.execute(tool, {"scale": 2}, trace_id=uuid4())
+
+    assert result.success is True
+    assert tool.calls == [{}]
+
+
+async def test_an_acting_call_with_an_unexpected_field_is_still_refused() -> None:
+    executor, _events = _executor()
+    tool = _SendMessage()
+
+    result = await executor.execute(tool, {**_VALID, "bcc": "x"}, trace_id=uuid4())
+
+    assert result.success is False
+    assert tool.calls == []

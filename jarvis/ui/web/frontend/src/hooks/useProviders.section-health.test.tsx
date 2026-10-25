@@ -12,6 +12,11 @@ import {
   useSectionHealth,
 } from "./useProviders";
 
+/** Reads of /api/providers; the local-only scope read (route policy) is not one. */
+function providerCalls(fetchMock: { mock: { calls: unknown[][] } }): number {
+  return fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/providers")).length;
+}
+
 function jsonResponse(body: unknown): Response {
   return {
     ok: true,
@@ -58,7 +63,7 @@ describe("provider status loading", () => {
     await waitFor(() => expect(result.current.providers).toEqual([provider]));
 
     expect(result.current.error).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(providerCalls(fetchMock)).toBe(2);
   });
 
   it("does not let an older response overwrite newer provider truth", async () => {
@@ -72,7 +77,7 @@ describe("provider status loading", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { result } = renderHook(() => useProviders());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(providerCalls(fetchMock)).toBe(1));
     await act(async () => {
       await result.current.refetch();
     });
@@ -142,7 +147,7 @@ describe("provider-bound section health", () => {
       .mockImplementation(() => new Promise<Response>(() => undefined));
     vi.stubGlobal("fetch", fetchMock);
     const { result } = renderHook(() => useSectionHealth());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(providerCalls(fetchMock)).toBe(1));
 
     act(() => {
       window.dispatchEvent(
@@ -212,7 +217,7 @@ describe("provider-bound section health", () => {
     });
 
     expect(result.current.health.brain).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(providerCalls(fetchMock)).toBe(1);
   });
 
   it("re-reads after a key save without forcing a server-side recompute", async () => {
@@ -225,7 +230,7 @@ describe("provider-bound section health", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     renderHook(() => useSectionHealth());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(providerCalls(fetchMock)).toBe(1));
 
     act(() => {
       window.dispatchEvent(
@@ -233,7 +238,7 @@ describe("provider-bound section health", () => {
       );
     });
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(providerCalls(fetchMock)).toBe(2));
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
     expect(urls.every((url) => !url.includes("refresh=true"))).toBe(true);
   });
@@ -271,7 +276,7 @@ describe("provider-bound section health", () => {
     expect(result.current.health.brain?.reason).toBe("unverified");
 
     await waitFor(() => expect(result.current.health.brain?.status).toBe("error"));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(providerCalls(fetchMock)).toBe(2);
     expect(String(fetchMock.mock.calls[1][0])).not.toContain("refresh=true");
   });
 });

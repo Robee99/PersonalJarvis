@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FIRED_SHOW_MS, GestureIndicator, HandGuide, HandOverlay, HandToggle, guideRowsFor } from "./HandControls";
@@ -28,8 +28,18 @@ afterEach(() => {
 });
 
 describe("the gesture guide", () => {
+  it("folds to one line while hands are live, so the map stays clear", () => {
+    render(<HandToggle tracking={liveTracking()} />);
+    expect(document.querySelector("[data-testid='orb-hands-guide'] li")).toBeNull();
+    fireEvent.click(screen.getByTestId("orb-hands-guide-open"));
+    expect(document.querySelectorAll("[data-testid='orb-hands-guide'] li").length).toBe(GESTURES.length);
+    fireEvent.click(screen.getByTestId("orb-hands-guide-close"));
+    expect(document.querySelector("[data-testid='orb-hands-guide'] li")).toBeNull();
+  });
+
   it("lists every gesture while hands are live", () => {
     render(<HandToggle tracking={liveTracking()} />);
+    fireEvent.click(screen.getByTestId("orb-hands-guide-open"));
     const rows = [...document.querySelectorAll("[data-testid='orb-hands-guide'] li")].map((li) => li.getAttribute("data-gesture"));
     expect(rows).toEqual([...GESTURES]);
     expect(activeRows()).toEqual([]);
@@ -37,6 +47,7 @@ describe("the gesture guide", () => {
 
   it("lights up the gesture the camera recognises", () => {
     const { rerender } = render(<HandToggle tracking={liveTracking({ gesture: { id: "zoom" } })} />);
+    fireEvent.click(screen.getByTestId("orb-hands-guide-open"));
     expect(activeRows()).toEqual(["zoom"]);
     // A pinch not yet released or held could become either.
     rerender(<HandToggle tracking={liveTracking({ gesture: { id: "pinch", progress: 0.4 } })} />);

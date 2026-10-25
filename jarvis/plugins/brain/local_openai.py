@@ -90,7 +90,9 @@ def _declared_vision_support(model: str) -> bool:
 #: declares the modality still wins.
 _VISION_MODEL_NAME = re.compile(
     r"(?:^|[-_/.:\s])(?:vl|vlm|vision|llava|bakllava|pixtral|minicpm-v|moondream"
-    r"|internvl|ui-venus|gemma-?[34])(?:$|[-_/.:\s\d])|qwen[\d.]*-?vl",
+    r"|internvl|ui-venus|gemma-?[34])(?:$|[-_/.:\s\d])|qwen[\d.]*-?vl"
+    # Gemma 3/4 with the size written onto the family: gemma-4b-qat, gemma3n:e4b.
+    r"|gemma-?[34]n?b?(?:[-:]?e?\d+b)?(?:$|[-_/.:\s])",
     re.IGNORECASE,
 )
 

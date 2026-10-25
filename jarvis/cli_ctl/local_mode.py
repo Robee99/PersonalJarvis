@@ -99,6 +99,33 @@ def _call(client: Any, method: str, path: str, body: Any = None) -> Any:
     return client.request(method, path, json=body)
 
 
+def _move_chats(client: Any, model: str, denied: list[str]) -> tuple[str, str, str]:
+    """New Jarvis chats, and the ones seated on a now-denied brain, use the local one.
+
+    Without this the front page's chat kept its Hermes seat after the switch
+    and every message failed with "can't reach my provider" (2026-10-25).
+    """
+    seat = {"provider": LOCAL_PROVIDER, "model": model, "effort": ""}
+    try:
+        _call(client, "PUT", "/api/agent-chat/selection", seat)
+        listing = _call(client, "GET", "/api/agent-chat/sessions?surface=jarvis") or {}
+        moved = failed = 0
+        for session in listing.get("sessions", []):
+            if session.get("surface") != "jarvis" or session.get("provider") not in denied:
+                continue
+            try:
+                _call(client, "PATCH", f"/api/agent-chat/sessions/{session['session_id']}", seat)
+                moved += 1
+            except ApiError:
+                failed += 1
+    except ApiError as exc:
+        return ("chat", "failed", str(exc))
+    detail = f"new chats and {moved} earlier chat(s) answer on {model}"
+    if failed:
+        return ("chat", "failed", f"{detail}; {failed} could not be moved")
+    return ("chat", "changed", detail)
+
+
 def run_local_mode(
     client: Any,
     *,
@@ -138,7 +165,9 @@ def run_local_mode(
         "escalation": {"enabled": False},
     }
     if brain_ok:
-        policy["fast"] = {"provider": LOCAL_PROVIDER}
+        # ``local`` marks the whole app local-only: the provider console and
+        # the chat's picker then offer only what runs on this machine.
+        policy["fast"] = {"provider": LOCAL_PROVIDER, "local": True}
     try:
         _call(client, "PUT", "/api/brain/route-policy", policy)
         report.add(
@@ -148,6 +177,10 @@ def run_local_mode(
         )
     except ApiError as exc:
         report.add("route-policy", "failed", str(exc))
+
+    # --- Chat: the front page's chat on the same brain ------------------------
+    if brain_ok:
+        report.add(*_move_chats(client, model, policy["deny_providers"]))
 
     # --- Hands: the same brain plans computer use and runs missions -----------
     for name, path in (
