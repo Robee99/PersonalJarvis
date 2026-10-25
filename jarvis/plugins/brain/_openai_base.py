@@ -599,6 +599,8 @@ async def stream_complete(
     reverse_name_map = {safe: original for original, safe in name_map.items()}
     if req.tools:
         kwargs["tools"] = _tools_openai_format(req.tools, name_map)
+        if getattr(req, "tool_choice", None):
+            kwargs["tool_choice"] = req.tool_choice
     # Reasoning-by-default models (GPT-5.x class) otherwise burn the small
     # deterministic tool-step budget (CU: 256 tokens) on hidden thought and
     # stream back empty/truncated JSON — "OpenAI never works as the Tool

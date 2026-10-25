@@ -1006,6 +1006,8 @@ class ToolUseLoop:
         refused_call = ""
         failed_call = ""
         retry_nudged = False
+        #: The next round must call a tool (llama.cpp's tool_choice "required").
+        force_tool = False
         verify_rounds = 0
         round_no = 0
 
@@ -1048,7 +1050,9 @@ class ToolUseLoop:
                 max_tokens=self._max_tokens,
                 stream=True,
                 reasoning_effort=self._reasoning_effort,
+                tool_choice="required" if force_tool and tools_payload else None,
             )
+            force_tool = False
             stream = self._brain.complete(req)
             if text_consumer is not None:
                 agg = await aggregate_with_consumer(
@@ -1169,6 +1173,11 @@ class ToolUseLoop:
                     )
                     current_messages.append(BrainMessage(role="assistant", content=agg.text))
                     current_messages.append(BrainMessage(role="user", content=directive))
+                    # An action announced and never made: the retry must be a
+                    # call. Live 2026-10-25 Nemotron 3.5 Bolt E4B answered
+                    # "On it, I am setting the volume" six times with no call,
+                    # and a words-only nudge leaves it free to do so again.
+                    force_tool = reason == "unmade"
                     final_agg.text = ""
                     continue
                 outcome = await self._run_verify(

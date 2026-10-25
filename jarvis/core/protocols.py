@@ -158,6 +158,11 @@ class BrainRequest:
     # person picks the level by hand; a provider that does not know a level
     # treats it like the nearest one it does (see jarvis.agent_chat.effort).
     reasoning_effort: ReasoningEffort | None = None
+    # "required" makes an OpenAI-compatible server answer with a tool call
+    # (llama.cpp enforces it with a grammar). The tool loop asks for it once
+    # when a model announced an action in words and called nothing. ``None``
+    # leaves the choice to the model; providers without the knob ignore it.
+    tool_choice: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

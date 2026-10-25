@@ -219,3 +219,23 @@ async def test_a_turn_that_needs_no_action_answers_again_without_the_promise() -
 
     assert executor.calls == 0
     assert out.text == "Good evening, Sir."
+
+
+async def test_the_retry_after_an_announced_action_must_be_a_tool_call() -> None:
+    # Live 2026-10-25 Nemotron 3.5 Bolt E4B said "setting the volume" six
+    # times with no call; the retry asks the server for a call, not words.
+    brain = _AnnouncingBrain()
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    await loop.run([BrainMessage(role="user", content="set my volume to 35")])
+
+    assert [r.tool_choice for r in brain.requests] == [None, "required", None]
+
+
+async def test_the_retry_after_a_refusal_leaves_the_choice_to_the_model() -> None:
+    brain = _PromisingBrain()
+    loop = ToolUseLoop(brain, {"search_web": _Tool()}, _Executor())
+
+    await loop.run([BrainMessage(role="user", content="cheapest chicken")])
+
+    assert all(r.tool_choice is None for r in brain.requests)
