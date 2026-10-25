@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from jarvis.screen_context import screen_parse
 from jarvis.screen_context.models import Degradation, DegradationCode
 from jarvis.screen_context.ports import Rect
 
@@ -189,7 +190,12 @@ async def read_ui_text(
         target_rect,
         keep_unbounded=keep_unbounded_nodes,
     )
-    text, truncated = aggregate_text(nodes, max_chars=max_chars)
+    if any(screen_parse.is_placed(n) for n in nodes):
+        # Laid out with numbered entities when the tree has positions (ReALM).
+        parse = screen_parse.layout(nodes, max_chars=max_chars)
+        text, truncated = parse.text, parse.truncated
+    else:
+        text, truncated = aggregate_text(nodes, max_chars=max_chars)
     if truncated:
         degradations.append(
             Degradation(

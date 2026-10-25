@@ -503,3 +503,46 @@ async def test_dropped_image_never_uses_the_screen_capture_failure_phrase(
 
     assert "captured the screen" not in reply.lower()
     assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_text_only_brain_answers_a_screen_turn_from_the_screen_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Nemotron 3.5 Bolt E4B cannot see images (live 2026-10-25): it gets the
+    # capture's laid-out text instead of "connect a vision provider".
+    _patch_screen(
+        monkeypatch,
+        TurnScreenContext(
+            status="captured",
+            image=b"jpeg",
+            mime="image/jpeg",
+            note="<SCREEN_EVIDENCE>Dr. Rao {{1. (206) 198 1999}}</SCREEN_EVIDENCE>",
+            text="Dr. Rao {{1. (206) 198 1999}}",
+        ),
+    )
+    manager, recorder = _manager(chain=[("blind", "a")])
+    manager._get_brain = lambda _name, _model: _FakeBrain(vision=False)  # type: ignore[method-assign]
+
+    result = await manager.generate("what number is on my screen?", use_history=False)
+
+    assert result == "grounded answer"
+    assert recorder.calls[0]["images"] == ()
+    assert "{{1. (206) 198 1999}}" in recorder.calls[0]["turn_context"]
+    assert "SCREEN AS TEXT" in recorder.calls[0]["turn_context"]
+
+
+@pytest.mark.asyncio
+async def test_text_only_brain_still_declines_a_capture_with_no_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_screen(
+        monkeypatch, TurnScreenContext(status="captured", image=b"jpeg", mime="image/jpeg")
+    )
+    manager, recorder = _manager(chain=[("blind", "a")])
+    manager._get_brain = lambda _name, _model: _FakeBrain(vision=False)  # type: ignore[method-assign]
+
+    result = await manager.generate("what is on my screen?", use_history=False)
+
+    assert recorder.calls == []
+    assert "inspect images" in result

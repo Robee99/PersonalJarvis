@@ -27,6 +27,7 @@ from uuid import UUID
 
 from jarvis.screen_context import intent as intent_module
 from jarvis.screen_context.models import ScreenContext
+from jarvis.screen_context.screen_parse import ENTITY_LEGEND
 from jarvis.screen_context.service import ScreenContextService, settings_from_config
 
 log = logging.getLogger(__name__)
@@ -220,6 +221,8 @@ def model_note(context: ScreenContext) -> str:
             f"Visible on-screen text, {source}:\n"
             f"{escape(context.ui_text, quote=True)}"
         )
+        if "{{1. " in context.ui_text:
+            lines.append(ENTITY_LEGEND)
 
     lines.append("</SCREEN_EVIDENCE>")
     lines.append(

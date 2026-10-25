@@ -367,6 +367,28 @@ def _provider_display_name(provider: str) -> str:
     return pid.replace("-", " ").replace("_", " ").title() or "the configured provider"
 
 
+#: Rides with the screen text when the answering brain cannot see images.
+_SCREEN_AS_TEXT_NOTE = (
+    "SCREEN AS TEXT: you cannot see images, so the screenshot was not sent to "
+    "you. The visible on-screen text above, with its layout and numbered "
+    "{{n. ...}} entities, is the screen. Answer from it, and say so if what "
+    "the user asks about is not in it."
+)
+
+
+def _screen_text_stands_in(screen_context: Any, images: Sequence[Any]) -> bool:
+    """Whether the capture's own text can stand in for its picture.
+
+    Only for the capture alone: a picture the user dropped or pasted has no
+    text twin, so a blind brain still has to be skipped for it.
+    """
+    return bool(
+        screen_context.has_image
+        and len(images) == 1
+        and str(getattr(screen_context, "text", "") or "").strip()
+    )
+
+
 _USER_FOLDERS: str | None = None
 
 
@@ -12800,6 +12822,7 @@ class BrainManager:
         )
 
         vision_capable_seen = False
+        screen_text_seen = False
         if images and route_policy is not None:
             chain, media_excluded = media_chain(
                 route_policy, chain,
@@ -12909,18 +12932,34 @@ class BrainManager:
             # cannot inspect them must never answer as though it had; skip it
             # by runtime capability and preserve the normal cross-family retry
             # order for the remaining vision-capable providers.
+            _attempt_images = images
+            _attempt_context = turn_context
             if images and getattr(brain, "supports_vision", False) is not True:
-                provider_errors.append(
-                    (prov_name, model, "vision_unsupported", "vision unsupported")
-                )
-                log.info(
-                    "Skipping %s(%s): this turn carries an image but the "
-                    "provider does not advertise vision support",
-                    prov_name,
-                    model,
-                )
-                continue
-            if images:
+                if _screen_text_stands_in(screen_context, images):
+                    # A text-only brain (Nemotron 3.5 Bolt E4B) gets the screen
+                    # as the laid-out text the capture already read, never a
+                    # picture it would pretend to have seen (ReALM's method,
+                    # jarvis/screen_context/screen_parse.py).
+                    _attempt_images = ()
+                    _attempt_context = f"{turn_context}\n\n{_SCREEN_AS_TEXT_NOTE}"
+                    screen_text_seen = True
+                    log.info(
+                        "%s(%s) cannot see images; it answers from the screen text",
+                        prov_name,
+                        model,
+                    )
+                else:
+                    provider_errors.append(
+                        (prov_name, model, "vision_unsupported", "vision unsupported")
+                    )
+                    log.info(
+                        "Skipping %s(%s): this turn carries an image but the "
+                        "provider does not advertise vision support",
+                        prov_name,
+                        model,
+                    )
+                    continue
+            elif images:
                 vision_capable_seen = True
 
             _turn_tools = (
@@ -13144,7 +13183,7 @@ class BrainManager:
                 with recording_side_effects() as attempt_actions:
                     agg = await disp.dispatch(
                         user_text,
-                        images=images,
+                        images=_attempt_images,
                         history=dispatch_history,
                         # The turn's own id, so tool events correlate with it.
                         trace_id=trace_uuid,
@@ -13153,7 +13192,7 @@ class BrainManager:
                         text_consumer=_attempt_consumer,
                         ack_emitter=_tool_ack_emitter,
                         on_progress=on_progress,
-                        turn_context=turn_context,
+                        turn_context=_attempt_context,
                         reply_language=self._reply_language,
                         conversation_language=self._conversation_language,
                         voice_confirm=(allow_voice_confirm and self._voice_confirm_enabled),
@@ -13486,7 +13525,7 @@ class BrainManager:
         # stale context cannot leak into the next voice turn.
         self._wiki_context_suffix = ""
 
-        if screen_context.has_image and not vision_capable_seen:
+        if screen_context.has_image and not (vision_capable_seen or screen_text_seen):
             from jarvis.screen_context.intent import (  # noqa: PLC0415
                 no_vision_provider_reply,
             )

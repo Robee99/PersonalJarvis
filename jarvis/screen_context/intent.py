@@ -594,6 +594,37 @@ _AMBIGUOUS_RE: re.Pattern[str] = re.compile(
 )
 
 
+# ReALM-style references (Apple, 2024): "call this number", "email that
+# address", "open the second link". The thing named is on the screen, so the
+# turn looks at it and the laid-out screen text numbers it
+# (jarvis/screen_context/screen_parse.py). Live 2026-10-25 none of these
+# reached the screen at all. Code and errors stay out: "fix this error" is
+# usually about text already in the conversation.
+_ENTITY_NOUN = (
+    r"(?:phone\s+)?(?:number|phone)|e-?mail(?:\s+address)?|address|link|url"
+    r"|web\s*site|web\s*page|page|article|message|post|tweet|event|meeting"
+    r"|appointment|invite|invitation|contact|price|item|order|video|song"
+    r"|button|option|field|result"
+)
+_ENTITY_REFERENCE_RE: re.Pattern[str] = re.compile(
+    rf"\b(?:this|that|these|those)\s+(?:{_ENTITY_NOUN})s?\b"
+    rf"|\bthe\s+(?:first|second|third|fourth|fifth|last|top|bottom|\d+(?:st|nd|rd|th))"
+    rf"\s+(?:{_ENTITY_NOUN}|one)s?\b",
+    re.IGNORECASE,
+)
+#: The thing is in the request or the conversation, not on the screen:
+#: "save this number 98765 43210", "that meeting we discussed", or a question
+#: about how to do something rather than a request to do it now.
+_ENTITY_ELSEWHERE_RE: re.Pattern[str] = re.compile(
+    r"\d[\d\s().-]{6,}\d|[\w.+-]+@[\w-]+\.|https?://|www\."
+    r"|\b(?:we|you|i)\s+(?:discussed|talked\s+about|mentioned|said|told\s+you|sent\s+you)\b"
+    r"|\b(?:earlier|before|last\s+time|yesterday)\b"
+    r"|\bdid\s+you\s+(?:get|receive)\b"
+    r"|\bhow\s+(?:do|can|could|would|should)\s+(?:i|you|we)\b|\bhow\s+to\b",
+    re.IGNORECASE,
+)
+
+
 def _evidence(pattern: re.Pattern[str], text: str) -> tuple[str, ...]:
     """Up to ``_MAX_EVIDENCE`` matched fragments, whitespace-collapsed."""
     found: list[str] = []
@@ -651,6 +682,12 @@ def classify(text: str, *, locale: str = "") -> IntentVerdict:
     if screen_hits:
         return IntentVerdict(
             intent=VisualIntent.SCREEN, evidence=screen_hits, locale=locale
+        )
+
+    entity_hits = _evidence(_ENTITY_REFERENCE_RE, normalized)
+    if entity_hits and not _ENTITY_ELSEWHERE_RE.search(normalized):
+        return IntentVerdict(
+            intent=VisualIntent.SCREEN, evidence=entity_hits, locale=locale
         )
 
     ambiguous_hits = _evidence(_AMBIGUOUS_RE, normalized)
