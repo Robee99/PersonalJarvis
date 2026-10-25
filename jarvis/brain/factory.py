@@ -327,6 +327,11 @@ ROUTER_TOOLS = frozenset({
     # safe-gated action — never a spawn, so it never enters a worker tool-set
     # (AP-5/AP-14). See ADR-0011 amendment "Inline web search".
     "search-web",
+    # News headlines (2026-10-25): today's top stories from the outlets' own
+    # free RSS feeds (India or world). search_web found only the outlets' home
+    # pages, so the answer named outlets instead of stories. Read-only, risk
+    # safe, never a spawn and never in a worker tool set (AP-5/AP-14).
+    "news-headlines",
 })
 
 # Phase 7.3 — self-mod tools are registered directly in the router loader in

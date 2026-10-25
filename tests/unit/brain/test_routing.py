@@ -2029,6 +2029,8 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             "laptop-power",
             # System volume (2026-10-12): master level and mute (risk safe).
             "system-volume",
+            # News headlines (2026-10-25): outlet RSS feeds (risk safe, read-only).
+            "news-headlines",
             # Window control (2026-10-12): window state by title (risk monitor).
             "window-control",
             # Memory by topic (2026-10-12): orb topics, their chats, one chat

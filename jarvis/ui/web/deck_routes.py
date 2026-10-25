@@ -54,14 +54,13 @@ import tempfile
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, StrictBool, StringConstraints
 
+from jarvis.intel.news import WORLD_FEEDS, fetch_feeds
 from jarvis.screen_context.last_frame import get_last_frame_mirror
 
 log = logging.getLogger(__name__)
@@ -266,47 +265,9 @@ async def change_context(body: ContextChange) -> dict[str, Any]:
 
 
 #: Free, keyless world-news feeds (the owner's rule: free sources only).
-NEWS_FEEDS: tuple[tuple[str, str], ...] = (
-    ("BBC World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
-    ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
-    ("NPR World", "https://feeds.npr.org/1004/rss.xml"),
-)
+NEWS_FEEDS = WORLD_FEEDS
 NEWS_TTL_S = 600.0
-_NEWS_MAX_BYTES = 2_000_000
 _news_cache: dict[str, Any] = {"at": 0.0, "body": None}
-
-
-def parse_rss(source: str, raw: bytes, limit: int = 15) -> list[dict[str, Any]]:
-    """The newest items of one RSS feed as ``{title, link, source, published}``.
-
-    A feed that declares a DOCTYPE or entities is refused outright: the
-    standard parser would expand them, and no news feed needs them.
-    """
-    head = raw[:4096].upper()
-    if b"<!DOCTYPE" in head or b"<!ENTITY" in raw.upper():
-        return []
-    try:
-        root = ET.fromstring(raw)  # noqa: S314 - DOCTYPE/ENTITY refused above
-    except ET.ParseError:
-        log.debug("deck: %s feed is not well-formed XML", source, exc_info=True)
-        return []
-    items: list[dict[str, Any]] = []
-    for node in root.iter("item"):
-        title = (node.findtext("title") or "").strip()
-        link = (node.findtext("link") or "").strip()
-        if not title or not link.startswith(("https://", "http://")):
-            continue
-        published: float | None = None
-        stamp = node.findtext("pubDate")
-        if stamp:
-            try:
-                published = parsedate_to_datetime(stamp).timestamp()
-            except (TypeError, ValueError):  # unparseable date: unknown, never invented
-                published = None
-        items.append({"title": title, "link": link, "source": source, "published": published})
-        if len(items) >= limit:
-            break
-    return items
 
 
 @router.get("/news", summary="World headlines from free public RSS feeds")
@@ -320,21 +281,9 @@ async def news() -> dict[str, Any]:
     cached = _news_cache["body"]
     if cached is not None and time.monotonic() - _news_cache["at"] < NEWS_TTL_S:
         return cached
-    items: list[dict[str, Any]] = []
-    failed: list[str] = []
     async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as http:
-        for source, url in NEWS_FEEDS:
-            try:
-                res = await http.get(url, headers={"User-Agent": "Jarvis-HUD/1.0"})
-                res.raise_for_status()
-                got = parse_rss(source, res.content[:_NEWS_MAX_BYTES])
-            except httpx.HTTPError as exc:
-                log.info("deck: news feed %s failed: %s", source, exc)
-                got = []
-            if got:
-                items += got
-            else:
-                failed.append(source)
+        by_source, failed = await fetch_feeds(NEWS_FEEDS, http)
+    items = [item for got in by_source.values() for item in got]
     items.sort(key=lambda i: i["published"] or 0, reverse=True)
     body = {
         "items": items[:40],

@@ -15,6 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from jarvis.intel import news
 from jarvis.screen_context import last_frame as last_frame_module
 from jarvis.screen_context.last_frame import LastFrameMirror
 from jarvis.ui.web import deck_routes
@@ -324,7 +325,7 @@ RSS = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 def test_rss_items_are_parsed_and_unsafe_links_dropped():
-    items = deck_routes.parse_rss("Test", RSS)
+    items = news.parse_rss("Test", RSS)
     assert [i["title"] for i in items] == ["Older story", "Newer story"]
     assert items[0]["source"] == "Test"
     assert items[1]["published"] > items[0]["published"]
@@ -332,7 +333,7 @@ def test_rss_items_are_parsed_and_unsafe_links_dropped():
 
 def test_a_feed_with_entities_is_refused():
     evil = b'<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x "boom">]><rss><channel><item><title>&x;</title><link>https://e.org</link></item></channel></rss>'
-    assert deck_routes.parse_rss("Evil", evil) == []
+    assert news.parse_rss("Evil", evil) == []
 
 
 def test_news_merges_feeds_newest_first_and_names_the_failed_ones(
