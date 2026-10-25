@@ -160,6 +160,11 @@ async def notice(body: NoticeBody, request: Request) -> dict:
     from jarvis.core.events import AnnouncementRequested
 
     text = NOTICES[body.kind]
+    if body.kind == "head-down":
+        # A focus session counts a phone glance as a drift, with its own lines.
+        from jarvis.focus.session import get_session
+
+        text = get_session().note_phone() or text
     bus = getattr(request.app.state, "bus", None)
     if bus is not None and not body.silent:
         await bus.publish(AnnouncementRequested(text=text, source_layer="vision.eyes", kind="info"))

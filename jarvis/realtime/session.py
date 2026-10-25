@@ -37,6 +37,7 @@ from jarvis.brain.cu_gate import (
     is_explicit_computer_use_turn,
 )
 from jarvis.brain.output_filter import scrub_for_voice
+from jarvis.brain.persona_loader import persona_style
 from jarvis.brain.provider_test import (
     BAD_KEY,
     MODEL_UNAVAILABLE,
@@ -2216,8 +2217,15 @@ def _identity_block(config: Any, *, compact: bool = False) -> str:
     """
     try:
         from jarvis.brain.identity import identity_block
+        from jarvis.brain.output_filter import allow_honorific
+        from jarvis.brain.persona_loader import BUTLER, address_directive
 
-        return identity_block(config, compact=compact)
+        style, honorific = persona_style(config)
+        allow_honorific(honorific)
+        block = identity_block(config, compact=compact)
+        if style == BUTLER:
+            block = f"{block}\n\n{address_directive(honorific)}".strip()
+        return block
     except Exception:  # noqa: BLE001 — never break the voice session on an identity fault
         log.warning("realtime: identity block unavailable", exc_info=True)
         return ""
@@ -2239,6 +2247,7 @@ def _session_instructions(
     society_directive: str = "",
     compact: bool = False,
     history_lost: bool = False,
+    style: str = "butler",
 ) -> str:
     """Assemble the session instructions; ``compact`` is the small-brain profile.
 
@@ -2253,7 +2262,7 @@ def _session_instructions(
     """
     from jarvis.brain.persona_loader import load_effective_persona_prompt
 
-    persona = _realtime_persona(load_effective_persona_prompt(compact=compact))
+    persona = _realtime_persona(load_effective_persona_prompt(compact=compact, style=style))
     # The block is re-sent with every per-turn session update, so this stays
     # current across long sessions. Without it the model must either
     # hallucinate calendar answers or delegate a trivial "what day is
@@ -3873,6 +3882,7 @@ class RealtimeVoiceSession:
             session_config = RealtimeSessionConfig(
                 instructions=_session_instructions(
                     self._language,
+                    style=persona_style(self._config)[0],
                     identity=_identity_block(
                         self._config,
                         compact=bool(
@@ -5513,6 +5523,7 @@ class RealtimeVoiceSession:
                         update_kwargs: dict[str, Any] = {
                             "instructions": _session_instructions(
                                 new_language,
+                                style=persona_style(self._config)[0],
                                 identity=_identity_block(
                                     self._config,
                                     compact=getattr(
@@ -7400,6 +7411,7 @@ class RealtimeVoiceSession:
             await self._session.update_session(
                 instructions=_session_instructions(
                     self._language,
+                    style=persona_style(self._config)[0],
                     identity=_identity_block(
                         self._config,
                         compact=getattr(self, "_compact_instructions", False),

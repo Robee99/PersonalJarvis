@@ -55,6 +55,7 @@ from .loop_control import (
 )
 from .streaming import StreamingAggregate, aggregate, aggregate_with_consumer
 from .tool_call_recovery import extract_leaked_tool_calls
+from .tool_switch import ToolSwitch
 
 # Central backstop for tool-output bloat: no tool result may exceed this many
 # chars in the tool-role message fed back to the brain. Individual tools should
@@ -640,9 +641,13 @@ class ToolUseLoop:
         tool_context: dict[str, Any] | None = None,
         loop_control: LoopControl | None = None,
         tool_images: bool = True,
+        tool_switch: ToolSwitch | None = None,
     ) -> None:
         self._brain = brain
         self._tools = tools
+        # Which registered tools go on the wire (jarvis/brain/tool_switch.py).
+        # ``None`` sends every one of them, as before.
+        self._switch = tool_switch
         self._executor = executor
         # False when this turn's model may not receive images (route policy:
         # a cloud target without cloud-vision consent). A tool screenshot then
@@ -806,13 +811,14 @@ class ToolUseLoop:
 
     def _tool_schemas(self) -> list[dict[str, Any]]:
         """Schemas in Anthropic-compatible format (providers normalise)."""
+        shown = self._switch.visible() if self._switch is not None else self._tools
         return [
             {
                 "name": tool.name,
                 "description": getattr(tool, "description", ""),
                 "input_schema": tool.schema,
             }
-            for tool in self._tools.values()
+            for tool in shown.values()
         ]
 
     async def _phase(self, phase: str, detail: str = "") -> None:
@@ -950,6 +956,7 @@ class ToolUseLoop:
         tid = trace_id or uuid4()
         current_messages = list(messages)
         tools_payload = self._tool_schemas()
+        switch_version = self._switch.version if self._switch is not None else 0
         final_agg = StreamingAggregate()
         ack_attempted = False
         loop_started = time.monotonic()
@@ -981,6 +988,15 @@ class ToolUseLoop:
                 log.info("tool_use_loop: %d steer message(s) folded in", len(pending))
             round_no += 1
             await self._phase(PHASE_GATHER, f"round {round_no}")
+            if (
+                self._switch is not None
+                and self._switch.version != switch_version
+                and tools_payload
+                and not deadline_forced
+            ):
+                # Tools switched on last round are callable from this one.
+                switch_version = self._switch.version
+                tools_payload = self._tool_schemas()
 
             req = BrainRequest(
                 messages=tuple(current_messages),
@@ -1219,6 +1235,14 @@ class ToolUseLoop:
                 # and the tool-result message all key on it); the raw model
                 # spelling stays in ``final_agg.tool_calls`` above.
                 tool, tool_name = self._resolve_tool(tool_name)
+                if (
+                    tool is not None
+                    and self._switch is not None
+                    and self._switch.switch_on([tool_name])
+                ):
+                    # The model named a registered tool it could not see: it
+                    # knew what it needed, so switch it on and let it run.
+                    log.info("tool switch: %s called by name, switched on", tool_name)
                 tool, tool_name, tool_args = self._reroute_music_tool(
                     tool, tool_name, tool_args, user_utterance
                 )

@@ -27,10 +27,15 @@ def test_effective_prompt_is_default_when_no_custom_file() -> None:
 
 
 def test_default_persona_prompt_is_the_packaged_block() -> None:
+    # The butler register is the shipped default (owner's choice 2026-10-25);
+    # the companion block stays one setting away.
     default = persona_loader.default_persona_prompt()
-    assert default == persona_loader.load_persona_prompt()
+    assert default == persona_loader.load_butler_persona_prompt()
+    assert "butler" in default
+    companion = persona_loader.default_persona_prompt(persona_loader.COMPANION)
+    assert companion == persona_loader.load_persona_prompt()
     # Sanity: it is the real (name-neutral) voice persona, not an empty fallback.
-    assert "voice companion" in default
+    assert "voice companion" in companion
 
 
 def test_save_custom_then_effective_returns_custom() -> None:

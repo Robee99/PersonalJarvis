@@ -142,6 +142,135 @@ def test_every_other_turn_says_earlier_tasks_are_over() -> None:
     assert hermes.FOCUS_NOTE not in hermes.turn_note(first, written=True)
 
 
+@pytest.mark.asyncio
+async def test_a_turn_streams_hermes_text_tool_evidence_and_the_model_it_used() -> None:
+    server = FakeHermesApi(
+        say("Opened Notepad.", tools=("computer_use",),
+            runtime={"provider": "local-qwen", "model": "qwen"})
+    )
+    brain = _brain(server)
+    deltas = await _collect(brain, _req("open notepad"))
+
+    assert "".join(d.content or "" for d in deltas) == "Opened Notepad."
+    assert [d.agent_tools for d in deltas if d.agent_tools] == [("hermes:computer_use",)]
+    assert {"input_tokens": 40, "output_tokens": 3} in [d.usage for d in deltas if d.usage]
+    assert brain.last_runtime == {"provider": "local-qwen", "model": "qwen"}
+    sent = server.runs[0].body
+    assert sent["model"] == "hermes-agent" and "provider" not in sent
+    assert sent["input"] == f"[spoken] {hermes.FOCUS_NOTE}\nopen notepad"
+    assert "tools" not in sent and "conversation_history" not in sent
+    assert server.runs[0].headers["x-hermes-session-key"] == hermes.SESSION_KEY
+
+
+@pytest.mark.asyncio
+async def test_qwen_and_gemma_are_reached_as_models_under_hermes() -> None:
+    for card, provider, model in (
+        ("local-qwen::qwen", "local-qwen", "qwen"),
+        ("local-gemma::gemma-4-12b-qat", "local-gemma", "gemma-4-12b-qat"),
+    ):
+        server = FakeHermesApi(say("ok", runtime={"provider": provider, "model": model}))
+        brain = _brain(server, model=card)
+        await _collect(brain, _req("hello"))
+        assert (server.runs[0].body["provider"], server.runs[0].body["model"]) == (provider, model)
+        assert brain.last_runtime == {"provider": provider, "model": model}
+
+
+@pytest.mark.asyncio
+async def test_a_fast_turn_asks_hermes_to_skip_its_reasoning_pass() -> None:
+    server = FakeHermesApi(say("4"))
+    await _collect(_brain(server), _req("two plus two", reasoning_effort="none"))
+    assert server.runs[0].body["model_options"] == {"reasoning": {"enabled": False}}
+
+
+@pytest.mark.asyncio
+async def test_a_picked_thinking_level_reaches_hermes_and_a_local_model() -> None:
+    server = FakeHermesApi(say("ok"), say("ok"))
+    await _collect(_brain(server, model="local-qwen-2::qwen"), _req("refactor", reasoning_effort="high"))
+    await _collect(_brain(server), _req("hi", reasoning_effort="low"))
+    local, cloud = server.runs[0].body, server.runs[1].body
+    assert local["model_options"] == {"reasoning": {"enabled": True, "effort": "high"}}
+    # Hermes sends a llama.cpp provider no reasoning setting: the swapper reads it from the name.
+    assert (local["provider"], local["model"]) == ("local-qwen-2", "qwen@high")
+    assert cloud["model_options"] == {"reasoning": {"enabled": True, "effort": "low"}}
+    assert cloud["model"] == "hermes-agent"
+
+
+@pytest.mark.asyncio
+async def test_the_key_is_read_from_hermes_env_in_place(_isolated: Path) -> None:
+    (_isolated / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=local-secret\n")
+    server = FakeHermesApi(say("hi"))
+    await _collect(_brain(server), _req("hi"))
+    assert server.runs[0].headers["authorization"] == "Bearer local-secret"
+
+
+@pytest.mark.asyncio
+async def test_a_remote_hermes_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hermes, "configured_base_url", lambda: "http://10.0.0.5:8642")
+    with pytest.raises(RuntimeError, match="not on this machine"):
+        await _collect(HermesBrain(), _req("hi"))
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_key_is_named() -> None:
+    brain = HermesBrain()
+    brain.transport = httpx.MockTransport(lambda _r: httpx.Response(401, content=b"no"))
+    with pytest.raises(RuntimeError, match="401"):
+        await _collect(brain, _req("hi"))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_is_raised_for_the_fallback_chain() -> None:
+    async def fails(_server: Any, _run: Any):
+        yield {"event": "run.failed", "error": "provider 429"}
+
+    with pytest.raises(RuntimeError, match="429"):
+        await _collect(_brain(FakeHermesApi(fails)), _req("hi"))
+
+
+# --- runs nobody reads anymore are stopped -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_new_turn_stops_an_earlier_run_still_going(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 2026-10-12: a shopping task kept running beside the newer turns, and
+    # "stop" only reached the newest run.
+    monkeypatch.setattr(hermes, "_LIVE_RUNS", {"run_left": ("http://127.0.0.1:8642", hermes.SESSION_ID, None)})
+    server = FakeHermesApi(say("It's five."))
+    brain = _brain(server)
+    brain.join_conversation()
+    await _collect(brain, _req("what time is it"))
+    assert server.stop_requests == ["run_left"]
+    assert hermes._LIVE_RUNS == {}
+
+
+@pytest.mark.asyncio
+async def test_runs_left_by_an_earlier_jarvis_are_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Closing the app drops the event stream, not the run.
+    path = tmp_path / "hermes-live-runs.json"
+    path.write_text(
+        '{"run_old": {"base_url": "http://127.0.0.1:8642", "session_id": "jarvis-main"}}'
+    )
+    monkeypatch.setattr(hermes, "live_runs_path", lambda: path)
+    monkeypatch.setattr(hermes, "_LIVE_RUNS", {})
+    monkeypatch.setattr(hermes, "_ORPHAN_SWEEP", None)
+    server = FakeHermesApi(say("Hi."))
+    brain = _brain(server)
+    monkeypatch.setattr(brain, "_persists", lambda: True)
+    brain.join_conversation()
+    await _collect(brain, _req("hi"))
+    assert server.stop_requests == ["run_old"]
+    # The finished turn is not left on disk either.
+    assert hermes.read_live_runs(path) == {}
+
+
+# --- the manager: Hermes owns the turn ------------------------------------
+
+
+@pytest.fixture
 def hermes_manager(monkeypatch: pytest.MonkeyPatch) -> BrainManager:
     monkeypatch.setattr("jarvis.core.config.get_secret_any", lambda _candidates: "test-key")
     cfg = load_config()

@@ -2578,12 +2578,14 @@ class SystemPromptBody(BaseModel):
 
 def _system_prompt_payload() -> dict[str, object]:
     from jarvis.brain import persona_loader
+    from jarvis.core.config import load_config
 
-    content = persona_loader.load_effective_persona_prompt()
+    style, _honorific = persona_loader.persona_style(load_config())
+    content = persona_loader.load_effective_persona_prompt(style=style)
     return {
         "content": content,
         "is_custom": persona_loader.has_custom_prompt(),
-        "default": persona_loader.default_persona_prompt(),
+        "default": persona_loader.default_persona_prompt(style),
         "char_count": len(content),
     }
 

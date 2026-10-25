@@ -35,6 +35,11 @@ log = logging.getLogger(__name__)
 _PERSONA_MD_FILENAME = "JARVIS_PERSONA.md"
 _SECTION_MARKER = "## System-Prompt"
 _COMPACT_SECTION_MARKER = "## System-Prompt (Compact)"
+_BUTLER_SECTION_MARKER = "## System-Prompt (Butler)"
+_BUTLER_COMPACT_SECTION_MARKER = "## System-Prompt (Butler Compact)"
+#: ``[persona] style`` values; ``butler`` is the shipped default.
+BUTLER = "butler"
+COMPANION = "companion"
 _FENCE = "```"
 
 
@@ -111,10 +116,42 @@ def load_compact_persona_prompt() -> str:
     return load_persona_prompt()
 
 
+@lru_cache(maxsize=2)
+def load_butler_persona_prompt(*, compact: bool = False) -> str:
+    """The butler register of the persona; the companion block when it is missing."""
+    marker = _BUTLER_COMPACT_SECTION_MARKER if compact else _BUTLER_SECTION_MARKER
+    block = _extract_fence_after_marker(_read_persona_md(), marker)
+    if block:
+        return block
+    log.warning("JARVIS_PERSONA.md: no '%s' section — using the companion persona.", marker)
+    return load_compact_persona_prompt() if compact else load_persona_prompt()
+
+
+def persona_style(config: object) -> tuple[str, str]:
+    """``(style, honorific)`` from ``[persona]``; butler and "Sir" when unset."""
+    persona = getattr(config, "persona", None)
+    style = getattr(persona, "style", BUTLER)
+    honorific = str(getattr(persona, "honorific", "Sir") or "").strip()
+    if style not in (BUTLER, COMPANION):
+        style = BUTLER
+    return style, honorific if style == BUTLER else ""
+
+
+def address_directive(honorific: str) -> str:
+    """The runtime line that tells a butler persona how to address the owner."""
+    if not honorific:
+        return "Address the user by name, without an honorific."
+    return (
+        f'Address the user as "{honorific}", sparingly: once in a greeting or a '
+        "confirmation, never in every sentence."
+    )
+
+
 def invalidate_cache() -> None:
     """Invalidate the caches — for tests or hot reload after an MD edit."""
     load_persona_prompt.cache_clear()
     load_compact_persona_prompt.cache_clear()
+    load_butler_persona_prompt.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -170,12 +207,14 @@ def has_custom_prompt() -> bool:
     return read_custom_prompt() is not None
 
 
-def default_persona_prompt() -> str:
+def default_persona_prompt(style: str = BUTLER) -> str:
     """The packaged default persona block (from ``JARVIS_PERSONA.md``)."""
+    if style == BUTLER:
+        return load_butler_persona_prompt()
     return load_persona_prompt()
 
 
-def load_effective_persona_prompt(*, compact: bool = False) -> str:
+def load_effective_persona_prompt(*, compact: bool = False, style: str = BUTLER) -> str:
     """The persona block the brain should use: custom override if set, else default.
 
     The custom override wins EVEN in compact mode — the user chose those
@@ -190,9 +229,11 @@ def load_effective_persona_prompt(*, compact: bool = False) -> str:
     custom = read_custom_prompt()
     if custom is not None:
         return custom
+    if style == BUTLER:
+        return load_butler_persona_prompt(compact=compact)
     if compact:
         return load_compact_persona_prompt()
-    return default_persona_prompt()
+    return default_persona_prompt(style)
 
 
 def save_custom_prompt(text: str) -> None:

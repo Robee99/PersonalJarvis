@@ -529,6 +529,7 @@ class WebServer:
         from .intel_routes import router as intel_router
         from .jarvisx_routes import router as jarvisx_router
         from .live_routes import router as live_router
+        from .focus_routes import router as focus_router
         from .live_vision_routes import router as live_vision_router
         from .local_models_assistant_routes import (
             router as local_models_assistant_router,
@@ -754,6 +755,7 @@ class WebServer:
         # valid capability probe everywhere.
         app.include_router(screen_context_router)
         app.include_router(live_vision_router)
+        app.include_router(focus_router)
         # Appshots: the front window as conversation context, on a shortcut,
         # a button or a spoken request. Captures through Screen Context.
         app.include_router(app_actions_router)

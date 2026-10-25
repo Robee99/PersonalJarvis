@@ -52,6 +52,13 @@ from jarvis.brain import provider_health_ledger as _health_ledger
 # the API-Keys badge can never disagree on "out of credits / over budget" (AP-22).
 from jarvis.brain.provider_test import BILLING_LIMIT_MARKERS
 from jarvis.brain.spawn_gate import effort_warrants_delegation
+from jarvis.brain.tool_switch import (
+    DEFAULT_CORE,
+    ENABLE_TOOLS,
+    EnableToolsTool,
+    ToolSwitch,
+    wants_switch,
+)
 from jarvis.brain.turn_override import TurnOverride
 from jarvis.core.bus import EventBus
 from jarvis.core.config import (
@@ -121,8 +128,14 @@ from .local_action_gate import (
 )
 from .local_action_gate import _normalize as _gate_normalize
 from .mission_command_gate import match_mission_command
+from .output_filter import allow_honorific
 from .paperclip_delegation import DelegationRequest, delegate_from_config
-from .persona_loader import load_effective_persona_prompt
+from .persona_loader import (
+    BUTLER,
+    address_directive,
+    load_effective_persona_prompt,
+    persona_style,
+)
 from .provider_registry import BrainProviderRegistry
 from .rate_limit_tracker import RateLimitTracker
 from .route_policy import (
@@ -190,6 +203,15 @@ _SKILL_TURN_STATE: ContextVar[_SkillTurnState | None] = ContextVar(
 #: At most this many tools are kept for matching the request's words when a
 #: small model's tool surface is trimmed (``_relevant_tool_names``).
 _RELEVANT_TOOLS_MAX = 16
+#: Brains that run on this machine; the tool switch is on for them by default.
+_LOCAL_BRAIN_NAMES = frozenset({"local-openai", "ollama", "local-voice", "local-realtime"})
+#: Told to the model when its turn runs behind the tool switch.
+_TOOL_SWITCH_DIRECTIVE = (
+    "Only some of your tools are switched on. When the task needs a tool you do "
+    "not see (browser, files, desktop, mail, music, a connected service), call "
+    "enable_tools with the job in a few words, then use what it switches on. "
+    "Never say you cannot do something before checking with enable_tools."
+)
 
 #: Tools whose whole result is a picture; a blind brain is never offered them.
 _IMAGE_CAPTURE_TOOL_NAMES: frozenset[str] = frozenset({"screenshot", "camera"})
@@ -3924,13 +3946,26 @@ class BrainManager:
             history = tuple(getattr(self, "_history", None) or ())
         if compact_prompt:
             history = _compact_history_for_local_context(history, context_window)
-        tools = self._fit_tools_to_brain(
-            tools, brain, system_prompt=system_prompt, history=history, query=query
-        )
+        opened = self._open_tool_switch(tools, brain, query)
+        switch: ToolSwitch | None = None
+        if opened is None:
+            tools = self._fit_tools_to_brain(
+                tools, brain, system_prompt=system_prompt, history=history, query=query
+            )
+            surface = tools
+        else:
+            tools, switch = opened
+            shown = switch.visible()
+            fitted = self._fit_tools_to_brain(
+                shown, brain, system_prompt=system_prompt, history=history, query=query
+            )
+            switch.switch_off([name for name in shown if name not in fitted])
+            surface = switch.visible()
+            system_prompt = f"{system_prompt}\n\n{_TOOL_SWITCH_DIRECTIVE}"
         # Per-plugin usage guidance for whichever plugins are active this turn
         # (the "MCP + thin skill" reliability layer). Appended last so it sits
         # closest to the turn; only present when a plugin tool is in scope.
-        cards = self._plugin_usage_cards_block(tools)
+        cards = self._plugin_usage_cards_block(surface)
         if cards:
             system_prompt = f"{system_prompt}\n\n{cards}"
         if delegated_voice:
@@ -3950,8 +3985,73 @@ class BrainManager:
             reasoning_effort=reasoning_effort,
             tool_context=tool_context,
             loop_control=loop_control,
+            tool_switch=switch,
             **kwargs,
         )
+
+    def _focus_speaker(self):
+        """How a focus session speaks a callout: an announcement on the bus."""
+        bus = getattr(self, "_bus", None)
+        if bus is None:
+            return None
+        from jarvis.core.events import AnnouncementRequested
+
+        async def say(text: str) -> None:
+            await bus.publish(
+                AnnouncementRequested(text=text, source_layer="focus", kind="info")
+            )
+
+        return say
+
+    def _open_tool_switch(
+        self, tools: dict[str, Tool], brain: Any, query: str
+    ) -> tuple[dict[str, Tool], ToolSwitch] | None:
+        """Put this turn behind the tool switch, or ``None`` to send every tool.
+
+        Returns the turn's full surface (registry plus ``enable_tools``) and the
+        switch that decides which of it the model sees; see tool_switch.py.
+        """
+        if not tools:
+            return None
+        try:
+            window = int(getattr(brain, "context_window", 0) or 0)
+            max_tools = int(getattr(brain, "max_tools", 0) or 0)
+        except (TypeError, ValueError):
+            # A malformed declaration means 'unknown': judge by name alone.
+            window, max_tools = 0, 0
+        local = getattr(brain, "name", "") in _LOCAL_BRAIN_NAMES or max_tools > 0
+        mode = getattr(self._config.brain, "tool_switch", "auto")
+        if not wants_switch(mode, tool_count=len(tools), context_window=window, local=local):
+            return None
+        surface = dict(tools)
+        switch = ToolSwitch(surface, _relevant_tool_names)
+        surface[ENABLE_TOOLS] = EnableToolsTool(switch)
+        core = getattr(self._config.brain, "tool_switch_core", None) or DEFAULT_CORE
+        relevant = switch.open_turn(query, core=core, keep=self._turn_keep_names(surface))
+        log.info(
+            "tool switch: %d of %d tools on for %s (request matched: %s)",
+            len(switch.visible()),
+            len(surface),
+            getattr(brain, "name", type(brain).__name__),
+            ", ".join(relevant[:8]) or "none",
+        )
+        return surface, switch
+
+    def _turn_keep_names(self, tools: dict[str, Tool]) -> set[str]:
+        """Tools a gate decided this turn needs; a fit never drops them."""
+        keep: set[str] = set()
+        mandated = getattr(self, "_evidence_required_tool", None)
+        if mandated:
+            keep.add(str(mandated))
+        # The desktop action gate already removed this tool on turns without
+        # an actionable UI request. Keep its schema when it survives that
+        # gate, or a small local context could silently remove the user's
+        # requested computer-use capability while fitting unrelated tools.
+        if "computer_use" in tools:
+            keep.add("computer_use")
+        if getattr(self, "_skill_turn_match", None) is not None:
+            keep.add("run-skill")
+        return keep
 
     def _apply_turn_override_tools(
         self, tools: dict[str, Tool] | None, override: TurnOverride
@@ -4519,9 +4619,13 @@ class BrainManager:
         # is set in Settings (data/custom_system_prompt.md), else the packaged
         # default. Read fresh each turn, so an edit/reset applies on the next turn
         # without a restart. Empty string when nothing is available — no crash.
-        persona_block = load_effective_persona_prompt(compact=compact)
+        style, honorific = persona_style(getattr(self, "_config", None))
+        allow_honorific(honorific)
+        persona_block = load_effective_persona_prompt(compact=compact, style=style)
         if persona_block:
             parts.append(persona_block)
+            if style == BUTLER:
+                parts.append(address_directive(honorific))
 
         # User's own standing-instructions file (AGENTS.md / CLAUDE.md equivalent),
         # named after the assistant (e.g. Assistant.md). Distinct from the persona: the
@@ -7054,18 +7158,9 @@ class BrainManager:
             used = int(prompt_tokens * 1.25) + max(768, window // 10)
         else:
             used = prompt_tokens + _CONTEXT_FIT_RESERVE_TOKENS
-        keep: set[str] = set()
-        mandated = getattr(self, "_evidence_required_tool", None)
-        if mandated:
-            keep.add(str(mandated))
-        # The desktop action gate already removed this tool on turns without
-        # an actionable UI request. Keep its schema when it survives that
-        # gate, or a small local context could silently remove the user's
-        # requested computer-use capability while fitting unrelated tools.
-        if "computer_use" in tools:
-            keep.add("computer_use")
-        if getattr(self, "_skill_turn_match", None) is not None:
-            keep.add("run-skill")
+        keep = self._turn_keep_names(tools)
+        if ENABLE_TOOLS in tools:
+            keep.add(ENABLE_TOOLS)
         relevant_cap = (max_tools if max_tools > 0 else len(tools)) // 3
         relevant = _relevant_tool_names(tools, query, min(relevant_cap, _RELEVANT_TOOLS_MAX))
         if window > 0:
@@ -11964,6 +12059,26 @@ class BrainManager:
                 trace_id=turn_trace_id,
             )
             return nav_reply
+
+        # Focus sessions: "thirty minutes on this", "lock on this tab", "stop
+        # focus" start, move and end the server-side session without a model
+        # (jarvis/focus/session.py); the callouts later come over the bus.
+        if not screen_context.has_image:
+            from jarvis.focus.session import focus_reflex
+
+            focus_reply = await focus_reflex(
+                user_text,
+                say=self._focus_speaker(),
+                honorific=persona_style(getattr(self, "_config", None))[1],
+            )
+            if focus_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=focus_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return focus_reply
 
         # Brightness, volume and window reflexes: a plain "set the brightness to
         # 40", "volume 40" or "maximize notepad" is answered without a model,

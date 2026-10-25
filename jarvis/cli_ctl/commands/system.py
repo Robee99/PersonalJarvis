@@ -131,8 +131,8 @@ def free_voice(
         help="Let Hermes search Jarvis's memory (the wiki) over MCP.",
     ),
 ) -> None:
-    """Make Hermes Agent the brain for everything: voice, tools, missions; Hermes
-    picks the model (local Qwen, local Gemma, cloud); paid providers blocked."""
+    """Make Hermes Agent the brain for everything (superseded by ``jarvis system
+    local``, which needs no Hermes); paid providers blocked."""
     from jarvis.cli_ctl.__main__ import as_json, make_client
     from jarvis.cli_ctl.free_voice import (
         computer_use_for,
@@ -153,6 +153,30 @@ def free_voice(
             lean_context=lean_context_for(),
             computer_use=computer_use_for(),
         )
+    if as_json():
+        render.emit(report.as_dict(), as_json=True)
+    else:
+        typer.echo(render_report(report))
+    if report.failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("local")
+def local_mode(
+    server: str = typer.Option(
+        "http://127.0.0.1:11443", "--server",
+        help="The local OpenAI-compatible server (the model swapper's Gemma 4 E4B front).",
+    ),
+    model: str = typer.Option("gemma-4b-qat", "--model", help="The model id that server serves."),
+) -> None:
+    """Run Jarvis on a local model with its own brain and tools: no Hermes,
+    paid and cloud brains blocked, local speech in and out."""
+    from jarvis.cli_ctl.__main__ import as_json, make_client
+    from jarvis.cli_ctl.free_voice import render_report
+    from jarvis.cli_ctl.local_mode import run_local_mode
+
+    with make_client() as client:
+        report = run_local_mode(client, server=server, model=model)
     if as_json():
         render.emit(report.as_dict(), as_json=True)
     else:

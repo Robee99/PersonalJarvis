@@ -307,6 +307,13 @@ class PersonaConfig(BaseModel):
     # silently broken by a future base-class / project-wide model_config change.
     model_config = ConfigDict(extra="ignore")
 
+    # The voice's register (jarvis/brain/JARVIS_PERSONA.md): ``butler`` is the
+    # prompt pack's JARVIS (owner's choice 2026-10-25), ``companion`` the warm
+    # friend that never uses an honorific. ``honorific`` is how the butler
+    # addresses the owner; empty means by name only.
+    style: Literal["butler", "companion"] = "butler"
+    honorific: str = Field(default="Sir", max_length=24)
+
 
 class WakeWordConfig(BaseModel):
     """User-editable ``[trigger.wake_word]`` — the custom-wake-word config.
@@ -1689,6 +1696,13 @@ class BrainConfig(BaseModel):
     # a live cut-off report; kept configurable so an operator can trade speech
     # length against latency/cost. ~8192 tokens ≈ several minutes of speech.
     max_tokens: int = Field(default=32_768, ge=256, le=32_768)
+    # The tool switch (jarvis/brain/tool_switch.py): a turn sees a few core
+    # tools plus the ones the request names, and an ``enable_tools`` switch
+    # for the rest. ``auto`` = on for a local model or a window of 128k or
+    # less; ``on`` / ``off`` force it. ``tool_switch_core`` replaces the
+    # always-on set (``None`` = the shipped one).
+    tool_switch: Literal["auto", "on", "off"] = "auto"
+    tool_switch_core: list[str] | None = None
     # Phase 5 tiered routing — Wave-4 migration: the ``sub_jarvis`` tier was
     # replaced by the Jarvis-Agent bridge (see docs/jarvis-agents-bridge.md §11).
     # Only ``router`` remains as a tier; the heavy worker runs as an external
