@@ -98,9 +98,9 @@ def solve(text: str) -> str | None:
         return None
     try:
         value = _eval(ast.parse(spoken, mode="eval"))
-    except ZeroDivisionError:
+    except ZeroDivisionError:  # the honest answer to x / 0 is said, not logged
         return "That divides by zero, so it has no answer."
-    except (SyntaxError, ValueError, OverflowError):
+    except (SyntaxError, ValueError, OverflowError):  # not plain arithmetic: the brain answers
         return None
     said = " ".join(spoken.split())
     for symbol, word in (

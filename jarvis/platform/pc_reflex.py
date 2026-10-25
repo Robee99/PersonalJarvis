@@ -240,11 +240,11 @@ def window_reflex(text: str) -> str | None:
         result = change(
             command.action, command.window, program_only=command.action == "close"
         )
-    except LookupError:
+    except LookupError:  # no such window: said for resizes, else the brain looks
         if command.action in _NOT_OPEN_IS_THE_ANSWER:
             return f"I can't find an open {_spoken(command.window)} window, so nothing changed."
         return None
-    except ValueError:
+    except ValueError:  # no window named: the brain asks which one
         return None
     except (OSError, RuntimeError) as exc:
         log.warning("window reflex failed: %s", exc)

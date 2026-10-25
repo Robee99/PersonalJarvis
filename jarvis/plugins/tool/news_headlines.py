@@ -61,7 +61,7 @@ class NewsHeadlinesTool:
             )
         try:
             count = max(1, min(_MAX_COUNT, int((args or {}).get("count") or DEFAULT_COUNT)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # a count that is not a number gets the default
             count = DEFAULT_COUNT
         if self._http is not None:
             by_source, failed = await fetch_feeds(feeds, self._http)

@@ -140,7 +140,7 @@ class SystemVolumeTool:
         try:
             percent = None if raw is None else int(raw)
             output = await asyncio.to_thread(apply, action, percent, self._opener)
-        except (VolumeUnavailable, ValueError) as exc:
+        except (VolumeUnavailable, ValueError) as exc:  # the reason goes back to the model
             return ToolResult(success=False, output=None, error=str(exc))
         except (OSError, ImportError) as exc:
             log.warning("system_volume: %s failed", action, exc_info=True)
