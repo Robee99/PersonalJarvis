@@ -94,6 +94,7 @@ datas.append((str(PROJECT_ROOT / "jarvis/society/browser/native_window.py"), "ja
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/manual_chrome.py"), "jarvis/society/browser"))
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/window_actions.py"), "jarvis/society/browser"))
 datas.append((str(PROJECT_ROOT / "jarvis/society/browser/pointer.py"), "jarvis/society/browser"))
+datas.append((str(PROJECT_ROOT / "jarvis/society/browser/page_cursor.py"), "jarvis/society/browser"))
 # The Hermes / OpenClaw pins (agent_runtimes/versions.py). The package-data
 # sweep below also finds them; named here so a narrower sweep cannot drop them
 # and send a frozen app's setup to upstream latest.
