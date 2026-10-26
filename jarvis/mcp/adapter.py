@@ -29,6 +29,8 @@ from .browser_page import (
 )
 from .browser_page import compact as compact_page
 from .client import MCPClient
+from .desktop_labels import LABEL_HINT, SNAPSHOT_TOOLS, takes_loc_or_label, worded_label
+from .desktop_labels import repair as repair_label
 from .registry import MCPRegistry
 
 log = logging.getLogger(__name__)
@@ -308,6 +310,26 @@ class MCPToolAdapter:
             return "ask"
         return None
 
+    def repair_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """A pointer call that names its target in words, sent as the point it names.
+
+        See jarvis/mcp/desktop_labels.py: Windows-MCP takes ``label`` as a
+        number its Snapshot never shows, so the model sends the control's name.
+        """
+        if not isinstance(args, dict) or not takes_loc_or_label(self._mcp_tool_name, self.schema):
+            return args
+        return repair_label(args, _LAST_SNAPSHOT.get(self._client.spec.name, ""))
+
+    def invalid_args_hint(self, args: dict[str, Any]) -> str:
+        """How to call instead, for a refusal ``repair_args`` could not prevent."""
+        if (
+            isinstance(args, dict)
+            and takes_loc_or_label(self._mcp_tool_name, self.schema)
+            and worded_label(args)
+        ):
+            return LABEL_HINT
+        return ""
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         """Call the MCP tool and map the result to a `ToolResult`.
 
@@ -320,6 +342,8 @@ class MCPToolAdapter:
         try:
             raw = await self._client.call_tool(self._mcp_tool_name, args)
             output = _normalize_mcp_result(raw)
+            if self._mcp_tool_name in SNAPSHOT_TOOLS:
+                _remember_snapshot(self._client.spec.name, output)
             if self._mcp_tool_name == "show_in_gods_eye_view":
                 output = await _show_on_world_screen(raw, output)
             elif self._mcp_tool_name in PAGE_ACTIONS or self._mcp_tool_name == SNAPSHOT_TOOL:
@@ -366,6 +390,17 @@ class MCPToolAdapter:
             log.warning("browser page outline failed for %s", self.name, exc_info=True)
             return output
         return short if not isinstance(output, list) else [short, *items[1:]]
+
+
+#: The last Snapshot answer per desktop server, which a worded label is read against.
+_LAST_SNAPSHOT: dict[str, str] = {}
+
+
+def _remember_snapshot(server: str, output: Any) -> None:
+    items = output if isinstance(output, list) else [output]
+    text = "\n".join(item for item in items if isinstance(item, str))
+    if text.strip():
+        _LAST_SNAPSHOT[server] = text
 
 
 #: Actions after which a page may still be drawing, and how long it gets.

@@ -443,6 +443,22 @@ def _describe_error(error: Any) -> str:
     return f"field '{where}' does not match any allowed form"
 
 
+def _repaired_args(tool: Tool, args: Any) -> Any:
+    """``args`` after the tool's own repair of a known model slip, if it has one.
+
+    An MCP desktop pointer call that names its target in words instead of the
+    server's element number is the case today (jarvis/mcp/desktop_labels.py).
+    """
+    repair = getattr(tool, "repair_args", None)
+    if not callable(repair) or not isinstance(args, dict):
+        return args
+    try:
+        return repair(args)
+    except Exception:  # noqa: BLE001 — a failed repair leaves the call as the model sent it
+        log.debug("argument repair failed for %s", getattr(tool, "name", "?"), exc_info=True)
+        return args
+
+
 def drop_undeclared_args(tool: Tool, args: Any) -> Any:
     """``args`` without the fields a READ-ONLY tool's strict schema does not declare.
 
@@ -725,6 +741,7 @@ class ToolExecutor:
         # 0. Arguments must match the tool's schema before anything is
         # evaluated, approved or run. Nothing has happened yet, so the caller
         # may correct the call and try again.
+        args = _repaired_args(tool, args)
         args = drop_undeclared_args(tool, args)
         invalid = await self._refuse_invalid_args(tool, args, tid)
         if invalid is not None:
@@ -982,6 +999,8 @@ class ToolExecutor:
             return None
         error = f"{INVALID_ARGUMENTS_PREFIX}: {reason}"
         log.info("invalid arguments for %s: %s", tool.name, reason)
+        hint_for = getattr(tool, "invalid_args_hint", None)
+        hint = hint_for(args) if callable(hint_for) else ""
         await self._bus.publish(ActionDenied(
             trace_id=tid, tool_name=tool.name, reason=error,
         ))
@@ -991,7 +1010,7 @@ class ToolExecutor:
                 "outcome": "not_executed",
                 "tool_name": tool.name,
                 "retryable": True,
-                "message": f"{reason}. Correct the arguments and call again.",
+                "message": f"{reason}. {hint or 'Correct the arguments and call again.'}",
             },
             error=error,
         )
