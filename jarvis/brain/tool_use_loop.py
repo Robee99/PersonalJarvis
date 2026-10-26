@@ -26,6 +26,7 @@ from jarvis.brain.cu_gate import (
     CU_VEHICLE_TOOL_NAMES,
     llm_computer_use_allowed,
 )
+from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
 from jarvis.brain.spawn_gate import (
     SPAWN_VEHICLE_TOOL_NAMES,
     llm_spawn_allowed,
@@ -168,7 +169,8 @@ _NARROW_DIRECTIVE = (
 _ACTION_GERUNDS = (
     "opening|launching|starting|playing|pausing|setting|turning|muting|unmuting|"
     "filling|typing|clicking|pressing|navigating|closing|minimi[sz]ing|maximi[sz]ing|"
-    "creating|writing|saving|sending|deleting|moving|searching|downloading"
+    "creating|writing|saving|sending|deleting|moving|searching|downloading|"
+    "selecting|zooming|flying|scrolling|switching"
 )
 _ANNOUNCED = re.compile(
     r"(?:^|[.!?]\s+)(?:(?:ok(?:ay)?|sure|certainly|right away|of course|on it),?\s+(?:sir,?\s+)?)?"
@@ -176,6 +178,10 @@ _ANNOUNCED = re.compile(
     r"(?:(?:i will|i'll|i am going to|i'm going to|let me)\s+(?!know\b)[a-z]+|[a-z]+ing)\b"
     r"(?:[^.!?\n]|\.(?=\w)){0,60}\b(?:now|for you|right away)\b"
     rf"|(?:{_ACTION_GERUNDS})\s+(?:the|a|an|your|my|it|this|that|\w+\.\w+)\b"
+    # Live 2026-10-26 "Opening Windows PC settings, navigating to Display, and
+    # then selecting Advanced Display." with no call: a chain of steps.
+    rf"|(?:{_ACTION_GERUNDS})\b[^.!?\n]{{0,80}},\s+(?:and\s+)?(?:then\s+)?"
+    rf"(?:{_ACTION_GERUNDS})\b"
     r")",
     re.IGNORECASE,
 )
@@ -906,6 +912,26 @@ class ToolUseLoop:
         except Exception:  # noqa: BLE001 — observability must never break the loop
             log.debug("guard-denied publish failed", exc_info=True)
 
+    def _with_screen_control(self, payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """``payload`` plus the screen-control tool, for the retry of an unmade action.
+
+        Live 2026-10-26 "open windows pc settings go to display then advanced
+        display" and "click on roberto" were answered in words, and the tool
+        switch had not offered computer_use for either. An action that no
+        offered tool fits can still be done with the mouse and keyboard.
+        """
+        tool = self._tools.get("computer_use")
+        if tool is None or any(t.get("name") == "computer_use" for t in payload):
+            return payload
+        return [
+            *payload,
+            {
+                "name": tool.name,
+                "description": getattr(tool, "description", ""),
+                "input_schema": tool.schema,
+            },
+        ]
+
     def _tool_schemas(self) -> list[dict[str, Any]]:
         """Schemas in Anthropic-compatible format (providers normalise)."""
         shown = self._switch.visible() if self._switch is not None else self._tools
@@ -1151,6 +1177,10 @@ class ToolUseLoop:
                     if agg.tool_calls:
                         agg.finish_reason = "tool_use"
 
+            # A "[used tool X]" line the model wrote itself is a claimed call
+            # that never ran (jarvis/brain/fake_tool_mark.py): never shown,
+            # and a reply without a real call goes back as an unmade action.
+            agg.text, faked_call = strip_fake_tool_marks(agg.text)
             duplicate_only_round = False
             if agg.tool_calls:
                 had_tool_calls = True
@@ -1227,6 +1257,7 @@ class ToolUseLoop:
                     and not tool_log
                     and any(t.get("name") == evidence_required_tool for t in tools_payload)
                 )
+                undone = undone or bool(faked_call and tools_payload)
                 if (
                     (refused_call or promised or undone or narrowed)
                     and not retry_nudged
@@ -1263,6 +1294,8 @@ class ToolUseLoop:
                     # A narrowing question is sent back free: the honest answer
                     # may still be a question.
                     force_tool = reason == "unmade"
+                    if force_tool:
+                        tools_payload = self._with_screen_control(tools_payload)
                     final_agg.text = ""
                     continue
                 outcome = await self._run_verify(

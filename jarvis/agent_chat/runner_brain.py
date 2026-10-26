@@ -42,6 +42,7 @@ from jarvis.agent_chat.runner_api import messages_from_events
 from jarvis.agent_chat.surface_kits import kit_for
 from jarvis.agent_chat.tool_catalog import ToolChoice
 from jarvis.agent_chat.tools import summarize_call
+from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
 from jarvis.brain.turn_override import TurnOverride
 from jarvis.core.protocols import BrainMessage, ReasoningEffort, Tool
 
@@ -118,12 +119,14 @@ def brain_history_from_events(
 
 def _assistant_prose(content: str | list[dict[str, Any]]) -> str:
     if isinstance(content, str):
-        return content
+        return strip_fake_tool_marks(content)[0]
     lines: list[str] = []
     for block in content:
         kind = block.get("type")
         if kind == "text":
-            text = str(block.get("text") or "")
+            # A marker inside TEXT was written by the model, not by a tool
+            # round: kept, it teaches the next turn to fake calls again.
+            text, _ = strip_fake_tool_marks(str(block.get("text") or ""))
             if text.strip():
                 lines.append(text)
         elif kind == "tool_use":

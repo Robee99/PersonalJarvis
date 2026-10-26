@@ -271,6 +271,9 @@ class _SaysThenCalls:
         # Live 2026-10-25 on the installed build, both with no call made.
         "Opening youtube.com now.",
         "Opening the specified page in the browser and filling the form fields.",
+        # Live 2026-10-26, no call made.
+        "Opening Windows PC settings, navigating to Display, and then selecting "
+        "Advanced Display.",
     ],
 )
 async def test_announced_browser_actions_are_sent_back(first: str) -> None:
@@ -415,3 +418,61 @@ async def test_a_mandated_tool_left_uncalled_is_forced_once() -> None:
 
     assert executor.calls == 1
     assert brain.requests[1].tool_choice == "required"
+
+
+async def test_a_written_tool_marker_is_a_claimed_call_and_is_sent_back() -> None:
+    # Live 2026-10-26 Gemma copied the history's tool marker instead of
+    # calling: "[used tool app_ui_click]\nClicking on Roberto's profile now."
+    brain = _SaysThenCalls("[used tool app_ui_click]\nRoberto's profile is open.")
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    out = await loop.run([BrainMessage(role="user", content="click on roberto")])
+
+    assert executor.calls == 1
+    assert brain.requests[1].tool_choice == "required"
+    assert "[used tool" not in out.text
+
+
+async def test_a_written_tool_marker_is_never_shown() -> None:
+    brain = _SaysThenCalls("[used tool system_volume]\nThe volume is 35%.")
+    loop = ToolUseLoop(brain, {}, _Executor(refusals=0))
+
+    out = await loop.run([BrainMessage(role="user", content="volume?")])
+
+    assert out.text == "The volume is 35%."
+
+
+class _ScreenTool:
+    name = "computer_use"
+    schema: dict[str, Any] = {}
+    description = "mouse and keyboard"
+
+
+class _HiddenScreenSwitch:
+    """A tool switch that left computer_use off for this request."""
+
+    version = 0
+
+    def __init__(self, tools: dict[str, Any]) -> None:
+        self._tools = tools
+
+    def visible(self) -> dict[str, Any]:
+        return {k: v for k, v in self._tools.items() if k != "computer_use"}
+
+    def switch_on(self, names: list[str]) -> bool:
+        return False
+
+
+async def test_the_retry_of_an_unmade_action_offers_screen_control() -> None:
+    brain = _SaysThenCalls("Opening Windows PC settings, navigating to Display, and then "
+                           "selecting Advanced Display.")
+    tools = {"system_volume": _VolumeTool(), "computer_use": _ScreenTool()}
+    loop = ToolUseLoop(brain, tools, _Executor(refusals=0))
+    loop._switch = _HiddenScreenSwitch(tools)
+
+    await loop.run([BrainMessage(role="user", content="open advanced display settings")])
+
+    first, retry = brain.requests[0], brain.requests[1]
+    assert "computer_use" not in [t["name"] for t in first.tools]
+    assert "computer_use" in [t["name"] for t in retry.tools]
