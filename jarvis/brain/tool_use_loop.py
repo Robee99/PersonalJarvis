@@ -138,6 +138,28 @@ _UNDONE_DIRECTIVE = (
     "the request needs an action, call the tool now. If it needs none, answer "
     "again without saying you are doing something."
 )
+# The directives above end with the person's request. Live 2026-10-25 Gemma
+# answered the bare "[retry]" line after "Open Notepad and type hello from
+# jarvis, then tell me what Notepad shows" with "I see you've provided some
+# context, but I do not have a specific question": the newest user message was
+# the directive, and it named no task.
+_REQUEST_REMINDER = "\nThe request was: "
+# Live 2026-10-25 "Find public CCTV cameras in Mumbai" was answered "I need to
+# know the area more specifically, such as a particular neighborhood or a
+# bounding box" with find_cctv_cameras offered, whose place field takes a city.
+# A reply that only asks to narrow down what the person already named gets one
+# nudge to call with what was given; a missing value is still asked for.
+_NARROW_ASK = re.compile(
+    r"\b(?:more specific(?:ally)?|narrow (?:it |that |this )?down|"
+    r"(?:a |any )?(?:particular|specific|exact) (?:neighbou?rhood|area|district|"
+    r"part|region|locality|location|spot))\b",
+    re.IGNORECASE,
+)
+_NARROW_DIRECTIVE = (
+    "[retry] Do not ask the person to be more specific. What they said is enough "
+    "for the tool: call it now with the values they gave (a place name goes in "
+    "as it is). Ask only for a value the tool requires that they did not give."
+)
 # Live 2026-10-25 on the installed build, Gemma answered "Opening youtube.com
 # now." and "Opening the specified page in the browser and filling the form
 # fields ..." with no call. A dot inside a word (a web address) does not end
@@ -1167,13 +1189,21 @@ class ToolUseLoop:
                 undone = bool(
                     not tool_log and tools_payload and _ANNOUNCED.search(agg.text or "")
                 )
+                narrowed = bool(
+                    not tool_log and tools_payload and _NARROW_ASK.search(agg.text or "")
+                )
                 if (
-                    (refused_call or promised or undone)
+                    (refused_call or promised or undone or narrowed)
                     and not retry_nudged
                     and not deadline_forced
                 ):
                     retry_nudged = True
-                    reason = "refused" if refused_call else "failed" if promised else "unmade"
+                    reason = (
+                        "refused" if refused_call
+                        else "failed" if promised
+                        else "unmade" if undone
+                        else "narrowed"
+                    )
                     log.info(
                         "tool_use_loop: a %s call was answered in words; sent back once", reason
                     )
@@ -1183,13 +1213,20 @@ class ToolUseLoop:
                         else _FAILED_DIRECTIVE + failed_call
                         if promised
                         else _UNDONE_DIRECTIVE
+                        if undone
+                        else _NARROW_DIRECTIVE
                     )
+                    request = user_utterance or _last_user_text(current_messages)
+                    if request:
+                        directive += _REQUEST_REMINDER + request
                     current_messages.append(BrainMessage(role="assistant", content=agg.text))
                     current_messages.append(BrainMessage(role="user", content=directive))
                     # An action announced and never made: the retry must be a
                     # call. Live 2026-10-25 Nemotron 3.5 Bolt E4B answered
                     # "On it, I am setting the volume" six times with no call,
                     # and a words-only nudge leaves it free to do so again.
+                    # A narrowing question is sent back free: the honest answer
+                    # may still be a question.
                     force_tool = reason == "unmade"
                     final_agg.text = ""
                     continue

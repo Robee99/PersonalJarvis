@@ -300,3 +300,74 @@ async def test_plain_statements_are_not_sent_back(answer: str) -> None:
 
     assert len(brain.requests) == 1
     assert out.text == answer
+
+
+async def test_the_retry_names_the_request_it_is_about() -> None:
+    # Live 2026-10-25 Gemma answered a bare "[retry]" line with "I see you've
+    # provided some context, but I do not have a specific question."
+    brain = _AnnouncingBrain()
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    await loop.run([BrainMessage(role="user", content="set my volume to 35")])
+
+    retry = str(brain.requests[1].messages[-1].content)
+    assert retry.startswith("[retry]")
+    assert retry.endswith("The request was: set my volume to 35")
+
+
+class _CameraTool:
+    name = "find_cctv_cameras"
+    schema: dict[str, Any] = {}
+    description = "cameras in an area"
+
+
+class _NarrowingBrain:
+    """Asks for a narrower area first; calls with the city when told it is enough."""
+
+    def __init__(self, first: str) -> None:
+        self.requests: list[BrainRequest] = []
+        self._first = first
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        last = req.messages[-1]
+        if last.role == "tool":
+            yield BrainDelta(content="The catalog has no public cameras in Mumbai.")
+        elif str(last.content).startswith("[retry]"):
+            call = {"id": "g1", "name": "find_cctv_cameras", "input": {"area": {"place": "Mumbai"}}}
+            yield BrainDelta(tool_call=call)
+            yield BrainDelta(finish_reason="tool_use")
+            return
+        else:
+            yield BrainDelta(content=self._first)
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_a_request_to_narrow_down_a_named_place_is_sent_back_once() -> None:
+    brain = _NarrowingBrain(
+        "I can search for public CCTV cameras in Mumbai, but I need to know the area "
+        "you are interested in more specifically, such as a particular neighborhood "
+        "or a bounding box, to give you the most relevant results."
+    )
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"find_cctv_cameras": _CameraTool()}, executor)
+
+    out = await loop.run(
+        [BrainMessage(role="user", content="Find public CCTV cameras in Mumbai.")]
+    )
+
+    assert executor.calls == 1
+    assert out.text == "The catalog has no public cameras in Mumbai."
+    retry = str(brain.requests[1].messages[-1].content)
+    assert "Do not ask the person to be more specific" in retry
+    assert brain.requests[1].tool_choice is None
+
+
+async def test_a_question_for_a_missing_value_is_not_sent_back() -> None:
+    brain = _NarrowingBrain("Which city should I look in?")
+    loop = ToolUseLoop(brain, {"find_cctv_cameras": _CameraTool()}, _Executor(refusals=0))
+
+    out = await loop.run([BrainMessage(role="user", content="Find public CCTV cameras.")])
+
+    assert len(brain.requests) == 1
+    assert out.text == "Which city should I look in?"
