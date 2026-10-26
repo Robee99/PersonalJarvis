@@ -496,6 +496,9 @@ _SETTINGS_PAGES: tuple[tuple[str, str, str], ...] = (
     (r"wi-?fi|wireless", "network-wifi", "Wi-Fi"),
     (r"network(?:\s+(?:and|&)\s+internet)?|internet", "network", "Network"),
     (r"display|screen|resolution", "display", "Display"),
+    (r"advanced\s+display(?:\s+settings)?", "display-advanced", "Advanced display"),
+    (r"graphics", "display-advancedgraphics", "Graphics"),
+    (r"night\s+light", "nightlight", "Night light"),
     (r"sound|audio", "sound", "Sound"),
     (r"battery|power(?:\s+(?:and|&)\s+battery)?", "batterysaver", "Battery"),
     (r"windows\s+update|updates?", "windowsupdate", "Windows Update"),
@@ -533,21 +536,77 @@ _FOLDER_OPEN = re.compile(
 )
 
 
+#: One step of a spoken path through Settings: "go to display", "then advanced display".
+_STEP_SPLIT = re.compile(r"\s*(?:,|>|\bthen\b|\band\b)\s*", re.IGNORECASE)
+_STEP_FILLER = re.compile(
+    rf"^(?:{_OPEN_VERB}|navigate\s+to|click(?:\s+on)?|select|choose)?\s*"
+    r"(?:the\s+|my\s+)?(?:windows\s+)?(?:pc\s+|computer\s+)?",
+    re.IGNORECASE,
+)
+
+
+def _page(words: str) -> tuple[str, str] | None:
+    for pattern, uri, name in _SETTINGS_PAGES:
+        if re.fullmatch(pattern, words, re.IGNORECASE):
+            return uri, name
+    return None
+
+
+def _settings_path(text: str) -> tuple[str, str] | None:
+    """The deepest page of "open Settings, go to Display, then Advanced display".
+
+    Live 2026-10-26 "open windows pc settings go to display then advanced
+    display" got "Opening Windows PC settings, navigating to Display, and then
+    selecting Advanced Display." with no call. Every step must name Settings
+    or a known page; any other step leaves the ask to the brain.
+    """
+    if not re.match(rf"^\s*{_PLEASE}{_OPEN_VERB}\b", text, re.IGNORECASE):
+        return None
+    body = re.sub(_TAIL, "", text.strip(), flags=re.IGNORECASE)
+    body = re.sub(rf"^\s*{_PLEASE}", "", body, flags=re.IGNORECASE)
+    # "go to" between two steps with no comma is a step boundary too.
+    body = re.sub(r"\s+(?=(?:go\s+to|navigate\s+to|open)\b)", ", ", body, flags=re.IGNORECASE)
+    found: tuple[str, str] | None = None
+    for step in filter(None, (part.strip() for part in _STEP_SPLIT.split(body))):
+        words = _STEP_FILLER.sub("", step).strip()
+        words = re.sub(r"\s+(?:page|section|panel|tab)$", "", words, flags=re.IGNORECASE)
+        if re.fullmatch(r"settings(?:\s+app)?", words, re.IGNORECASE):
+            found = found or ("", "Settings")
+            continue
+        page = _page(re.sub(r"\s+settings$", "", words, flags=re.IGNORECASE)) or _page(words)
+        if page is None:
+            return None
+        found = page
+    return found
+
+
+#: A spoken Settings path chains its steps with "and"/"then", which ``_plain``
+#: reads as a second task; every other condition still sends it to the brain.
+_PATH_CONDITION = re.compile(
+    r"\b(if|when|unless|until|after|before|later|tomorrow|also)\b", re.IGNORECASE
+)
+
+
 def parse_settings_page(text: str) -> tuple[str, str] | None:
     """(ms-settings page, spoken name) this utterance plainly asks to open, else ``None``."""
     if not _plain(text):
+        if (
+            text
+            and not _NEGATION.search(text)
+            and not _QUESTION.search(text)
+            and not _PATH_CONDITION.search(text)
+            and re.search(r"\bsettings\b", text, re.IGNORECASE)
+        ):
+            return _settings_path(text)
         return None
     bare = rf"^\s*{_PLEASE}{_OPEN_VERB}\s+(?:the\s+)?(?:windows\s+)?settings(?:\s+app)?{_TAIL}"
     if re.match(bare, text, re.IGNORECASE):
         return "", "Settings"
-    m = _SETTINGS_OPEN.match(text)
-    if not m or not re.search(r"\bsettings\b", text, re.IGNORECASE):
+    if not re.search(r"\bsettings\b", text, re.IGNORECASE):
         return None
-    page = m.group("page").strip()
-    for pattern, uri, name in _SETTINGS_PAGES:
-        if re.fullmatch(pattern, page, re.IGNORECASE):
-            return uri, name
-    return None
+    m = _SETTINGS_OPEN.match(text)
+    page = _page(m.group("page").strip()) if m else None
+    return page or _settings_path(text)
 
 
 def parse_folder_open(text: str) -> str | None:

@@ -502,6 +502,14 @@ def test_uptime_is_spoken_in_days_hours_and_minutes() -> None:
         ("Open Windows Update settings", ("windowsupdate", "Windows Update")),
         ("show me the display settings", ("display", "Display")),
         ("Open settings", ("", "Settings")),
+        # Live 2026-10-26: answered "Opening ... and then selecting" with no call.
+        (
+            "open windows pc settings go to display then advanced display",
+            ("display-advanced", "Advanced display"),
+        ),
+        ("open settings, then display", ("display", "Display")),
+        ("Open Settings and go to Bluetooth", ("bluetooth", "Bluetooth")),
+        ("open advanced display settings", ("display-advanced", "Advanced display")),
     ],
 )
 def test_settings_pages_match(text: str, expected: tuple[str, str]) -> None:
@@ -510,7 +518,14 @@ def test_settings_pages_match(text: str, expected: tuple[str, str]) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["open bluetooth", "open the settings for my mixer", "don't open settings", "open youtube.com"],
+    [
+        "open bluetooth",
+        "open the settings for my mixer",
+        "don't open settings",
+        "open youtube.com",
+        "open settings then turn off bluetooth",
+        "open chrome settings then display",
+    ],
 )
 def test_other_opens_are_not_settings_pages(text: str) -> None:
     assert pc_reflex.parse_settings_page(text) is None
