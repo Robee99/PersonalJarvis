@@ -12235,6 +12235,30 @@ class BrainManager:
                 )
                 return weather_reply
 
+            # A calendar ask with no calendar connected gets the step that fixes
+            # it; it ran a web search for the words instead (battery 2026-10-26).
+            from jarvis.brain.calendar_gate import (
+                CALENDAR_PLUGINS,
+                is_calendar_ask,
+                not_connected_reply,
+            )
+
+            if is_calendar_ask(user_text) and all(
+                await asyncio.gather(
+                    *(asyncio.to_thread(self._plugin_disconnected, p) for p in CALENDAR_PLUGINS)
+                )
+            ):
+                calendar_reply = not_connected_reply(
+                    persona_style(getattr(self, "_config", None))[1]
+                )
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=calendar_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return calendar_reply
+
         # Focus sessions: "thirty minutes on this", "lock on this tab", "stop
         # focus" start, move and end the server-side session without a model
         # (jarvis/focus/session.py); the callouts later come over the bus.
