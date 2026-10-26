@@ -355,6 +355,61 @@ async def _publish_observation(bus: Any, frame: Frame, window_title: str) -> Non
         log.debug("ObservationCaptured publish failed", exc_info=True)
 
 
+#: Apps a goal can name. A mission typed into Jarvis's own window goes to the
+#: named app's open window first ("chrome is already opened, click on
+#: roberto"), and to the window under Jarvis when the goal names none.
+_NAMED_APPS: tuple[str, ...] = (
+    "chrome", "edge", "firefox", "brave", "opera", "notepad", "spotify",
+    "whatsapp", "telegram", "discord", "excel", "powerpoint", "outlook",
+    "teams", "vlc", "calculator", "obs",
+)
+
+
+def _named_app_window(goal: str, windows: list[Any], own_pid: int) -> Any | None:
+    """The open window of the first app the goal names, never Jarvis's own."""
+    from jarvis.platform import window_state  # noqa: PLC0415
+
+    words = set(re.findall(r"[a-z]+", goal.casefold()))
+    others = [w for w in windows if w.pid != own_pid and not w.minimized]
+    for app in _NAMED_APPS:
+        if app in words:
+            match = window_state._match_window(app, others)  # noqa: SLF001
+            if match is not None:
+                return match
+    return None
+
+
+def _step_off_jarvis(goal: str, platform: str = sys.platform, own_pid: int = 0) -> str:
+    """Bring the goal's app forward when Jarvis's own window has the focus.
+
+    Returns the raised window's title, or "" when Jarvis was not in front or
+    there was nothing to raise. Windows only: elsewhere Jarvis's window does
+    not take the focus from a typed chat the same way. Best-effort, never
+    raises.
+    """
+    import os  # noqa: PLC0415
+
+    if platform != "win32":
+        return ""
+    try:
+        from jarvis.platform import window_state  # noqa: PLC0415
+
+        own_pid = own_pid or os.getpid()
+        front = window_state.foreground_window()
+        if front is None or front.pid != own_pid:
+            return ""
+        target = _named_app_window(goal, window_state.list_windows(), own_pid)
+        if target is None:
+            target = window_state.window_behind_jarvis()
+        if target is None:
+            return ""
+        raised, _ = window_state.raise_window(target)
+        return str(target.title or "app window") if raised else ""
+    except Exception:  # noqa: BLE001 - the mission still starts on the current window
+        log.debug("[cu] stepping off Jarvis's window failed", exc_info=True)
+        return ""
+
+
 def _foreground_title() -> str:
     try:
         from jarvis.platform import window_state  # noqa: PLC0415
@@ -1021,6 +1076,12 @@ async def run_cu_loop(
         ensure_dpi_awareness()
     except Exception:  # noqa: BLE001 — declaration is best-effort
         log.debug("[cu] DPI awareness declaration failed", exc_info=True)
+
+    stepped_to = await asyncio.to_thread(_step_off_jarvis, goal)
+    if stepped_to:
+        log.info("[cu] Jarvis had the focus; brought %r forward", stepped_to[:60])
+        yield _progress(f"[cu] switched from Jarvis to {stepped_to[:60]}")
+        await asyncio.sleep(0.4)  # let the raised window paint before step 1
 
     max_steps = max(25, int(getattr(ctx, "step_budget", 100)))
     monitor_policy = str(getattr(ctx, "monitor", "primary") or "primary")

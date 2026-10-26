@@ -1235,7 +1235,27 @@ def _pick_app_window(
     return None
 
 
-def _foreground_app_window_windows() -> WindowInfo | None:
+def window_behind_jarvis() -> WindowInfo | None:
+    """The app window under Jarvis's own window, when Jarvis has the focus.
+
+    Typing a desktop task into Jarvis's chat leaves Jarvis's main window in
+    front, so a screen mission photographed the dark HUD and gave up ("the
+    screenshot is too dark", live 2026-10-26). Unlike
+    :func:`foreground_app_window`, which only looks past the small overlays,
+    this treats every window of this process as Jarvis's. Returns ``None``
+    when the foreground window is not Jarvis's (nothing to step off) or when
+    no app window sits under it. Windows only; best-effort, never raises.
+    """
+    try:
+        if detect_platform() != "win32":
+            return None
+        return _foreground_app_window_windows(skip_all_own=True)
+    except Exception:  # noqa: BLE001
+        log.debug("window_behind_jarvis failed", exc_info=True)
+        return None
+
+
+def _foreground_app_window_windows(*, skip_all_own: bool = False) -> WindowInfo | None:
     if os.name != "nt":
         return None
     import ctypes  # noqa: PLC0415
@@ -1320,10 +1340,15 @@ def _foreground_app_window_windows() -> WindowInfo | None:
         foreground = user32.GetForegroundWindow()
         if not foreground:
             return None
+        is_ours = (
+            (lambda hwnd: _is_own_process(_pid_of(hwnd))) if skip_all_own else _is_own_overlay
+        )
+        if skip_all_own and not is_ours(int(foreground)):
+            return None
         chosen = _pick_app_window(
             int(foreground),
             next_below=lambda hwnd: int(user32.GetWindow(hwnd, _GW_HWNDNEXT) or 0),
-            is_own_overlay=_is_own_overlay,
+            is_own_overlay=is_ours,
             is_app_window=_is_app_window,
             is_desktop=lambda hwnd: _window_class_windows(hwnd) in _DESKTOP_WINDOW_CLASSES,
         )
@@ -2055,6 +2080,7 @@ __all__ = [
     "focus_window",
     "raise_window",
     "is_app_running",
+    "window_behind_jarvis",
     "raise_after_launch",
     "window_is_on_monitor",
     "window_rect",

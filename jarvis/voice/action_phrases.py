@@ -852,6 +852,8 @@ _EXIT_CODE_PHRASE: dict[int, str] = {
 _CU_REASON_PREFIX_RE = re.compile(
     r"^\s*\[cu\][^:]*:\s*", re.IGNORECASE,
 )
+#: The engine's line for the model's own ``fail`` reason.
+_CU_FAIL_LINE_RE = re.compile(r"^\s*\[cu\]\s*fail\b", re.IGNORECASE)
 #: Internal computer-use DIAGNOSTIC / telemetry markers. A stderr fragment
 #: carrying any of these is loop instrumentation — the no-progress guard, the
 #: anti-oscillation / toggle guards, or the latency "mission profile" summary —
@@ -1469,9 +1471,16 @@ def cu_failure_readback(
             spoken = _localize_permission_cause(cause, lang) or cause
             return action_phrase("cu_failed_reason", lang, error=spoken)
 
-    # 1) The harness detail string may carry the model's verified reason.
+    # 1) The harness detail string may carry the model's verified reason. The
+    # engine always appends its "[cu] mission profile" line after the reason,
+    # so only the "[cu] fail at <tag>:" line is the candidate; otherwise the
+    # whole detail read as telemetry and the user heard only "couldn't get it
+    # done" with no why (live 2026-10-26, "the screenshot is too dark").
     if detail:
-        candidate = _CU_REASON_PREFIX_RE.sub("", detail).strip()
+        fail_line = next(
+            (ln for ln in detail.splitlines() if _CU_FAIL_LINE_RE.match(ln)), detail
+        )
+        candidate = _CU_REASON_PREFIX_RE.sub("", fail_line).strip()
         if _is_speakable_reason(candidate):
             return action_phrase("cu_failed_reason", lang, error=candidate)
 
