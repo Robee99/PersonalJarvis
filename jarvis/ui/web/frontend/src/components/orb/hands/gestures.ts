@@ -24,6 +24,13 @@
  *   peace sign held (PEACE_MS), or both
  *   palms open and still (TWO_PALM_MS) → reset the view
  *
+ * And from the Hands view itself (Zubair Trabzada's holo page, MIT), the
+ * gestures the Orb did not have yet:
+ *   both hands pinching, twisted          → rotate (the page's "twist = rotate")
+ *   a pan let go while moving fast        → flick: the map keeps gliding
+ *   open palm closed to a fist quickly    → pull: fly in to what the cursor is on
+ *   one open palm held still (PUSH_MS)    → push: the map moves back
+ *
  * A pinch aims where the cursor was just before the fingers closed (the
  * index tip travels to the thumb while pinching, so the fingertip under the
  * pinch is not where the person was pointing). That is what makes "pinch the
@@ -62,10 +69,29 @@ export type GestureAction =
   | { type: "zoom"; scale: number }
   | { type: "section"; step: 1 | -1 }
   | { type: "reset" }
-  | { type: "release" };
+  | { type: "release" }
+  /** Radians the two pinching hands turned since the last frame. */
+  | { type: "rotate"; angle: number }
+  /** A pan let go at this speed (0..1 units per second). */
+  | { type: "fling"; vx: number; vy: number }
+  | { type: "pull"; point: ScreenPoint }
+  | { type: "push" };
 
 /** The gestures the guide lists, one row each. */
-export const GESTURES = ["hover", "select", "open", "confirm", "pan", "zoom", "swipe", "reset"] as const;
+export const GESTURES = [
+  "hover",
+  "select",
+  "open",
+  "confirm",
+  "pan",
+  "flick",
+  "zoom",
+  "rotate",
+  "pull",
+  "push",
+  "swipe",
+  "reset",
+] as const;
 export type GestureId = (typeof GESTURES)[number];
 
 /** What the engine sees right now; "pinch" is a pinch not yet a tap, hold or pan. */
@@ -116,6 +142,20 @@ export const SWIPE_DIST = 0.22;
 export const SWIPE_COOLDOWN_MS = 700;
 /** The hand coming back after a swipe is not a swipe the other way. */
 export const SWIPE_REVERSE_MS = 1100;
+/** Turning below this (radians per frame) between two pinches is tremor. */
+export const TWIST_DEADZONE = 0.008;
+/** A pan let go faster than this (0..1 units per second) keeps gliding. */
+export const FLICK_SPEED = 1.1;
+/** The stretch of a pan its release speed is measured over. */
+export const FLICK_WINDOW_MS = 120;
+/** An open palm closed to a fist within this pulls (the Hands view's 320 ms). */
+export const PULL_MS = 320;
+/** The palm must have been shown this long first, so closing a hand to grab is not a pull. */
+export const PULL_SHOWN_MS = 250;
+export const PULL_COOLDOWN_MS = 900;
+/** One open palm held still this long pushes the map back (the page's repulsor, ~0.8 s). */
+export const PUSH_MS = 800;
+export const PUSH_COOLDOWN_MS = 1200;
 
 const dist = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -239,6 +279,13 @@ interface HandState {
   thumbSince: number | null;
   thumbFired: boolean;
   trail: { x: number; y: number; t: number }[];
+  /** Palm positions while panning, for the speed it is let go at. */
+  moves: { x: number; y: number; t: number }[];
+  /** When the palm was last open, and where the cursor was. */
+  openAt: { t: number; since: number; point: ScreenPoint } | null;
+  pushSince: number | null;
+  pushAnchor: ScreenPoint | null;
+  pushFired: boolean;
 }
 
 const newHand = (): HandState => ({
@@ -264,7 +311,33 @@ const newHand = (): HandState => ({
   thumbSince: null,
   thumbFired: false,
   trail: [],
+  moves: [],
+  openAt: null,
+  pushSince: null,
+  pushAnchor: null,
+  pushFired: false,
 });
+
+/** The fling a pan ends with, when the hand was still moving fast. */
+function flingOf(moves: { x: number; y: number; t: number }[], now: number): GestureAction | null {
+  const recent = moves.filter((p) => now - p.t <= FLICK_WINDOW_MS);
+  if (recent.length < 2) return null;
+  const first = recent[0];
+  const last = recent[recent.length - 1];
+  const dt = (last.t - first.t) / 1000;
+  if (dt <= 0) return null;
+  const vx = (last.x - first.x) / dt;
+  const vy = (last.y - first.y) / dt;
+  return Math.hypot(vx, vy) >= FLICK_SPEED ? { type: "fling", vx, vy } : null;
+}
+
+/** The smallest turn from one angle to another, in (-pi, pi]. */
+function turn(from: number, to: number): number {
+  let d = to - from;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d <= -Math.PI) d += 2 * Math.PI;
+  return d;
+}
 
 /** Slot hands by nearest palm so MediaPipe's arbitrary order cannot swap state. */
 function assign(hands: HandLandmarks[], states: HandState[]): (HandLandmarks | null)[] {
@@ -310,9 +383,15 @@ export class GestureEngine {
   private lastReset = -Infinity;
   private lastSwipe: { t: number; step: 1 | -1 } | null = null;
   private twoPalm: { since: number; anchor: ScreenPoint[]; fired: boolean } | null = null;
+  private twistFrom: number | null = null;
+  private lastPull = -Infinity;
+  private lastPush = -Infinity;
 
   reset(): void {
     this.hands = [newHand(), newHand()];
+    this.twistFrom = null;
+    this.lastPull = -Infinity;
+    this.lastPush = -Infinity;
     this.zoomFrom = null;
     this.zoomed = false;
     this.lastReset = -Infinity;
@@ -382,7 +461,12 @@ export class GestureEngine {
         if (st.outFrames >= PINCH_DROP) {
           const tap = !st.panning && !st.held && !this.zoomed && now - st.pinchT < HOLD_MS;
           if (tap && st.aim) actions.push({ type: "select", point: st.aim });
-          if (st.panning) actions.push({ type: "release" });
+          if (st.panning) {
+            actions.push({ type: "release" });
+            const fling = flingOf(st.moves, now);
+            if (fling) actions.push(fling);
+          }
+          st.moves = [];
           Object.assign(st, { pinch: false, inFrames: 0, outFrames: 0, aim: null, pinchPalm: null, lastPinchPalm: null, panning: false, held: false });
           if (!this.hands.some((h) => h.pinch)) this.zoomed = false;
         } else if (!this.zoomed && !(both && other.pinch) && st.pinchPalm && st.lastPinchPalm) {
@@ -392,6 +476,8 @@ export class GestureEngine {
             const dx = palm.x - st.lastPinchPalm.x;
             const dy = palm.y - st.lastPinchPalm.y;
             if (Math.hypot(dx, dy) > DRAG_DEADZONE) actions.push({ type: "drag", dx, dy });
+            st.moves.push({ x: palm.x, y: palm.y, t: now });
+            while (st.moves.length && now - st.moves[0].t > FLICK_WINDOW_MS * 2) st.moves.shift();
             live.push({ id: "pan" });
           } else if (!st.held) {
             progress = clampProgress((now - st.pinchT) / HOLD_MS);
@@ -405,6 +491,18 @@ export class GestureEngine {
         }
       }
 
+      // ---- Open palm closed to a fist at once: pull in (the Hands view's force pull).
+      if (m.open) st.openAt = { t: now, since: st.openAt?.since ?? now, point: cursor };
+      else if (st.openAt && now - st.openAt.t > PULL_MS) st.openAt = null;
+      if (m.fist && !st.pinch && st.fistFrames === 0 && st.openAt) {
+        const shown = st.openAt.t - st.openAt.since >= PULL_SHOWN_MS;
+        if (shown && now - st.openAt.t <= PULL_MS && now - this.lastPull >= PULL_COOLDOWN_MS) {
+          this.lastPull = now;
+          actions.push({ type: "pull", point: st.openAt.point });
+        }
+        st.openAt = null;
+      }
+
       // ---- Fist: grab the map and move it with the hand.
       if (m.fist && !st.pinch) {
         st.fistFrames += 1;
@@ -416,10 +514,17 @@ export class GestureEngine {
           }
           st.grabbing = true;
           st.lastFistPalm = palm;
+          st.moves.push({ x: palm.x, y: palm.y, t: now });
+          while (st.moves.length && now - st.moves[0].t > FLICK_WINDOW_MS * 2) st.moves.shift();
           live.push({ id: "pan" });
         }
       } else {
-        if (st.grabbing) actions.push({ type: "release" });
+        if (st.grabbing) {
+          actions.push({ type: "release" });
+          const fling = flingOf(st.moves, now);
+          if (fling) actions.push(fling);
+        }
+        if (!st.pinch) st.moves = [];
         st.grabbing = false;
         st.fistFrames = 0;
         st.lastFistPalm = null;
@@ -476,6 +581,29 @@ export class GestureEngine {
         live.push({ id: "swipe" });
       } else st.trail = [];
 
+      // ---- One open palm held still: push the map back (the Hands view's repulsor).
+      // Two open palms are the reset pose, so the other hand must not be open too.
+      const otherOpen = metrics[1 - i]?.open ?? false;
+      if (m.open && !st.pinch && !otherOpen) {
+        const moved = st.pushAnchor && Math.hypot(palm.x - st.pushAnchor.x, palm.y - st.pushAnchor.y) > STILL_SLOP;
+        if (st.pushSince === null || moved) {
+          st.pushSince = now;
+          st.pushAnchor = palm;
+          st.pushFired = false;
+        }
+        const held = now - st.pushSince;
+        if (!st.pushFired && held >= PUSH_MS && now - this.lastPush >= PUSH_COOLDOWN_MS) {
+          st.pushFired = true;
+          this.lastPush = now;
+          actions.push({ type: "push" });
+        }
+        if (held > SWIPE_MS) live.push({ id: "push", progress: st.pushFired ? 1 : clampProgress(held / PUSH_MS) });
+      } else {
+        st.pushSince = null;
+        st.pushAnchor = null;
+        st.pushFired = false;
+      }
+
       const pose: HandPose = st.pinch
         ? "pinch"
         : m.thumbsUp
@@ -501,11 +629,23 @@ export class GestureEngine {
     // ---- Two pinching hands zoom by the change in the distance between them.
     const [a, b] = this.hands;
     if (both && a.pinch && b.pinch && metrics[0] && metrics[1]) {
-      const d = dist(toScreen(metrics[0].pinchAt), toScreen(metrics[1].pinchAt));
+      const pa = toScreen(metrics[0].pinchAt);
+      const pb = toScreen(metrics[1].pinchAt);
+      const d = dist(pa, pb);
       if (this.zoomFrom !== null && this.zoomFrom > 1e-3 && d > 1e-3) {
         const scale = d / this.zoomFrom;
         if (Math.abs(scale - 1) > 0.004) actions.push({ type: "zoom", scale });
       }
+      // Twisting the two pinches turns the map, as in the Hands view.
+      const angle = Math.atan2(pb.y - pa.y, pb.x - pa.x);
+      if (this.twistFrom !== null) {
+        const delta = turn(this.twistFrom, angle);
+        if (Math.abs(delta) > TWIST_DEADZONE) {
+          actions.push({ type: "rotate", angle: delta });
+          live.unshift({ id: "rotate" });
+        }
+      }
+      this.twistFrom = angle;
       // A one-hand pan that turned into a zoom has let go of the map.
       for (const h of this.hands) {
         if (h.panning) actions.push({ type: "release" });
@@ -514,7 +654,10 @@ export class GestureEngine {
       this.zoomFrom = d;
       this.zoomed = true;
       live.unshift({ id: "zoom" });
-    } else this.zoomFrom = null;
+    } else {
+      this.zoomFrom = null;
+      this.twistFrom = null;
+    }
 
     // ---- Both palms open and still: reset the view.
     if (both && metrics[0]?.open && metrics[1]?.open && !a.pinch && !b.pinch) {
@@ -540,7 +683,8 @@ export class GestureEngine {
       }
     }
 
-    const rank = (g: LiveGesture) => ["zoom", "reset", "open", "pinch", "confirm", "pan", "swipe", "hover"].indexOf(g.id);
+    const rank = (g: LiveGesture) =>
+      ["rotate", "zoom", "reset", "push", "open", "pinch", "confirm", "pan", "swipe", "hover"].indexOf(g.id);
     const gesture = live.length ? [...live].sort((x, y) => rank(x) - rank(y))[0] : null;
     return { actions, cursors, gesture };
   }

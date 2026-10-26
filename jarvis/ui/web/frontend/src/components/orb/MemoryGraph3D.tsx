@@ -64,6 +64,11 @@ export interface MemoryGraph3DHandle {
   fit: (ids?: ReadonlySet<string>) => void;
   /** Fly to one memory and keep turning around it. */
   focus: (id: string) => void;
+  /**
+   * Turn the camera around what it looks at, by these fractions of a turn
+   * (sideways) and of half a turn (up and down): a hand grabbing the cloud.
+   */
+  orbit: (dx: number, dy: number) => void;
 }
 
 export interface MemoryGraph3DProps {
@@ -489,7 +494,31 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
     [data, radius, reduced],
   );
 
-  useImperativeHandle(ref, () => ({ fit, focus }), [fit, focus]);
+  const orbit = useCallback((dx: number, dy: number) => {
+    const graph = graphRef.current;
+    if (!graph) return;
+    const controls = graph.controls() as { target?: { x: number; y: number; z: number }; update?: () => void };
+    const t = controls.target ?? { x: 0, y: 0, z: 0 };
+    const camera = graph.camera() as {
+      position: { x: number; y: number; z: number };
+      lookAt?: (x: number, y: number, z: number) => void;
+    };
+    const ox = camera.position.x - t.x;
+    const oy = camera.position.y - t.y;
+    const oz = camera.position.z - t.z;
+    const r = Math.hypot(ox, oy, oz) || 1;
+    // The cloud follows the hand the way it follows a mouse drag
+    // (OrbitControls: dragging right turns theta down, dragging down phi).
+    const theta = Math.atan2(ox, oz) - dx * 2 * Math.PI;
+    const phi = Math.min(Math.PI - 0.15, Math.max(0.15, Math.acos(Math.min(1, Math.max(-1, oy / r))) - dy * Math.PI));
+    camera.position.x = t.x + r * Math.sin(phi) * Math.sin(theta);
+    camera.position.y = t.y + r * Math.cos(phi);
+    camera.position.z = t.z + r * Math.sin(phi) * Math.cos(theta);
+    camera.lookAt?.(t.x, t.y, t.z);
+    controls.update?.();
+  }, []);
+
+  useImperativeHandle(ref, () => ({ fit, focus, orbit }), [fit, focus, orbit]);
 
   // Frame once the cloud has spread, and again when it has settled.
   useEffect(() => {

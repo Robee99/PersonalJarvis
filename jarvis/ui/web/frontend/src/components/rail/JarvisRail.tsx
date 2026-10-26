@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ArcHalo } from "@/components/stark/ArcHalo";
-import { wordmark } from "@/components/stark/StarkShell";
+import { FullMemoryMap, wordmark } from "@/components/stark/StarkShell";
 import { HUD_SECTION_IDS } from "@/components/layout/navGroups";
 import { clock, useFocusSession } from "@/lib/focusSession";
 import { useEventStore, type VoiceState } from "@/store/events";
@@ -142,31 +142,26 @@ export function JarvisRail({ vision }: { vision: RailVision }) {
   const brainProvider = useEventStore((s) => s.brainProvider);
   const assistantName = useEventStore((s) => s.assistantName);
   const activeSection = useEventStore((s) => s.activeSection);
-  const setActiveSection = useEventStore((s) => s.setActiveSection);
   const { avatar, holo, reflexOpen, folded: foldPick, mapOpen, setAvatar, setHolo, setReflexOpen, setFolded } = useRailStore();
   const focus = useFocusSession();
   const [focusOpen, setFocusOpen] = useState(false);
   const [problem, setProblem] = useState("");
   const onHud = (HUD_SECTION_IDS as readonly string[]).includes(activeSection);
   const f = focus.state;
-  // Leaving the Stark screens closes the map and its camera: HOLO goes off too.
   const onStark = STARK_SCREENS.includes(activeSection);
   const folded = !onStark && foldPick;
   const showPresence = !(onHud && !mapOpen);
-  useEffect(() => {
-    if (holo && !onStark) setHolo(false);
-  }, [holo, onStark, setHolo]);
+  // A Stark screen opens the brain map for HOLO itself (StarkShell). The HUD
+  // and every other screen have none, so the rail opens it over them: HOLO
+  // used to jump to the HUD, which has no map, and the hands never started
+  // (Roberto 2026-10-26 "holo hands still broken").
+  const shellMap = onStark && !onHud;
 
   const act = (work: () => Promise<unknown>) => {
     setProblem("");
     void work().catch((error: unknown) => setProblem(error instanceof Error ? error.message : String(error)));
   };
-  const toggleHolo = () => {
-    const next = !holo;
-    setHolo(next);
-    // Hands steer the brain map, which opens from the HUD.
-    if (next && !onHud) setActiveSection("chats");
-  };
+  const toggleHolo = () => setHolo(!holo);
   const toggleFocus = () => {
     if (f?.active) setFocusOpen(!focusOpen);
     else act(async () => { await focus.start(30); setFocusOpen(true); });
@@ -175,6 +170,12 @@ export function JarvisRail({ vision }: { vision: RailVision }) {
   const modelText = modelChip(brainModel || brainProvider) || t("rail.no_model");
 
   return (
+    <>
+    {holo && !shellMap && (
+      <div className="fixed inset-0 z-[80]" data-testid="rail-holo-map">
+        <FullMemoryMap request={{ mode: "memory" }} onClose={() => setHolo(false)} />
+      </div>
+    )}
     <aside
       aria-label={t("rail.label")}
       data-testid="jarvis-rail"
@@ -272,5 +273,6 @@ export function JarvisRail({ vision }: { vision: RailVision }) {
         </div>
       )}
     </aside>
+    </>
   );
 }

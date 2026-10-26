@@ -8032,6 +8032,22 @@
         "reset": {
           "pose": "Señal de la paz, o ambas palmas abiertas, mantenidas",
           "action": "Restablece la vista"
+        },
+        "flick": {
+          "pose": "Pellizca o cierra el puño, mueve y suelta rápido",
+          "action": "Lanza el mapa; sigue deslizándose"
+        },
+        "rotate": {
+          "pose": "Pellizca con las dos manos y gira",
+          "action": "Gira el mapa 3D"
+        },
+        "pull": {
+          "pose": "Muestra la palma abierta y ciérrala en puño",
+          "action": "Vuela al elemento bajo el cursor"
+        },
+        "push": {
+          "pose": "Una palma abierta, quieta",
+          "action": "Aleja un paso"
         }
       },
       "indicator_label": "Gesto reconocido",
@@ -8045,7 +8061,9 @@
         "pan": "Agarrando: moviendo el mapa",
         "zoom": "Pellizco con dos manos: zoom",
         "swipe": "Palma abierta: desliza a la izquierda o a la derecha para cambiar de sección",
-        "reset": "Mantén para restablecer la vista"
+        "reset": "Mantén para restablecer la vista",
+        "rotate": "Giro con dos manos: girando",
+        "push": "Mantén la palma quieta para alejar"
       },
       "fired": {
         "select": "Seleccionado",
@@ -8053,7 +8071,10 @@
         "confirm": "Confirmado",
         "swipe_next": "Sección siguiente",
         "swipe_prev": "Sección anterior",
-        "reset": "Vista restablecida"
+        "reset": "Vista restablecida",
+        "flick": "Lanzado",
+        "pull": "Acercado",
+        "push": "Alejado"
       }
     }
   },

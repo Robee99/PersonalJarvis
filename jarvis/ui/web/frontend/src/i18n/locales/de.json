@@ -8032,6 +8032,22 @@
         "reset": {
           "pose": "Victory-Zeichen oder beide Hände offen, halten",
           "action": "Setzt die Ansicht zurück"
+        },
+        "flick": {
+          "pose": "Pinch oder Faust, bewegen und schnell loslassen",
+          "action": "Wirft die Karte; sie gleitet weiter"
+        },
+        "rotate": {
+          "pose": "Mit beiden Händen pinchen und drehen",
+          "action": "Dreht die 3D-Karte"
+        },
+        "pull": {
+          "pose": "Offene Hand zeigen, dann zur Faust schließen",
+          "action": "Fliegt zum Eintrag unter dem Zeiger"
+        },
+        "push": {
+          "pose": "Eine offene Hand ruhig halten",
+          "action": "Zoomt eine Stufe heraus"
         }
       },
       "indicator_label": "Erkannte Geste",
@@ -8045,7 +8061,9 @@
         "pan": "Gegriffen: Karte wird verschoben",
         "zoom": "Beidhändig: zoomen",
         "swipe": "Offene Hand: nach links oder rechts wischen für Abschnitte",
-        "reset": "Halten setzt die Ansicht zurück"
+        "reset": "Halten setzt die Ansicht zurück",
+        "rotate": "Zwei Hände drehen: dreht",
+        "push": "Hand ruhig halten zum Herauszoomen"
       },
       "fired": {
         "select": "Ausgewählt",
@@ -8053,7 +8071,10 @@
         "confirm": "Bestätigt",
         "swipe_next": "Nächster Abschnitt",
         "swipe_prev": "Vorheriger Abschnitt",
-        "reset": "Ansicht zurückgesetzt"
+        "reset": "Ansicht zurückgesetzt",
+        "flick": "Geworfen",
+        "pull": "Herangeholt",
+        "push": "Zurückgeschoben"
       }
     }
   },

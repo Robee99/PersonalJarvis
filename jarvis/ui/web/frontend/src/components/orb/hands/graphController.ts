@@ -14,6 +14,10 @@
  *   zoom    → zoom around the centre
  *   section → previous / next section
  *   reset   → the whole map framed again, nothing picked
+ *   rotate  → the map turns (the 3D map orbits; the flat map has no turn)
+ *   fling   → the map keeps gliding the way the hand threw it, slowing down
+ *   pull    → fly in to the node under the cursor (or zoom in)
+ *   push    → zoom out a step
  *
  * A pick by hand only marks the node. Recentring on it would slide it out
  * from under the hand, and the second pinch that opens it would land on
@@ -37,10 +41,54 @@ export interface HandMap<N extends { id: string }> {
   zoom?(scale: number): void;
   reset?(): void;
   section?(step: 1 | -1): void;
+  rotate?(angle: number): void;
+  /** Fly in to this node; without it a pull zooms in. */
+  pull?(node: N): void;
+}
+
+/** Zoom steps of a pull with nothing under the cursor, and of a push. */
+export const PULL_ZOOM = 1.4;
+export const PUSH_ZOOM = 0.7;
+/** How long a flick glides, and how fast it slows (per 60 fps frame). */
+export const GLIDE_MS = 900;
+export const GLIDE_DECAY = 0.9;
+
+/**
+ * Keep moving at `vx, vy` (units per second), slowing each frame, by calling
+ * `step` with each frame's share. A new glide or `stop()` ends the last one.
+ */
+export function glider(step: (dx: number, dy: number) => void) {
+  let raf: number | undefined;
+  const stop = () => {
+    if (raf !== undefined) cancelAnimationFrame(raf);
+    raf = undefined;
+  };
+  return {
+    stop,
+    start(vx: number, vy: number) {
+      stop();
+      let last = performance.now();
+      const began = last;
+      let ux = vx;
+      let uy = vy;
+      const tick = (now: number) => {
+        const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+        last = now;
+        step(ux * dt, uy * dt);
+        const decay = Math.pow(GLIDE_DECAY, dt * 60);
+        ux *= decay;
+        uy *= decay;
+        if (now - began < GLIDE_MS && Math.hypot(ux, uy) > 0.02) raf = requestAnimationFrame(tick);
+        else raf = undefined;
+      };
+      raf = requestAnimationFrame(tick);
+    },
+  };
 }
 
 export function handMapController<N extends { id: string }>(map: HandMap<N>): HandController {
   let hovered: N | null = null;
+  const glide = glider((dx, dy) => map.pan?.(dx, dy));
   return {
     onAction(action: GestureAction) {
       switch (action.type) {
@@ -66,7 +114,23 @@ export function handMapController<N extends { id: string }>(map: HandMap<N>): Ha
           return;
         }
         case "drag":
+          glide.stop();
           map.pan?.(action.dx, action.dy);
+          return;
+        case "fling":
+          if (map.pan) glide.start(action.vx, action.vy);
+          return;
+        case "rotate":
+          map.rotate?.(action.angle);
+          return;
+        case "pull": {
+          const node = map.nodeAt(action.point) ?? hovered;
+          if (node && map.pull) map.pull(node);
+          else map.zoom?.(PULL_ZOOM);
+          return;
+        }
+        case "push":
+          map.zoom?.(PUSH_ZOOM);
           return;
         case "zoom":
           map.zoom?.(action.scale);
@@ -75,6 +139,7 @@ export function handMapController<N extends { id: string }>(map: HandMap<N>): Ha
           map.section?.(action.step);
           return;
         case "reset":
+          glide.stop();
           hovered = null;
           map.hover(null);
           map.pick(null);
@@ -181,6 +246,12 @@ export function graphHandController<N extends PlacedNode>(target: GraphHandTarge
       }
     },
     section: target.section ? (step) => target.section?.(step) : undefined,
+    pull(node) {
+      const graph = target.graph();
+      if (!graph || node.x === undefined || node.y === undefined) return;
+      graph.centerAt(node.x, node.y, 400);
+      graph.zoom(Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, graph.zoom() * PULL_ZOOM)), 400);
+    },
   });
 }
 

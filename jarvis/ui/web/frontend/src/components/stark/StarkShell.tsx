@@ -323,7 +323,7 @@ export function wordmark(name: string): string {
  * The full memory map over the screen, closed with the X or Escape. The
  * screen stays mounted underneath, so closing it lands exactly where you were.
  */
-function FullMemoryMap({ request, onClose }: { request: FullMapRequest; onClose: () => void }) {
+export function FullMemoryMap({ request, onClose }: { request: FullMapRequest; onClose: () => void }) {
   const t = useT();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

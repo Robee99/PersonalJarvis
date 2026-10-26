@@ -8037,6 +8037,22 @@
         "reset": {
           "pose": "Peace sign, or both palms open, held",
           "action": "Resets the view"
+        },
+        "flick": {
+          "pose": "Pinch or fist, move and let go fast",
+          "action": "Throws the map; it keeps gliding"
+        },
+        "rotate": {
+          "pose": "Pinch with both hands and twist",
+          "action": "Turns the 3D map"
+        },
+        "pull": {
+          "pose": "Show an open palm, then close it to a fist",
+          "action": "Flies in to the item under the cursor"
+        },
+        "push": {
+          "pose": "One open palm, held still",
+          "action": "Zooms out a step"
         }
       },
       "indicator_label": "Recognised gesture",
@@ -8050,7 +8066,9 @@
         "pan": "Grabbing: moving the map",
         "zoom": "Two-hand pinch: zooming",
         "swipe": "Open palm: swipe left or right for sections",
-        "reset": "Hold to reset the view"
+        "reset": "Hold to reset the view",
+        "rotate": "Two-hand twist: turning",
+        "push": "Hold the palm still to zoom out"
       },
       "fired": {
         "select": "Selected",
@@ -8058,7 +8076,10 @@
         "confirm": "Confirmed",
         "swipe_next": "Next section",
         "swipe_prev": "Previous section",
-        "reset": "View reset"
+        "reset": "View reset",
+        "flick": "Thrown",
+        "pull": "Pulled in",
+        "push": "Pushed back"
       }
     }
   },

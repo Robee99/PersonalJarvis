@@ -194,6 +194,12 @@ export function firedGesture(action: GestureAction): Omit<FiredGesture, "seq"> |
       return { id: "swipe", step: action.step };
     case "reset":
       return { id: "reset" };
+    case "fling":
+      return { id: "flick" };
+    case "pull":
+      return { id: "pull" };
+    case "push":
+      return { id: "push" };
     default:
       return null;
   }

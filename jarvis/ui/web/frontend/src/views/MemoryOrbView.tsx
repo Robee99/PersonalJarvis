@@ -257,7 +257,8 @@ export function MemoryOrbView({
   const trackingRef = useRef(tracking);
   trackingRef.current = tracking;
   useEffect(() => {
-    if (holo) trackingRef.current.start();
+    // HOLO is the ask: the tracking files are fetched if they are missing.
+    if (holo) trackingRef.current.start({ install: true });
     else if (trackingRef.current.status !== "off") trackingRef.current.stop();
   }, [holo]);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -495,6 +496,11 @@ export function MemoryOrbView({
           zoom: (scale) => {
             scene.zoom(scale);
           },
+          // Grabbing the cloud turns it, and so does twisting two pinches,
+          // as in the Hands view; a pull flies in to the node.
+          pan: (dx, dy) => graph3dRef.current?.orbit(dx, dy),
+          rotate: (angle) => graph3dRef.current?.orbit(-angle / (2 * Math.PI), 0),
+          pull: (node) => graph3dRef.current?.focus(node.id),
         }),
       );
     } else {
@@ -512,10 +518,10 @@ export function MemoryOrbView({
     }
     return () => registerHands(null);
   }, [mode, registerHands, in3d]);
-  // What hands can do on the map shown: the 3D map orbits by itself and has
-  // no pan, the projects map has no sections.
+  // What hands can do on the map shown: only the 3D map turns, the projects
+  // map has no sections.
   const handGestures = useMemo<readonly GestureId[]>(
-    () => GESTURES.filter((id) => (mode === "projects" ? id !== "swipe" : !(in3d && id === "pan"))),
+    () => GESTURES.filter((id) => (mode === "projects" ? id !== "swipe" && id !== "rotate" : in3d || id !== "rotate")),
     [mode, in3d],
   );
 
