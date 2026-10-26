@@ -149,7 +149,7 @@ def top_video(query: str) -> tuple[str, str] | None:
     title_match = _TITLE.search(page, found.end())
     try:
         title = json.loads(f'"{title_match.group(1)}"') if title_match else query
-    except ValueError:
+    except ValueError:  # an escape JSON cannot read: speak the asked-for name instead
         title = query
     return found.group(1), " ".join(str(title).split())
 

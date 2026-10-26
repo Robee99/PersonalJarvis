@@ -1403,7 +1403,7 @@ def _pi_log_has_user_turn(log: Path) -> bool:
     try:
         with log.open("rb") as handle:
             return any(_PI_USER_TURN_MARKER in line for line in handle)
-    except OSError:
+    except OSError:  # unreadable file = no conversation to resume; the pane starts fresh
         return False
 
 
@@ -1427,11 +1427,11 @@ def _pi_header(path: Path) -> dict[str, Any] | None:
                     return None
                 try:
                     record = json.loads(raw.decode("utf-8", errors="replace"))
-                except ValueError:
+                except ValueError:  # a torn or foreign line; the header may be the next one
                     continue
                 if isinstance(record, dict) and record.get("type") == "session":
                     return record
-    except OSError:
+    except OSError:  # unreadable file: not a session this pane can claim
         return None
     return None
 
@@ -1457,7 +1457,7 @@ def _discover_omp(
     for path in root.glob("*/*.jsonl"):
         try:
             mtime = path.stat().st_mtime
-        except OSError:
+        except OSError:  # deleted between glob and stat: not a candidate
             continue
         if mtime >= floor:
             files.append((mtime, path))
