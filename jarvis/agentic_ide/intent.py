@@ -3075,6 +3075,12 @@ def _mask_spoken_positions(text: str) -> str:
     return out
 
 
+#: Longer than any spoken pane request ("open five Claude Code terminals and
+#: three Codex ones in the jarvis folder").
+_SPAWN_MAX_CHARS = 400
+_SPAWN_MAX_LINES = 4
+
+
 def detect_spawn(user_text: str, *, names: list[str] | None = None) -> SpawnTerminalsRequest | None:
     """A request to open more terminals, or ``None``.
 
@@ -3086,6 +3092,11 @@ def detect_spawn(user_text: str, *, names: list[str] | None = None) -> SpawnTerm
     """
     original = (user_text or "").strip()
     if len(original) < 6:
+        return None
+    # A pasted document is no spoken request for panes: a test sheet with
+    # "opens a new window" in a table cell opened the Agentic IDE instead
+    # of being read (live 2026-10-26).
+    if len(original) > _SPAWN_MAX_CHARS or original.count("\n") >= _SPAWN_MAX_LINES:
         return None
     # A spoken self-correction RETRACTS everything in front of it, so the
     # corrected request is parsed and the withdrawn half never opens a pane.

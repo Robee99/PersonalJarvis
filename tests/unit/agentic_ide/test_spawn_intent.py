@@ -1033,3 +1033,14 @@ def test_spoken_filler_in_front_of_the_enumeration_is_not_the_task() -> None:
         instruction = intent.spawn_instruction(utterance)
         assert not instruction.casefold().startswith(("like", "so"))
         assert intent.distributes_tasks(instruction) is True
+
+
+def test_a_pasted_document_never_opens_panes() -> None:
+    # Live 2026-10-26: "BEGIN" plus a pasted test sheet whose table said
+    # "opens a new window" was answered with "Pick a folder in the Agentic IDE".
+    from jarvis.agentic_ide.intent import detect_spawn
+
+    row = "| A2 | `what tabs are open` | Reads your tabs. | It opens a new window. |"
+    sheet = "BEGIN\n\n# Jarvis live tests\n\n| # | Type | Should | Fail |\n|---|---|---|\n" + row
+    assert detect_spawn(sheet) is None
+    assert detect_spawn("open a new terminal") is not None
