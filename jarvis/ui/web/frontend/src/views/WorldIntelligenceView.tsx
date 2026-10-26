@@ -38,7 +38,9 @@ export function resolveGeVEmbedUrl(configured?: string): string | null {
       url.password
     )
       return null;
-    url.searchParams.set("embed", "1");
+    // "full": every GEV panel and setting stays, and views and incidents still
+    // arrive (GEV jarvis/latest); "1" would show the globe alone.
+    url.searchParams.set("embed", "full");
     return url.href;
   } catch {
     return null;

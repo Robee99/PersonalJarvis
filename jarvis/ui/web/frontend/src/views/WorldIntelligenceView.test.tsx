@@ -178,7 +178,7 @@ describe("WorldIntelligenceView", () => {
     const frame = screen.getByTitle("God’s Eye View") as HTMLIFrameElement;
     expect(frame.src).toBe(GEV_EMBED_URL);
     expect(new URL(frame.src).hostname).toBe("127.0.0.1");
-    expect(new URL(frame.src).searchParams.get("embed")).toBe("1");
+    expect(new URL(frame.src).searchParams.get("embed")).toBe("full");
     expect(frame.getAttribute("allow")).toContain("microphone");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(
@@ -187,9 +187,9 @@ describe("WorldIntelligenceView", () => {
   });
 
   it("allows configured loopback ports and rejects remote view servers", () => {
-    expect(resolveGeVEmbedUrl()).toBe("http://127.0.0.1:4173/?embed=1");
+    expect(resolveGeVEmbedUrl()).toBe("http://127.0.0.1:4173/?embed=full");
     expect(resolveGeVEmbedUrl("http://localhost:4182/path?style=flir")).toBe(
-      "http://localhost:4182/path?style=flir&embed=1",
+      "http://localhost:4182/path?style=flir&embed=full",
     );
     expect(resolveGeVEmbedUrl("https://example.com/" )).toBeNull();
     expect(resolveGeVEmbedUrl("http://user:pass@127.0.0.1:4173/")).toBeNull();
