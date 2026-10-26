@@ -99,6 +99,8 @@ datas.append((str(PROJECT_ROOT / "jarvis/society/browser/page_cursor.py"), "jarv
 # sweep below also finds them; named here so a narrower sweep cannot drop them
 # and send a frozen app's setup to upstream latest.
 datas.append((str(PROJECT_ROOT / "jarvis/agent_runtimes/runtime-versions.json"), "jarvis/agent_runtimes"))
+# The Pi extension a Pi / Oh My Pi pane loads with ``-e`` (jarvis/workspace/agents.py).
+datas.append((str(PROJECT_ROOT / "jarvis/workspace/pi_local_models.js"), "jarvis/workspace"))
 
 # The local voice engine runs in its OWN Python environment, so a frozen build
 # must ship its sources as plain files: setup copies them into the engine home

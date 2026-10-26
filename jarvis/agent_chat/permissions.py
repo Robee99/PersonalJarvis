@@ -243,6 +243,34 @@ _CURSOR: Final[tuple[PermissionMode, ...]] = (
     ),
 )
 
+_PI: Final[tuple[PermissionMode, ...]] = (
+    PermissionMode(
+        "auto",
+        "Full access",
+        "Pi has no permission prompts: every tool it has runs without asking.",
+    ),
+    PermissionMode(
+        "plan",
+        "Plan",
+        "Only Pi's read, grep, find and ls tools are switched on (`--tools`), so "
+        "nothing can be changed.",
+    ),
+)
+
+_OMP: Final[tuple[PermissionMode, ...]] = (
+    PermissionMode(
+        "auto",
+        "Full access",
+        "Every tool call is approved without asking (`--auto-approve`).",
+    ),
+    PermissionMode(
+        "plan",
+        "Plan",
+        "Only Oh My Pi's read, grep, glob and lsp tools are switched on "
+        "(`--tools`), so nothing can be changed.",
+    ),
+)
+
 _API: Final[tuple[PermissionMode, ...]] = (
     PermissionMode(
         "ask",
@@ -329,6 +357,8 @@ _LADDERS: Final[dict[str, tuple[tuple[PermissionMode, ...], str]]] = {
     "dsh-cli": (_DSH, "auto"),
     "hermes-cli": (_HERMES, "auto"),
     "cursor-cli": (_CURSOR, "auto"),
+    "pi-cli": (_PI, "auto"),
+    "omp-cli": (_OMP, "auto"),
     "api": (_API, "auto"),
     JARVIS_LADDER: (_JARVIS, "bypass"),
     "society": (_SOCIETY, "bypass"),

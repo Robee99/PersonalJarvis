@@ -79,6 +79,10 @@ _LADDERS: Final[dict[str, tuple[tuple[str, ...], str]]] = {
     # as ``model@effort`` (jarvis.plugins.brain.hermes.local_thinking_model).
     "hermes": (("", "none", "low", "medium", "high", "xhigh", "max"), ""),
     "cursor": (("",), ""),
+    # Pi's ``--thinking`` levels mean nothing to the local model the seat runs
+    # on (the extension declares it non-reasoning), so no knob is offered.
+    "pi": (("",), ""),
+    "omp": (("",), ""),
     "nvidia": (("", "none", "low", "medium", "high"), ""),
     # Nous Portal documents no reasoning-effort parameter, so no knob is offered.
     "nous": (("",), ""),

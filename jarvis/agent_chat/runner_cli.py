@@ -128,6 +128,8 @@ CLI_BINARIES: Final[dict[str, tuple[str, ...]]] = {
     "glm-cli": ("claude", "claude.cmd", "claude.exe"),
     "dsh-cli": ("dsh", "dsh.cmd", "dsh.exe"),
     "hermes-cli": ("hermes", "hermes.exe", "hermes.cmd"),
+    "pi-cli": ("pi", "pi.cmd", "pi.exe"),
+    "omp-cli": ("omp", "omp.exe", "omp.cmd"),
     # Documented command is ``agent``; the Windows installer also drops
     # ``cursor-agent`` so the generic name does not collide with another
     # product. Prefer the unambiguous name when both are present.
@@ -291,6 +293,20 @@ def hermes_argv_prefix() -> list[str]:
     if not binary:
         raise CliUnavailable("Hermes Agent (hermes) is not installed or not on PATH.")
     return [binary]
+
+
+def pi_argv_prefix() -> list[str]:
+    binary = _which(*CLI_BINARIES["pi-cli"])
+    if not binary:
+        raise CliUnavailable("Pi (pi) is not installed or not on PATH.")
+    return _behind_shim(binary, "pi")
+
+
+def omp_argv_prefix() -> list[str]:
+    binary = _which(*CLI_BINARIES["omp-cli"])
+    if not binary:
+        raise CliUnavailable("Oh My Pi (omp) is not installed or not on PATH.")
+    return _behind_shim(binary, "omp")
 
 
 def cursor_argv_prefix() -> list[str]:
@@ -523,7 +539,7 @@ class CliPlan:
     argv: list[str]
     env: dict[str, str]
     stdin_text: str | None
-    shape: str  # a key of ``_SHAPES``: claude | codex | agy | opencode | kimi | text | cursor
+    shape: str  # a key of ``_SHAPES``: claude | codex | agy | opencode | kimi | pi | text | cursor
     #: Vendor session id we chose up front (claude/grok --session-id), or None
     #: when the CLI assigns one (agy, codex) and we read it from the stream.
     vendor_session: str | None
@@ -1399,6 +1415,112 @@ def plan_hermes(
     return CliPlan(argv, env, None, "text", None)
 
 
+#: The tools a Plan turn keeps, per CLI: reading and searching only, so the
+#: stance is enforced by the CLI rather than asked of the model.
+_PI_READ_ONLY_TOOLS: Final[dict[str, str]] = {
+    "pi-cli": "read,grep,find,ls",
+    "omp-cli": "read,grep,glob,lsp",
+}
+
+
+def _plan_pi_family(
+    runner: str,
+    agent: str,
+    prefix: list[str],
+    *,
+    prompt: str,
+    model: str,
+    permission_mode: str,
+    resume: str | None,
+    identity: jarvis_harness.Identity | None,
+    resume_flag: str,
+    auto_flags: tuple[str, ...],
+) -> CliPlan:
+    """Pi and Oh My Pi print mode: one prompt in, the agent's events as JSON lines.
+
+    Both load the extension that offers the local model server and start on
+    its model unless one was picked, so a turn never lands on a paid provider
+    by accident (``jarvis.workspace.agents.PI_LOCAL_MODEL``). The stream's
+    first line names the session, which is how a fresh turn learns its id.
+    """
+    from jarvis.workspace.agents import PI_LOCAL_EXTENSION, PI_LOCAL_MODEL
+
+    mode = normalize_permission(runner, permission_mode)
+    prompt = _with_identity(prompt, identity, resume)
+    argv = [
+        *prefix,
+        "-p",
+        "--mode",
+        "json",
+        "-e",
+        PI_LOCAL_EXTENSION,
+        "--model",
+        model or PI_LOCAL_MODEL,
+    ]
+    if mode == "plan":
+        argv += ["--tools", _PI_READ_ONLY_TOOLS[runner]]
+    else:
+        argv += list(auto_flags)
+    if resume:
+        argv += [resume_flag, resume]
+    argv += ["--", _argv_prompt(argv, prompt)]
+    env = _registry_env(agent, _account_env(agent))
+    return CliPlan(argv, env, None, "pi", resume)
+
+
+def plan_pi(
+    *,
+    prompt: str,
+    cwd: Path,
+    model: str,
+    effort: str,
+    permission_mode: str,
+    resume: str | None,
+    identity: jarvis_harness.Identity | None = None,
+) -> CliPlan:
+    # Pi has no permission prompts at all: every enabled tool runs.
+    del cwd, effort
+    return _plan_pi_family(
+        "pi-cli",
+        "pi",
+        pi_argv_prefix(),
+        prompt=prompt,
+        model=model,
+        permission_mode=permission_mode,
+        resume=resume,
+        identity=identity,
+        resume_flag="--session",
+        auto_flags=(),
+    )
+
+
+def plan_omp(
+    *,
+    prompt: str,
+    cwd: Path,
+    model: str,
+    effort: str,
+    permission_mode: str,
+    resume: str | None,
+    identity: jarvis_harness.Identity | None = None,
+) -> CliPlan:
+    # Print mode has nobody to answer an approval prompt, so Full access says
+    # so explicitly instead of leaving the configured approval mode to stall.
+    del cwd, effort
+    return _plan_pi_family(
+        "omp-cli",
+        "omp",
+        omp_argv_prefix(),
+        prompt=prompt,
+        model=model,
+        permission_mode=permission_mode,
+        resume=resume,
+        identity=identity,
+        resume_flag="--resume",
+        auto_flags=("--auto-approve",),
+    )
+
+
 def plan_cursor(
     *,
     prompt: str,
@@ -1504,6 +1626,8 @@ _PLANNERS: Final[dict[str, Any]] = {
     "dsh-cli": plan_dsh,
     "hermes-cli": plan_hermes,
     "cursor-cli": plan_cursor,
+    "pi-cli": plan_pi,
+    "omp-cli": plan_omp,
 }
 
 #: Every runner this module drives — the catalog route's "is this a CLI
@@ -2742,6 +2866,166 @@ def translate_opencode_line(obj: dict[str, Any], st: _OpenCodeState) -> list[dic
     return out
 
 
+# ------------------------------------------------------------ pi translation
+
+
+@dataclass(slots=True)
+class _PiState:
+    turn_id: str
+    vendor_session: str | None = None
+    status: str = "done"
+    error: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
+    cost_usd: float | None = None
+    emitted_text: bool = False
+    result_text: str = ""
+    #: toolCallIds already announced as tool rows
+    tool_calls: set[str] = field(default_factory=set)
+    started_at: dict[str, float] = field(default_factory=dict)
+    #: assistant messages seen — each is one message on the timeline
+    messages: int = 0
+
+
+#: ``message.usage`` -> the usage keys the timeline sums. Pi follows the
+#: Anthropic convention: ``input`` EXCLUDES the cache read and write (its
+#: OpenAI adapter subtracts them), so these are Claude Code's own keys.
+_PI_TOKEN_KEYS: Final[tuple[tuple[str, str], ...]] = (
+    ("input", "input_tokens"),
+    ("output", "output_tokens"),
+    ("cacheRead", "cache_read_input_tokens"),
+    ("cacheWrite", "cache_creation_input_tokens"),
+)
+
+
+def translate_pi_line(obj: dict[str, Any], st: _PiState) -> list[dict[str, Any]]:
+    """One ``pi -p --mode json`` (or ``omp``) object -> agent-chat events.
+
+    Shape (pi 1.4.0, omp 18.12.6): a ``session`` header with the ``id``,
+    then agent events. ``message_end`` carries a finished message with its
+    ``role``; an assistant one has ``content`` blocks (``text``,
+    ``thinking``, ``toolCall``), ``usage{input, output, cacheRead,
+    cacheWrite, cost{total}}``, ``stopReason`` and, on a failure,
+    ``errorMessage``. ``tool_execution_start`` / ``_end`` carry
+    ``toolCallId``, ``toolName``, ``args`` and ``result{content}`` with
+    ``isError``. ``turn_end`` repeats the assistant message and is skipped;
+    ``message_update`` deltas are skipped because ``message_end`` has the
+    whole text.
+    """
+    out: list[dict[str, Any]] = []
+    kind = str(obj.get("type") or "")
+
+    if kind == "session":
+        sid = obj.get("id")
+        if sid and not st.vendor_session:
+            st.vendor_session = str(sid)
+        return out
+
+    if kind == "message_end":
+        message = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+        if message.get("role") != "assistant":
+            return out
+        st.messages += 1
+        mid = f"{st.turn_id}-pi-{st.messages}"
+        content = message.get("content") if isinstance(message.get("content"), list) else []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "thinking":
+                text = str(block.get("thinking") or "")
+                if text.strip():
+                    out.append(
+                        make_event(
+                            "reasoning",
+                            {
+                                "turn_id": st.turn_id,
+                                "message_id": f"{mid}-r",
+                                "text": text,
+                                "duration_ms": None,
+                            },
+                        )
+                    )
+        text = "".join(
+            str(b.get("text") or "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+        if text.strip():
+            st.emitted_text = True
+            st.result_text = text
+            out.append(
+                make_event(
+                    "assistant_text",
+                    {"turn_id": st.turn_id, "message_id": mid, "text": text},
+                )
+            )
+        usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+        for theirs, ours in _PI_TOKEN_KEYS:
+            val = usage.get(theirs)
+            if isinstance(val, int | float) and val:
+                st.usage[ours] = st.usage.get(ours, 0) + int(val)
+        cost = usage.get("cost") if isinstance(usage.get("cost"), dict) else {}
+        total = cost.get("total")
+        if isinstance(total, int | float) and total:
+            st.cost_usd = (st.cost_usd or 0.0) + float(total)
+        stop = str(message.get("stopReason") or "")
+        if stop in {"error", "aborted"}:
+            st.status = "error"
+            st.error = str(message.get("errorMessage") or f"pi stopped the turn ({stop})")
+        elif stop:
+            # A later answer after a failed attempt means the retry worked.
+            st.status, st.error = "done", None
+        return out
+
+    if kind == "tool_execution_start":
+        name = str(obj.get("toolName") or "tool")
+        call_id = str(obj.get("toolCallId") or uuid.uuid4().hex)
+        args = obj.get("args") if isinstance(obj.get("args"), dict) else {}
+        if call_id not in st.tool_calls:
+            st.tool_calls.add(call_id)
+            st.started_at[call_id] = time.perf_counter()
+            out.append(
+                make_event(
+                    "tool_call",
+                    {
+                        "turn_id": st.turn_id,
+                        "call_id": call_id,
+                        "name": name,
+                        "input": args,
+                        "summary": _cli_tool_summary(name, args),
+                    },
+                )
+            )
+        return out
+
+    if kind == "tool_execution_end":
+        call_id = str(obj.get("toolCallId") or "")
+        result = obj.get("result") if isinstance(obj.get("result"), dict) else {}
+        is_error = bool(obj.get("isError"))
+        output = _content_text(result.get("content"))
+        started = st.started_at.get(call_id)
+        duration = obj.get("durationMs")
+        duration_ms = (
+            int(duration)
+            if isinstance(duration, int | float)
+            else (int((time.perf_counter() - started) * 1000) if started else None)
+        )
+        out.append(
+            make_event(
+                "tool_result",
+                {
+                    "turn_id": st.turn_id,
+                    "call_id": call_id,
+                    "output": output or ("failed" if is_error else "done"),
+                    "is_error": is_error,
+                    "duration_ms": duration_ms,
+                },
+            )
+        )
+        return out
+
+    return out
+
+
 # ---------------------------------------------------------- kimi translation
 
 
@@ -3066,6 +3350,7 @@ _SHAPES: Final[dict[str, tuple[Callable[[str, str | None], Any], Callable[..., A
         translate_opencode_line,
     ),
     "kimi": (lambda tid, vs: _KimiState(turn_id=tid, vendor_session=vs), translate_kimi_line),
+    "pi": (lambda tid, vs: _PiState(turn_id=tid, vendor_session=vs), translate_pi_line),
     "cursor": (
         lambda tid, vs: _CursorState(turn_id=tid, vendor_session=vs),
         translate_cursor_line,

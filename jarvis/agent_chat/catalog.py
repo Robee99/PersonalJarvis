@@ -76,6 +76,8 @@ Runner = Literal[
     "dsh-cli",
     "hermes-cli",
     "cursor-cli",
+    "pi-cli",
+    "omp-cli",
     # Society agent runtimes (``service.EXTERNAL_RUNTIME_RUNNERS``): picked by
     # the agent's runtime, never by a provider row.
     "hermes-cli",
@@ -372,6 +374,29 @@ PROVIDER_ROWS: Final[tuple[ProviderRow, ...]] = (
         curated_models=HERMES_FREE_MODELS,
         default_model="",
         agent="hermes",
+    ),
+    ProviderRow(
+        id="pi",
+        label="Pi",
+        family="pi",
+        runner="pi-cli",
+        models_source="curated",
+        # "" runs the local model server's default model through the
+        # extension every Pi turn loads (``jarvis.workspace.agents``); a picked
+        # id is ``provider/model`` as Pi names it.
+        default_model="",
+        native_resume=True,
+        agent="pi",
+    ),
+    ProviderRow(
+        id="omp",
+        label="Oh My Pi",
+        family="pi",
+        runner="omp-cli",
+        models_source="curated",
+        default_model="",
+        native_resume=True,
+        agent="omp",
     ),
     ProviderRow(id="openai", label="OpenAI", family="openai", runner="api", models_source="live"),
     ProviderRow(

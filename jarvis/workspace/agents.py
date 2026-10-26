@@ -521,6 +521,42 @@ _HERMES_BIN_DIRS = (
 )
 
 
+def _pi_install() -> InstallMethods:
+    """Pi's npm package, with its official installer as the other choice.
+
+    npm is recommended because the package layout is known (the pane launches
+    ``node`` on its entry script instead of the ``.cmd`` shim). The installer
+    (PowerShell on Windows, a shell script elsewhere) also installs Node.js
+    22.19+ when it is missing.
+    """
+    url = "https://pi.dev/install.ps1" if sys.platform == "win32" else "https://pi.dev/install.sh"
+    return InstallMethods(
+        npm_package="@earendil-works/pi-coding-agent",
+        script_url=url,
+        recommended="npm",
+    )
+
+
+def _omp_install() -> InstallMethods:
+    """Oh My Pi's official installer for the OS that will run it.
+
+    Not npm: the npm package's entry script needs the Bun runtime (``#!/usr/bin/env
+    bun``, engines bun >= 1.3.14), while the installer ships a standalone build.
+    """
+    url = "https://omp.sh/install.ps1" if sys.platform == "win32" else "https://omp.sh/install"
+    return InstallMethods(script_url=url, recommended="script")
+
+
+#: The Pi extension that offers the local model server to Pi and Oh My Pi as
+#: the ``jarvis`` provider (``pi_local_models.js`` beside this module), and
+#: the model a pane starts on. Passing the model matters: without it Pi picks
+#: the first provider it finds credentials for, which may be a paid one
+#: (measured: a container with AWS variables started on Amazon Bedrock).
+PI_LOCAL_EXTENSION = str(Path(__file__).with_name("pi_local_models.js"))
+PI_LOCAL_MODEL = "jarvis/gemma-4b-qat"
+_PI_LOCAL_ARGS = ("-e", PI_LOCAL_EXTENSION, "--model", PI_LOCAL_MODEL)
+
+
 def _cursor_cli_install() -> InstallMethods:
     """Official Cursor CLI installer for the OS that will run it.
 
@@ -1116,6 +1152,54 @@ _AGENTS: dict[str, WorkspaceAgent] = {
         # (code, config, skills and memory), not just a login, so a seat
         # switcher over it would swap far more than an account.
         spoken_aliases=("hermes", "hermes agent", "hermies", "hermis"),
+    ),
+    "pi": make_cli_agent(
+        "pi",
+        "Pi",
+        binary="pi",
+        homepage="https://pi.dev",
+        description="Minimal open-source terminal coding agent, on the local model for free.",
+        install=_pi_install(),
+        # No folder-trust dialog; project-local extensions are what Pi asks
+        # about, and only when a project ships some.
+        needs_trust=False,
+        win_shim=WinShim(
+            relative_path=(
+                "node_modules",
+                "@earendil-works",
+                "pi-coding-agent",
+                "dist",
+                "bundle",
+                "cli.js",
+            ),
+            kind="node",
+        ),
+        launch_args=_PI_LOCAL_ARGS,
+        file_reference="at",
+        instruction_filename="AGENTS.md",
+        # "pie" alone is left out: "open a pie chart" is not a request for a
+        # coding pane.
+        spoken_aliases=("pi", "pi agent", "pie agent", "pi coding agent"),
+    ),
+    "omp": make_cli_agent(
+        "omp",
+        "Oh My Pi",
+        binary="omp",
+        homepage="https://omp.sh",
+        description="Pi with subagents, LSP and hash-anchored edits, on the local model for free.",
+        install=_omp_install(),
+        # Its banner reads "omp/<version>".
+        version_regex=_LOOSE_SEMVER_RE,
+        needs_trust=False,
+        # Where a GUI-launched process may not see the installer's or Bun's
+        # global bin folder on PATH yet.
+        extra_path_dirs=("~/.local/bin", "~/.bun/bin"),
+        # Oh My Pi kept Pi's extension API, so the same file adds the local
+        # models (measured with omp 18.12.6).
+        launch_args=_PI_LOCAL_ARGS,
+        file_reference="at",
+        instruction_filename="AGENTS.md",
+        spoken_aliases=("oh my pi", "omp", "o m p", "oh my pie"),
     ),
     PLAIN_TERMINAL: WorkspaceAgent(
         name=PLAIN_TERMINAL,
