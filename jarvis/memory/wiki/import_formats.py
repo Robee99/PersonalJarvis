@@ -530,6 +530,36 @@ def conversation_pages(path: Path, raw: bytes) -> list[Page] | None:
     ]
 
 
+# --- chats saved as Markdown -------------------------------------------------
+
+#: Front matter of a chat note saved from the browser: Kept
+#: (github.com/egroup-labs/kept, MIT) writes ``id:``, AI Chat Exporter
+#: (github.com/nikolaylosev/ai-chat-exporter, MIT) writes ``conversation_id:``.
+_FRONT_MATTER = re.compile(r"\A\ufeff?---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
+CHAT_PLATFORMS: Final[frozenset[str]] = frozenset(
+    {"chatgpt", "claude", "gemini", "grok", "kimi"}
+)
+
+
+def markdown_chat_key(text: str) -> str:
+    """The conversation id of a chat note saved as Markdown, or ``""``.
+
+    The id is the one the platform's own export uses, so a chat saved from the
+    browser and the same chat from a ChatGPT or Claude export ZIP are one page.
+    """
+    match = _FRONT_MATTER.match(text[:4096])
+    if not match:
+        return ""
+    fields: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        key, sep, value = line.partition(":")
+        if sep and not line.startswith((" ", "\t")):
+            fields[key.strip()] = value.strip().strip("'\"")
+    if fields.get("platform", "").lower() not in CHAT_PLATFORMS:
+        return ""
+    return _clean_id(fields.get("conversation_id") or fields.get("id") or "")
+
+
 # --- documents -------------------------------------------------------------
 
 

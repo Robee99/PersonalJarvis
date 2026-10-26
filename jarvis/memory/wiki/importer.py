@@ -52,6 +52,7 @@ from jarvis.memory.wiki.import_formats import (
     Page,
     conversation_pages,
     document_page,
+    markdown_chat_key,
 )
 from jarvis.memory.wiki.secret_guard import contains_secret
 
@@ -277,8 +278,9 @@ def _chat_pages(imports: Path) -> dict[str, Path]:
         except OSError:  # an unreadable page simply is not matched
             continue
         match = _CHAT_ID.search(head)
-        if match:
-            found.setdefault(match.group(1), page)
+        key = match.group(1) if match else markdown_chat_key(head)
+        if key:
+            found.setdefault(key, page)
     return found
 
 
@@ -302,7 +304,7 @@ class _Indexer:
     def remember_chat(self, key: str, page: Path) -> None:
         if self._chats is None:
             self._chats = _chat_pages(self._vault_root / IMPORT_DIR)
-        self._chats.setdefault(key, page)
+        self._chats[key] = page
 
     def add(self, path: Path) -> None:
         self._pending.append(path)
@@ -433,7 +435,13 @@ def _import_content(
         if contains_secret(content):
             _skip(progress, relative, "looks like it holds a key or token")
             return
-        _write(destination_for(relative, import_root), content, relative, progress, indexer)
+        target = destination_for(relative, import_root)
+        key = markdown_chat_key(content) if suffix in MARKDOWN_SUFFIXES else ""
+        if key:
+            # A chat saved from the browser updates the page its export made.
+            target = indexer.chat_page(key) or target
+            indexer.remember_chat(key, target)
+        _write(target, content, relative, progress, indexer)
         return
 
     pages: list[Page] | None = None
@@ -655,6 +663,65 @@ def _skip(progress: ImportProgress, relative: Path, reason: str) -> None:
 def _fail(progress: ImportProgress, relative: Path, reason: str) -> None:
     progress.failed += 1
     progress.problems.append({"path": relative.as_posix(), "reason": reason})
+
+
+# ---------------------------------------------------------------- browser chats
+
+#: Folder under ``imports/`` for chats pushed from the browser by Kept.
+KEPT_DIR: Final[str] = "Kept"
+_SYNCED_LINE = re.compile(r"^synced: .*$", re.MULTILINE)
+
+
+class ChatSaver:
+    """Writes chats pushed from the signed-in browser as memory pages.
+
+    The Kept extension (github.com/egroup-labs/kept, MIT) reads ChatGPT,
+    Claude, Gemini, Grok and Kimi chats through the owner's own sessions and
+    sends each one as Markdown; ``kept_bridge`` hands them here. One page per
+    conversation: a chat already in memory (from an export ZIP, an earlier
+    sync or a saved file) is updated in place. Safe to call from several
+    threads.
+    """
+
+    def __init__(self, vault_root: Path, db_path: Path | None) -> None:
+        self._vault_root = vault_root
+        self._indexer = _Indexer(vault_root, db_path)
+        self._lock = threading.Lock()
+
+    def save(
+        self, *, platform: str, key: str, title: str, markdown: str, day: str
+    ) -> tuple[str, Path]:
+        """``(status, page)``: status is created, updated, unchanged or refused."""
+        body = redact_secrets(markdown)
+        import_root = self._vault_root / IMPORT_DIR / KEPT_DIR / platform
+        slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60] or "chat"
+        fresh = destination_for(Path(f"{day}_{slug}.md"), import_root)
+        if contains_secret(body):
+            return "refused", fresh
+        with self._lock:
+            target = self._indexer.chat_page(key)
+            if target is None or not target.is_file():
+                target = fresh
+                if target.exists():
+                    target = destination_for(Path(f"{day}_{slug}-{key[:8]}.md"), import_root)
+            self._indexer.remember_chat(key, target)
+            try:
+                existing = target.read_text("utf-8", errors="replace") if target.is_file() else None
+            except OSError:  # unreadable: written fresh below
+                existing = None
+            same = existing is not None and (
+                _SYNCED_LINE.sub("", existing) == _SYNCED_LINE.sub("", body)
+            )
+            if same:
+                return "unchanged", target
+            write_page_atomic(target, body)
+            self._indexer.add(target)
+            self._indexer.flush()
+        return ("created" if existing is None else "updated"), target
+
+    def close(self) -> None:
+        with self._lock:
+            self._indexer.close()
 
 
 # ---------------------------------------------------------------- jobs

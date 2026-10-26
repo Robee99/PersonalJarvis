@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Local AI Council Side Panel</title>
+  <link rel="stylesheet" href="side_panel.css">
+</head>
+<body>
+
+  <div class="header">
+    <div style="display:flex; align-items:center; gap:0.5rem;">
+      <span class="header-icon">🏛️</span>
+      <span class="header-title">Jarvis AI Council</span>
+    </div>
+    <button id="btnNewChat" class="btn-new-chat">🆕 New Chat</button>
+  </div>
+
+  <div class="section-card">
+    <span class="label">Task Description</span>
+    <textarea id="taskPrompt" class="input-prompt" placeholder="Enter decision prompt..."></textarea>
+
+    <span class="label">Council Members</span>
+    <div class="model-chips">
+      <label class="chip"><input type="checkbox" id="m_chatgpt" value="chatgpt" checked> ChatGPT</label>
+      <label class="chip"><input type="checkbox" id="m_gemini" value="gemini" checked> Gemini</label>
+      <label class="chip"><input type="checkbox" id="m_claude" value="claude"> Claude</label>
+      <label class="chip"><input type="checkbox" id="m_grok" value="grok"> Grok</label>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+      <div>
+        <span class="label">Judge (final verdict)</span>
+        <select id="chairmanSelect" class="select-control">
+          <option value="auto">Auto (1st Checked)</option>
+          <option value="chatgpt">ChatGPT</option>
+          <option value="gemini">Gemini</option>
+          <option value="claude" selected>Claude</option>
+          <option value="grok">Grok</option>
+        </select>
+      </div>
+      <div>
+        <span class="label">Debate Rounds</span>
+        <select id="debateRounds" class="select-control">
+          <option value="1">1 Round (Fast)</option>
+          <option value="2">2 Rounds (Deep)</option>
+        </select>
+      </div>
+    </div>
+
+    <button id="btnRun" class="btn-primary">🚀 Convene Council</button>
+  </div>
+
+  <div id="progressText" class="progress-bar" style="display:none;">
+    Ready
+  </div>
+
+
+
+  <!-- Executive Consensus Card (pinned final result) -->
+  <div id="consensusCard" class="section-card" style="display:none; border-color: rgba(168,85,247,0.4);">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span class="label">🏆 Chairman Consensus Resolution</span>
+      <span class="badge">Final Output</span>
+    </div>
+    <div id="consensusText" class="result-box"></div>
+  </div>
+
+  <!-- Follow-up Questions Panel -->
+  <div id="followUpSection" class="section-card followup-card" style="display:none;">
+    <span class="label">💬 Ask a Follow-up Question</span>
+    <div class="followup-input-row">
+      <textarea id="followUpPrompt" class="input-prompt followup-textarea" placeholder="A follow-up question for the council..."></textarea>
+    </div>
+    <div class="followup-actions">
+      <div class="followup-target-row">
+        <span class="label" style="margin:0;">Ask:</span>
+        <label class="chip followup-chip">
+          <input type="radio" name="followTarget" value="all" checked> All Members
+        </label>
+        <label class="chip followup-chip">
+          <input type="radio" name="followTarget" value="chairman"> Chairman Only
+        </label>
+      </div>
+      <button id="btnFollowUp" class="btn-followup">➤ Send</button>
+    </div>
+    <div id="followUpStatus" class="followup-status" style="display:none;"></div>
+  </div>
+
+  <!-- New Chat Confirmation Modal -->
+  <div id="newChatModal" class="modal-backdrop" style="display:none;">
+    <div class="modal-card">
+      <div class="modal-title">🆕 Start New Council Session?</div>
+      <div class="modal-body">
+        This will clear current consensus resolution and history in this panel.
+        <div class="modal-warning">
+          ⚠️ <strong>IMPORTANT:</strong> For a completely clean session without previous context, please also click <strong>"New Chat"</strong> inside your <strong>ChatGPT, Gemini, Claude, and Grok</strong> tabs!
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="btnCancelNewChat" class="btn-modal-cancel">Cancel</button>
+        <button id="btnConfirmNewChat" class="btn-modal-confirm">Clear & Start New Chat</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="side_panel.js"></script>
+</body>
+</html>

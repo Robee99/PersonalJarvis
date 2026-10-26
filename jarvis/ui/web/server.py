@@ -3655,6 +3655,17 @@ class WebServer:
         self.app.state.wiki_watcher = watcher
         logger.info("wiki_watcher: started for vault {}", vault_root)
 
+        # Chats saved from Chrome (AI Chat Exporter, council verdicts) land in
+        # Downloads/AI Chats; this imports them into memory as they change.
+        from jarvis.memory.wiki.chat_sync import chat_sync_loop
+
+        self._chat_sync_task = asyncio.create_task(chat_sync_loop(lambda: (vault_root, db_path)))
+        # The Kept extension syncs every ChatGPT/Claude/Gemini chat from the
+        # owner's signed-in Chrome; Jarvis answers it in place of the Kept app.
+        from jarvis.memory.wiki.kept_bridge import serve_kept_bridge
+
+        self._kept_bridge_task = asyncio.create_task(serve_kept_bridge(vault_root, db_path))
+
     async def _init_task_stack(self) -> None:
         """Phase-5 task-queue wiring (BUG-007).
 
@@ -4387,6 +4398,15 @@ class WebServer:
             except (TimeoutError, asyncio.CancelledError):
                 pass
             self._missions_cleanup_task = None
+
+        chat_sync_task = getattr(self, "_chat_sync_task", None)
+        if chat_sync_task is not None:
+            chat_sync_task.cancel()
+            self._chat_sync_task = None
+        kept_bridge_task = getattr(self, "_kept_bridge_task", None)
+        if kept_bridge_task is not None:
+            kept_bridge_task.cancel()
+            self._kept_bridge_task = None
 
         # Screenshot-retention background task (opt-in via retention_days > 0).
         screenshot_task = getattr(self, "_screenshot_retention_task", None)

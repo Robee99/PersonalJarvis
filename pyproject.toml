@@ -749,6 +749,9 @@ system-volume = "jarvis.plugins.tool.system_volume:SystemVolumeTool"
 # (Windows Search index, then a bounded walk). Read-only, risk safe.
 find-files = "jarvis.plugins.tool.find_files:FindFilesTool"
 pc-pilot = "jarvis.plugins.tool.pc_pilot:PcPilot"
+# AI council (2026-10-26): ChatGPT and Gemini debate in the owner's signed-in
+# Chrome, Claude judges; also asks the Kept extension to sync chats into memory.
+ai-council = "jarvis.plugins.tool.ai_council:AiCouncilTool"
 news-headlines = "jarvis.plugins.tool.news_headlines:NewsHeadlinesTool"
 window-control = "jarvis.plugins.tool.window_control:WindowControlTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"

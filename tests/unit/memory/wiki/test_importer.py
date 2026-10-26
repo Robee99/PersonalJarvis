@@ -413,3 +413,31 @@ def test_the_same_chat_in_an_old_folder_and_a_newer_zip_is_one_page(
     assert (second.imported, second.updated) == (0, 1)
     assert "Osprey_Day" in pages[0].read_text("utf-8")
     assert second.skip_reasons.get("picture (no text)") == 1
+
+
+def test_a_chat_saved_from_the_browser_updates_the_page_its_export_made(
+    tmp_path: Path, vault: Path, db_path: Path
+) -> None:
+    import copy
+    import json
+
+    old = copy.deepcopy(CHATGPT_EXPORT)
+    old[0]["id"] = "6703a1b2-falcon"
+    _write(tmp_path / "AI DATA" / "conversations-000.json", json.dumps(old))
+    saved = (
+        "---\ntitle: Falcon launch\nplatform: chatgpt\nconversation_id: 6703a1b2-falcon\n"
+        "tags: [ai-chat, chatgpt]\n---\n\n# Falcon launch\n\nLaunch moved to Heron_Day.\n"
+    )
+    chats = tmp_path / "Downloads" / "AI Chats"
+    _write(chats / "Falcon launch (ChatGPT)" / "Falcon launch.md", saved)
+
+    run_import(tmp_path / "AI DATA", vault, db_path=db_path)
+    second = run_import(tmp_path / "Downloads" / "AI Chats", vault, db_path=db_path)
+    third = run_import(tmp_path / "Downloads" / "AI Chats", vault, db_path=db_path)
+
+    pages = [p for p in (vault / IMPORT_DIR).rglob("*.md") if "Falcon" in p.name]
+    assert len(pages) == 1, pages
+    assert (second.imported, second.updated) == (0, 1)
+    assert "Heron_Day" in pages[0].read_text("utf-8")
+    assert third.unchanged == 1
+

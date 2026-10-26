@@ -99,6 +99,9 @@ ROUTER_TOOLS = frozenset({
     # name, type, press keys, scroll and manage windows in any program, with a
     # readback and a policy that asks before delete/send/pay. Never a spawn.
     "pc-pilot",
+    # AI council (2026-10-26): ChatGPT vs Gemini in the owner's Chrome, Claude
+    # judges; verdict saved to memory. Opens one Chrome tab. Never a spawn.
+    "ai-council",
     # Window control (2026-10-12): minimize / maximize / restore / focus /
     # close a window by title or program, state read back. Risk monitor, never
     # a spawn and never in a worker or society tool set (AP-5/AP-14).
