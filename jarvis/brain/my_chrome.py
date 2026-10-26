@@ -178,7 +178,7 @@ def page_outline(snapshot: str) -> str:
     if "[ref=" in snapshot and snapshot.lstrip().startswith("-"):
         text = "\n".join(browser_page.outline(snapshot))
     else:
-        text = "\n".join(clean_bsk_snapshot(snapshot))
+        text = "\n".join(browser_page.drop_page_instructions(clean_bsk_snapshot(snapshot)))
     if len(text) > _MAX_PAGE:
         text = text[:_MAX_PAGE].rsplit("\n", 1)[0] + "\n[page continues; ask to read more]"
     return (
