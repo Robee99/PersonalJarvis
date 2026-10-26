@@ -24,6 +24,8 @@ from uuid import UUID, uuid4
 from jarvis.brain.cu_gate import (
     CU_BLOCKED_MODEL_FEEDBACK,
     CU_VEHICLE_TOOL_NAMES,
+    is_explicit_computer_use_turn,
+    is_observation_only,
     llm_computer_use_allowed,
 )
 from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
@@ -335,6 +337,7 @@ _INSTRUCTIONAL_QUESTION_RE = re.compile(
     r"|how\s+(?:do|can|could|should|would)\s+"
     r"|what\s+(?:is|does|are)\s+"
     r"|why\s+"
+    r"|(?:please\s+)?(?:explain|describe)\s+"
     r")",
     re.IGNORECASE,
 )
@@ -645,6 +648,25 @@ def _should_block_action_as_research(
     if tool_name and tool_name == evidence_required_tool:
         return False
     if _is_own_data_request(user_utterance):
+        return False
+    # The subject of text to enter is not the intent of the tool action. In
+    # particular, typing a research prompt into an open app must not be replaced
+    # by search_web. Limit this exception to desktop/browser tools so unrelated
+    # CLI actions still need their existing evidence or ownership justification.
+    desktop_tool = tool_name.startswith(("windows-desktop/", "windows_desktop/", "browser_"))
+    desktop_tool = desktop_tool or "/browser_" in tool_name
+    explicit_input = re.search(
+        r"\bby\s+(?:typing|pasting)\b"
+        r"|\b(?:type|paste)\s+(?:a|the|this|that)\s+(?:prompt|text|message)\b",
+        user_utterance,
+        re.IGNORECASE,
+    )
+    if (
+        desktop_tool
+        and not _is_instructional_question(user_utterance)
+        and not is_observation_only(user_utterance)
+        and (is_explicit_computer_use_turn(user_utterance) or explicit_input)
+    ):
         return False
     return _is_research_intent(user_utterance, intent_level)
 

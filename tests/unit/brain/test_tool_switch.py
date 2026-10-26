@@ -394,3 +394,19 @@ def test_saying_chrome_brings_the_owners_own_chrome_but_not_screen_clicking() ->
     assert switch.is_on("my_chrome")
     assert switch.is_on("playwright/browser_navigate")
     assert not switch.is_on("computer_use")
+
+
+@pytest.mark.parametrize("utterance", [
+    "NOW IN THE SAME WINDOW CLICK ON NEW TAB AND GO TO LICIOUS",
+    "In the same Chrome window open two tabs, Swiggy in one and BigBasket in the other",
+])
+def test_explicit_same_window_tabs_keep_the_desktop_operator(utterance):
+    tools = _registry()
+    tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome")
+    tools["computer_use"] = _Tool("computer_use", "Click and type on screen")
+    tools["app_control"] = _Tool("app_control", "Drive an app in the background")
+    switch = _switch(tools)
+    switch.open_turn(utterance, core=(), keep=("computer_use",))
+    assert switch.is_on("computer_use")
+    assert not switch.is_on("my_chrome")
+    assert not switch.is_on("playwright/browser_navigate")

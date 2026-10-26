@@ -30,6 +30,8 @@ from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
 from jarvis.mcp import browser_page
 
+from .tool_switch import wants_browser_window_control
+
 log = logging.getLogger(__name__)
 
 MY_CHROME = "my_chrome"
@@ -243,7 +245,15 @@ class MyChromeTool:
         return None
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
-        del ctx
+        if wants_browser_window_control(getattr(ctx, "user_utterance", "") or ""):
+            return ToolResult(
+                success=False, output=None,
+                error=(
+                    "This request must stay in the existing browser window. "
+                    "my_chrome uses a separate agent window; use computer_use "
+                    "to operate the requested window and verify its tabs."
+                ),
+            )
         action = str(args.get("action") or "").strip().lower()
         if action not in _ACTIONS:
             return ToolResult(

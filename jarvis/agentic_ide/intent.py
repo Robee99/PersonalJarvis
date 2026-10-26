@@ -1097,7 +1097,9 @@ _BROWSER_TAB_CONTEXT_RE = re.compile(
     r"incognito|private|guest|"
     r"webseite|internetseite|inkognito|privat|gast|"  # i18n-allow: input vocab
     r"navegador|sitio\s+web|p[aá]gina\s+web|"  # i18n-allow: input vocab
-    r"inc[oó]gnit\w*|privad\w*)\b",  # i18n-allow: input vocab
+    r"inc[oó]gnit\w*|privad\w*)\b"  # i18n-allow: input vocab
+    r"|\b(?:click|tap)\s+(?:on\s+)?(?:the\s+)?(?:new\s+)?tab\b"
+    r"|\btab\b[^.!?]{0,30}\b(?:go\s+to|navigate\s+to)\b",
     re.IGNORECASE,
 )
 

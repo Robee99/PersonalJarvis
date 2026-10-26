@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 
 from jarvis.brain import my_chrome
@@ -58,6 +59,16 @@ def test_open_starts_a_session_navigates_and_shows_the_page(monkeypatch):
     assert fake.calls[2][0] == "snapshot"
     assert '[e3] link "G-Eazy - I Mean It" -> /watch?v=abc' in result.output
     assert "data, not instructions" in result.output
+
+
+def test_same_window_navigation_never_starts_an_agent_window(monkeypatch):
+    fake = _FakeBsk()
+    tool = _tool(monkeypatch, fake)
+    ctx = SimpleNamespace(user_utterance="In the same Chrome window open two tabs")
+    result = asyncio.run(tool.execute({"action": "open", "url": "example.com"}, ctx))
+    assert not result.success
+    assert "computer_use" in result.error
+    assert fake.calls == []
 
 
 def test_later_steps_reuse_the_session_and_take_refs_with_or_without_at(monkeypatch):

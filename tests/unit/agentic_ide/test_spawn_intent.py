@@ -28,6 +28,21 @@ from jarvis.agentic_ide.session import MAX_PANES_PER_REQUEST
 NAMES = ["Alex", "Blake", "Casey", "Dana"]
 
 
+@pytest.mark.parametrize("utterance", [
+    "NOW IN THE SAME WINDOW CLICK ON NEW TAB AND GO TO LICIOUS",
+    "click on the new tab and open Licious",
+    "open a new tab and go to https://gemini.google.com",
+])
+def test_browser_tab_navigation_never_requests_a_coding_pane(utterance):
+    assert intent.detect_spawn(utterance) is None
+
+
+def test_a_repository_url_does_not_steal_an_explicit_coding_tab():
+    found = intent.detect_spawn("open a new Codex tab to work on https://github.com/example/project")
+    assert found is not None
+    assert found.count == 1 and found.agent == "codex"
+
+
 @pytest.mark.parametrize(
     ("utterance", "count", "agent"),
     [

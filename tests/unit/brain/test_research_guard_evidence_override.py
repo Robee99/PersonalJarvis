@@ -11,6 +11,8 @@ ONLY for that exact tool (other action tools stay blocked under research).
 """
 from __future__ import annotations
 
+import pytest
+
 from jarvis.brain.tool_use_loop import _should_block_action_as_research
 
 _RESEARCH = "Vergleiche mir mal, was ich bei Google Cloud verbraucht habe"
@@ -60,3 +62,44 @@ def test_non_action_tool_never_blocked() -> None:
     assert _should_block_action_as_research(
         tool, "search_web", _RESEARCH, "deep", evidence_required_tool=""
     ) is False
+
+
+@pytest.mark.parametrize("utterance", [
+    "CAN U ASK IT TO SUMMARIZE CRIME AND PUNISHMENT IN GREAT DETAIL "
+    "BY TYPING BUT DONT HIT ENTER/SEND YET",
+    "In Gemini type a prompt to summarize the book, do not send it",
+    "Open Chrome and search for research about batteries",
+])
+def test_explicit_desktop_instruction_is_not_blocked_by_its_subject(utterance):
+    tool = _FakeTool("windows-desktop/Type")
+    tool.is_action_tool = True
+    assert not _should_block_action_as_research(tool, tool.name, utterance, "deep")
+
+
+def test_a_pure_research_question_still_blocks_desktop_tools():
+    tool = _FakeTool("windows-desktop/Type")
+    tool.is_action_tool = True
+    assert _should_block_action_as_research(
+        tool, tool.name, "Summarize Crime and Punishment in great detail", "deep",
+    )
+
+
+@pytest.mark.parametrize("utterance", [
+    "What type of research summarizes Crime and Punishment?",
+    "Explain typing research prompts in Chrome",
+    "How can I type a prompt to summarize a book in Chrome?",
+    "Do not type anything; just summarize the visible screen",
+    "Explain how to type a prompt in Chrome",
+    "Explain how clicking browser tabs works",
+])
+def test_mentions_of_input_are_not_permission_to_act(utterance):
+    tool = _FakeTool("windows-desktop/Type")
+    tool.is_action_tool = True
+    assert _should_block_action_as_research(tool, tool.name, utterance, "deep")
+
+
+def test_a_desktop_request_does_not_unblock_unrelated_cli_actions():
+    tool = _FakeTool("cli_aws")
+    assert _should_block_action_as_research(
+        tool, tool.name, "Open Chrome and research batteries", "deep",
+    )

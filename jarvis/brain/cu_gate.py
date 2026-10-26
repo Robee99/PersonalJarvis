@@ -140,7 +140,7 @@ _DESKTOP_ACTION_RE: re.Pattern[str] = re.compile(
     r"|\bminimi[sz]e\b|\bmaximi[sz]e\b|\bnavigate\b|\bbrowse\b"
     r"|\brefresh\w*\b|\breload\w*\b"
     r"|\blog\s?in\b|\bsign\s?in\b|\bgo\s+to\b"
-    r"|(?<!what )(?<!which )(?<!of )\btype\b"
+    r"|(?<!what )(?<!which )(?<!of )\btyp(?:e|ing)\b|\bpasting\b"
     r"|\bstart(?:s|ed|ing)?\s+(?:up\s+)?(?:the|a|an|my)\b"
     # --- action verbs (de) ---  # i18n-allow: German speech-input matching data
     r"|\boeffn\w*|\baufmach\w*|\bklick\w*|\btipp\w*|\bscroll\w*"

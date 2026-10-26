@@ -109,6 +109,20 @@ def wants_own_browser(text: str) -> bool:
     return bool(text and _OWN_BROWSER.search(text))
 
 
+def wants_browser_window_control(text: str) -> bool:
+    """An existing-window constraint cannot be met by a separate agent browser."""
+    return bool(
+        re.search(
+            r"\b(?:same|this|current|existing)\s+"
+            r"(?:(?:google\s+)?chrome\s+|browser\s+)?window\b", text, re.IGNORECASE,
+        )
+        and re.search(r"\b(?:open|add|create|click|press|switch|close)\b", text, re.IGNORECASE)
+        and re.search(
+            r"\b(?:browser|chrome|firefox|edge)\b|\bnew\s+tabs?\b", text, re.IGNORECASE,
+        )
+    )
+
+
 #: The one-call background app driver (desktop_driver.py) and the raw server it
 #: replaces on the opening surface: Gemma copied example ids out of the raw
 #: CUA tools' descriptions and typed into the wrong control (live 2026-10-25).
@@ -197,6 +211,23 @@ class ToolSwitch:
         relevant = [
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
+        if SCREEN_HANDS in self._tools and wants_browser_window_control(query or ""):
+            # Browser servers own separate windows. Keep an explicit same-window
+            # task on the observed desktop, including requests without a site URL.
+            relevant = [
+                n for n in relevant
+                if n not in (OWN_BROWSER_HANDS, APP_HANDS) and not _is_browser_tool(n)
+            ]
+            self.switch_off([
+                n for n in self._on
+                if n == OWN_BROWSER_HANDS or _is_browser_tool(n)
+            ])
+            allowed = [
+                n for n in (*core, *keep)
+                if n != OWN_BROWSER_HANDS and not _is_browser_tool(n)
+            ]
+            self.switch_on([ENABLE_TOOLS, *allowed, SCREEN_HANDS, *relevant])
+            return relevant
         hands = self._browser_hands(query, relevant)
         if OWN_BROWSER_HANDS in self._tools and (
             wants_own_browser(query) or _SAYS_CHROME.search(query or "")
