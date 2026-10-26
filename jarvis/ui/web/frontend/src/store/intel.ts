@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_FILTERS, KINDS, type Category, type Evidence, type IntelFilters } from "@/lib/intel";
+import { requestGeVView } from "@/lib/gevViewBridge";
 
 /**
  * What the World screen is showing: the incident filters, the selected
@@ -77,6 +78,10 @@ export const useIntelStore = create<IntelStore>((set) => ({
       });
     } else if (action === "reset") {
       set((s) => ({ filters: DEFAULT_FILTERS, selectedId: null, selectedVia: null, resetSeq: s.resetSeq + 1 }));
+    } else if (action === "view") {
+      // GEV's show_in_gods_eye_view answered with a camera view; the World
+      // screen (opened by the NavigateSidebar before this) flies there.
+      if (typeof p.view === "string") requestGeVView(p.view, `assistant-${Date.now()}`);
     } else if (action === "watch") {
       const key = text(p.stream, 80);
       if (key) set((s) => ({ watch: { key, seq: (s.watch?.seq ?? 0) + 1 } }));

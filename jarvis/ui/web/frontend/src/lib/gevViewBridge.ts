@@ -66,6 +66,18 @@ export function publishGeVViewResult(
   if (view) publish(view, callId);
 }
 
+/**
+ * Fly the globe to a view the backend sent (`WorldIntelCommand` "view", from
+ * GEV's own tool result). Voice and HUD turns draw no chat trace, so this is
+ * the path that reaches the World screen whatever surface asked.
+ */
+export function requestGeVView(viewJson: string, callId: string): boolean {
+  const view = extractView({ view: parseJson(viewJson) });
+  if (!view) return false;
+  publish(view, callId);
+  return true;
+}
+
 /** Read a fresh command if the globe workspace was not mounted yet. */
 export function readPendingGeVView(): GeVView | null {
   try {

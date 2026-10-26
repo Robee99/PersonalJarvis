@@ -311,9 +311,12 @@ class MCPToolAdapter:
         start_ns = time.time_ns()
         try:
             raw = await self._client.call_tool(self._mcp_tool_name, args)
+            output = _normalize_mcp_result(raw)
+            if self._mcp_tool_name == "show_in_gods_eye_view":
+                output = await _show_on_world_screen(raw, output)
             return ToolResult(
                 success=True,
-                output=_normalize_mcp_result(raw),
+                output=output,
             )
         except Exception as e:  # noqa: BLE001
             log.warning(
@@ -323,6 +326,31 @@ class MCPToolAdapter:
                 e,
             )
             return ToolResult(success=False, output=None, error=str(e))
+
+
+async def _show_on_world_screen(raw: Any, output: Any) -> Any:
+    """Fly the World screen's globe to God's Eye View's answer (jarvis/intel/gev_view.py).
+
+    The result says what really happened, so the model reports the screen
+    change only when one was made.
+    """
+    from jarvis.intel.gev_view import gev_view_from_result, show_gev_view
+
+    view = gev_view_from_result(raw)
+    if view is None:
+        return output
+    try:
+        shown = await show_gev_view(view)
+    except Exception:  # noqa: BLE001 — the tool's own answer still stands
+        log.warning("God's Eye View result could not be shown on the World screen", exc_info=True)
+        shown = False
+    note = (
+        "Shown now: the World screen is open and its God's Eye View globe flew there."
+        if shown
+        else "Not shown: the Jarvis window is not connected, so only the link above exists."
+    )
+    items = output if isinstance(output, list) else [output]
+    return [*items, note]
 
 
 #: Argument names under which desktop/shell MCP servers take a command line.

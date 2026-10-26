@@ -918,8 +918,9 @@ class WorldIntelCommand(Event):
 
     ``action`` is ``focus`` (select ``event_id`` and fly to it), ``filter``
     (replace the filters; empty fields clear theirs), ``reset`` (no filter,
-    no selection, the whole globe) or ``watch`` (play the live news channel
-    or camera ``stream``, a key from ``jarvis.intel.live``).
+    no selection, the whole globe), ``watch`` (play the live news channel
+    or camera ``stream``, a key from ``jarvis.intel.live``) or ``view`` (fly
+    the embedded God's Eye View to the camera in ``view``).
     """
     action: str = ""
     event_id: str = ""
@@ -936,6 +937,9 @@ class WorldIntelCommand(Event):
     evidence: str = ""
     #: A live stream key for ``watch``.
     stream: str = ""
+    #: ``view``: a God's Eye View camera view as JSON (``{"camera": {...}, ...}``),
+    #: from GEV's own ``show_in_gods_eye_view`` result (jarvis/intel/gev_view.py).
+    view: str = ""
 
 
 @dataclass(frozen=True, slots=True)

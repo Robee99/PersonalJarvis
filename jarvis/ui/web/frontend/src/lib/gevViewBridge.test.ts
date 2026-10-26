@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { clearPendingGeVView, publishGeVViewResult, readPendingGeVView } from "./gevViewBridge";
+import { clearPendingGeVView, publishGeVViewResult, readPendingGeVView, requestGeVView } from "./gevViewBridge";
+import { useIntelStore } from "@/store/intel";
 
 afterEach(() => {
   clearPendingGeVView();
@@ -40,5 +41,23 @@ describe("God’s Eye View result bridge", () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(readPendingGeVView()).toBeNull();
+  });
+
+  it("flies to a view the backend sent with WorldIntelCommand", () => {
+    // Live 2026-10-26: voice "take me to Mumbai in God's Eye View" never moved the globe.
+    const dispatch = vi.spyOn(window, "dispatchEvent");
+    const view = { camera: { lat: 19.055, lon: 72.8692, altitude_m: 44521 }, layers: [] };
+
+    useIntelStore.getState().applyCommand({ action: "view", view: JSON.stringify(view) });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "jarvis:gev-view", detail: expect.objectContaining({ view }) }),
+    );
+    expect(readPendingGeVView()).toEqual(view);
+  });
+
+  it("ignores a backend view without a camera", () => {
+    expect(requestGeVView(JSON.stringify({ layers: [] }), "x")).toBe(false);
+    expect(requestGeVView("not json", "x")).toBe(false);
   });
 });
