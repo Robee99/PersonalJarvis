@@ -625,6 +625,7 @@ async def test_foreground_change_after_model_decision_refuses_action(patched):
         [
             '{"action":"click","x":500,"y":500}',
             '{"action":"fail","reason":"the target window changed"}',
+            '{"action":"fail","reason":"the target window changed"}',
         ]
     )
     executor = FakeExecutor()
@@ -653,6 +654,7 @@ async def test_same_app_window_swap_before_first_action_refuses(patched):
     brain = _FocusChangingBrain(
         [
             '{"action":"click","x":500,"y":500}',
+            '{"action":"fail","reason":"the target window changed"}',
             '{"action":"fail","reason":"the target window changed"}',
         ]
     )
@@ -1444,3 +1446,50 @@ async def test_an_ordinary_tool_failure_is_not_a_permission_block(patched):
     final = _final(await _run(_ctx(brain, executor)))
 
     assert "blocked_permission" not in final.stderr
+
+
+async def test_a_fail_right_after_a_held_back_action_gets_one_retry(patched):
+    # Live 2026-10-26: click_element was held back for a stale frame and the
+    # model gave up at once; the engine now says nothing failed and re-asks.
+    class _FocusChangingBrain(FakeBrain):
+        async def complete_text(self, *, system: str, user: str) -> str:
+            reply = await super().complete_text(system=system, user=user)
+            if len(self.calls) == 1:
+                patched.foreground_handle = 22
+            return reply
+
+    brain = _FocusChangingBrain(
+        [
+            '{"action":"click","x":500,"y":500}',
+            '{"action":"fail","reason":"the click was refused"}',
+            '{"action":"fail","reason":"still cannot"}',
+        ]
+    )
+    chunks = await _run(_ctx(brain, FakeExecutor()))
+
+    assert _final(chunks).exit_code == 5
+    assert len(brain.calls) == 3
+    assert any("fail NOT accepted" in user for _system, user in brain.calls)
+
+
+async def test_typing_the_request_itself_is_refused(patched):
+    brain = FakeBrain(
+        [
+            '{"action":"type","text":"open the thing"}',
+            '{"action":"fail","reason":"cannot"}',
+        ]
+    )
+    executor = FakeExecutor()
+
+    chunks = await _run(_ctx(brain, executor))
+
+    assert _final(chunks).exit_code == 5
+    assert not any(name == "type" for name, _args in executor.calls)
+    assert any("the user's request itself" in user for _system, user in brain.calls)
+
+
+def test_types_the_request_allows_quoted_content() -> None:
+    asked = "Problem and click on roboto"
+    assert engine_mod._types_the_request(asked, asked)
+    assert not engine_mod._types_the_request("hello world", "type hello world into notepad")
+    assert not engine_mod._types_the_request("lofi", "search youtube for lofi")

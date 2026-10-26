@@ -742,6 +742,25 @@ def _summarize_action(action: dict[str, Any]) -> str:
     return str(kind)
 
 
+def _norm_words(text: str) -> str:
+    return " ".join(re.findall(r"\w+", (text or "").lower()))
+
+
+def _types_the_request(text: str, goal: str) -> bool:
+    """True when ``text`` is the user's request (or most of it), not content.
+
+    A goal may itself quote what to type ("type hello world"); the quoted part
+    is a strict, shorter piece of the goal and stays allowed. Typing the whole
+    request, or a long run of it, is the planner echoing the ask.
+    """
+    typed, wanted = _norm_words(text), _norm_words(goal)
+    if not typed or not wanted or len(typed.split()) < 3:
+        return False
+    if typed == wanted:
+        return True
+    return typed in wanted and len(typed) >= 0.8 * len(wanted)
+
+
 #: Zoom-refine crop half-side in input units. Near-square context crops
 #: preserve surroundings better than tight boxes (MEGA-GUI / UI-Zoomer).
 _REFINE_RADIUS = 220
@@ -1030,6 +1049,9 @@ async def run_cu_loop(
     llm_failures = 0
     done_rejects = 0
     guard_hits = 0
+    # One "fail" right after the engine itself held an action back (stale
+    # frame, display change) is answered with a retry, not taken as final.
+    fail_after_refusal_retried = False
     observe_failures = 0
     prev_thumb: bytes | None = None
     fruitless_steps = 0  # steps with zero successful actions on an unchanged screen
@@ -1429,12 +1451,47 @@ async def run_cu_loop(
                 break  # re-perceive
 
             if kind == "fail":
+                last = history[-1] if history else ""
+                if not fail_after_refusal_retried and (
+                    " REFUSED — the foreground window changed" in last
+                    or " REFUSED — the display layout changed" in last
+                    or " SKIPPED — only one pointer action" in last
+                ):
+                    # Live 2026-10-26: the engine held back click_element
+                    # ('roboto') for a stale frame, and Gemma read the
+                    # REFUSED line as its own failure and gave up. Nothing
+                    # had failed: say so once and let it act on the new frame.
+                    fail_after_refusal_retried = True
+                    msg = (
+                        f"step {step_idx}: fail NOT accepted — your previous "
+                        "action was only held back because the screen changed; "
+                        "it did not fail. Look at this fresh screenshot and "
+                        "do that action again if it still applies."
+                    )
+                    history.append(msg)
+                    log.info("[cu] %s", msg)
+                    yield _progress(f"[cu] {msg}")
+                    break  # re-perceive
                 reason = action.get("reason") or "the model gave up"
                 yield _final(
                     stderr=f"[cu] fail at step-{step_idx}: {reason}\n",
                     exit_code=_EXIT_FAIL,
                 )
                 return
+
+            if kind == "type" and _types_the_request(str(action.get("text", "")), goal):
+                # Live 2026-10-26: "click on roboto" was TYPED into Chrome's
+                # profile picker verbatim. The request is what to do, never
+                # the text to enter.
+                msg = (
+                    f"step {step_idx}: {_summarize_action(action)} REFUSED — "
+                    "that is the user's request itself, not text to type. "
+                    "Carry the request out (click, open, select) instead."
+                )
+                history.append(msg)
+                log.info("[cu] %s", msg)
+                yield _progress(f"[cu] {msg}")
+                break  # re-perceive
 
             # -- pointer staleness rule -----------------------------------
             # Scrolling always targets the pointer's current surface. Treat it
