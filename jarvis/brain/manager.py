@@ -12359,6 +12359,7 @@ class BrainManager:
                 window_list_reflex,
                 window_reflex,
             )
+            from jarvis.platform.youtube_play import youtube_reflex
 
             reflex_reply = None
             for reflex in (
@@ -12371,6 +12372,7 @@ class BrainManager:
                 system_facts_reflex,
                 machine_facts_reflex,
                 open_place_reflex,
+                youtube_reflex,
                 url_reflex,
             ):
                 reflex_reply = await asyncio.to_thread(reflex, user_text)
