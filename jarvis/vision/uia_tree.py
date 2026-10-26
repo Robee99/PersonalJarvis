@@ -8,6 +8,11 @@ The flow:
 4. If still > 150 nodes after the pipeline: retry with depth 5, then 4.
 5. If still > 150: `source="screenshot_only"`, nodes empty.
 
+A Chromium or Electron window, or any window whose shallow pass found almost
+no named controls, also gets a deep pass: one cached FindAll for the
+clickable controls below the depth limit, merged in under the root. That is
+what lets click_element reach a button inside a web page.
+
 Why the UIA tree is not an AsyncIterator: the contract (`observe()`) returns
 exactly one Observation — streaming makes no sense at the tree level, because
 the structure is atomic per frame.
@@ -42,6 +47,30 @@ logger = logging.getLogger(__name__)
 
 _DEPTH_RETRY_LADDER: tuple[int, ...] = (6, 5, 4)
 _RPC_E_CHANGED_MODE = 0x80010106
+
+#: Controls the deep pass collects. Web pages and Electron apps nest their
+#: buttons and links 12 to 19 levels below the window (measured on a
+#: Chromium window on Roberto's PC, 2026-10-26), far past the depth ladder,
+#: so "click Roberto's profile" in Chrome's profile picker saw one label:
+#: the window title.
+_DEEP_ROLES: tuple[str, ...] = (
+    "Button",
+    "Edit",
+    "ComboBox",
+    "Hyperlink",
+    "CheckBox",
+    "RadioButton",
+    "MenuItem",
+    "ListItem",
+)
+#: Chrome, Edge, Brave and every Electron app share this window class.
+_CHROMIUM_CLASS = "Chrome_WidgetWin_"
+#: A shallow pass with fewer named controls than this is probably a window
+#: whose real controls sit deeper (a WPF or web view), so it gets a deep pass.
+_SHALLOW_ENOUGH = 5
+#: Room left for the shallow pass's own nodes inside DEFAULT_MAX_NODES, so a
+#: deep pass can never push the tree into the overflow fallback.
+_DEEP_HEADROOM = 10
 
 
 def _is_changed_com_apartment(exc: Exception) -> bool:
@@ -358,6 +387,20 @@ class UIATreeSource:
         except Exception:  # noqa: BLE001
             logger.warning("UIA traversal aborted", exc_info=True)
 
+        try:
+            class_name = str(root.class_name or "")
+        except Exception:  # noqa: BLE001 - an unknown class only skips the Chromium hint
+            class_name = ""
+        if nodes and wants_deep_pass(class_name, nodes):
+            deep = _deep_query(root)
+            if not deep and class_name.startswith(_CHROMIUM_CLASS):
+                # Chromium builds its page tree only once an accessibility
+                # client asks for it, so the very first query can come back
+                # empty. One short wait is enough for it to answer.
+                time.sleep(0.3)
+                deep = _deep_query(root)
+            nodes = merge_deep_controls(nodes, deep)
+
         return (window_title, active_pid, nodes)
 
     # ---- Pruning + Serialization ------------------------------------------
@@ -508,6 +551,126 @@ def _flatten(
             parent_index=my_index,
             out=out,
         )
+
+
+# ---------------------------------------------------------------------------
+# Deep pass — controls below the depth ladder (web pages, Electron, WPF)
+# ---------------------------------------------------------------------------
+
+def _named_controls(nodes: Sequence[RawNode]) -> int:
+    return sum(
+        1
+        for n in nodes
+        if n.role in DEFAULT_INTERESTING_ROLES
+        and n.role != "Text"
+        and (n.name or n.automation_id)
+        and not n.is_offscreen
+    )
+
+
+def wants_deep_pass(class_name: str, shallow: Sequence[RawNode]) -> bool:
+    """Whether the depth-limited pass probably missed the window's controls."""
+    return class_name.startswith(_CHROMIUM_CLASS) or _named_controls(shallow) < _SHALLOW_ENOUGH
+
+
+def merge_deep_controls(shallow: list[RawNode], deep: Sequence[RawNode]) -> list[RawNode]:
+    """Append the deep pass's controls under the root, without duplicates.
+
+    Each deep control becomes a child of the window (depth 1), so the depth
+    filter keeps it whatever rung of the ladder is in use. The total stays
+    inside DEFAULT_MAX_NODES: the shallow pass already counted is kept first,
+    then deep controls in document order until the budget runs out.
+    """
+    if not shallow or not deep:
+        return shallow
+    seen = {(n.role, n.name, n.bounds) for n in shallow}
+    budget = DEFAULT_MAX_NODES - _DEEP_HEADROOM - sum(
+        1
+        for n in shallow[1:]
+        if n.role in DEFAULT_INTERESTING_ROLES and (n.name or n.automation_id)
+    )
+    merged = list(shallow)
+    for node in deep:
+        if budget <= 0:
+            break
+        key = (node.role, node.name, node.bounds)
+        if key in seen:
+            continue
+        seen.add(key)
+        node.depth = 1
+        node.parent_index = 0
+        node.value = ""
+        merged.append(node)
+        budget -= 1
+    return merged
+
+
+def _deep_query(root: Any) -> list[RawNode]:
+    """Every named, on-screen control below ``root`` in one cached UIA call.
+
+    FindAllBuildCache fetches each control's properties in the same
+    cross-process call, which keeps a few hundred web controls to tens of
+    milliseconds. Values are deliberately not cached: reading one before the
+    secure-field flag is known could pull a password into this process.
+    """
+    try:
+        from pywinauto.uia_defines import IUIA  # noqa: PLC0415
+
+        uia = IUIA()
+        dll = uia.UIA_dll
+        client = uia.iuia
+        conditions = [
+            client.CreatePropertyCondition(
+                dll.UIA_ControlTypePropertyId, uia.known_control_types[role]
+            )
+            for role in _DEEP_ROLES
+            if role in uia.known_control_types
+        ]
+        cache = client.CreateCacheRequest()
+        for prop in (
+            dll.UIA_NamePropertyId,
+            dll.UIA_ControlTypePropertyId,
+            dll.UIA_BoundingRectanglePropertyId,
+            dll.UIA_IsEnabledPropertyId,
+            dll.UIA_IsOffscreenPropertyId,
+            dll.UIA_AutomationIdPropertyId,
+            dll.UIA_IsPasswordPropertyId,
+            dll.UIA_HasKeyboardFocusPropertyId,
+        ):
+            cache.AddProperty(prop)
+        found = root.element.FindAllBuildCache(
+            dll.TreeScope_Descendants, client.CreateOrConditionFromArray(conditions), cache
+        )
+        count = int(found.Length)
+    except Exception:  # noqa: BLE001 - no deep pass just leaves the shallow tree
+        logger.debug("UIA deep pass unavailable", exc_info=True)
+        return []
+    out: list[RawNode] = []
+    for i in range(count):
+        try:
+            el = found.GetElement(i)
+            name = str(el.CachedName or "")
+            automation_id = str(el.CachedAutomationId or "")
+            if (not name and not automation_id) or bool(el.CachedIsOffscreen):
+                continue
+            rect = el.CachedBoundingRectangle
+            width = int(rect.right) - int(rect.left)
+            height = int(rect.bottom) - int(rect.top)
+            if width <= 0 or height <= 0:
+                continue
+            out.append(RawNode(
+                role=str(uia.known_control_type_ids.get(int(el.CachedControlType), "")),
+                name=name,
+                automation_id=automation_id,
+                bounds=(int(rect.left), int(rect.top), width, height),
+                enabled=bool(el.CachedIsEnabled),
+                is_offscreen=False,
+                is_password=bool(el.CachedIsPassword),
+                focused=bool(el.CachedHasKeyboardFocus),
+            ))
+        except Exception:  # noqa: BLE001, S112 - one stale control is skipped, not the pass
+            continue
+    return out
 
 
 # ---------------------------------------------------------------------------
