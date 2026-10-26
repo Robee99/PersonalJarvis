@@ -11,6 +11,7 @@ knows this MCP tool exists.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -20,6 +21,13 @@ from jarvis.core.capabilities import Capability, get_registry
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
 from jarvis.safety.command_impact import DESTRUCTIVE, classify_command
 
+from .browser_page import (
+    PAGE_ACTIONS,
+    SNAPSHOT_TOOL,
+    has_inline_snapshot,
+    links_only_to_a_file,
+)
+from .browser_page import compact as compact_page
 from .client import MCPClient
 from .registry import MCPRegistry
 
@@ -314,6 +322,8 @@ class MCPToolAdapter:
             output = _normalize_mcp_result(raw)
             if self._mcp_tool_name == "show_in_gods_eye_view":
                 output = await _show_on_world_screen(raw, output)
+            elif self._mcp_tool_name in PAGE_ACTIONS or self._mcp_tool_name == SNAPSHOT_TOOL:
+                output = await self._with_page(output)
             return ToolResult(
                 success=True,
                 output=output,
@@ -326,6 +336,43 @@ class MCPToolAdapter:
                 e,
             )
             return ToolResult(success=False, output=None, error=str(e))
+
+
+    async def _with_page(self, output: Any) -> Any:
+        """A browser answer with the page it left, as a short outline (browser_page.py).
+
+        Only a Playwright-style answer ("### Page" sections) is touched; when it
+        links to a snapshot file instead of showing the page, the page is read
+        with one ``browser_snapshot`` call. Any failure keeps the answer as it was.
+        """
+        items = output if isinstance(output, list) else [output]
+        if not items or not isinstance(items[0], str) or "### Page" not in items[0]:
+            return output
+        text = items[0]
+        page: str | None = None
+        try:
+            if links_only_to_a_file(text):
+                if self._mcp_tool_name in _SETTLING_ACTIONS:
+                    # Script-drawn pages (YouTube results) fill in after load.
+                    await asyncio.sleep(_PAGE_SETTLE_S)
+                snap = _normalize_mcp_result(await self._client.call_tool(SNAPSHOT_TOOL, {}))
+                snap_items = snap if isinstance(snap, list) else [snap]
+                if snap_items and isinstance(snap_items[0], str):
+                    page = snap_items[0]
+            elif not has_inline_snapshot(text):
+                return output
+            short = compact_page(text, page)
+        except Exception:  # noqa: BLE001 — the server's own answer still stands
+            log.warning("browser page outline failed for %s", self.name, exc_info=True)
+            return output
+        return short if not isinstance(output, list) else [short, *items[1:]]
+
+
+#: Actions after which a page may still be drawing, and how long it gets.
+_SETTLING_ACTIONS = frozenset({
+    "browser_navigate", "browser_navigate_back", "browser_click", "browser_press_key",
+})
+_PAGE_SETTLE_S = 0.8
 
 
 async def _show_on_world_screen(raw: Any, output: Any) -> Any:
