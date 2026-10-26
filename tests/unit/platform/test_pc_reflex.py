@@ -422,3 +422,135 @@ def test_non_media_text_never_touches_the_player() -> None:
     player = _FakePlayer()
     assert media_reflex("open notepad", controller=player) is None
     assert player.calls == []
+
+
+# -- machine facts, Settings pages and folders (live 2026-10-26 battery) --------
+
+from types import SimpleNamespace  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("text", "pattern"),
+    [
+        ("How much RAM is free on this computer right now?", "_RAM_ASK"),
+        ("how much memory is in use?", "_RAM_ASK"),
+        ("Which three programs are using the most memory right now?", "_TOP_MEM_ASK"),
+        ("What apps use the most RAM?", "_TOP_MEM_ASK"),
+        ("How long has this computer been on since the last restart?", "_UPTIME_ASK"),
+        ("What's the system uptime?", "_UPTIME_ASK"),
+        ("What is this computer's local IP address?", "_IP_ASK"),
+        ("what's my ip", "_IP_ASK"),
+        ("Which Wi-Fi network am I connected to?", "_WIFI_ASK"),
+        ("What is the screen brightness right now?", "_BRIGHT_ASK"),
+    ],
+)
+def test_machine_fact_questions_match(text: str, pattern: str) -> None:
+    assert getattr(pc_reflex, pattern).search(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What do you remember about me?",
+        "How do I free up RAM?",
+        "Set the brightness to 40",
+        "What is an IP address?",
+    ],
+)
+def test_other_questions_are_not_machine_facts(text: str, monkeypatch) -> None:
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(pc_reflex, "_local_ip", lambda: "192.168.1.5")
+    monkeypatch.setattr(pc_reflex, "_wifi_name", lambda: "Home")
+    assert pc_reflex.machine_facts_reflex(text) is None
+
+
+def test_free_ram_is_read_from_the_machine(monkeypatch) -> None:
+    import psutil
+
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(
+        psutil, "virtual_memory",
+        lambda: SimpleNamespace(available=6 * 1024**3, total=16 * 1024**3, percent=62.5),
+    )
+    assert pc_reflex.machine_facts_reflex("How much RAM is free?") == (
+        "6.0 GB of 16.0 GB of RAM is free (62 percent in use)."
+    )
+
+
+def test_wifi_and_ip_answers(monkeypatch) -> None:
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(pc_reflex, "_local_ip", lambda: "192.168.1.5")
+    monkeypatch.setattr(pc_reflex, "_wifi_name", lambda: None)
+    assert pc_reflex.machine_facts_reflex("What is my local IP address?") == (
+        "This computer's local IP address is 192.168.1.5."
+    )
+    assert pc_reflex.machine_facts_reflex("Which Wi-Fi network am I connected to?") == (
+        "This computer is not connected to a Wi-Fi network right now."
+    )
+
+
+def test_uptime_is_spoken_in_days_hours_and_minutes() -> None:
+    assert pc_reflex._duration(90061) == "1 day, 1 hour, 1 minute"
+    assert pc_reflex._duration(30) == "less than a minute"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Open the Bluetooth page in Windows Settings.", ("bluetooth", "Bluetooth")),
+        ("open bluetooth settings", ("bluetooth", "Bluetooth")),
+        ("Open Windows Update settings", ("windowsupdate", "Windows Update")),
+        ("show me the display settings", ("display", "Display")),
+        ("Open settings", ("", "Settings")),
+    ],
+)
+def test_settings_pages_match(text: str, expected: tuple[str, str]) -> None:
+    assert pc_reflex.parse_settings_page(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["open bluetooth", "open the settings for my mixer", "don't open settings", "open youtube.com"],
+)
+def test_other_opens_are_not_settings_pages(text: str) -> None:
+    assert pc_reflex.parse_settings_page(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Open File Explorer at my Downloads folder.", "Downloads"),
+        ("open my documents folder", "Personal"),
+        ("Open the desktop folder in explorer", "Desktop"),
+    ],
+)
+def test_known_folders_match(text: str, expected: str) -> None:
+    assert pc_reflex.parse_folder_open(text) == expected
+
+
+def test_open_music_is_not_a_folder() -> None:
+    assert pc_reflex.parse_folder_open("open music") is None
+
+
+def test_closing_a_named_window_that_is_not_open_says_so(monkeypatch) -> None:
+    from jarvis.plugins.tool import window_control
+
+    def _missing(*_a, **_k):
+        raise LookupError("no window")
+
+    monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
+    monkeypatch.setattr(window_control, "change", _missing)
+    assert pc_reflex.window_reflex("Close the Settings window.") == (
+        "I can't find an open Settings window, so nothing changed."
+    )
+    assert pc_reflex.window_reflex("close the downloads") is None
+
+
+def test_what_is_playing_is_read_from_the_media_session() -> None:
+    assert parse_media_command("What song is playing right now?") == "now"
+    assert media_reflex("What song is playing right now?", controller=_FakePlayer()) == (
+        "Lofi Beats is playing in Google Chrome."
+    )
+    assert media_reflex("what's playing?", controller=_FakePlayer("none")) == (
+        "Nothing is playing right now."
+    )

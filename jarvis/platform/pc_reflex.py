@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -242,7 +243,10 @@ def window_reflex(text: str) -> str | None:
             command.action, command.window, program_only=command.action == "close"
         )
     except LookupError:  # no such window: said for resizes, else the brain looks
-        if command.action in _NOT_OPEN_IS_THE_ANSWER:
+        # "Close the Settings window" names a window outright. Live 2026-10-26
+        # it went to Gemma with nothing open, which said "The Settings window
+        # is now closed."
+        if command.action in _NOT_OPEN_IS_THE_ANSWER or re.search(r"\bwindow\b", text, re.I):
             return f"I can't find an open {_spoken(command.window)} window, so nothing changed."
         return None
     except ValueError:  # no window named: the brain asks which one
@@ -348,6 +352,253 @@ def system_facts_reflex(text: str) -> str | None:
     return None
 
 
+_ASK = r"^\s*(?:(?:hey\s+)?jarvis[,\s]+)?(?:(?:can|could)\s+you\s+tell\s+me\s+)?"
+_RAM_ASK = re.compile(
+    _ASK + r"(?:how\s+much|what(?:'s|\s+is)|check|tell\s+me)\b[^?]{0,30}\b(?:ram|memory)\b"
+    r"[^?]{0,40}\b(?:free|available|left|used|in\s+use)\b",
+    re.IGNORECASE,
+)
+_TOP_MEM_ASK = re.compile(
+    _ASK + r"(?:which|what)\s+(?:\w+\s+)?(?:programs?|apps?|applications?|processes)\b"
+    r"[^?]{0,40}\b(?:most|much)\s+(?:memory|ram)\b",
+    re.IGNORECASE,
+)
+_UPTIME_ASK = re.compile(
+    _ASK + r"(?:how\s+long\s+(?:has|have)\s+(?:this|my|the)\s+(?:computer|pc|laptop|system|machine)"
+    r"\s+been\s+(?:on|running|up)|what(?:'s|\s+is)\s+(?:the\s+|my\s+)?(?:system\s+)?uptime"
+    r"|when\s+did\s+(?:this|my|the)\s+(?:computer|pc|laptop)\s+(?:last\s+)?(?:start|restart|boot))",
+    re.IGNORECASE,
+)
+_IP_ASK = re.compile(
+    _ASK + r"what(?:'s|\s+is)\s+(?:this\s+computer's\s+|this\s+pc's\s+|my\s+|the\s+)?"
+    r"(?:local\s+|private\s+|lan\s+)?ip(?:\s+address)?\b",
+    re.IGNORECASE,
+)
+_WIFI_ASK = re.compile(
+    _ASK + r"(?:(?:which|what)\s+(?:wi-?fi|wireless)(?:\s+network)?\s+am\s+i\s+"
+    r"(?:connected\s+to|on)"
+    r"|what(?:'s|\s+is)\s+(?:the\s+|my\s+)?(?:wi-?fi|wireless)(?:\s+network)?(?:'s)?\s+name)",
+    re.IGNORECASE,
+)
+_BRIGHT_ASK = re.compile(
+    _ASK + r"(?:what(?:'s|\s+is)\s+(?:the\s+|my\s+)?(?:screen\s+|display\s+)?brightness"
+    r"|how\s+bright\s+is\s+(?:the\s+|my\s+)?(?:screen|display))",
+    re.IGNORECASE,
+)
+
+
+def _duration(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    days, rest = divmod(minutes, 24 * 60)
+    hours, minutes = divmod(rest, 60)
+    parts = [f"{n} {unit}{'s' if n != 1 else ''}" for n, unit in
+             ((days, "day"), (hours, "hour"), (minutes, "minute")) if n]
+    return ", ".join(parts) if parts else "less than a minute"
+
+
+def _local_ip() -> str | None:
+    import socket  # noqa: PLC0415
+
+    # Connecting a UDP socket sends nothing; it only picks the outgoing interface.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        try:
+            sock.connect(("192.0.2.1", 9))
+        except OSError:
+            return None
+        address = sock.getsockname()[0]
+    return None if address.startswith(("0.", "127.")) else address
+
+
+def _wifi_name() -> str | None:
+    from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS  # noqa: PLC0415
+
+    done = subprocess.run(
+        ["netsh", "wlan", "show", "interfaces"], capture_output=True, text=True,
+        timeout=8, check=False, creationflags=NO_WINDOW_CREATIONFLAGS,
+    )
+    for line in (done.stdout or "").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "SSID" and value.strip():
+            return value.strip()
+    return None
+
+
+def machine_facts_reflex(text: str) -> str | None:
+    """Free RAM, the biggest programs, uptime, local IP, Wi-Fi and brightness, read
+    from the machine.
+
+    Live 2026-10-26 Gemma answered each of these with "I do not have direct
+    access" while run_shell was offered, and once called run-skill with
+    skill_name "run_shell". Each is one read; only a plain question matches.
+    """
+    text = text or ""
+    if len(text.split()) > 16 or sys.platform != "win32":
+        return None
+    try:
+        import psutil  # noqa: PLC0415
+
+        if _TOP_MEM_ASK.search(text):
+            totals: dict[str, int] = {}
+            for proc in psutil.process_iter(["name", "memory_info"]):
+                info = proc.info
+                if info.get("memory_info") is None or not info.get("name"):
+                    continue
+                name = str(info["name"]).removesuffix(".exe")
+                totals[name] = totals.get(name, 0) + int(info["memory_info"].rss)
+            top = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:3]
+            listed = ", ".join(f"{name} {rss / 1024**3:.1f} GB" for name, rss in top)
+            return f"Using the most memory, all their processes counted: {listed}."
+        if _RAM_ASK.search(text):
+            vm = psutil.virtual_memory()
+            return (
+                f"{vm.available / 1024**3:.1f} GB of {vm.total / 1024**3:.1f} GB of RAM is free "
+                f"({vm.percent:.0f} percent in use)."
+            )
+        if _UPTIME_ASK.search(text):
+            import time  # noqa: PLC0415
+
+            return f"This computer has been on for {_duration(time.time() - psutil.boot_time())}."
+    except (ImportError, OSError, RuntimeError) as exc:
+        log.warning("machine facts reflex failed: %s", exc)
+        return None
+    if _IP_ASK.search(text):
+        address = _local_ip()
+        return f"This computer's local IP address is {address}." if address else (
+            "This computer has no network address right now."
+        )
+    if _WIFI_ASK.search(text):
+        try:
+            name = _wifi_name()
+        except (OSError, subprocess.SubprocessError) as exc:  # netsh missing or timed out
+            log.warning("wifi reflex failed: %s", exc)
+            return None
+        return f"You're connected to the Wi-Fi network {name}." if name else (
+            "This computer is not connected to a Wi-Fi network right now."
+        )
+    if _BRIGHT_ASK.search(text):
+        from jarvis.platform.brightness import read_brightness  # noqa: PLC0415
+
+        try:
+            level = read_brightness()
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("brightness read failed: %s", exc)
+            return None
+        return f"The screen brightness is {level}%." if level is not None else (
+            "Windows doesn't report a brightness for this screen; external monitors "
+            "usually keep it in their own menu."
+        )
+    return None
+
+
+#: Windows Settings pages by what people call them (ms-settings URIs).
+_SETTINGS_PAGES: tuple[tuple[str, str, str], ...] = (
+    (r"bluetooth(?:\s+(?:and|&)\s+devices)?", "bluetooth", "Bluetooth"),
+    (r"wi-?fi|wireless", "network-wifi", "Wi-Fi"),
+    (r"network(?:\s+(?:and|&)\s+internet)?|internet", "network", "Network"),
+    (r"display|screen|resolution", "display", "Display"),
+    (r"sound|audio", "sound", "Sound"),
+    (r"battery|power(?:\s+(?:and|&)\s+battery)?", "batterysaver", "Battery"),
+    (r"windows\s+update|updates?", "windowsupdate", "Windows Update"),
+    (r"(?:installed\s+)?apps(?:\s+(?:and|&)\s+features)?", "appsfeatures", "Apps"),
+    (r"default\s+apps", "defaultapps", "Default apps"),
+    (r"notifications?", "notifications", "Notifications"),
+    (r"privacy(?:\s+(?:and|&)\s+security)?", "privacy", "Privacy"),
+    (r"storage|disk\s+space", "storagesense", "Storage"),
+    (r"mouse|touchpad", "mousetouchpad", "Mouse"),
+    (r"keyboard|typing", "typing", "Typing"),
+    (r"wallpaper|background|personali[sz]ation", "personalization-background", "Background"),
+    (r"date(?:\s+(?:and|&)\s+time)?|time", "dateandtime", "Date and time"),
+    (r"language|region", "regionlanguage", "Language"),
+    (r"printers?(?:\s+(?:and|&)\s+scanners)?", "printers", "Printers"),
+)
+_OPEN_VERB = r"(?:open|show(?:\s+me)?|go\s+to|bring\s+up|pull\s+up|take\s+me\s+to)"
+_SETTINGS_OPEN = re.compile(
+    rf"^\s*{_PLEASE}{_OPEN_VERB}\s+(?:the\s+|my\s+)?(?:windows\s+)?(?:settings\s+for\s+)?"
+    r"(?P<page>.+?)(?:\s+(?:page|settings|section|panel))*"
+    r"(?:\s+(?:in|from)\s+(?:the\s+)?(?:windows\s+)?settings(?:\s+app)?)?"
+    + _TAIL,
+    re.IGNORECASE,
+)
+#: Known folders by their shell names; ``shell:`` follows OneDrive redirection.
+_FOLDERS = {
+    "downloads": "Downloads", "documents": "Personal", "desktop": "Desktop",
+    "pictures": "My Pictures", "photos": "My Pictures", "music": "My Music",
+    "videos": "My Video",
+}
+_FOLDER_OPEN = re.compile(
+    rf"^\s*{_PLEASE}(?:{_OPEN_VERB})\s+(?:(?:file\s+)?explorer\s+(?:at|to|in|on)\s+)?"
+    r"(?:the\s+|my\s+)?(?P<folder>downloads|documents|desktop|pictures|photos|music|videos)"
+    r"(?:\s+folder)?(?:\s+in\s+(?:file\s+)?explorer)?" + _TAIL,
+    re.IGNORECASE,
+)
+
+
+def parse_settings_page(text: str) -> tuple[str, str] | None:
+    """(ms-settings page, spoken name) this utterance plainly asks to open, else ``None``."""
+    if not _plain(text):
+        return None
+    bare = rf"^\s*{_PLEASE}{_OPEN_VERB}\s+(?:the\s+)?(?:windows\s+)?settings(?:\s+app)?{_TAIL}"
+    if re.match(bare, text, re.IGNORECASE):
+        return "", "Settings"
+    m = _SETTINGS_OPEN.match(text)
+    if not m or not re.search(r"\bsettings\b", text, re.IGNORECASE):
+        return None
+    page = m.group("page").strip()
+    for pattern, uri, name in _SETTINGS_PAGES:
+        if re.fullmatch(pattern, page, re.IGNORECASE):
+            return uri, name
+    return None
+
+
+def parse_folder_open(text: str) -> str | None:
+    """The known folder's shell name this utterance plainly asks to open, else ``None``."""
+    if not _plain(text):
+        return None
+    m = _FOLDER_OPEN.match(text)
+    if not m:
+        return None
+    if not (re.search(r"\b(?:folder|explorer)\b", text, re.IGNORECASE)):
+        return None  # "open music" may mean a player
+    return _FOLDERS[m.group("folder").lower()]
+
+
+def open_place_reflex(text: str) -> str | None:
+    """Open a Windows Settings page or a known folder, on Windows, else ``None``.
+
+    Live 2026-10-26 "Open the Bluetooth page in Windows Settings" made no call,
+    and "Open File Explorer at my Downloads folder" took a 14-second screen
+    mission that clicked a label that was not there.
+    """
+    if sys.platform != "win32":
+        return None
+    settings = parse_settings_page(text or "")
+    if settings is not None:
+        import os  # noqa: PLC0415
+
+        uri, name = settings
+        try:
+            os.startfile(f"ms-settings:{uri}")  # type: ignore[attr-defined]  # noqa: S606 - fixed URI
+        except OSError as exc:
+            log.warning("settings reflex failed: %s", exc)
+            return None
+        return "Opened Settings." if not uri else f"Opened the {name} page in Settings."
+    folder = parse_folder_open(text or "")
+    if folder is not None:
+        from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS  # noqa: PLC0415
+
+        try:
+            subprocess.Popen(  # noqa: S603 - fixed program and shell folder name
+                ["explorer.exe", f"shell:{folder}"], creationflags=NO_WINDOW_CREATIONFLAGS
+            )
+        except OSError as exc:
+            log.warning("folder reflex failed: %s", exc)
+            return None
+        spoken = {"Personal": "Documents", "My Pictures": "Pictures", "My Music": "Music",
+                  "My Video": "Videos"}.get(folder, folder)
+        return f"Opened your {spoken} folder in File Explorer."
+    return None
+
+
 _TLD = r"(?:com|org|net|io|in|co|dev|ai|app|gg|tv|me|de|es|uk)"
 _DOMAIN = rf"((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+{_TLD})(/[^\s]*)?"
 _URL_OPEN = re.compile(
@@ -414,10 +665,20 @@ _M_PREV = re.compile(
 )
 
 
+_M_NOW = re.compile(
+    rf"^\s*{_PLEASE}(?:what(?:'s|\s+is)\s+(?:playing|this\s+song|the\s+song|on)"
+    rf"(?:\s+(?:right\s+)?now)?|(?:which|what)\s+(?:song|track|music)\s+is\s+(?:this|playing)"
+    rf"(?:\s+(?:right\s+)?now)?)\s*[?.!]*\s*$",
+    re.IGNORECASE,
+)
+
+
 def parse_media_command(text: str) -> str | None:
-    """The player command ("pause", "play", "next", "previous") this utterance
+    """The player command ("now", "pause", "play", "next", "previous") this utterance
     plainly orders, else ``None``. "Stop", "next" and "skip" need a media word:
     alone they may mean a timer, a slide or a step."""
+    if _M_NOW.match(text or ""):
+        return "now"
     if not _plain(text):
         return None
     for action, pattern in (
@@ -454,12 +715,20 @@ def media_reflex(text: str, *, controller: Any | None = None) -> str | None:
 
     async def _run() -> str | None:
         if not (await controller.capability()).can_read:
+            if action == "now":
+                return None  # media keys cannot read; the brain may look at the screen
             # Media keys only: nothing can be read back, so say what was pressed.
             if not await getattr(controller, action)():
                 return None
             key = "play/pause" if action in _MEDIA_STATUS else action
             return f"I pressed the {key} media key; I can't read back what is playing."
         before = await controller.now_playing()
+        if action == "now":
+            if before is None:
+                return "Nothing is playing right now."
+            artist = f" by {before.artist}" if before.artist else ""
+            state = "is playing" if before.status == "playing" else f"is {before.status}"
+            return f"{before.title or 'A track'}{artist} {state} in {before.app}."
         if before is None:
             if action == "play":
                 return None  # nothing to resume: the brain may open a player

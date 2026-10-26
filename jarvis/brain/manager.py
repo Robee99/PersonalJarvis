@@ -12222,7 +12222,9 @@ class BrainManager:
             from jarvis.brain.quick_math import solve as math_reflex
             from jarvis.platform.brightness import brightness_reflex
             from jarvis.platform.pc_reflex import (
+                machine_facts_reflex,
                 media_reflex,
+                open_place_reflex,
                 system_facts_reflex,
                 url_reflex,
                 volume_reflex,
@@ -12239,6 +12241,8 @@ class BrainManager:
                 window_reflex,
                 window_list_reflex,
                 system_facts_reflex,
+                machine_facts_reflex,
+                open_place_reflex,
                 url_reflex,
             ):
                 reflex_reply = await asyncio.to_thread(reflex, user_text)

@@ -371,3 +371,47 @@ async def test_a_question_for_a_missing_value_is_not_sent_back() -> None:
 
     assert len(brain.requests) == 1
     assert out.text == "Which city should I look in?"
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        # Live 2026-10-26, both with no call made.
+        "On it, I will check the current weather for Bengaluru.",
+        "Noted, I will remind you to drink water in ten minutes.",
+    ],
+)
+async def test_an_acknowledged_promise_is_sent_back(first: str) -> None:
+    brain = _SaysThenCalls(first)
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    await loop.run([BrainMessage(role="user", content="weather in Bengaluru")])
+
+    assert executor.calls == 1
+    assert brain.requests[1].tool_choice == "required"
+
+
+async def test_noted_with_remember_is_an_answer() -> None:
+    brain = _SaysThenCalls("Noted, I will remember that you like BigBasket.")
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    await loop.run([BrainMessage(role="user", content="remember I like BigBasket")])
+
+    assert len(brain.requests) == 1
+
+
+async def test_a_mandated_tool_left_uncalled_is_forced_once() -> None:
+    # Live 2026-10-26 a folder request carried the run_shell mandate and was
+    # answered in words the announcement check did not catch.
+    brain = _SaysThenCalls("The folder jarvis-b5 is ready in to-claude.")
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    await loop.run(
+        [BrainMessage(role="user", content="create a folder named jarvis-b5")],
+        evidence_required_tool="system_volume",
+    )
+
+    assert executor.calls == 1
+    assert brain.requests[1].tool_choice == "required"

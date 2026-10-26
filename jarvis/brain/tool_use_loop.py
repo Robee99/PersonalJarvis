@@ -180,6 +180,17 @@ _ANNOUNCED = re.compile(
     re.IGNORECASE,
 )
 
+# Live 2026-10-26 "On it, I will check the current weather for Bengaluru." and
+# "Noted, I will remind you to drink water in ten minutes." ended turns with no
+# call. An acknowledgement followed by a first-person promise is an
+# announcement with or without "now"; "I'll remember" stays an answer.
+_ACK_PROMISE = re.compile(
+    r"(?:^|[.!?]\s+)(?:on it|noted|certainly|sure|of course|right away|very well),?\s+"
+    r"(?:sir,?\s+)?(?:i will|i'll|i am going to|i'm going to|let me)\s+"
+    r"(?!know\b|remember\b|keep\b|note\b|bear\b)[a-z]+",
+    re.IGNORECASE,
+)
+
 # A provider can repeat the exact same text-serialized call after receiving its
 # result. The action must remain exactly-once, but the turn must not end on an
 # empty ``tool_use`` round. Force one tool-less synthesis pass instead.
@@ -319,6 +330,16 @@ _INSTRUCTIONAL_QUESTION_RE = re.compile(
     r"|what\s+(?:is|does|are)\s+"
     r"|why\s+"
     r")",
+    re.IGNORECASE,
+)
+
+# "What is the largest file in my Downloads folder?" asks for a fact about this
+# machine, not for an explanation. Live 2026-10-26 the how-to guard blocked
+# run_shell on it, and Gemma then made up "VacationHighlights.mp4, 3 GB".
+_OWN_MACHINE_LOOKUP_RE = re.compile(
+    r"^\s*what(?:'s|\s+is|\s+are)\s+"
+    r"(?=.*(?:\bmy\b|\bthis\s+(?:computer|pc|laptop|machine)\b|\b[a-z]:\\|"
+    r"\b(?:downloads|documents|desktop)\s+folder\b))",
     re.IGNORECASE,
 )
 
@@ -555,6 +576,8 @@ def _is_instructional_question(utterance: str) -> bool:
     """
     text = utterance or ""
     if not _INSTRUCTIONAL_QUESTION_RE.search(text):
+        return False
+    if _OWN_MACHINE_LOOKUP_RE.search(text):
         return False
     return not _has_trailing_imperative(text)
 
@@ -1187,10 +1210,22 @@ class ToolUseLoop:
                     continue
                 promised = bool(failed_call and _PROMISE.search(agg.text or ""))
                 undone = bool(
-                    not tool_log and tools_payload and _ANNOUNCED.search(agg.text or "")
+                    not tool_log
+                    and tools_payload
+                    and (_ANNOUNCED.search(agg.text or "") or _ACK_PROMISE.search(agg.text or ""))
                 )
                 narrowed = bool(
                     not tool_log and tools_payload and _NARROW_ASK.search(agg.text or "")
+                )
+                # Live 2026-10-26 "Create a folder named jarvis-b5 inside ..."
+                # carried the run_shell mandate, and Gemma answered in words the
+                # announcement check did not recognise, so the turn ended on
+                # "the command never ran". A mandated tool that was offered and
+                # not called is an unmade action whatever the wording.
+                undone = undone or bool(
+                    evidence_required_tool
+                    and not tool_log
+                    and any(t.get("name") == evidence_required_tool for t in tools_payload)
                 )
                 if (
                     (refused_call or promised or undone or narrowed)
