@@ -12192,6 +12192,28 @@ class BrainManager:
                 )
                 return capture_reply
 
+        # Timers and reminders: "set a timer for 2 minutes", "remind me in 10
+        # minutes to drink water" are kept by Jarvis itself and ring over the bus
+        # plus a Windows notification (jarvis/focus/timers.py). Gemma only said
+        # "Noted, I will remind you" with nothing set (battery 2026-10-26). Runs
+        # ahead of focus, whose words ("minutes") overlap. Binding every turn
+        # also re-arms what a restart left pending.
+        if not screen_context.has_image:
+            from jarvis.focus.timers import get_board, timer_reflex
+
+            board = get_board()
+            honorific = persona_style(getattr(self, "_config", None))[1]
+            board.bind(self._focus_speaker(), honorific)
+            timer_reply = await timer_reflex(user_text, board=board)
+            if timer_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=timer_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return timer_reply
+
         # Focus sessions: "thirty minutes on this", "lock on this tab", "stop
         # focus" start, move and end the server-side session without a model
         # (jarvis/focus/session.py); the callouts later come over the bus.
