@@ -163,6 +163,25 @@ def find_button(elements: list[dict[str, Any]], name: str) -> dict[str, Any] | N
 
 _OPERATORS = frozenset({"plus", "minus", "multiply by", "divide by"})
 
+#: A press that is a whole number or sum rather than one key: "12", "3*12=".
+_KEY_RUN = re.compile(r"^[0-9.,+\-*/x×÷=%()]{2,}$")
+
+
+def expand_presses(press: list[str]) -> list[str]:
+    """One key per press. Live 2026-10-26 Gemma pressed ["3", "*", "12", "="] and
+    Calculator has no "12" key, so the sum stopped at "3 *"."""
+    keys: list[str] = []
+    for token in press:
+        flat = token.replace(" ", "")
+        keys.extend(list(flat) if _KEY_RUN.match(flat) and not flat.isalpha() else [token])
+    return keys
+
+
+def _same_keys(text: str, press: list[str]) -> bool:
+    """Whether ``text`` only repeats the keys already pressed ("3*12" after 3, *, 1, 2, =)."""
+    typed = text.replace(" ", "").rstrip("=")
+    return bool(typed) and typed == "".join(press).replace(" ", "").rstrip("=")
+
 
 def _sum_left_open(pressed: list[str]) -> bool:
     """Whether an operator was pressed and the sum never finished with Equals."""
@@ -244,8 +263,12 @@ class AppControlTool:
                 output=None,
                 error="CUA Driver is not installed, so apps cannot be driven in the background.",
             )
-        press = [str(p) for p in (args.get("press") or []) if str(p).strip()]
+        press = expand_presses([str(p) for p in (args.get("press") or []) if str(p).strip()])
         text = str(args.get("type") or "")
+        if press and _same_keys(text, press):
+            # Live 2026-10-26 Gemma pressed 3, *, 1, 2, = and also typed
+            # "3*12": the typing ran the sum again and the display read 12.
+            text = ""
         try:
             return await self._drive(exe, app, press, text)
         except CuaError as exc:
