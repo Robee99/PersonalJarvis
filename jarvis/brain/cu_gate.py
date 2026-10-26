@@ -411,6 +411,26 @@ def llm_computer_use_allowed(user_text: str) -> bool:
     return False
 
 
+#: A short turn that only asks for the last thing again. Live 2026-10-26 after
+#: "open calculator and press 3 * 12 =" failed, "TRY AGAIN" was refused as
+#: "no explicit desktop request" and answered "36" from arithmetic.
+_RETRY_RE = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|no|please|pls|plz|jarvis|sir)\W+)*"
+    r"(?:(?:try|do)\s+(?:it\s+|that\s+|this\s+)?(?:again|once\s+more)"
+    r"|retry|again|one\s+more\s+time"
+    r"|(?:you|u)\s+(?:did\s*n[o']?t|did\s+not|didnt)\s+(?:do|click|open|press|type|try)\b.*"
+    r"|(?:it|that)\s+(?:did\s*n[o']?t|did\s+not|didnt)\s+work)"
+    r"(?:\W+(?:please|pls|plz|again|sir))*\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_retry_request(user_text: str) -> bool:
+    """Whether the turn only asks to repeat the previous request."""
+    text = str(user_text or "").strip()
+    return len(text.split()) <= 10 and _RETRY_RE.match(text) is not None
+
+
 #: Structured tool error the model receives instead of a mission. English —
 #: internal steering text, never spoken verbatim (suppress_response tools
 #: aside, the model rephrases in the conversation language).

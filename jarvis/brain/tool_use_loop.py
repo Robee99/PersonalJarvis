@@ -21,11 +21,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
 
+from jarvis.brain.action_honesty import action_not_started_phrase
 from jarvis.brain.cu_gate import (
     CU_BLOCKED_MODEL_FEEDBACK,
     CU_VEHICLE_TOOL_NAMES,
     is_explicit_computer_use_turn,
     is_observation_only,
+    is_retry_request,
     llm_computer_use_allowed,
 )
 from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
@@ -199,6 +201,39 @@ _ACK_PROMISE = re.compile(
     re.IGNORECASE,
 )
 
+# Live 2026-10-26 on Gemma 4 E4B, every one with no call behind it: "I have
+# opened two tabs", "I have zoomed in on the God's Eye View as requested" and
+# "I am navigating to the God's Eye View centered on New York". A first-person
+# report of a finished or running action needs a call that made it; the
+# delivered-sounding sentence after it ("The screen now offers ...") is part
+# of the same invention, so the whole reply goes back.
+_DONE_VERBS = (
+    "opened|closed|launched|started|clicked|typed|pressed|entered|filled|"
+    "zoomed|navigated|scrolled|selected|switched|turned|set|muted|unmuted|"
+    "paused|played|resumed|stopped|moved|maximi[sz]ed|minimi[sz]ed|resized|"
+    "created|saved|sent|added|removed|deleted|renamed|copied|enabled|disabled|"
+    "changed|adjusted|installed|downloaded|uploaded|submitted|flown|flew|"
+    "taken|took|captured|centered|centred|focused|brought|put|placed|booked|ordered"
+)
+_CLAIMED_DONE = re.compile(
+    r"\bi(?:['\u2019]ve|\s+have)\s+(?:just\s+|now\s+|already\s+|successfully\s+|also\s+)?"
+    rf"(?:{_DONE_VERBS})\b"
+    r"|\bi(?:['\u2019]m|\s+am)\s+(?:now\s+|currently\s+|also\s+)?"
+    rf"(?:{_ACTION_GERUNDS})\b",
+    re.IGNORECASE,
+)
+
+
+def _claims_done(text: str) -> bool:
+    """A first-person report of an action, outside a question."""
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        if sentence.rstrip().endswith("?"):
+            continue
+        if _CLAIMED_DONE.search(sentence):
+            return True
+    return False
+
+
 # A provider can repeat the exact same text-serialized call after receiving its
 # result. The action must remain exactly-once, but the turn must not end on an
 # empty ``tool_use`` round. Force one tool-less synthesis pass instead.
@@ -219,6 +254,21 @@ def _cap_tool_result_json(serialized: str) -> str:
         f"{kept}… [truncated: tool output was {len(serialized)} chars, "
         f"capped at {_MAX_TOOL_RESULT_CHARS}]"
     )
+
+
+def _previous_user_text(messages: list[BrainMessage]) -> str:
+    """The person's request before the newest one, for a bare "try again"."""
+    seen = 0
+    for message in reversed(messages):
+        if message.role != "user" or not isinstance(message.content, str):
+            continue
+        text = message.content
+        if text.startswith(_STEER_PREFIX) or text.startswith("["):
+            continue
+        seen += 1
+        if seen == 2:
+            return text
+    return ""
 
 
 def _last_user_text(messages: list[BrainMessage]) -> str:
@@ -1277,7 +1327,11 @@ class ToolUseLoop:
                 undone = bool(
                     not tool_log
                     and tools_payload
-                    and (_ANNOUNCED.search(agg.text or "") or _ACK_PROMISE.search(agg.text or ""))
+                    and (
+                        _ANNOUNCED.search(agg.text or "")
+                        or _ACK_PROMISE.search(agg.text or "")
+                        or _claims_done(agg.text or "")
+                    )
                 )
                 narrowed = bool(
                     not tool_log and tools_payload and _NARROW_ASK.search(agg.text or "")
@@ -1336,6 +1390,16 @@ class ToolUseLoop:
                         )
                     final_agg.text = ""
                     continue
+                if retry_nudged and not tool_log and tools_payload and _claims_done(agg.text or ""):
+                    # Sent back once and still reporting an action no tool
+                    # made: the person hears that nothing ran, not the claim.
+                    log.info("tool_use_loop: an action claim with no call replaced")
+                    final_agg.text = _localized_phrase(
+                        {lang: action_not_started_phrase(lang) for lang in ("de", "en", "es")},
+                        user_utterance or _last_user_text(current_messages),
+                        reply_language,
+                    )
+                    break
                 outcome = await self._run_verify(
                     user_utterance or _last_user_text(current_messages),
                     final_agg.text,
@@ -1658,6 +1722,10 @@ class ToolUseLoop:
                 elif (
                     tool_name in CU_VEHICLE_TOOL_NAMES
                     and not llm_computer_use_allowed(user_utterance)
+                    and not (
+                        is_retry_request(user_utterance)
+                        and llm_computer_use_allowed(_previous_user_text(current_messages))
+                    )
                 ):
                     # Explicit-desktop gate (live incident 2026-07-21 11:36):
                     # a pure knowledge question delegated by realtime was

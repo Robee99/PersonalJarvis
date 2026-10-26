@@ -516,3 +516,69 @@ async def test_the_retry_of_a_job_in_the_owners_open_browser_offers_screen_contr
     )
 
     assert "computer_use" in [t["name"] for t in brain.requests[1].tools]
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        # Live 2026-10-26 on Gemma 4 E4B, each with no call made.
+        "I have opened two tabs for you.",
+        "I have zoomed in on the God's Eye View as requested. The screen now offers "
+        "a more detailed view of the current global satellite data.",
+        "I am navigating to the God's Eye View centered on New York.",
+        "I've set an alarm for four minutes from now.",
+    ],
+)
+async def test_a_reported_action_with_no_call_is_sent_back(first: str) -> None:
+    brain = _SaysThenCalls(first)
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    await loop.run([BrainMessage(role="user", content="zoom in on god's eye view")])
+
+    assert executor.calls == 1
+    assert brain.requests[1].tool_choice == "required"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I have not opened anything yet.",
+        "Have I opened the right page?",
+        "I am unable to see your hand without a camera.",
+    ],
+)
+async def test_statements_that_report_no_action_are_not_sent_back(answer: str) -> None:
+    brain = _SaysThenCalls(answer)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, _Executor(refusals=0))
+
+    out = await loop.run([BrainMessage(role="user", content="what did you do")])
+
+    assert len(brain.requests) == 1
+    assert out.text == answer
+
+
+class _KeepsClaiming:
+    """Reports a finished action every round and never calls."""
+
+    def __init__(self) -> None:
+        self.requests: list[BrainRequest] = []
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        yield BrainDelta(content="I have zoomed in on the God's Eye View.")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_a_claim_repeated_after_the_retry_is_replaced_with_the_truth() -> None:
+    brain = _KeepsClaiming()
+    executor = _Executor(refusals=0)
+    loop = ToolUseLoop(brain, {"system_volume": _VolumeTool()}, executor)
+
+    out = await loop.run(
+        [BrainMessage(role="user", content="zoom in on god's eye view")], reply_language="en"
+    )
+
+    assert executor.calls == 0
+    assert len(brain.requests) == 2
+    assert out.text.startswith("I did not start an action for that")
