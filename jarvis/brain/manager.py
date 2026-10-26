@@ -2987,6 +2987,19 @@ def _takes_pending_appshot(source_layer: str | None) -> bool:
     return not layer.startswith(_AUTOMATED_LAYER_PREFIXES)
 
 
+#: A spoken change of plan: "actually open Edge", "no wait, Spotify", "do it
+#: in Edge instead". It replaces a running screen mission.
+_SPOKEN_CORRECTION = re.compile(
+    r"^\s*(?:no[,.!]?\s+)?(?:wait[,.!]?\s+)?(?:actually|instead|rather|i\s+meant?|"
+    r"change\s+(?:that|it|of\s+plan)|make\s+it)\b|^\s*no[,.!]?\s+wait\b|\binstead\b",
+    re.IGNORECASE,
+)
+#: "stop the music" stops a thing, not the mission that is running.
+_STOPS_A_THING = re.compile(
+    r"^\s*(?:stop|pause|cancel)\s+(?:the|my|this|that)\s+(?!task\b|mission\b)\w+",
+    re.IGNORECASE,
+)
+
 class BrainManager:
     """Top-level orchestrator with intent router and smart fallback."""
 
@@ -11054,6 +11067,30 @@ class BrainManager:
         log.info("Cancelled %d background Jarvis-Agent task(s)", cancelled)
         return cancelled
 
+    @staticmethod
+    def _stop_screen_mission() -> int:
+        """Stop a running screen mission for a spoken "stop"; 1 when one ran."""
+        from jarvis.harness.computer_use_context import cancel_active_cu, cu_mission_active
+
+        if not cu_mission_active():
+            return 0
+        return 1 if cancel_active_cu("voice_stop", suppress_new=False) else 0
+
+    @staticmethod
+    def _redirects_screen_mission(text: str) -> bool:
+        """Whether ``text`` corrects the task a running screen mission is doing."""
+        from jarvis.harness.computer_use_context import cu_mission_active
+        from jarvis.speech.interrupt_intent import INTERRUPT_REDIRECT, classify_interrupt
+
+        if not cu_mission_active():
+            return False
+        if _SPOKEN_CORRECTION.search(text or ""):
+            return True
+        return (
+            classify_interrupt(text) == INTERRUPT_REDIRECT
+            and not _STOPS_A_THING.match(text or "")
+        )
+
     def _cancel_is_an_order(self, text: str) -> bool:
         """With Hermes as the brain, "stop the music" or "cancel the meeting"
         is an order for Hermes, not a cancel; only a bare "stop" (or "stop,
@@ -11795,8 +11832,19 @@ class BrainManager:
                 )
                 return screen_reply
 
+        # A correction spoken while a screen mission runs ("wait, open Edge
+        # instead") replaces the mission: the old one stops before the new
+        # order runs, so two missions never fight over the mouse. Before this
+        # only Escape or a hang-up could stop a running mission (2026-10-26
+        # "no interruption layer if I wanna change the task").
+        if self._redirects_screen_mission(user_text):
+            from jarvis.harness.computer_use_context import cancel_active_cu
+
+            if cancel_active_cu("voice_redirect", suppress_new=False):
+                log.info("screen mission stopped for a spoken correction: %.60s", user_text)
+
         if self._detect_cancel_intent(user_text) and not self._cancel_is_an_order(user_text):
-            stopped = self._cancel_all_background_tasks()
+            stopped = self._cancel_all_background_tasks() + self._stop_screen_mission()
             hermes_report = await self._stop_hermes()
             if hermes_report is not None and hermes_report.count:
                 confirmation = self._hermes_stop_readback()
