@@ -1,5 +1,15 @@
 # OS Feature Parity — macOS / Linux Gap Register
 
+## Desktop action capture recovery (2026-10-26, T2)
+
+Windows native HWND capture rejects frames whose RGB channels are all at most
+8/255; the existing foreground-rectangle fallback then captures the same bounds.
+This handles Chromium/WebView capture returning black without rejecting textured
+dark interfaces. macOS and Linux capture backends and permission handling are
+unchanged. Fake-driven tests cover fallback reuse, exact bounds, dark content,
+and the existing macOS permission refusal cases. Live profile selection still
+requires verification against a rebuilt installed app.
+
 ## Local voice and audio topology refresh (issue #464, T2)
 
 Local final transcription uses its configured model independently of the wake
