@@ -96,6 +96,12 @@ _OWN_BROWSER = re.compile(
 
 #: The owner's real Chrome through BrowserSkill (my_chrome.py).
 OWN_BROWSER_HANDS = "my_chrome"
+#: "go to chrome and open youtube" also means his Chrome, though it is no
+#: reason to keep screen clicking on (live 2026-10-26).
+_SAYS_CHROME = re.compile(
+    r"\b(go\s+to|in|on|into|use|using|with|open|through|via)\s+(google\s+)?chrome\b",
+    re.IGNORECASE,
+)
 
 
 def wants_own_browser(text: str) -> bool:
@@ -130,6 +136,11 @@ def server_of(name: str, tool: Any) -> str:
     if not getattr(tool, "is_mcp_tool", False):
         return ""
     return name.split("/", 1)[0] if "/" in name else ""
+
+
+def _is_browser_tool(name: str) -> bool:
+    tail = name.rsplit("/", 1)[-1]
+    return tail.startswith("browser_") or tail == "get_browser_state"
 
 
 def _one_line(tool: Any) -> str:
@@ -187,7 +198,9 @@ class ToolSwitch:
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
         hands = self._browser_hands(query, relevant)
-        if OWN_BROWSER_HANDS in self._tools and wants_own_browser(query):
+        if OWN_BROWSER_HANDS in self._tools and (
+            wants_own_browser(query) or _SAYS_CHROME.search(query or "")
+        ):
             hands = [OWN_BROWSER_HANDS, *hands]
         if hands and _WEB_WORDS.search(query) and not wants_own_browser(query):
             # With both on, Gemma picked screen clicking for a web page (live
@@ -214,7 +227,19 @@ class ToolSwitch:
         exact = [n for n in names if n in self._tools]
         hidden = {n: t for n, t in self._tools.items() if n not in self._on}
         ranked = self._rank(hidden, request, _ENABLE_LIMIT) if request and hidden else []
-        hands = [n for n in self._browser_hands(request, ranked) if n in hidden]
+        all_hands = self._browser_hands(request, ranked)
+        if APP_HANDS in self._tools or all_hands:
+            # "enable_tools: control Chrome browser" switched on the raw CUA
+            # browser tools; Gemma made up pid 12345 and target_1 for them and
+            # every call failed (live 2026-10-26). They need a DevTools
+            # binding first, so the other browser server's tools do the job.
+            ranked = [
+                n
+                for n in ranked
+                if not self._is_raw_app_tool(n)
+                or (APP_HANDS not in self._tools and not _is_browser_tool(n))
+            ]
+        hands = [n for n in all_hands if n in hidden]
         if hands and _WEB_WORDS.search(request) and not wants_own_browser(request):
             ranked = [n for n in ranked if n != SCREEN_HANDS]
         found = list(dict.fromkeys([*exact, *hands, *ranked, *self._siblings(request, ranked)]))
@@ -242,6 +267,10 @@ class ToolSwitch:
             if server_of(name, tool) not in ("", _RAW_APP_SERVER)
             and name.rsplit("/", 1)[-1] == hand
         ]
+
+    def browser_hands_on(self, request: str) -> list[str]:
+        """The browser tools already visible for a web job ``request``."""
+        return [n for n in self._browser_hands(request, []) if n in self._on]
 
     def _is_raw_app_tool(self, name: str) -> bool:
         tool = self._tools.get(name)
@@ -308,7 +337,17 @@ class EnableToolsTool:
         need = str(args.get("need") or "").strip()
         raw_names = args.get("names") or []
         names = [str(n) for n in raw_names] if isinstance(raw_names, list) else []
+        ready = self.switch.browser_hands_on(need)
         added = self.switch.enable_for(need, names)
+        # The browser tools the model already had answer a browser ask; say so,
+        # or it keeps looking for others (live 2026-10-26).
+        already = (
+            "These browser tools are already on; call them now:\n" + self.switch.describe(ready)
+            if ready
+            else ""
+        )
+        if not added and already:
+            return ToolResult(success=True, output=already)
         if not added:
             return ToolResult(
                 success=True,
@@ -320,7 +359,11 @@ class EnableToolsTool:
         log.info("tool switch: %r switched on %s", need[:80], ", ".join(added))
         return ToolResult(
             success=True,
-            output="Switched on, callable now:\n" + self.switch.describe(added),
+            output="\n".join(
+                filter(
+                    None, [already, "Switched on, callable now:\n" + self.switch.describe(added)]
+                )
+            ),
         )
 
 

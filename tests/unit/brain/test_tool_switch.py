@@ -359,3 +359,38 @@ def test_a_web_job_never_gets_the_desktop_drivers_browser_tools() -> None:
 
     assert switch.is_on("playwright/browser_navigate")
     assert not switch.is_on("cua-driver/browser_navigate")
+
+
+@pytest.mark.asyncio
+async def test_enable_tools_for_chrome_never_hands_over_the_desktop_drivers_browser_tools() -> None:
+    # Live 2026-10-26 "enable_tools: control Chrome browser" switched on the
+    # raw CUA browser tools; Gemma invented pid 12345 and target_1 and every
+    # call failed. The browser server's tools, already on, are the answer.
+    tools = _with_cua(_registry())
+    for verb in ("get_browser_state", "browser_prepare", "browser_dialog"):
+        name = f"cua-driver/{verb}"
+        tools[name] = _Tool(name, f"Chrome browser {verb} with pid and window id", is_mcp_tool=True)
+    switch = _switch(tools)
+    switch.open_turn("go to chrome open youtube and play i mean it by g eazy", core=())
+    assert switch.is_on("playwright/browser_navigate")
+
+    result = await tools[ENABLE_TOOLS].execute({"need": "control Chrome browser"}, None)
+
+    assert not any(n.startswith("cua-driver/") for n in switch.visible())
+    assert "playwright/browser_navigate" in result.output
+    assert "already on" in result.output
+
+
+def test_saying_chrome_brings_the_owners_own_chrome_but_not_screen_clicking() -> None:
+    tools = _registry()
+    tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome")
+    tools["computer_use"] = _Tool("computer_use", "Click and type on screen")
+    switch = _switch(tools)
+
+    switch.open_turn(
+        "go to chrome open youtube and play i mean it by g eazy", core=(), keep=("computer_use",)
+    )
+
+    assert switch.is_on("my_chrome")
+    assert switch.is_on("playwright/browser_navigate")
+    assert not switch.is_on("computer_use")
