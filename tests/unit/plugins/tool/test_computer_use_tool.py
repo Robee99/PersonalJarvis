@@ -22,6 +22,7 @@ import pytest
 
 from jarvis.core.protocols import ExecutionContext, HarnessResult, HarnessTask
 from jarvis.harness.computer_use_context import (
+    CU_ORIGINAL_REQUEST_ENV_KEY,
     ComputerUseContext,
     set_computer_use_context,
 )
@@ -78,9 +79,11 @@ class _FakeHarnessManager:
 
     def __init__(self) -> None:
         self.dispatched: list[tuple[str, str]] = []
+        self.envs: list[dict] = []
 
     async def dispatch(self, name: str, task: HarnessTask) -> AsyncIterator[HarnessResult]:
         self.dispatched.append((name, task.prompt))
+        self.envs.append(dict(task.env))
         yield HarnessResult(stdout="done", exit_code=0, is_final=True)
 
 
@@ -129,6 +132,53 @@ async def test_empty_goal_is_rejected_without_dispatch() -> None:
 
     assert not result.success
     assert fake.dispatched == []
+
+
+@pytest.mark.parametrize("background", [False, True])
+async def test_original_app_and_constraints_survive_router_paraphrase(background) -> None:
+    from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
+
+    original = "Chrome is already open: click Roberto, use the SAME window; do not send."
+    manager = _FakeHarnessManager()
+    bus = _FakeBus() if background else None
+    tool = ComputerUseTool(bus=bus, manager=manager)
+    ctx = _lang_ctx(original, {"output_language": "en"})
+    result = await tool.execute({"goal": "Click Roberto"}, ctx)
+    assert result.success
+    if background:
+        await asyncio.wait_for(asyncio.gather(*tool._background_tasks), timeout=2)
+    assert manager.dispatched[0][0] == "screenshot"
+    prompt = manager.dispatched[0][1]
+    assert "Click Roberto" in prompt
+    assert prompt == "Click Roberto"
+    assert manager.envs[0][CU_ORIGINAL_REQUEST_ENV_KEY] == original
+
+
+async def test_identical_original_request_is_not_duplicated() -> None:
+    from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
+
+    manager = _FakeHarnessManager()
+    tool = ComputerUseTool(manager=manager)
+    goal = "Click Roberto in Chrome"
+    await tool.execute({"goal": goal}, _lang_ctx(goal, {"output_language": "en"}))
+    assert manager.dispatched == [("screenshot", goal)]
+
+
+async def test_same_paraphrase_with_different_target_context_is_not_a_duplicate():
+    from jarvis.plugins.tool.computer_use_tool import ComputerUseTool
+
+    manager = _SlowHarnessManager()
+    tool = ComputerUseTool(bus=_FakeBus(), manager=manager)
+    first = _lang_ctx("In Chrome click Roberto", {"output_language": "en"})
+    second = _lang_ctx("In Edge click Roberto", {"output_language": "en"})
+    await tool.execute({"goal": "Click Roberto"}, first)
+    await tool.execute({"goal": "Click Roberto"}, first)
+    await tool.execute({"goal": "Click Roberto"}, second)
+    tasks = list(tool._background_tasks)
+    manager.release.set()
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
+    assert len(tasks) == 2
+    assert len(manager.dispatched) == 2
 
 
 # ---------------------------------------------------------------------------

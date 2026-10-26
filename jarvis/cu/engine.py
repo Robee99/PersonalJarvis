@@ -80,6 +80,7 @@ from jarvis.cu.verify import (
     verify_click_focus_point,
     verify_typed_text,
 )
+from jarvis.harness.computer_use_context import CU_ORIGINAL_REQUEST_ENV_KEY
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +178,9 @@ _SYSTEM_BASE = (
     "unchanged.\n"
     "* Prefer click_element with an EXACT label from CLICKABLE ELEMENTS when "
     "one matches your target — it is more reliable than pixel coordinates.\n"
+    "* A missing accessibility label does not mean a visible control is absent. "
+    "If click_element cannot find it, inspect the fresh screenshot and use a "
+    "visually grounded click, or the exact available label. Never guess.\n"
     "* Never two pointer actions (click/drag) in one reply — after the first "
     "one the screen may change, so a second guess would be blind. A tight "
     "click -> type -> key sequence IS allowed.\n"
@@ -1017,6 +1021,15 @@ async def run_cu_loop(
     """CU v2 mission loop. Same contract as the legacy ``run_cu_loop``."""
     t_start = time.time_ns()
     goal = task.prompt
+    original_request = str((getattr(task, "env", None) or {}).get(
+        CU_ORIGINAL_REQUEST_ENV_KEY, "",
+    ) or "").strip()
+    request_context = ""
+    if original_request and original_request.casefold() != goal.strip().casefold():
+        request_context = (
+            "ORIGINAL USER REQUEST (context and constraints; do not repeat "
+            "steps already completed):\n" + original_request
+        )
     output_language = (getattr(task, "env", None) or {}).get(
         _OUTPUT_LANGUAGE_ENV_KEY,
     ) or None
@@ -1077,7 +1090,7 @@ async def run_cu_loop(
     except Exception:  # noqa: BLE001 — declaration is best-effort
         log.debug("[cu] DPI awareness declaration failed", exc_info=True)
 
-    stepped_to = await asyncio.to_thread(_step_off_jarvis, goal)
+    stepped_to = await asyncio.to_thread(_step_off_jarvis, f"{goal}\n{original_request}")
     if stepped_to:
         log.info("[cu] Jarvis had the focus; brought %r forward", stepped_to[:60])
         yield _progress(f"[cu] switched from Jarvis to {stepped_to[:60]}")
@@ -1113,6 +1126,7 @@ async def run_cu_loop(
     # One "fail" right after the engine itself held an action back (stale
     # frame, display change) is answered with a retry, not taken as final.
     fail_after_refusal_retried = False
+    fail_after_label_miss_retried = False
     observe_failures = 0
     prev_thumb: bytes | None = None
     fruitless_steps = 0  # steps with zero successful actions on an unchanged screen
@@ -1372,6 +1386,8 @@ async def run_cu_loop(
                 + conv_mod.action_grammar_block()
             )
             lines = [f"GOAL: {goal}"]
+            if request_context:
+                lines.append(request_context)
             if prior_missions:
                 lines.append(
                     "EARLIER DESKTOP MISSIONS of this conversation (context "
@@ -1474,7 +1490,7 @@ async def run_cu_loop(
             if kind == "done":
                 done, proof = await _judge_done(
                     ctx,
-                    goal,
+                    f"{goal}\n\n{request_context}" if request_context else goal,
                     monitor,
                     image_cfg,
                     output_language,
@@ -1513,6 +1529,23 @@ async def run_cu_loop(
 
             if kind == "fail":
                 last = history[-1] if history else ""
+                if (
+                    not fail_after_label_miss_retried
+                    and "click_element(" in last
+                    and " -> FAILED: No matching element" in last
+                ):
+                    fail_after_label_miss_retried = True
+                    msg = (
+                        f"step {step_idx}: fail NOT accepted yet — only the "
+                        "accessibility label lookup failed. Inspect this fresh "
+                        "screenshot for the target and try a visually grounded "
+                        "click or an exact available label. If the target is "
+                        "not visible or cannot be identified, fail honestly."
+                    )
+                    history.append(msg)
+                    log.info("[cu] %s", msg)
+                    yield _progress(f"[cu] {msg}")
+                    break  # re-perceive, preserving all pointer guards
                 if not fail_after_refusal_retried and (
                     " REFUSED — the foreground window changed" in last
                     or " REFUSED — the display layout changed" in last
@@ -1540,7 +1573,10 @@ async def run_cu_loop(
                 )
                 return
 
-            if kind == "type" and _types_the_request(str(action.get("text", "")), goal):
+            if kind == "type" and any(
+                _types_the_request(str(action.get("text", "")), instruction)
+                for instruction in (goal, original_request) if instruction
+            ):
                 # Live 2026-10-26: "click on roboto" was TYPED into Chrome's
                 # profile picker verbatim. The request is what to do, never
                 # the text to enter.

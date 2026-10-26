@@ -179,6 +179,9 @@ def patched(monkeypatch, tmp_path):
         fake_verify_click_focus_point,
     )
     monkeypatch.setattr(engine_mod, "_foreground_title", lambda: "Test Window")
+    # Startup focus recovery has its own tests. Do not read/move a real window
+    # here or consume the foreground sequence reserved for capture race tests.
+    monkeypatch.setattr(engine_mod, "_step_off_jarvis", lambda _goal: "")
     # The per-action permission guard reads the LIVE TCC state and the window list: on
     # a macOS dev machine without a grant it would refuse every dispatched action.
     # The guard's own tests drive ``_dispatch_tool`` through a FakeTCC world instead.
@@ -1488,8 +1491,80 @@ async def test_typing_the_request_itself_is_refused(patched):
     assert any("the user's request itself" in user for _system, user in brain.calls)
 
 
+@pytest.mark.parametrize("echo", ["click on Roberto", "In Chrome click on Roberto"])
+async def test_original_context_does_not_disable_request_echo_guard(patched, monkeypatch, echo):
+    selected = []
+    monkeypatch.setattr(engine_mod, "_step_off_jarvis", lambda goal: selected.append(goal) or "")
+    original = "In Chrome click on Roberto"
+    brain = FakeBrain([
+        '{"action":"type","text":"' + echo + '"}',
+        '{"action":"fail","reason":"stop"}',
+    ])
+    executor = FakeExecutor()
+    task = SimpleNamespace(
+        prompt="click on Roberto", env={"JARVIS_CU_ORIGINAL_REQUEST": original}, timeout_s=60,
+    )
+    chunks = [chunk async for chunk in engine_mod.run_cu_loop(
+        task, _ctx(brain, executor), cancel_token=None,
+    )]
+    assert _final(chunks).exit_code == 5
+    assert not any(name == "type_text" for name, _args in executor.calls)
+    assert any("the user's request itself" in user for _system, user in brain.calls)
+    assert original in brain.calls[0][1]
+    assert original in selected[0]
+
+
 def test_types_the_request_allows_quoted_content() -> None:
     asked = "Problem and click on roboto"
     assert engine_mod._types_the_request(asked, asked)
     assert not engine_mod._types_the_request("hello world", "type hello world into notepad")
     assert not engine_mod._types_the_request("lofi", "search youtube for lofi")
+
+
+async def test_a_missing_label_gets_one_fresh_visual_recovery(patched):
+    class MissingLabelExecutor(FakeExecutor):
+        async def execute(self, tool, args, **kwargs):
+            if tool["name"] == "click_element":
+                self.calls.append((tool["name"], dict(args)))
+                return SimpleNamespace(
+                    success=False, output=None,
+                    error=(
+                        "No matching element (name~'Roberto'). "
+                        "Available labels: ['Google Chrome']"
+                    ),
+                )
+            return await super().execute(tool, args, **kwargs)
+
+    brain = FakeBrain([
+        '{"action":"click_element","name":"Roberto"}',
+        '{"action":"fail","reason":"the label was not found"}',
+        '{"action":"click","x":500,"y":500}',
+        '{"action":"fail","reason":"cannot finish"}',
+    ])
+    executor = MissingLabelExecutor()
+    chunks = await _run(_ctx(brain, executor))
+
+    assert any(name == "click" for name, _args in executor.calls)
+    assert len(brain.calls) == 4
+    assert any(
+        "visual" in user.lower() and "label" in user.lower() for _system, user in brain.calls
+    )
+    assert _final(chunks).exit_code == 5
+
+
+async def test_visual_recovery_after_a_label_miss_is_bounded(patched):
+    class MissingLabelExecutor(FakeExecutor):
+        async def execute(self, tool, args, **kwargs):
+            self.calls.append((tool["name"], dict(args)))
+            return SimpleNamespace(success=False, output=None, error="No matching element")
+
+    brain = FakeBrain([
+        '{"action":"click_element","name":"Roberto"}',
+        '{"action":"fail","reason":"label missing"}',
+        '{"action":"fail","reason":"no visible target"}',
+    ])
+    executor = MissingLabelExecutor()
+    chunks = await _run(_ctx(brain, executor))
+    assert len(brain.calls) == 3
+    assert len(executor.calls) == 1
+    assert _final(chunks).exit_code == 5
