@@ -44,6 +44,7 @@ DEFAULT_CORE: tuple[str, ...] = (
     "app_ui_click",
     "app_ui_type",
     "app_ui_scroll",
+    "pc_pilot",
     "open_app",
     "window_control",
     "system_volume",
@@ -168,6 +169,17 @@ def names_other_program(text: str) -> bool:
     return bool(text and _OTHER_PROGRAM.search(text) and not _JARVIS_NAMED.search(text))
 
 
+#: The one desktop driver (pc_pilot.py): any app, window, Settings page or
+#: site, clicked and typed by name. When it is registered, the other hands
+#: for another program's window stay off the opening surface: live
+#: 2026-10-26 Gemma failed differently with each of computer_use, app_control,
+#: the raw Windows-MCP and CUA servers and app_ui_click.
+PILOT = "pc_pilot"
+#: Words that keep a web job on the browser servers instead of the pilot.
+_SAYS_BROWSER_SERVER = re.compile(
+    r"\b(playwright|headless|agent\s+browser|browser\s+server|compare\s+prices?)\b", re.I
+)
+
 #: The one-call background app driver (desktop_driver.py) and the raw server it
 #: replaces on the opening surface: Gemma copied example ids out of the raw
 #: CUA tools' descriptions and typed into the wrong control (live 2026-10-25).
@@ -256,6 +268,8 @@ class ToolSwitch:
         relevant = [
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
+        if PILOT in self._tools:
+            return self._open_pilot_turn(query, relevant, core=core, keep=keep)
         if SCREEN_HANDS in self._tools and wants_browser_window_control(query or ""):
             # Browser servers own separate windows. Keep an explicit same-window
             # task on the observed desktop, including requests without a site URL.
@@ -309,6 +323,53 @@ class ToolSwitch:
              *self._siblings(query, relevant)]
         )
         return relevant
+
+    def _open_pilot_turn(
+        self, query: str, relevant: list[str], *, core: Iterable[str], keep: Iterable[str]
+    ) -> list[str]:
+        """The opening surface when the PC pilot is here: it is the desktop's hands.
+
+        Screen clicking, the CUA app driver, the raw desktop servers' pointer
+        tools and the browser servers leave the opening surface; the pilot
+        opens a site in the owner's own browser and works the page by name.
+        A request that names a browser server or a price comparison keeps the
+        browser tools, and ``enable_tools`` can still bring any of them back.
+        """
+        browser = bool(_SAYS_BROWSER_SERVER.search(query or ""))
+        desktop_servers = {
+            server_of(n, t) for n, t in self._tools.items() if self._is_pointer_server(n, t)
+        }
+
+        def other_hands(name: str) -> bool:
+            tool = self._tools.get(name)
+            if tool is None:
+                return False
+            if name in (SCREEN_HANDS, APP_HANDS) or server_of(name, tool) in desktop_servers:
+                return True
+            return not browser and (name == OWN_BROWSER_HANDS or _is_browser_tool(name))
+
+        relevant = [n for n in relevant if not other_hands(n)]
+        named = self._named_servers(query or "")
+        hands = self._browser_hands(query, relevant) if browser else []
+        camera = [CAMERA] if wants_camera(query or "") else []
+        siblings = [n for n in self._siblings(query, relevant) if not other_hands(n)]
+        self.switch_on(
+            [ENABLE_TOOLS, PILOT, *core, *[n for n in keep if not other_hands(n)], *camera,
+             *hands, *relevant, *named, *siblings]
+        )
+        return relevant
+
+    def _is_pointer_server(self, name: str, tool: Any) -> bool:
+        """A tool of an MCP server that clicks in windows (Windows-MCP, CUA)."""
+        server = server_of(name, tool)
+        if not server:
+            return False
+        if server == _RAW_APP_SERVER:
+            return True
+        tails = {
+            n.rsplit("/", 1)[-1] for n, t in self._tools.items() if server_of(n, t) == server
+        }
+        return "Snapshot" in tails and "Click" in tails
 
     def _named_servers(self, query: str) -> list[str]:
         """Tools of an MCP server the request names ("use Windows MCP").

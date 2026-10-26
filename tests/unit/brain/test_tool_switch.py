@@ -410,3 +410,46 @@ def test_explicit_same_window_tabs_keep_the_desktop_operator(utterance):
     assert switch.is_on("computer_use")
     assert not switch.is_on("my_chrome")
     assert not switch.is_on("playwright/browser_navigate")
+
+
+def _desktop_registry() -> dict[str, Any]:
+    tools = _registry()
+    tools["pc_pilot"] = _Tool("pc_pilot", "Drive any app or window on this PC: click, type, keys")
+    tools["computer_use"] = _Tool("computer_use", "Control the screen with mouse and keyboard")
+    tools["app_control"] = _Tool("app_control", "Press buttons in a desktop app")
+    tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome browser")
+    for verb in ("Snapshot", "Click", "Type", "Scroll", "App"):
+        name = f"windows-desktop/{verb}"
+        tools[name] = _Tool(name, f"{verb} a Windows desktop window app", is_mcp_tool=True)
+    return tools
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "open windows settings and click on windows update",
+        "open calculator and press 7 plus 8",
+        "go to chrome open youtube and search lofi",
+        "open a new tab in the same chrome window",
+    ],
+)
+def test_the_pc_pilot_is_the_only_desktop_hands(utterance: str) -> None:
+    # Live 2026-10-26: five sets of desktop hands, each failing differently.
+    tools = _desktop_registry()
+    switch = _switch(tools)
+
+    switch.open_turn(utterance, core=("navigate", "pc_pilot"), keep=("computer_use",))
+
+    on = set(switch.visible())
+    assert "pc_pilot" in on
+    assert not {"computer_use", "app_control", "my_chrome"} & on
+    assert not any(n.startswith(("windows-desktop/", "playwright/")) for n in on)
+
+
+def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None:
+    tools = _desktop_registry()
+    switch = _switch(tools)
+
+    switch.open_turn("use playwright to open example.com", core=("pc_pilot",))
+
+    assert {"pc_pilot", "playwright/browser_navigate"} <= set(switch.visible())

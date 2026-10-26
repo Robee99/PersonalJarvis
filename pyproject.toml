@@ -748,6 +748,7 @@ system-volume = "jarvis.plugins.tool.system_volume:SystemVolumeTool"
 # Find files (2026-10-26): files and folders by name across the whole C: drive
 # (Windows Search index, then a bounded walk). Read-only, risk safe.
 find-files = "jarvis.plugins.tool.find_files:FindFilesTool"
+pc-pilot = "jarvis.plugins.tool.pc_pilot:PcPilot"
 news-headlines = "jarvis.plugins.tool.news_headlines:NewsHeadlinesTool"
 window-control = "jarvis.plugins.tool.window_control:WindowControlTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"

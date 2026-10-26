@@ -95,6 +95,10 @@ ROUTER_TOOLS = frozenset({
     # Find files (2026-10-26): "search my C drive for the invoice". Names only,
     # read-only, risk safe; never a spawn.
     "find-files",
+    # PC pilot (2026-10-26): open apps, pages, folders and sites, then click by
+    # name, type, press keys, scroll and manage windows in any program, with a
+    # readback and a policy that asks before delete/send/pay. Never a spawn.
+    "pc-pilot",
     # Window control (2026-10-12): minimize / maximize / restore / focus /
     # close a window by title or program, state read back. Risk monitor, never
     # a spawn and never in a worker or society tool set (AP-5/AP-14).
