@@ -307,3 +307,118 @@ def test_the_battery_level_is_read_from_the_machine(monkeypatch: pytest.MonkeyPa
 )
 def test_other_disk_and_battery_talk_goes_to_the_brain(text: str) -> None:
     assert pc_reflex.system_facts_reflex(text) is None
+
+
+# -- media reflex (live 2026-10-25: "Pause the music" went to an unconnected skill) --
+
+from jarvis.platform.media_session import MediaSessionCapability, NowPlaying  # noqa: E402
+from jarvis.platform.pc_reflex import media_reflex, parse_media_command  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Pause the music", "pause"),
+        ("pause", "pause"),
+        ("Jarvis, pause it please", "pause"),
+        ("stop the music", "pause"),
+        ("resume", "play"),
+        ("resume the song", "play"),
+        ("play the music again", "play"),
+        ("next song", "next"),
+        ("skip this track", "next"),
+        ("play the next track", "next"),
+        ("previous song", "previous"),
+        ("go back a track", "previous"),
+    ],
+)
+def test_plain_media_commands_match(text: str, expected: str) -> None:
+    assert parse_media_command(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "stop",
+        "stop it",
+        "next",
+        "skip",
+        "play the music",
+        "play lo-fi music on YouTube",
+        "don't pause the music",
+        "why did the music pause?",
+        "pause the music and open notepad",
+        "pause the music when this song ends",
+    ],
+)
+def test_other_utterances_stay_with_the_brain(text: str) -> None:
+    assert parse_media_command(text) is None
+
+
+class _FakePlayer:
+    def __init__(self, status: str = "playing", *, can_read: bool = True, accepts: bool = True):
+        self.status = status
+        self.can_read = can_read
+        self.accepts = accepts
+        self.calls: list[str] = []
+
+    async def capability(self) -> MediaSessionCapability:
+        return MediaSessionCapability(self.can_read, True, "fake")
+
+    async def now_playing(self) -> NowPlaying | None:
+        if self.status == "none":
+            return None
+        return NowPlaying("Lofi Beats", "", "", "Google Chrome", self.status)  # type: ignore[arg-type]
+
+    async def _do(self, action: str, status: str | None) -> bool:
+        self.calls.append(action)
+        if self.accepts and status is not None:
+            self.status = status
+        return self.accepts
+
+    async def pause(self) -> bool:
+        return await self._do("pause", "paused")
+
+    async def play(self) -> bool:
+        return await self._do("play", "playing")
+
+    async def next(self) -> bool:
+        return await self._do("next", None)
+
+    async def previous(self) -> bool:
+        return await self._do("previous", None)
+
+
+def test_pause_reports_what_the_session_reads_back() -> None:
+    player = _FakePlayer()
+    assert media_reflex("Pause the music", controller=player) == (
+        "Paused Lofi Beats in Google Chrome."
+    )
+    assert player.calls == ["pause"]
+
+
+def test_a_pause_the_player_ignored_is_not_claimed() -> None:
+    player = _FakePlayer(accepts=False)
+    assert media_reflex("pause", controller=player) == (
+        "The player did not accept pause, so nothing changed."
+    )
+
+
+def test_nothing_playing_is_said_and_resume_goes_to_the_brain() -> None:
+    assert media_reflex("pause the music", controller=_FakePlayer("none")) == (
+        "Nothing is playing, so there is nothing to pause."
+    )
+    assert media_reflex("resume", controller=_FakePlayer("none")) is None
+
+
+def test_media_keys_only_say_the_key_was_pressed() -> None:
+    player = _FakePlayer(can_read=False)
+    reply = media_reflex("next song", controller=player)
+    assert reply == "I pressed the next media key; I can't read back what is playing."
+    assert player.calls == ["next"]
+
+
+def test_non_media_text_never_touches_the_player() -> None:
+    player = _FakePlayer()
+    assert media_reflex("open notepad", controller=player) is None
+    assert player.calls == []

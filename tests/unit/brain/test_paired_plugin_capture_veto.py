@@ -203,3 +203,44 @@ def test_no_swap_when_the_match_already_fits_or_the_sibling_is_missing() -> None
     lonely = _Registry({"plugin-spotify": spotify})
     mgr = _manager_with("youtube_music", {"spotify", "youtube_music"})
     assert mgr._prefer_music_service(spotify, "spiel musik", lonely) is spotify
+
+
+def _noted_turn(tmp_path: Path, monkeypatch, connected: set[str]) -> Any:
+    _write_music_skill(tmp_path, "plugin-spotify", "spotify", "(musik|music)")
+    _write_music_skill(
+        tmp_path, "plugin-youtube_music", "youtube_music", "(youtube music)"
+    )
+    registry = SkillRegistry(root=tmp_path)
+    registry.reload_sync()
+    set_skill_context(SkillContext(registry=registry, runner=_StubRunner()))  # type: ignore[arg-type]
+    mgr = BrainManager(config=JarvisConfig(), bus=EventBus(), tools={})
+    monkeypatch.setattr(
+        BrainManager, "_plugin_disconnected",
+        staticmethod(lambda pid, store=None: pid not in connected),
+    )
+    mgr.note_skill_trigger("plugin-spotify", content="", source="chat")
+    mgr._consume_pending_skill_trigger("Pause the music")
+    return mgr._skill_turn_match
+
+
+def test_a_noted_trigger_for_a_disconnected_plugin_does_not_capture(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Live 2026-10-25: the chat hook noted plugin-spotify for "Pause the
+    music" with neither music plugin connected; the note skipped the veto
+    and the turn went to a tool that could only say "not connected"."""
+    try:
+        assert _noted_turn(tmp_path, monkeypatch, connected=set()) is None
+    finally:
+        set_skill_context(None)
+
+
+def test_a_noted_trigger_is_rematched_to_the_connected_music_service(
+    tmp_path: Path, monkeypatch
+) -> None:
+    try:
+        matched = _noted_turn(tmp_path, monkeypatch, connected={"youtube_music"})
+        assert matched is not None
+        assert matched.name == "plugin-youtube_music"
+    finally:
+        set_skill_context(None)

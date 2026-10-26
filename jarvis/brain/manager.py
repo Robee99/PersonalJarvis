@@ -6160,6 +6160,19 @@ class BrainManager:
         if self._skill_is_blocked(skill):
             log.info("noted skill %r is block-tier — ignored", skill_name)
             return
+        # The same music rematch and not-connected veto as the match path
+        # (_match_skill_for_turn). Live 2026-10-25 the chat hook noted
+        # plugin-spotify for "Pause the music" while YouTube Music played and
+        # Spotify had no credential; the note skipped both guards, captured
+        # the turn and stood the media reflex down.
+        skill = self._prefer_music_service(skill, user_text, ctx.registry)
+        if self._paired_plugin_disconnected(skill):
+            log.info(
+                "noted skill %s's plugin is not connected — turn not captured, "
+                "routing stays with the live tool surface",
+                getattr(skill, "name", "?"),
+            )
+            return
         self._skill_turn_match = skill
         self._skill_turn_content = content
         self._skill_turn_source = source
@@ -12209,6 +12222,7 @@ class BrainManager:
             from jarvis.brain.quick_math import solve as math_reflex
             from jarvis.platform.brightness import brightness_reflex
             from jarvis.platform.pc_reflex import (
+                media_reflex,
                 system_facts_reflex,
                 url_reflex,
                 volume_reflex,
@@ -12221,6 +12235,7 @@ class BrainManager:
                 math_reflex,
                 brightness_reflex,
                 volume_reflex,
+                media_reflex,
                 window_reflex,
                 window_list_reflex,
                 system_facts_reflex,

@@ -30,6 +30,7 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -384,3 +385,100 @@ def url_reflex(text: str) -> str | None:
         return None
     site = url.removeprefix("https://").rstrip("/")
     return f"Opened {site} in your browser."
+
+
+_MEDIA_NOUN = (
+    r"(?:(?:the|my|this|that)\s+)?(?:music|song|track|playback|video|player|"
+    r"youtube(?:\s+music)?|spotify)"
+)
+_MEDIA_THING = rf"(?:{_MEDIA_NOUN}|it)"
+_M_PAUSE = re.compile(
+    rf"^\s*{_PLEASE}(?:pause(?:\s+{_MEDIA_THING})?|(?:stop|halt)\s+{_MEDIA_NOUN}){_TAIL}",
+    re.IGNORECASE,
+)
+_M_PLAY = re.compile(
+    rf"^\s*{_PLEASE}(?:resume|unpause)(?:\s+{_MEDIA_THING})?{_TAIL}"
+    rf"|^\s*{_PLEASE}continue\s+{_MEDIA_THING}{_TAIL}"
+    rf"|^\s*{_PLEASE}(?:play|start)\s+{_MEDIA_THING}\s+again{_TAIL}",
+    re.IGNORECASE,
+)
+_M_NEXT = re.compile(
+    rf"^\s*{_PLEASE}(?:(?:play\s+)?(?:the\s+)?next\s+(?:song|track)|"
+    rf"skip\s+(?:to\s+the\s+next\s+(?:song|track)|{_MEDIA_NOUN})){_TAIL}",
+    re.IGNORECASE,
+)
+_M_PREV = re.compile(
+    rf"^\s*{_PLEASE}(?:(?:play\s+)?(?:the\s+)?(?:previous|last)\s+(?:song|track)|"
+    rf"go\s+back\s+(?:a|one)\s+(?:song|track)){_TAIL}",
+    re.IGNORECASE,
+)
+
+
+def parse_media_command(text: str) -> str | None:
+    """The player command ("pause", "play", "next", "previous") this utterance
+    plainly orders, else ``None``. "Stop", "next" and "skip" need a media word:
+    alone they may mean a timer, a slide or a step."""
+    if not _plain(text):
+        return None
+    for action, pattern in (
+        ("pause", _M_PAUSE), ("play", _M_PLAY), ("next", _M_NEXT), ("previous", _M_PREV)
+    ):
+        if pattern.match(text):
+            return action
+    return None
+
+
+_MEDIA_DONE = {"pause": "Paused", "play": "Resumed", "next": "Skipped to", "previous": "Back to"}
+_MEDIA_STATUS = {"pause": "paused", "play": "playing"}
+
+
+def media_reflex(text: str, *, controller: Any | None = None) -> str | None:
+    """Pause, resume or skip whatever plays, through the OS media session.
+
+    Live 2026-10-25 "Pause the music" matched the Spotify skill, which was not
+    connected, while YouTube Music played in Chrome; nothing paused. Every
+    player that answers the media keys (YouTube Music, Spotify, a YouTube tab)
+    is in the OS media session, so this needs no connected account. The reply
+    is what the session reads back afterwards. ``controller`` is injectable
+    for tests (``jarvis.platform.media_session.MediaSessionController``).
+    """
+    action = parse_media_command(text)
+    if action is None or (controller is None and sys.platform != "win32"):
+        return None
+    import asyncio  # noqa: PLC0415
+
+    if controller is None:
+        from jarvis.platform.media_session import make_media_session_controller  # noqa: PLC0415
+
+        controller = make_media_session_controller()
+
+    async def _run() -> str | None:
+        if not (await controller.capability()).can_read:
+            # Media keys only: nothing can be read back, so say what was pressed.
+            if not await getattr(controller, action)():
+                return None
+            key = "play/pause" if action in _MEDIA_STATUS else action
+            return f"I pressed the {key} media key; I can't read back what is playing."
+        before = await controller.now_playing()
+        if before is None:
+            if action == "play":
+                return None  # nothing to resume: the brain may open a player
+            return "Nothing is playing, so there is nothing to " + (
+                "pause." if action == "pause" else "skip."
+            )
+        if not await getattr(controller, action)():
+            return f"The player did not accept {action}, so nothing changed."
+        await asyncio.sleep(0.4)  # the session reports the new state a moment later
+        after = await controller.now_playing()
+        if after is None:
+            return f"I sent {action} to the player, but it no longer reports what plays."
+        title = after.title or "the track"
+        if action in _MEDIA_STATUS and after.status != _MEDIA_STATUS[action]:
+            return f"I sent {action} to {after.app}, but it still reads {after.status}."
+        return f"{_MEDIA_DONE[action]} {title} in {after.app}."
+
+    try:
+        return asyncio.run(_run())
+    except (OSError, RuntimeError) as exc:
+        log.warning("media reflex failed: %s", exc)
+        return None
