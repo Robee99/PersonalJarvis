@@ -52,6 +52,7 @@ from jarvis.brain import provider_health_ledger as _health_ledger
 # classifier (provider_test.classify_provider_error) so the live fallback chain and
 # the API-Keys badge can never disagree on "out of credits / over budget" (AP-22).
 from jarvis.brain.desktop_driver import APP_CONTROL, app_control_tool
+from jarvis.brain.my_chrome import MY_CHROME, my_chrome_tool
 from jarvis.brain.price_compare import COMPARE_PRICES, ComparePricesTool
 from jarvis.brain.provider_test import BILLING_LIMIT_MARKERS
 from jarvis.brain.spawn_gate import effort_warrants_delegation
@@ -4122,6 +4123,10 @@ class BrainManager:
             hands = app_control_tool()
             if hands is not None:
                 surface[APP_CONTROL] = hands
+        if MY_CHROME not in surface:
+            own_chrome = self._my_chrome()
+            if own_chrome is not None:
+                surface[MY_CHROME] = own_chrome
         switch = ToolSwitch(surface, _relevant_tool_names)
         surface[ENABLE_TOOLS] = EnableToolsTool(switch)
         core = getattr(self._config.brain, "tool_switch_core", None) or DEFAULT_CORE
@@ -4134,6 +4139,14 @@ class BrainManager:
             ", ".join(relevant[:8]) or "none",
         )
         return surface, switch
+
+    def _my_chrome(self) -> Tool | None:
+        """One BrowserSkill tool per manager, so its Chrome session spans turns."""
+        cached = getattr(self, "_my_chrome_tool", None)
+        if cached is None:
+            cached = my_chrome_tool()
+            self._my_chrome_tool = cached
+        return cached
 
     def _turn_keep_names(self, tools: dict[str, Tool]) -> set[str]:
         """Tools a gate decided this turn needs; a fit never drops them."""

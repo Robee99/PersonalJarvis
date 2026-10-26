@@ -94,6 +94,10 @@ _OWN_BROWSER = re.compile(
 )
 
 
+#: The owner's real Chrome through BrowserSkill (my_chrome.py).
+OWN_BROWSER_HANDS = "my_chrome"
+
+
 def wants_own_browser(text: str) -> bool:
     """Whether a request is about the person's own open browser, not a fresh one."""
     return bool(text and _OWN_BROWSER.search(text))
@@ -183,6 +187,8 @@ class ToolSwitch:
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
         hands = self._browser_hands(query, relevant)
+        if OWN_BROWSER_HANDS in self._tools and wants_own_browser(query):
+            hands = [OWN_BROWSER_HANDS, *hands]
         if hands and _WEB_WORDS.search(query) and not wants_own_browser(query):
             # With both on, Gemma picked screen clicking for a web page (live
             # 2026-10-25) and the browser tools never ran. The manager keeps
