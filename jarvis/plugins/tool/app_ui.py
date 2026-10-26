@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from jarvis.brain.tool_switch import names_other_program
 from jarvis.core.app_ui_bridge import AppUiBridge, AppUiReply
 from jarvis.core.protocols import ToolResult
 
@@ -112,6 +113,20 @@ def _failure(reply: AppUiReply) -> ToolResult:
     return ToolResult(success=False, output=None, error=reply.error or "The app did not say why.")
 
 
+_OTHER_PROGRAM_ERROR = (
+    "app_ui tools only reach the Jarvis window, and this request is about another "
+    "program. Use the desktop tools for it: windows-desktop/Snapshot, then "
+    "windows-desktop/Click with loc=[x, y] from the element's line (or computer_use)."
+)
+
+
+def _other_program(ctx: Any) -> ToolResult | None:
+    """A refusal when the person's request is about another program's window."""
+    if names_other_program(str(getattr(ctx, "user_utterance", "") or "")):
+        return ToolResult(success=False, output=None, error=_OTHER_PROGRAM_ERROR)
+    return None
+
+
 def _target(args: dict[str, Any]) -> tuple[str, str]:
     ref = str(args.get("ref") or "").strip()
     label = " ".join(str(args.get("label") or "").split())
@@ -139,6 +154,9 @@ class AppUiSnapshotTool(_AppUiTool):
     schema: dict[str, Any] = {"type": "object", "properties": {}}
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+        refused = _other_program(ctx)
+        if refused is not None:
+            return refused
         reply = await self._bridge.request("snapshot")
         if not reply.ok:
             return _failure(reply)
@@ -166,6 +184,9 @@ class AppUiClickTool(_AppUiTool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+        refused = _other_program(ctx)
+        if refused is not None:
+            return refused
         ref, label = _target(args)
         if not ref and not label:
             return ToolResult(
@@ -202,6 +223,9 @@ class AppUiTypeTool(_AppUiTool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+        refused = _other_program(ctx)
+        if refused is not None:
+            return refused
         ref, label = _target(args)
         if not ref and not label:
             return ToolResult(
@@ -242,6 +266,9 @@ class AppUiScrollTool(_AppUiTool):
     }
 
     async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+        refused = _other_program(ctx)
+        if refused is not None:
+            return refused
         direction = str(args.get("direction") or "").strip().lower()
         if direction not in ("up", "down", "top", "bottom"):
             return ToolResult(

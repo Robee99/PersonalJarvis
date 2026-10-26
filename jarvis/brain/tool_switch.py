@@ -123,6 +123,36 @@ def wants_browser_window_control(text: str) -> bool:
     )
 
 
+#: A request about another program's window. Live 2026-10-26 "open Windows PC
+#: settings, click on Windows Update": Settings was launched, then the clicks
+#: went to app_ui_click, which only sees the Jarvis window, and one landed on a
+#: row of Jarvis's own chat.
+_OTHER_PROGRAM = re.compile(
+    r"\b(?:windows|pc|system|computer|laptop)\s+settings?\b"
+    r"|\bsettings\s+(?:app|on\s+(?:my|the)\s+(?:pc|computer|laptop))\b"
+    r"|\bwindows\s+update\b|\bcontrol\s+panel\b|\bdevice\s+manager\b"
+    r"|\btask\s+manager\b|\bfile\s+explorer\b"
+    r"|\b(?:chrome|edge|firefox|brave|opera|notepad|calculator|excel|"
+    r"powerpoint|outlook|spotify|whatsapp|telegram|discord|vs\s*code|explorer)\b",
+    re.IGNORECASE,
+)
+_JARVIS_NAMED = re.compile(
+    r"\b(?:jarvis|this\s+app|your\s+(?:app|screen|window|settings))\b", re.IGNORECASE,
+)
+#: Pointer words: the request acts on controls inside a window.
+_POINTER_WORDS = re.compile(
+    r"\b(?:click\w*|tap|press|select|choose|type|typing|scroll\w*|toggle|check\s+for)\b",
+    re.IGNORECASE,
+)
+#: The desktop server tools a pointer job in another program needs, in order.
+_DESKTOP_POINTER = ("Snapshot", "Click", "Type", "Scroll")
+
+
+def names_other_program(text: str) -> bool:
+    """Whether ``text`` is about another program's window, not the Jarvis app."""
+    return bool(text and _OTHER_PROGRAM.search(text) and not _JARVIS_NAMED.search(text))
+
+
 #: The one-call background app driver (desktop_driver.py) and the raw server it
 #: replaces on the opening surface: Gemma copied example ids out of the raw
 #: CUA tools' descriptions and typed into the wrong control (live 2026-10-25).
@@ -248,10 +278,56 @@ class ToolSwitch:
                 hands = [APP_HANDS]
                 relevant = [n for n in relevant if n != SCREEN_HANDS]
                 keep = [n for n in keep if n != SCREEN_HANDS]
+        named = self._named_servers(query or "")
+        if (
+            not hands
+            and _POINTER_WORDS.search(query or "")
+            and names_other_program(query or "")
+        ):
+            # Live 2026-10-26 "open Windows PC settings, click on Windows
+            # Update": with no desktop click tool on, Gemma clicked with
+            # app_ui_click, which only reaches the Jarvis window.
+            named = [*named, *self._desktop_pointer()]
         self.switch_on(
-            [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *self._siblings(query, relevant)]
+            [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *named,
+             *self._siblings(query, relevant)]
         )
         return relevant
+
+    def _named_servers(self, query: str) -> list[str]:
+        """Tools of an MCP server the request names ("use Windows MCP").
+
+        Live 2026-10-26 "USE WINDOWS MCP" got "I am not seeing a Windows MCP
+        server configured" while windows-desktop was connected, its tools
+        switched off.
+        """
+        said = set(re.findall(r"[a-z0-9]+", query.casefold()))
+        if not said or not ({"mcp", "server"} & said or "tools" in said):
+            return []
+        out: list[str] = []
+        servers = {server_of(n, t) for n, t in self._tools.items()} - {""}
+        for server in sorted(servers):
+            words = set(re.findall(r"[a-z0-9]+", server.casefold())) - {"mcp", "server"}
+            if not words or not (words & said):
+                continue
+            members = {n: t for n, t in self._tools.items() if server_of(n, t) == server}
+            ranked = self._rank(members, query, _SIBLINGS_PER_SERVER)
+            pointer = [n for n in self._desktop_pointer() if n in members]
+            out.extend(dict.fromkeys([*pointer, *ranked]))
+        return out
+
+    def _desktop_pointer(self) -> list[str]:
+        """Snapshot, Click, Type and Scroll of a server that has Snapshot and Click."""
+        by_server: dict[str, dict[str, str]] = {}
+        for name, tool in self._tools.items():
+            server = server_of(name, tool)
+            if server and server != _RAW_APP_SERVER:
+                by_server.setdefault(server, {})[name.rsplit("/", 1)[-1]] = name
+        for server in sorted(by_server):
+            tails = by_server[server]
+            if "Snapshot" in tails and "Click" in tails:
+                return [tails[t] for t in _DESKTOP_POINTER if t in tails]
+        return []
 
     def enable_for(self, request: str, names: Iterable[str] = ()) -> list[str]:
         """Switch on what ``request`` describes, plus any exact ``names``."""

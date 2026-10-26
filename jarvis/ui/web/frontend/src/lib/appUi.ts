@@ -103,6 +103,7 @@ const INTERACTIVE = [
 const DIALOG = '[role="dialog"], [role="alertdialog"], dialog[open]';
 const NAV = 'aside, nav, [role="navigation"]';
 const DESTRUCTIVE = '[data-danger], [data-destructive], [class*="bg-destructive"], [class*="text-destructive"]';
+const WORK_TRACE = '[data-testid="work-trace"], [data-trace-tool], [data-trace-summary]';
 const REGION_RANK: Record<UiRegion, number> = { dialog: 0, main: 1, nav: 2, other: 3 };
 
 // --------------------------------------------------------------------------
@@ -386,8 +387,11 @@ type Pick = { found: Found } | { error: string };
 export function findByLabel(doc: Document, label: string, fieldsOnly = false): Pick {
   const query = normalizeLabel(label);
   if (!query) return { error: "The label is empty." };
+  // A turn's work trace lists earlier steps ("App ui click Windows Update
+  // 1.6s"); a spoken label never means one of those. Live 2026-10-26 a click
+  // for "Windows Update" landed on that trace row and reported success.
   const candidates = collect(doc).filter(
-    (item) => !item.control.disabled && (!fieldsOnly || isField(item.el)),
+    (item) => !item.control.disabled && (!fieldsOnly || isField(item.el)) && !item.el.closest(WORK_TRACE),
   );
   let best: { item: Found; rank: number[] } | null = null;
   for (const item of candidates) {
