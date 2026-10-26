@@ -62,7 +62,7 @@ _MAX_FRESH = 30
 #: A window with fewer named controls than this goes back as a picture too.
 _FEW_CONTROLS = 4
 #: Seconds a freshly opened window gets to appear.
-_OPEN_WAIT_S = 15.0
+_OPEN_WAIT_S = 25.0
 _SETTLE_S = 0.45
 #: Seconds an opened window may take to finish drawing its controls.
 _OPEN_SETTLE_S = 3.0
@@ -70,7 +70,8 @@ _OPEN_SETTLE_S = 3.0
 _PAGE_WAIT_S = 8.0
 #: Keys that open a shell surface (Start, search, Run, notifications, clipboard).
 _SHELL_KEYS = frozenset({"win", "windows", "win+s", "win+r", "win+a", "win+n", "win+v", "win+."})
-_ACTIONS = ("open", "app", "click", "type", "keys", "scroll", "window", "wait", "look")
+_ACTIONS = ("open", "app", "click", "set", "drag", "hover", "type", "keys", "scroll", "window",
+            "wait", "look")
 _WINDOW_OPS = ("focus", "minimize", "maximize", "restore", "close")
 
 # ---------------------------------------------------------------------------
@@ -246,7 +247,6 @@ _SYSTEM_TOOLS: dict[str, str] = {
     "powershell": "powershell.exe",
     "terminal": "wt.exe",
     "windows terminal": "wt.exe",
-    "paint": "mspaint.exe",
     "snipping tool": "ms-screenclip:",
     "clock": "ms-clock:",
     "alarms": "ms-clock:",
@@ -384,8 +384,9 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
         steps = [dict(s) for s in raw if isinstance(s, dict)]
     else:
         single = {k: args[k] for k in ("app", "into", "enter", "clear", "button", "double", "see",
-                                       "secret", "on") if k in args}
-        for action in ("open", "click", "type", "keys", "scroll", "window", "wait", "look"):
+                                       "secret", "on", "to", "value") if k in args}
+        for action in ("open", "click", "set", "drag", "hover", "type", "keys", "scroll", "window",
+                       "wait", "look"):
             if args.get(action) not in (None, "", False):
                 steps.append({**single, action: args[action]})
         if not steps and (args.get("app") or args.get("see")):
@@ -409,6 +410,9 @@ class Desk(Protocol):
     def focused_text(self) -> str | None: ...
     def click(self, x: int, y: int, button: str = "left", count: int = 1) -> None: ...
     def scroll(self, x: int, y: int, notches: int) -> None: ...
+    def hover(self, x: int, y: int) -> None: ...
+    def drag(self, start: tuple[int, int], end: tuple[int, int]) -> None: ...
+    def set_value(self, control: Control, value: str) -> str | None: ...
     def press(self, combo: str) -> None: ...
     def type_text(self, text: str) -> None: ...
 
@@ -442,7 +446,10 @@ def _launch(kind: str, value: str) -> None:
         raise StepFailed("Opening that needs Windows.")
     if kind == "path" and not Path(value).exists():
         raise StepFailed(f"{value} does not exist on this computer.")
-    os.startfile(value)  # type: ignore[attr-defined]  # noqa: S606 - the owner's own request
+    try:
+        os.startfile(value)  # type: ignore[attr-defined]  # noqa: S606 - the owner's own request
+    except FileNotFoundError:
+        raise StepFailed(f"{value} is not installed on this PC.") from None
 
 
 class PcPilot:
@@ -460,7 +467,10 @@ class PcPilot:
         "Step keys: open (app, page, folder or URL), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
         "enter=true, secret=true for a password), keys ('ctrl+s', 'enter', 'win+d'), "
-        "scroll ('down'/'up'/'down 10'; on=a control to scroll inside), "
+        "scroll ('down'/'up'/'down 10'; on=a control to scroll inside), drag (a control "
+        "or 'x,y', with to=where to drop), set (a slider or field by name, with "
+        "value=, e.g. set=Brightness value=60; use it for every slider), "
+        "hover (point at a control), "
         "window (focus/minimize/maximize/restore/close), wait (seconds), look (read "
         "the window). It answers with the window's controls after the steps; set "
         "see=true to also get a picture of the screen."
@@ -490,6 +500,11 @@ class PcPilot:
                         "look": {"type": "boolean"},
                         "button": {"type": "string", "enum": ["left", "right", "middle"]},
                         "double": {"type": "boolean"},
+                        "drag": {"type": "string"},
+                        "to": {"type": "string"},
+                        "hover": {"type": "string"},
+                        "set": {"type": "string"},
+                        "value": {"type": "string"},
                     },
                 },
             },
@@ -586,7 +601,7 @@ class PcPilot:
             run.secret = True
         if "open" in step:
             await self._do_open(desk, run, str(step["open"]), ctx)
-            if not any(k in step for k in ("click", "type", "keys", "scroll", "window")):
+            if not any(k in step for k in _ACTIONS if k not in ("open", "app", "wait", "look")):
                 return
         if "wait" in step:
             seconds = max(0.0, min(float(step.get("wait") or 0), 10.0))
@@ -750,6 +765,9 @@ class PcPilot:
             )
         return control
 
+    def _point(self, desk: Desk, run: _Run, target: str) -> tuple[int, int]:
+        return _coords(target) or self._find(desk, run, target).center()
+
     def _act(self, desk: Desk, policy: PilotPolicy, run: _Run, step: dict[str, Any]) -> None:
         win = run.window
         assert win is not None
@@ -778,8 +796,32 @@ class PcPilot:
             self._sleep(0.8)
             return
         self._front(desk, win)
-        if any(k in step for k in ("click", "keys")) or step.get("enter"):
+        if any(k in step for k in ("click", "keys", "drag", "hover")) or step.get("enter"):
             run.baseline = {(c.role, c.name) for c in self._look(desk, run)}
+        if "hover" in step:
+            desk.hover(*self._point(desk, run, str(step["hover"])))
+            run.done.append(f"pointed at {step['hover']}")
+            self._sleep(0.8)
+        if "set" in step:
+            control = self._find(desk, run, str(step["set"]))
+            if step.get("value") in (None, ""):
+                raise StepFailed("set needs value=: the number or text to set it to.")
+            try:
+                now = desk.set_value(control, str(step["value"]))
+            except ValueError as exc:
+                raise StepFailed(str(exc)) from None
+            if now is None:
+                raise StepFailed(f"{control.name!r} cannot be set directly; click or type instead.")
+            run.done.append(f"set {control.name} to {now}")
+            self._sleep(_SETTLE_S)
+        if "drag" in step:
+            start = self._point(desk, run, str(step["drag"]))
+            if not step.get("to"):
+                raise StepFailed("A drag needs to=: where to drop it (a control's name or 'x,y').")
+            end = self._point(desk, run, str(step["to"]))
+            desk.drag(start, end)
+            run.done.append(f"dragged {step['drag']} to {step['to']}")
+            self._sleep(_SETTLE_S)
         if "click" in step:
             target = str(step["click"])
             button = str(step.get("button") or "left")

@@ -299,6 +299,38 @@ class WinDesk:
                 continue
         return False
 
+    def set_value(self, control: Control, value: str) -> str | None:
+        """Set a slider or a field to ``value`` through UIA; its new value, or None.
+
+        Live 2026-10-26 the Settings brightness slider jumped to the press
+        point and ignored every injected drag, by cursor or by mouse input;
+        the RangeValue pattern set it exactly.
+        """
+        from pywinauto.uia_defines import IUIA, get_elem_interface  # noqa: PLC0415
+
+        dll = IUIA().UIA_dll
+        el = control.ref
+        if el is None:
+            return None
+        try:
+            if el.GetCurrentPattern(dll.UIA_RangeValuePatternId):
+                ranged = get_elem_interface(el, "RangeValue")
+                low, high = ranged.CurrentMinimum, ranged.CurrentMaximum
+                ranged.SetValue(min(max(float(value.strip().rstrip("%")), low), high))
+                return f"{ranged.CurrentValue:g}"
+        except ValueError:
+            raise ValueError(f"{control.name!r} is a slider: give a number.") from None
+        except Exception:  # noqa: BLE001 - no range pattern after all: try a text value
+            log.debug("win_pilot: RangeValue failed", exc_info=True)
+        try:
+            if el.GetCurrentPattern(dll.UIA_ValuePatternId):
+                field = get_elem_interface(el, "Value")
+                field.SetValue(value)
+                return str(field.CurrentValue)
+        except Exception:  # noqa: BLE001 - read-only or no value pattern: the caller says so
+            log.debug("win_pilot: Value failed", exc_info=True)
+        return None
+
     def focused_text(self) -> str | None:
         """What the focused field holds; ``None`` for a password or no field."""
         from pywinauto.uia_defines import IUIA, get_elem_interface  # noqa: PLC0415
@@ -329,6 +361,33 @@ class WinDesk:
             for _ in range(max(1, count)):
                 self._send([self._mouse(down), self._mouse(up)])
                 time.sleep(0.06)
+
+    def hover(self, x: int, y: int) -> None:
+        from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
+
+        with per_monitor_dpi_context():
+            self._user32.SetCursorPos(int(x), int(y))
+
+    def drag(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        """Press at ``start``, move in small steps like a hand, let go at ``end``."""
+        from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
+
+        with per_monitor_dpi_context():
+            self._user32.SetCursorPos(*start)
+            time.sleep(0.08)
+            self._send([self._mouse(0x2)])
+            time.sleep(0.12)
+            # Moves go in as mouse input, not SetCursorPos: live 2026-10-26 a
+            # Settings slider jumped to the press point and then ignored a
+            # cursor that only teleported while the button was held.
+            steps = 20
+            for i in range(1, steps + 1):
+                x = start[0] + (end[0] - start[0]) * i // steps
+                y = start[1] + (end[1] - start[1]) * i // steps
+                self._send([self._move(x, y)])
+                time.sleep(0.015)
+            time.sleep(0.12)
+            self._send([self._mouse(0x4)])
 
     def scroll(self, x: int, y: int, notches: int) -> None:
         from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
@@ -477,6 +536,22 @@ class WinDesk:
     def _mouse(self, flags: int, data: int = 0) -> Any:
         event = self._Input(type=0)
         event.u.mi = self._Mouse(dx=0, dy=0, mouseData=data, dwFlags=flags, time=0, dwExtraInfo=0)
+        return event
+
+    def _move(self, x: int, y: int) -> Any:
+        """An absolute mouse move to screen pixel ``(x, y)`` across all monitors."""
+        metric = self._user32.GetSystemMetrics
+        left, top = metric(76), metric(77)
+        width, height = max(metric(78) - 1, 1), max(metric(79) - 1, 1)
+        event = self._Input(type=0)
+        event.u.mi = self._Mouse(
+            dx=(x - left) * 65535 // width,
+            dy=(y - top) * 65535 // height,
+            mouseData=0,
+            dwFlags=0x0001 | 0x8000 | 0x4000,  # MOVE | ABSOLUTE | VIRTUALDESK
+            time=0,
+            dwExtraInfo=0,
+        )
         return event
 
     def _send(self, events: list[Any]) -> None:

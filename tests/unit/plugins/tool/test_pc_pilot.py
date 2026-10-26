@@ -80,6 +80,18 @@ class FakeDesk:
     def scroll(self, x: int, y: int, notches: int) -> None:
         self.log.append(("scroll", notches))
 
+    def hover(self, x: int, y: int) -> None:
+        self.log.append(("hover", (x, y)))
+
+    def drag(self, start: tuple[int, int], end: tuple[int, int]) -> None:
+        self.log.append(("drag", (start, end)))
+
+    def set_value(self, control: Control, value: str) -> str | None:
+        if control.role != "Slider":
+            return None
+        self.log.append(("set", (control.name, value)))
+        return value
+
     def press(self, combo: str) -> None:
         self.log.append(("press", combo))
 
@@ -157,6 +169,33 @@ async def test_input_goes_to_the_target_window_not_jarvis(tmp_path: Path) -> Non
     assert result.success, result.error
     assert desk.log.index(("activate", NOTEPAD.title)) < desk.log.index(("type", "hello"))
     assert "the field now holds 'hello'" in str(result.output)
+
+
+async def test_a_drag_goes_from_one_control_to_another(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CALC], panes={CALC.handle: [[_button("Card", x=0), _button("Done", x=300),
+                                                       _button("A"), _button("B")]]})
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute({"app": "calculator", "drag": "Card", "to": "Done"}, Ctx())
+
+    assert result.success, result.error
+    assert ("drag", ((10, 20), (310, 20))) in desk.log
+
+
+async def test_a_slider_is_set_to_a_value_not_dragged(tmp_path: Path) -> None:
+    settings = Window(handle=8, title="Settings", exe="SystemSettings.exe")
+    slider = Control("Brightness", "Slider", (0, 0, 200, 40))
+    desk = FakeDesk(wins=[settings], panes={8: [[slider, _button("Night light"), _button("A"),
+                                                 _button("B")]]})
+    pilot = _pilot(desk, tmp_path)
+
+    done = await pilot.execute({"app": "settings", "set": "brightness", "value": "60"}, Ctx())
+    refused = await pilot.execute({"app": "settings", "set": "Night light", "value": "on"}, Ctx())
+
+    assert done.success, done.error
+    assert ("set", ("Brightness", "60")) in desk.log
+    assert "set Brightness to 60" in str(done.output)
+    assert not refused.success and "cannot be set directly" in refused.error
 
 
 async def test_a_control_still_loading_is_looked_for_again(tmp_path: Path) -> None:
