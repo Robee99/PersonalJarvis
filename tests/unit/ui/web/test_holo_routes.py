@@ -119,6 +119,7 @@ def _pinned(monkeypatch: pytest.MonkeyPatch, files: dict[str, bytes]) -> None:
         "VENDOR_FILES",
         {name: hashlib.sha256(body).hexdigest() for name, body in files.items()},
     )
+    monkeypatch.setattr(holo_routes, "EYES_FILES", {})
 
 
 def _tree(root: Path) -> list[Path]:
@@ -149,6 +150,29 @@ async def test_install_downloads_pinned_files_once(
     assert holo_routes.missing_vendor_files(tmp_path) == []
     assert len(requested) == 2
     assert all(f"/{holo_routes.HOLO_COMMIT}/vendor/" in path for path in requested)
+
+
+async def test_the_eyes_face_and_pose_models_come_with_the_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pinned(monkeypatch, {})
+    face = b"face-model"
+    monkeypatch.setattr(
+        holo_routes,
+        "EYES_FILES",
+        {"face_landmarker.task": ("face/f.task", hashlib.sha256(face).hexdigest())},
+    )
+    asked: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return httpx.Response(200, content=face)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await holo_routes.install_vendor_files(tmp_path, client)
+
+    assert (tmp_path / "face_landmarker.task").read_bytes() == face
+    assert asked == ["https://storage.googleapis.com/mediapipe-models/face/f.task"]
 
 
 async def test_tampered_download_is_never_kept(

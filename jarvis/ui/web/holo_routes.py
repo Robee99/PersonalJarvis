@@ -94,6 +94,22 @@ VENDOR_FILES: dict[str, str] = {
         "a28483cd42e74e855bf5ebdb6b40d9b66a5b49e35e95020bc97669e6822a3192"
     ),
 }
+#: The Eyes posture nudges (``live_vision_routes``) need MediaPipe's face and
+#: pose models beside the hand model, which holo-gestures does not ship. Live
+#: 2026-10-26 Eyes said "Local face/pose assets are unavailable" because
+#: nothing ever downloaded them. Same files Google's MediaPipe docs link
+#: (Apache-2.0), pinned by digest like the rest.
+_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/{path}"
+EYES_FILES: dict[str, tuple[str, str]] = {
+    "face_landmarker.task": (
+        "face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff",
+    ),
+    "pose_landmarker_lite.task": (
+        "pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+    ),
+}
 _MIME = {
     ".js": "text/javascript",
     ".mjs": "text/javascript",
@@ -118,13 +134,16 @@ def _sha256(path: Path) -> str:
 
 def missing_vendor_files(root: Path) -> list[str]:
     """Files that are absent; a present file is trusted (it was verified on write)."""
-    return [name for name in VENDOR_FILES if not (root / name).is_file()]
+    return [name for name in (*VENDOR_FILES, *EYES_FILES) if not (root / name).is_file()]
 
 
 async def install_vendor_files(root: Path, client: httpx.AsyncClient) -> None:
     """Download every missing file, verify its digest, then move it into place."""
     for name in missing_vendor_files(root):
-        url = _RAW_URL.format(commit=HOLO_COMMIT, path=name)
+        if name in EYES_FILES:
+            url, digest = _MODEL_URL.format(path=EYES_FILES[name][0]), EYES_FILES[name][1]
+        else:
+            url, digest = _RAW_URL.format(commit=HOLO_COMMIT, path=name), VENDOR_FILES[name]
         target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         part = target.with_name(target.name + ".part")
@@ -134,7 +153,7 @@ async def install_vendor_files(root: Path, client: httpx.AsyncClient) -> None:
                 async for chunk in response.aiter_bytes():
                     handle.write(chunk)
         actual = await asyncio.to_thread(_sha256, part)
-        if actual != VENDOR_FILES[name]:
+        if actual != digest:
             part.unlink(missing_ok=True)
             raise ValueError(f"{name} did not match its pinned digest")
         part.replace(target)

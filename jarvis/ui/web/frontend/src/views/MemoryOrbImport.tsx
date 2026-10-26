@@ -167,7 +167,7 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
         <div
           role="dialog"
           aria-label="Import data into memory"
-          className="pointer-events-auto absolute right-4 top-16 z-10 w-96 rounded-xl border border-cyan-400/20 bg-black/80 p-4 text-xs text-slate-200 backdrop-blur"
+          className="pointer-events-auto absolute right-56 top-16 z-10 max-h-[80vh] w-96 overflow-y-auto rounded-xl border border-cyan-400/20 bg-black/80 p-4 text-xs text-slate-200 backdrop-blur"
         >
           <div className="mb-3 flex items-center">
             <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-200/90">Import data</p>

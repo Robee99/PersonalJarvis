@@ -1,4 +1,4 @@
-/** Optional, already-installed face/pose models. Frames never leave the browser. */
+/** Local face/pose models, downloaded once on first use. Frames never leave the browser. */
 import type { PostureSignals } from "./liveVision";
 
 type Landmark = { x: number; y: number; z: number; visibility?: number };
@@ -10,10 +10,22 @@ type Detector = { detectForVideo: (video: HTMLVideoElement, now: number) => {
 export class LocalPostureTracker {
   private constructor(private face: Detector, private pose: Detector) {}
   static async create(): Promise<LocalPostureTracker> {
-    const response = await fetch("/api/live-vision/capabilities", { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error("Local posture capability could not be checked");
-    const status = await response.json() as { tracking_ready: boolean; detail: string };
-    if (!status.tracking_ready) throw new Error(status.detail);
+    const check = async () => {
+      const response = await fetch("/api/live-vision/capabilities", { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error("Local posture capability could not be checked");
+      return await response.json() as { tracking_ready: boolean; detail: string };
+    };
+    let status = await check();
+    if (!status.tracking_ready) {
+      // First use: fetch the pinned face/pose models (about 10 MB) once, then look again.
+      const install = await fetch("/api/holo/install", { method: "POST" });
+      if (!install.ok) {
+        const body = await install.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || status.detail);
+      }
+      status = await check();
+      if (!status.tracking_ready) throw new Error(status.detail);
+    }
     const url = "/holo/vendor/vision_bundle.mjs";
     const sdk = await import(/* @vite-ignore */ url);
     const files = await sdk.FilesetResolver.forVisionTasks("/holo/vendor/wasm");
