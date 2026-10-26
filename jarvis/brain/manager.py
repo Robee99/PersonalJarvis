@@ -2812,6 +2812,27 @@ _PROVIDER_DOWN_CAUSE_PHRASES: dict[str, dict[str, str]] = {
             "con más contexto o empieza un chat nuevo."
         ),
     },
+    # The local model server refused to load the model because too little
+    # memory is free (the swapper's RAM guard). Live 2026-10-26 18:47: Gemma
+    # was refused while Nemotron held the memory, and the person heard "likely
+    # a network issue" twice.
+    "local_memory": {
+        "de": (
+            "Entschuldige — das lokale Modell kann gerade nicht laden, weil "  # i18n-allow
+            "zu wenig Arbeitsspeicher frei ist. Schließ ein paar Programme "  # i18n-allow
+            "oder nimm das Modell, das schon geladen ist."  # i18n-allow
+        ),
+        "en": (
+            "Sorry — the local model can't load right now because too little "
+            "memory is free. Close a few apps, or switch to the model that is "
+            "already loaded, and ask again."
+        ),
+        "es": (
+            "Lo siento: el modelo local no puede cargarse ahora porque hay poca "
+            "memoria libre. Cierra algunas aplicaciones o usa el modelo que ya "
+            "está cargado, y vuelve a pedirlo."
+        ),
+    },
     "unreachable": {
         "de": (
             "Entschuldige — ich erreiche meinen Anbieter gerade nicht, "  # i18n-allow
@@ -2865,6 +2886,7 @@ _PROVIDER_DOWN_CAUSE_PRIORITY: tuple[str, ...] = (
     "invalid_model",
     "context_overflow",
     "rate_limit",
+    "local_memory",
     "unreachable",
 )
 
@@ -2888,6 +2910,7 @@ def _primary_provider_down_cause(
         "rate_limit",
         "skipped_cooldown",
         "empty_response",
+        "local_memory",
     }:
         # Any unclassified failure (network, timeout, 5xx) reads as
         # unreachable — the honest generic cause.
@@ -15417,7 +15440,14 @@ def _classify_provider_error(msg: str, *, default: str) -> str:
     if any(s in m for s in ("429", "rate_limit", "rate-limit",
                              "rate limit", "too many requests")):
         return "rate_limit"
+    if _LOCAL_MEMORY_REFUSAL.search(m):
+        return "local_memory"
     return default
+
+
+#: The local model swapper's RAM guard ("Gemma 4B needs 5120 MiB free RAM;
+#: only about 3540 MiB would be free"): per request, never a dead provider.
+_LOCAL_MEMORY_REFUSAL = re.compile(r"needs\s+\d+\s*mib\s+free\s+ram")
 
 
 def _keyless_provider_is_rescued_by_oauth(provider_name: str) -> bool:

@@ -502,6 +502,8 @@ _SETTINGS_PAGES: tuple[tuple[str, str, str], ...] = (
     (r"sound|audio", "sound", "Sound"),
     (r"battery|power(?:\s+(?:and|&)\s+battery)?", "batterysaver", "Battery"),
     (r"windows\s+update|updates?", "windowsupdate", "Windows Update"),
+    (r"(?:check|look)\s+for\s+(?:windows\s+)?updates?", "windowsupdate-action",
+     "Windows Update, checking for updates"),
     (r"(?:installed\s+)?apps(?:\s+(?:and|&)\s+features)?", "appsfeatures", "Apps"),
     (r"default\s+apps", "defaultapps", "Default apps"),
     (r"notifications?", "notifications", "Notifications"),
@@ -564,20 +566,48 @@ def _settings_path(text: str) -> tuple[str, str] | None:
         return None
     body = re.sub(_TAIL, "", text.strip(), flags=re.IGNORECASE)
     body = re.sub(rf"^\s*{_PLEASE}", "", body, flags=re.IGNORECASE)
-    # "go to" between two steps with no comma is a step boundary too.
-    body = re.sub(r"\s+(?=(?:go\s+to|navigate\s+to|open)\b)", ", ", body, flags=re.IGNORECASE)
+    # "go to" / "click on" between two steps with no comma is a step boundary
+    # too. Live 2026-10-26 "OPEN WINDOWS PC SETTINGS CLICK ON WINDOWS UPDATE".
+    body = re.sub(
+        r"\s+(?=(?:go\s+to|navigate\s+to|open|click|tap|select|choose|scroll|use)\b)",
+        ", ", body, flags=re.IGNORECASE,
+    )
     found: tuple[str, str] | None = None
     for step in filter(None, (part.strip() for part in _STEP_SPLIT.split(body))):
+        if _NO_PAGE_STEP.fullmatch(step):
+            # Getting to a page by scrolling or looking is what the URI skips.
+            continue
         words = _STEP_FILLER.sub("", step).strip()
         words = re.sub(r"\s+(?:page|section|panel|tab)$", "", words, flags=re.IGNORECASE)
         if re.fullmatch(r"settings(?:\s+app)?", words, re.IGNORECASE):
             found = found or ("", "Settings")
             continue
-        page = _page(re.sub(r"\s+settings$", "", words, flags=re.IGNORECASE)) or _page(words)
+        page = _step_page(words)
         if page is None:
             return None
         found = page
     return found
+
+
+#: Steps of a spoken path that name no page: how to get there, not where.
+_NO_PAGE_STEP = re.compile(
+    r"scroll(?:\s+(?:all\s+the\s+way\s+)?(?:down|up))?(?:\s+to\s+(?:the\s+)?(?:bottom|top))?"
+    r"|use\s+(?:your\s+)?(?:vision|eyes|the\s+screen)",
+    re.IGNORECASE,
+)
+
+
+def _step_page(words: str) -> tuple[str, str] | None:
+    """The page one step names; "display advanced display" names two, the last wins."""
+    page = _page(re.sub(r"\s+settings$", "", words, flags=re.IGNORECASE)) or _page(words)
+    if page is not None:
+        return page
+    parts = words.split()
+    for cut in range(1, len(parts)):
+        first, last = " ".join(parts[:cut]), " ".join(parts[cut:])
+        if _page(first) is not None and _page(last) is not None:
+            return _page(last)
+    return None
 
 
 #: A spoken Settings path chains its steps with "and"/"then", which ``_plain``

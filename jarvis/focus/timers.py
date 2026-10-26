@@ -71,6 +71,14 @@ _REMIND = (
     re.compile(rf"^remind\s+me\s+(?:to|that|about)\s+(?P<what>.+?)\s+at\s+{_CLOCK}$"),
     re.compile(rf"^(?:set\s+a\s+)?reminder\s+(?:for\s+|in\s+)?{_DURATION}\s+(?:to|for|about)\s+(?P<what>.+)$"),
 )
+#: An alarm at a time of day. Live 2026-10-26 "SET AN ALARAM FOR 1834" missed
+#: every pattern and the model said "I have set an alarm for four minutes from
+#: now" with nothing set.
+_ALARM_AT = re.compile(
+    r"^(?:set\s+(?:an?\s+|my\s+|the\s+)?)?(?:alarm|wake\s+me(?:\s+up)?)\s+(?:for|at)\s+"
+    r"(?P<clock>\d{3,4}|\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?|\d{1,2}:\d{2})"
+    r"(?:\s+(?:today|tonight|tomorrow))?$"
+)
 _CANCEL = re.compile(
     r"^(?:cancel|stop|delete|remove|clear|turn\s+off)\s+(?:the\s+|my\s+|all\s+(?:the\s+|my\s+)?)?"
     r"(?P<kind>timers?|reminders?|alarms?)$"
@@ -331,6 +339,7 @@ def get_board() -> TimerBoard:
 
 def _normalise(text: str) -> str:
     phrase = " ".join((text or "").strip().lower().split())
+    phrase = re.sub(r"\bala(?:ra|ru|r)m(s?)\b", r"alarm\1", phrase)  # "alaram", typed fast
     phrase = _POLITE.sub("", phrase)
     return _TAIL.sub("", phrase).strip()
 
@@ -361,7 +370,9 @@ async def timer_reflex(
 ) -> str | None:
     """Set, list or cancel a timer or reminder without a model, else ``None``."""
     phrase = _normalise(text)
-    if not phrase or not re.search(r"\b(?:timers?|remind(?:er|ers)?|alarms?)\b", phrase):
+    if not phrase or not re.search(
+        r"\b(?:timers?|remind(?:er|ers)?|alarms?|wake\s+me)\b", phrase
+    ):
         return None
     if re.search(r"\b(?:don'?t|do\s+not|never)\b", phrase):
         return None
@@ -386,6 +397,22 @@ async def timer_reflex(
             return (
                 f"Timer set for {spoken_duration(seconds)}. It rings at {_clock(entry.due)}."
             )
+    m = _ALARM_AT.match(phrase)
+    if m:
+        clock = m.group("clock")
+        if clock.isdigit():
+            clock = f"{clock[:-2]}:{clock[-2:]}"  # "1834" -> "18:34"
+        current = now or datetime.fromtimestamp(board._clock())
+        due = parse_clock(clock, current)
+        if due is None:
+            return None
+        if "tomorrow" in phrase and due.date() == current.date():
+            due += timedelta(days=1)
+        seconds = (due - current).total_seconds()
+        if not 1 <= seconds <= MAX_SECONDS:
+            return None
+        entry = board.add("reminder", seconds, "your alarm")
+        return f"Alarm set for {_clock(entry.due)}, {spoken_duration(seconds)} from now."
     for pattern in _REMIND:
         m = pattern.match(phrase)
         if not m:
