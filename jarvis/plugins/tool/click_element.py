@@ -75,42 +75,45 @@ def matching_nodes(
     return _near_matches(nodes, name_lower, role_lower)
 
 
-def _closeness(needle: str, label: str) -> float:
-    """How alike ``needle`` is to the closest run of words in ``label``."""
+def _closeness(needle: str, label: str) -> tuple[float, str]:
+    """How alike ``needle`` is to the closest run of words in ``label``, and that run."""
     words = re.findall(r"\w+", label.lower())
     span = max(1, len(needle.split()))
-    best = 0.0
+    best = (0.0, "")
     for i in range(len(words)):
         piece = " ".join(words[i : i + span])
-        best = max(best, SequenceMatcher(None, needle, piece).ratio())
+        best = max(best, (SequenceMatcher(None, needle, piece).ratio(), piece))
     return best
 
 
 def _near_matches(nodes: Any, name_lower: str, role_lower: str) -> list[Any]:
-    """The closest-named node when no label contains the name, else nothing.
+    """The nodes holding the closest word when no label contains the name.
 
     Speech-to-text hands the planner names like "roboto" for the profile
     "Roberto" (live 2026-10-26: Chrome's profile picker, "No matching
-    element"). Only a single clear winner is returned: two labels equally
-    close mean the name is ambiguous, and a wrong click is worse than none.
+    element"). The closest word stands in for the name, so the nodes come
+    back in tree order exactly as a substring match on that word would
+    ("Open Roberto profile", then "More actions for Roberto"). Two different
+    words equally close mean the name is ambiguous, and a wrong click is
+    worse than none.
     """
-    scored: list[tuple[float, Any]] = []
+    scored: list[tuple[float, str, Any]] = []
     for node in nodes:
         _, _, w, h = node.bounds
         if not node.enabled or w <= 0 or h <= 0 or not (node.name or "").strip():
             continue
         if role_lower and (node.role or "").lower() != role_lower:
             continue
-        score = _closeness(name_lower, node.name)
+        score, word = _closeness(name_lower, node.name)
         if score >= _NEAR_MATCH_RATIO:
-            scored.append((score, node))
+            scored.append((score, word, node))
     if not scored:
         return []
-    scored.sort(key=lambda item: item[0], reverse=True)
-    top = scored[0][0]
-    winners = [node for score, node in scored if score == top]
-    labels = {(node.name or "").strip().lower() for node in winners}
-    return winners if len(labels) == 1 else []
+    top = max(score for score, _, _ in scored)
+    winners = [(word, node) for score, word, node in scored if score == top]
+    if len({word for word, _ in winners}) != 1:
+        return []
+    return [node for _, node in winners]
 
 
 def visible_labels(nodes: Any, limit: int = _MAX_AVAILABLE_NAMES) -> list[str]:
