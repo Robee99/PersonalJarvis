@@ -476,3 +476,43 @@ async def test_the_retry_of_an_unmade_action_offers_screen_control() -> None:
     first, retry = brain.requests[0], brain.requests[1]
     assert "computer_use" not in [t["name"] for t in first.tools]
     assert "computer_use" in [t["name"] for t in retry.tools]
+
+
+class _BrowserNavigate:
+    name = "playwright/browser_navigate"
+    schema: dict[str, Any] = {}
+    description = "Navigate to a URL"
+
+
+async def test_the_retry_of_a_web_job_keeps_to_the_browser_tools() -> None:
+    # The switch leaves screen control off for a web job on purpose: with
+    # both offered, Gemma clicked pixels on a page the browser could read.
+    brain = _SaysThenCalls("Opening YouTube and playing I Mean It now.")
+    tools = {
+        "system_volume": _VolumeTool(),
+        "computer_use": _ScreenTool(),
+        "playwright/browser_navigate": _BrowserNavigate(),
+    }
+    loop = ToolUseLoop(brain, tools, _Executor(refusals=0))
+    loop._switch = _HiddenScreenSwitch(tools)
+
+    await loop.run([BrainMessage(role="user", content="go to youtube.com and play i mean it")])
+
+    assert "computer_use" not in [t["name"] for t in brain.requests[1].tools]
+
+
+async def test_the_retry_of_a_job_in_the_owners_open_browser_offers_screen_control() -> None:
+    brain = _SaysThenCalls("Clicking on Roberto's profile now.")
+    tools = {
+        "system_volume": _VolumeTool(),
+        "computer_use": _ScreenTool(),
+        "playwright/browser_navigate": _BrowserNavigate(),
+    }
+    loop = ToolUseLoop(brain, tools, _Executor(refusals=0))
+    loop._switch = _HiddenScreenSwitch(tools)
+
+    await loop.run(
+        [BrainMessage(role="user", content="chrome is already opened, click on roberto")]
+    )
+
+    assert "computer_use" in [t["name"] for t in brain.requests[1].tools]

@@ -60,7 +60,7 @@ from .loop_control import (
 )
 from .streaming import StreamingAggregate, aggregate, aggregate_with_consumer
 from .tool_call_recovery import extract_leaked_tool_calls
-from .tool_switch import ToolSwitch
+from .tool_switch import ToolSwitch, wants_own_browser
 
 # Central backstop for tool-output bloat: no tool result may exceed this many
 # chars in the tool-role message fed back to the brain. Individual tools should
@@ -912,16 +912,29 @@ class ToolUseLoop:
         except Exception:  # noqa: BLE001 — observability must never break the loop
             log.debug("guard-denied publish failed", exc_info=True)
 
-    def _with_screen_control(self, payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _with_screen_control(
+        self, payload: list[dict[str, Any]], request: str = ""
+    ) -> list[dict[str, Any]]:
         """``payload`` plus the screen-control tool, for the retry of an unmade action.
 
         Live 2026-10-26 "open windows pc settings go to display then advanced
         display" and "click on roberto" were answered in words, and the tool
         switch had not offered computer_use for either. An action that no
         offered tool fits can still be done with the mouse and keyboard.
+
+        A web job that already has the browser tools keeps to them: the switch
+        left screen control off on purpose, because with both offered Gemma
+        clicks pixels on a page the browser could have read. The exception is
+        a request about the person's own open browser (a profile, a signed-in
+        tab), which the browser tools cannot reach.
         """
         tool = self._tools.get("computer_use")
         if tool is None or any(t.get("name") == "computer_use" for t in payload):
+            return payload
+        has_browser = any(
+            str(t.get("name", "")).rsplit("/", 1)[-1] == "browser_navigate" for t in payload
+        )
+        if has_browser and not wants_own_browser(request):
             return payload
         return [
             *payload,
@@ -1295,7 +1308,10 @@ class ToolUseLoop:
                     # may still be a question.
                     force_tool = reason == "unmade"
                     if force_tool:
-                        tools_payload = self._with_screen_control(tools_payload)
+                        tools_payload = self._with_screen_control(
+                            tools_payload,
+                            user_utterance or _last_user_text(current_messages),
+                        )
                     final_agg.text = ""
                     continue
                 outcome = await self._run_verify(

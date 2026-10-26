@@ -82,6 +82,22 @@ _WEB_WORDS = re.compile(
     r"chrome|edge|firefox)\b|https?://|\.(com|in|org|net|io)\b",
     re.IGNORECASE,
 )
+#: Words that point at the person's own, already open browser: its profiles,
+#: sign-ins and tabs live only there, never in the browser server's own
+#: window. "chrome is already opened click on roberto" means his Chrome
+#: profile picker (live 2026-10-26), which only screen control can reach.
+_OWN_BROWSER = re.compile(
+    r"\b(already\s+open(ed)?|my\s+(own\s+)?(chrome|browser|edge|firefox|tabs?)|"
+    r"profiles?|signed\s+in|logged\s+in|this\s+(tab|page|window)|current\s+(tab|page)|"
+    r"open\s+tabs?)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_own_browser(text: str) -> bool:
+    """Whether a request is about the person's own open browser, not a fresh one."""
+    return bool(text and _OWN_BROWSER.search(text))
+
 
 #: The one-call background app driver (desktop_driver.py) and the raw server it
 #: replaces on the opening surface: Gemma copied example ids out of the raw
@@ -167,7 +183,7 @@ class ToolSwitch:
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
         hands = self._browser_hands(query, relevant)
-        if hands and _WEB_WORDS.search(query):
+        if hands and _WEB_WORDS.search(query) and not wants_own_browser(query):
             # With both on, Gemma picked screen clicking for a web page (live
             # 2026-10-25) and the browser tools never ran. The manager keeps
             # computer_use whenever it is registered, so it leaves keep too.
@@ -193,7 +209,7 @@ class ToolSwitch:
         hidden = {n: t for n, t in self._tools.items() if n not in self._on}
         ranked = self._rank(hidden, request, _ENABLE_LIMIT) if request and hidden else []
         hands = [n for n in self._browser_hands(request, ranked) if n in hidden]
-        if hands and _WEB_WORDS.search(request):
+        if hands and _WEB_WORDS.search(request) and not wants_own_browser(request):
             ranked = [n for n in ranked if n != SCREEN_HANDS]
         found = list(dict.fromkeys([*exact, *hands, *ranked, *self._siblings(request, ranked)]))
         return self.switch_on(found[: _ENABLE_LIMIT + len(exact) + len(hands)])

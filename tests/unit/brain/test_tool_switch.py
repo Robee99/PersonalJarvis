@@ -151,6 +151,23 @@ def test_a_web_job_leaves_screen_clicking_off() -> None:
     assert not switch.is_on("computer_use")
 
 
+def test_a_job_in_the_owners_open_chrome_keeps_screen_clicking() -> None:
+    # Live 2026-10-26 "chrome is already opened click on roberto" meant his
+    # Chrome profile picker, which the browser server's own window never has.
+    tools = _registry()
+    tools["computer_use"] = _Tool("computer_use", "Open the browser and click on screen")
+    switch = _switch(tools)
+
+    switch.open_turn(
+        "chrome is already opened click on roberto profile then go to youtube",
+        core=(),
+        keep=("computer_use",),
+    )
+
+    assert switch.is_on("computer_use")
+    assert "playwright/browser_navigate" in switch.visible()
+
+
 def test_a_desktop_job_still_gets_screen_clicking() -> None:
     tools = _registry()
     tools["computer_use"] = _Tool("computer_use", "Click and type in a desktop app on screen")
