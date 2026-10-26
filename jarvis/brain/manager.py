@@ -30,6 +30,7 @@ import json
 import logging
 import math
 import re
+import sys
 import time
 from collections.abc import (
     AsyncIterator,
@@ -12213,6 +12214,26 @@ class BrainManager:
                     trace_id=turn_trace_id,
                 )
                 return timer_reply
+
+        # Weather: "weather in Pune", "Bengaluru ka aaj ka mausam batao" are
+        # answered from MET Norway's forecast, or with a plain "couldn't reach
+        # the weather service" (jarvis/platform/weather.py). Gemma invented a
+        # Hinglish forecast with no call (battery 2026-10-26). Windows only, as
+        # the product is, which also keeps the CI suites off the network.
+        if not screen_context.has_image and sys.platform == "win32":
+            from jarvis.platform.weather import weather_reflex
+
+            weather_reply = await weather_reflex(
+                user_text, honorific=persona_style(getattr(self, "_config", None))[1]
+            )
+            if weather_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=weather_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return weather_reply
 
         # Focus sessions: "thirty minutes on this", "lock on this tab", "stop
         # focus" start, move and end the server-side session without a model

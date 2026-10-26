@@ -32,3 +32,8 @@ and file-name rules from @pierre/trees (https://www.npmjs.com/package/@pierre/tr
 Copyright 2025 Pierre Computer Company, used under the Apache License, Version 2.0 -
 see third_party/pierre-trees/LICENSE - and a colour table adapted from T3 Code under
 the MIT License.
+
+Spoken weather (jarvis/platform/weather.py) uses forecast data from MET Norway
+(https://api.met.no), licensed under CC BY 4.0 and NLOD 2.0 - "Weather data from
+MET Norway" - and place search from OpenStreetMap's Nominatim, data (c)
+OpenStreetMap contributors, ODbL 1.0 (https://osm.org/copyright).
