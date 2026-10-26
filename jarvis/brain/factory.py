@@ -92,6 +92,9 @@ ROUTER_TOOLS = frozenset({
     # master level via Windows Core Audio. Risk safe, never a spawn and never
     # in a worker or society tool set (AP-5/AP-14).
     "system-volume",
+    # Find files (2026-10-26): "search my C drive for the invoice". Names only,
+    # read-only, risk safe; never a spawn.
+    "find-files",
     # Window control (2026-10-12): minimize / maximize / restore / focus /
     # close a window by title or program, state read back. Risk monitor, never
     # a spawn and never in a worker or society tool set (AP-5/AP-14).

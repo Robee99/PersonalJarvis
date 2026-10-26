@@ -48,6 +48,7 @@ DEFAULT_CORE: tuple[str, ...] = (
     "window_control",
     "system_volume",
     "screen_snapshot",
+    "find_files",
     "search_web",
     "wiki-recall",
     "remember",
@@ -73,6 +74,20 @@ BROWSER_HANDS: tuple[str, ...] = (
 _ONLY_WHEN_SAID: dict[str, re.Pattern[str]] = {
     "tts-volume-set": re.compile(r"\b(voice|speak\w*|talk\w*|your)\b", re.IGNORECASE),
 }
+#: The webcam tool's name, and what asks for it. Live 2026-10-26 "what am I
+#: holding in my hand" had no camera on and Gemma said it could not see.
+CAMERA = "camera"
+_CAMERA_WORDS = re.compile(
+    r"\b(?:webcam|camera|holding|hold(?:ing)?\s+up|in\s+my\s+hands?|look\s+at\s+me|see\s+me|"
+    r"how\s+do\s+i\s+look|what\s+am\s+i\s+wearing|my\s+(?:face|shirt|outfit|posture)|"
+    r"what(?:'s|\s+is)\s+this\s+(?:i'm|i\s+am)\s+(?:holding|showing))\b",
+    re.IGNORECASE,
+)
+
+
+def wants_camera(text: str) -> bool:
+    """Whether a request asks Jarvis to look through the webcam."""
+    return bool(_CAMERA_WORDS.search(text or ""))
 #: Pixel-level desktop control, left off for a web job the browser can do.
 SCREEN_HANDS = "computer_use"
 #: Words that mean the job happens on a web page.
@@ -288,8 +303,9 @@ class ToolSwitch:
             # Update": with no desktop click tool on, Gemma clicked with
             # app_ui_click, which only reaches the Jarvis window.
             named = [*named, *self._desktop_pointer()]
+        camera = [CAMERA] if wants_camera(query or "") else []
         self.switch_on(
-            [ENABLE_TOOLS, *core, *keep, *hands, *relevant, *named,
+            [ENABLE_TOOLS, *core, *keep, *camera, *hands, *relevant, *named,
              *self._siblings(query, relevant)]
         )
         return relevant

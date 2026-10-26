@@ -745,6 +745,9 @@ point-at = "jarvis.plugins.tool.point_at:PointAtTool"
 # tool set (AP-5/AP-14). See ADR-0011 amendment "Laptop power".
 laptop-power = "jarvis.plugins.tool.laptop_power:LaptopPowerTool"
 system-volume = "jarvis.plugins.tool.system_volume:SystemVolumeTool"
+# Find files (2026-10-26): files and folders by name across the whole C: drive
+# (Windows Search index, then a bounded walk). Read-only, risk safe.
+find-files = "jarvis.plugins.tool.find_files:FindFilesTool"
 news-headlines = "jarvis.plugins.tool.news_headlines:NewsHeadlinesTool"
 window-control = "jarvis.plugins.tool.window_control:WindowControlTool"
 move-mouse = "jarvis.plugins.tool.move_mouse:MoveMouseTool"

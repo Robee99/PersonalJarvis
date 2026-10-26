@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 
+from jarvis.brain.tool_switch import wants_camera
 from jarvis.core.events import Event
 from jarvis.core.protocols import ImageBlock
 from jarvis.vision.live_inputs import LiveVisionFrame, decode_frames
@@ -129,13 +130,14 @@ class LiveVisionBridge:
                 if key[0] == conversation and value["sources"]
             ]
             if not choices:
+                # One person, one desktop: Eyes switched on in another chat
+                # (or before the voice call opened its own) still sees for
+                # this turn. Frames go to that client under its own chat.
+                choices = [(key, value) for key, value in self._clients.items() if value["sources"]]
+            if not choices:
                 return None
             key, client = max(choices, key=lambda pair: pair[1]["order"])
-            camera = bool(
-                re.search(
-                    r"\b(look at me|see me|my (?:shirt|face|posture)|webcam|camera)\b", text, re.I
-                )
-            )
+            camera = wants_camera(text)
             screen = bool(re.search(r"\b(screen|desktop|window)\b", text, re.I))
             both = bool(re.search(r"\bboth\b", text, re.I)) or camera and screen
             sources = (
@@ -160,6 +162,11 @@ class LiveVisionBridge:
                 client["quiet_until"] = now + 180
             elif not sources:
                 return None
+            if camera and "webcam" not in client["sources"]:
+                # Eyes off: the turn runs without live frames and the camera
+                # tool takes one still instead (live 2026-10-26 "what am I
+                # holding" otherwise ended at "that source is switched off").
+                return None
             if any(source not in client["sources"] for source in sources):
                 raise LiveVisionUnavailable("That visual source is switched off")
             if bus is None:
@@ -172,7 +179,7 @@ class LiveVisionBridge:
         if quiet:
             await bus.publish(
                 LiveVisionQuietRequested(
-                    conversation_id=conversation,
+                    conversation_id=key[0],
                     client_id=key[1],
                     trace_id=trace_id,
                     source_layer="vision.live",
@@ -183,7 +190,7 @@ class LiveVisionBridge:
             await bus.publish(
                 LiveVisionFrameRequested(
                     request_id=request_id,
-                    conversation_id=conversation,
+                    conversation_id=key[0],
                     client_id=key[1],
                     sources=sources,
                     trace_id=trace_id,
