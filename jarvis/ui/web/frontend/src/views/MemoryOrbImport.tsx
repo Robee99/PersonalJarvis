@@ -5,7 +5,7 @@
 // progress and refreshes the orb when it ends.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Loader2, Upload, X } from "lucide-react";
+import { FolderOpen, Loader2, Trash2, Upload, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -69,6 +69,9 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
   const [error, setError] = useState("");
   const [picking, setPicking] = useState(false);
   const running = Boolean(state?.running);
+  const [wiping, setWiping] = useState(false);
+  const [confirm, setConfirm] = useState("");
+  const [wiped, setWiped] = useState("");
 
   // Poll the running job; refresh the orb once it ends.
   useEffect(() => {
@@ -119,6 +122,26 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
     setState({ ...((await res.json()) as ImportState), running: true });
   }
 
+  async function wipe() {
+    setError("");
+    setWiped("");
+    const res = await fetch("/api/wiki/wipe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: confirm.trim() }),
+    });
+    if (!res.ok) {
+      setError(await detail(res));
+      return;
+    }
+    const body = (await res.json()) as { pages: number; backup: string };
+    setWiped(`Deleted ${body.pages} notes. A copy of everything is in ${body.backup}.`);
+    setConfirm("");
+    setWiping(false);
+    void queryClient.invalidateQueries({ queryKey: ["orb"] });
+    void queryClient.invalidateQueries({ queryKey: ["orb2"] });
+  }
+
   async function cancel() {
     if (state?.job_id) await fetch(`/api/wiki/import/${state.job_id}/cancel`, { method: "POST" });
   }
@@ -146,9 +169,10 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
             </button>
           </div>
           <p className="mb-2 text-slate-400">
-            A folder of notes, an Obsidian vault or one file. Notes, documents (PDF, Word, slides,
-            spreadsheets, web pages) and AI chat exports (ChatGPT, Claude) are added to memory;
-            re-importing only picks up what changed.
+            A folder of notes, an Obsidian vault, one file or a .zip. Notes, documents (PDF, Word,
+            slides, spreadsheets, web pages) and AI chat exports (the ChatGPT or Claude export .zip as
+            downloaded, or its JSON files) are added to memory; re-importing only picks up what
+            changed.
           </p>
           <div className="flex gap-2">
             <input
@@ -184,6 +208,58 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
               >
                 Cancel
               </button>
+            )}
+          </div>
+          <div className="mt-4 border-t border-white/10 pt-3">
+            {!wiping ? (
+              <button
+                type="button"
+                onClick={() => setWiping(true)}
+                disabled={running}
+                className="flex items-center gap-1.5 text-red-300/80 hover:text-red-300 disabled:opacity-40"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden /> Delete all notes
+              </button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-slate-400">
+                  Every note in memory is removed and the search index emptied. A full copy is saved
+                  first. Type DELETE ALL NOTES to confirm.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    placeholder="DELETE ALL NOTES"
+                    aria-label="Type DELETE ALL NOTES to confirm"
+                    autoFocus
+                    className="min-w-0 flex-1 rounded-md border border-red-400/30 bg-black/50 px-2 py-1.5 outline-none focus:border-red-300/70"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void wipe()}
+                    disabled={confirm.trim() !== "DELETE ALL NOTES" || running}
+                    className="rounded-md bg-red-500/80 px-3 py-1.5 font-medium text-black hover:bg-red-400 disabled:opacity-40"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWiping(false);
+                      setConfirm("");
+                    }}
+                    className="rounded-md border border-white/10 px-2 hover:border-cyan-300/60"
+                  >
+                    Keep
+                  </button>
+                </div>
+              </div>
+            )}
+            {wiped && (
+              <p role="status" className="mt-2 text-slate-300">
+                {wiped}
+              </p>
             )}
           </div>
           {error && (

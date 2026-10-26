@@ -445,6 +445,12 @@ export const MemoryGraph3D = forwardRef<MemoryGraph3DHandle, MemoryGraph3DProps>
       const half = (((camera.fov ?? 40) * Math.PI) / 180) / 2;
       const horizontal = Math.atan(Math.tan(half) * (width / Math.max(height, 1)));
       const distance = (r / Math.sin(Math.min(half, horizontal))) * 1.08;
+      // The fog was sized from the node count, not from how far the fitted
+      // camera ends up: with a few thousand imported conversations the fit
+      // at 1.8 s pulled the camera back and the whole orb faded into the fog
+      // (live 2026-10-26). Keep the fog light at the distance actually used.
+      const fog = graph.scene().fog as { density?: number } | null;
+      if (fog && typeof fog.density === "number") fog.density = 0.35 / Math.max(distance + r, 1);
       const target = (graph.controls() as { target?: { x: number; y: number; z: number } }).target ?? centre;
       const away = {
         x: camera.position.x - target.x,

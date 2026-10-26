@@ -959,6 +959,36 @@ def _import_targets(request: Request) -> tuple[Path, Path]:
     return vault_root, resolve_wiki_db_path(data_dir)
 
 
+class WikiWipeRequest(BaseModel):
+    """The phrase the person typed to confirm deleting every note."""
+
+    confirm: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/wipe", openapi_extra={"x-jarvis-dangerous": True})
+async def wipe_wiki_notes(request: Request, payload: WikiWipeRequest) -> dict[str, Any]:
+    """Delete every note page and empty the search index, after a full snapshot.
+
+    Refused unless ``confirm`` is exactly the phrase the panel asks for. The
+    snapshot lands in ``wiki-backups`` next to the vault (``wiki/wipe.py``).
+    """
+    from jarvis.memory.wiki.importer import IMPORT_JOBS
+    from jarvis.memory.wiki.wipe import CONFIRM_PHRASE, wipe_notes
+
+    if payload.confirm.strip() != CONFIRM_PHRASE:
+        raise HTTPException(status_code=400, detail=f'Type "{CONFIRM_PHRASE}" to confirm.')
+    if IMPORT_JOBS.busy():
+        raise HTTPException(status_code=409, detail="An import is running; wait for it to end.")
+    vault_root, db_path = _import_targets(request)
+    try:
+        result = await asyncio.to_thread(
+            wipe_notes, vault_root, db_path=db_path, backup_dir=vault_root.parent / "wiki-backups"
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"Notes were not deleted: {exc}") from exc
+    return result.to_dict()
+
+
 @router.post("/import/pick-folder")
 async def pick_import_folder() -> dict[str, Any]:
     """Open the system folder dialog for an import (desktop only)."""

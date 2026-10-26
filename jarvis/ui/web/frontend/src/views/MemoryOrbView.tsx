@@ -22,7 +22,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useQuery } from "@tanstack/react-query";
 import ForceGraph2D from "react-force-graph-2d";
 import type { ForceGraphMethods, NodeObject } from "react-force-graph-2d";
-import { Box, ChevronLeft, ChevronRight, Crosshair, ListTree, Network, Orbit, Search, Send, Square, X } from "lucide-react";
+import { Box, ChevronLeft, ChevronRight, Crosshair, Keyboard, ListTree, Network, Orbit, Search, Send, Square, X } from "lucide-react";
 
 import { HandOverlay, HandToggle } from "@/components/orb/hands/HandControls";
 import { GESTURES, type GestureId } from "@/components/orb/hands/gestures";
@@ -283,6 +283,9 @@ export function MemoryOrbView({
   const [hover, setHover] = useState<OrbNode | null>(null);
   const [picked, setPicked] = useState<OrbNode | null>(null);
   const [ask, setAsk] = useState("");
+  // The ask bar stays hidden until the keyboard button opens it: Jarvis is
+  // spoken to here, and the bar covered the map (Roberto 2026-10-26).
+  const [typing, setTyping] = useState(false);
   const [sentAt, setSentAt] = useState<number | null>(null);
   // The map is framed again whenever what is on it changes.
   const framedFor = useRef("");
@@ -974,10 +977,24 @@ export function MemoryOrbView({
             {reply ? reply.content : <span className="text-slate-400">{t("orb2.thinking")}</span>}
           </div>
         ) : null}
+        {!typing ? (
+          <button
+            type="button"
+            aria-label={t("orb2.ask_label")}
+            title={t("orb2.ask_label")}
+            onClick={() => setTyping(true)}
+            className="pointer-events-auto flex h-8 w-8 items-center justify-center rounded-full border border-cyan-400/20 bg-black/40 text-cyan-200/70 hover:text-cyan-100"
+          >
+            <Keyboard className="h-4 w-4" aria-hidden />
+          </button>
+        ) : (
         <form
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setTyping(false);
           }}
           className="pointer-events-auto flex w-full max-w-xl items-center gap-2 rounded-full border border-cyan-400/25 bg-black/60 py-1.5 pl-4 pr-1.5 backdrop-blur focus-within:border-cyan-300/70"
         >
@@ -985,6 +1002,7 @@ export function MemoryOrbView({
             value={ask}
             onChange={(e) => setAsk(e.target.value)}
             placeholder={t("orb2.ask_placeholder")}
+            autoFocus
             aria-label={t("orb2.ask_label")}
             className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
           />
@@ -997,6 +1015,7 @@ export function MemoryOrbView({
             <Send className="h-4 w-4" />
           </button>
         </form>
+        )}
       </div>
     </div>
   );

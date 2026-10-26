@@ -322,7 +322,12 @@ def run_import(
             progress.current = relative.as_posix()
             suffix = path.suffix.lower() or "(none)"
             progress.extensions[suffix] += 1
-            _import_one(path, relative, import_root, progress, indexer)
+            if suffix == ".zip":
+                _import_zip(path, relative, import_root, progress, indexer, stop)
+            elif _repeats_an_export(path):
+                _skip(progress, relative, "the same chats as the export's conversations files")
+            else:
+                _import_one(path, relative, import_root, progress, indexer)
             progress.processed += 1
         progress.phase = "indexing" if progress.phase != "cancelled" else "cancelled"
         indexer.close()
@@ -349,11 +354,7 @@ def _import_one(
 ) -> None:
     suffix = path.suffix.lower()
     verbatim = suffix in MARKDOWN_SUFFIXES | TEXT_SUFFIXES
-    limit = (
-        MAX_FILE_BYTES if verbatim
-        else MAX_EXPORT_BYTES if suffix in EXPORT_SUFFIXES
-        else MAX_DOCUMENT_BYTES
-    )
+    limit = _size_limit(suffix)
     try:
         size = path.stat().st_size
         progress.total_bytes += size
@@ -364,6 +365,26 @@ def _import_one(
     except OSError as exc:  # reported per file in the job's problems list
         _fail(progress, relative, f"unreadable ({type(exc).__name__})")
         return
+    _import_content(path, relative, raw, import_root, progress, indexer)
+
+
+def _size_limit(suffix: str) -> int:
+    if suffix in MARKDOWN_SUFFIXES | TEXT_SUFFIXES:
+        return MAX_FILE_BYTES
+    return MAX_EXPORT_BYTES if suffix in EXPORT_SUFFIXES else MAX_DOCUMENT_BYTES
+
+
+def _import_content(
+    path: Path,
+    relative: Path,
+    raw: bytes,
+    import_root: Path,
+    progress: ImportProgress,
+    indexer: _Indexer,
+) -> None:
+    """Pages for one file whose bytes are read (notes, exports) or whose path is (documents)."""
+    suffix = path.suffix.lower()
+    verbatim = suffix in MARKDOWN_SUFFIXES | TEXT_SUFFIXES
     if verbatim:
         try:
             content = page_text(path, raw)
@@ -429,6 +450,137 @@ def _write(
     else:
         progress.updated += 1
     indexer.add(target)
+
+
+#: A ZIP is read member by member, never unpacked as a whole. These bound what
+#: one archive may expand to, so a crafted archive cannot fill the disk or memory.
+MAX_ZIP_MEMBERS: Final[int] = 20_000
+MAX_ZIP_TOTAL_BYTES: Final[int] = 8 * 1024 * 1024 * 1024
+MAX_ZIP_RATIO: Final[int] = 200
+#: ZIPs inside a ZIP are opened this many levels deep (a Claude export bundle).
+MAX_ZIP_DEPTH: Final[int] = 2
+
+
+def _repeats_an_export(path: Path) -> bool:
+    """ChatGPT's ``chat.html`` next to its ``conversations*.json``: the same chats again."""
+    if path.name.lower() != "chat.html":
+        return False
+    try:
+        return any(path.parent.glob("conversations*.json"))
+    except OSError:  # an unreadable folder: the html is imported as a document
+        return False
+
+
+def _zip_member_names(names: list[str]) -> set[str]:
+    return {n.lower().rsplit("/", 1)[-1] for n in names}
+
+
+def _import_zip(
+    path: Path,
+    relative: Path,
+    import_root: Path,
+    progress: ImportProgress,
+    indexer: _Indexer,
+    stop: threading.Event,
+    *,
+    depth: int = 1,
+    data: bytes | None = None,
+) -> None:
+    """Import a ZIP's members as if they sat in a folder named after it.
+
+    Roberto's ChatGPT export is one ZIP (``conversations-000.json`` ...,
+    ``chat.html``) and Claude's comes as several. Members are read one at a
+    time; names that climb out of the archive, links and hidden entries are
+    skipped, and the total size and compression ratio are bounded.
+    """
+    import io
+    import zipfile
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data) if data is not None else path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        _fail(progress, relative, f"not a readable ZIP ({type(exc).__name__})")
+        return
+    with archive:
+        infos = [i for i in archive.infolist() if not i.is_dir()]
+        if len(infos) > MAX_ZIP_MEMBERS:
+            _skip(progress, relative, "ZIP has too many files")
+            return
+        if sum(i.file_size for i in infos) > MAX_ZIP_TOTAL_BYTES:
+            _skip(progress, relative, "ZIP unpacks too large")
+            return
+        names = _zip_member_names([i.filename for i in infos])
+        has_export = any(n.startswith("conversations") and n.endswith(".json") for n in names)
+        progress.supported += 1
+        folder = relative.parent / relative.stem
+        for info in infos:
+            if stop.is_set():
+                return
+            member = Path(*[p for p in info.filename.replace("\\", "/").split("/") if p])
+            parts = member.parts
+            if (
+                not parts
+                or info.filename.startswith(("/", "\\"))
+                or any(p in ("..", ".") or p.startswith(".") or ":" in p for p in parts)
+                or parts[0] == "__MACOSX"
+                or (info.external_attr >> 16) & 0o170000 == 0o120000  # a symlink entry
+            ):
+                continue
+            inner = folder / member
+            progress.discovered += 1
+            progress.current = inner.as_posix()
+            suffix = member.suffix.lower() or "(none)"
+            progress.extensions[suffix] += 1
+            progress.total_bytes += info.file_size
+            if info.compress_size and info.file_size / info.compress_size > MAX_ZIP_RATIO:
+                _skip(progress, inner, "compressed suspiciously well")
+                continue
+            if has_export and member.name.lower() == "chat.html":
+                _skip(progress, inner, "the same chats as the export's conversations files")
+                continue
+            if suffix == ".zip":
+                if depth >= MAX_ZIP_DEPTH or info.file_size > MAX_EXPORT_BYTES:
+                    _skip(progress, inner, "ZIP inside a ZIP inside a ZIP")
+                    continue
+                _import_zip(
+                    member, inner, import_root, progress, indexer, stop,
+                    depth=depth + 1, data=archive.read(info),
+                )
+                progress.processed += 1
+                continue
+            if info.file_size > _size_limit(suffix):
+                _skip(progress, inner, "too large")
+                continue
+            _import_member(archive, info, member, inner, import_root, progress, indexer)
+            progress.processed += 1
+
+
+def _import_member(
+    archive: Any,
+    info: Any,
+    member: Path,
+    inner: Path,
+    import_root: Path,
+    progress: ImportProgress,
+    indexer: _Indexer,
+) -> None:
+    """One ZIP member: notes from its bytes, exports and documents via a temporary file."""
+    suffix = member.suffix.lower()
+    try:
+        raw = archive.read(info)
+    except Exception as exc:  # noqa: BLE001 — a damaged member is reported, the rest still import
+        _fail(progress, inner, f"unreadable in the ZIP ({type(exc).__name__})")
+        return
+    if suffix in MARKDOWN_SUFFIXES | TEXT_SUFFIXES:
+        _import_content(member, inner, raw, import_root, progress, indexer)
+        return
+    # A JSON that is not a chat export (ads.json, memories.json) falls back to
+    # the document reader, which needs a real file.
+    with tempfile.TemporaryDirectory(prefix="jarvis-zip-") as tmp:
+        on_disk = Path(tmp) / (_UNSAFE_NAME.sub("_", member.name) or "member")
+        on_disk.write_bytes(raw)
+        kept = raw if suffix in EXPORT_SUFFIXES else b""
+        _import_content(on_disk, inner, kept, import_root, progress, indexer)
 
 
 #: Skip reasons counted but not listed file by file: they are the normal
@@ -504,6 +656,11 @@ class ImportJobs:
 
     def get(self, job_id: str) -> ImportJob | None:
         return self._jobs.get(job_id)
+
+    def busy(self) -> bool:
+        """Whether an import is running now."""
+        with self._lock:
+            return any(job.running for job in self._jobs.values())
 
     def latest(self) -> ImportJob | None:
         return next(reversed(self._jobs.values()), None) if self._jobs else None
