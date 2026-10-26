@@ -385,3 +385,31 @@ def test_documents_become_pages_and_files_without_text_say_why(
         ".doc: old Office format (save it as .docx/.xlsx/.pptx)": 1,
     }
     assert result.problems == [], "pictures and old files are counted, not listed as problems"
+
+
+def test_the_same_chat_in_an_old_folder_and_a_newer_zip_is_one_page(
+    tmp_path: Path, vault: Path, db_path: Path
+) -> None:
+    import copy
+    import json
+    import zipfile
+
+    old = copy.deepcopy(CHATGPT_EXPORT)
+    old[0]["id"] = "conv-falcon-1"
+    _write(tmp_path / "AI DATA" / "conversations-000.json", json.dumps(old))
+    newer = copy.deepcopy(old)
+    newer[0]["mapping"]["b"]["message"]["content"]["parts"] = ["Launch moved to Osprey_Day."]
+    export = tmp_path / "Downloads" / "chatgpt-export.zip"
+    export.parent.mkdir(parents=True)
+    with zipfile.ZipFile(export, "w") as zf:
+        zf.writestr("conversations-003.json", json.dumps(newer))
+        zf.writestr("file-abc.png", b"\x89PNG" + b"\x00" * 64)
+
+    run_import(tmp_path / "AI DATA", vault, db_path=db_path)
+    second = run_import(export, vault, db_path=db_path)
+
+    pages = [p for p in (vault / IMPORT_DIR).rglob("*.md") if "Falcon" in p.name]
+    assert len(pages) == 1, pages
+    assert (second.imported, second.updated) == (0, 1)
+    assert "Osprey_Day" in pages[0].read_text("utf-8")
+    assert second.skip_reasons.get("picture (no text)") == 1

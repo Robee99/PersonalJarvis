@@ -5,7 +5,7 @@
 // progress and refreshes the orb when it ends.
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { FolderOpen, Loader2, Trash2, Upload, X } from "lucide-react";
+import { FileArchive, FolderOpen, Keyboard, Loader2, Trash2, Upload, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -70,8 +70,9 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
   const [picking, setPicking] = useState(false);
   const running = Boolean(state?.running);
   const [wiping, setWiping] = useState(false);
-  const [confirm, setConfirm] = useState("");
   const [wiped, setWiped] = useState("");
+  // The path box stays hidden: the pickers are the way in. Typing is the fallback.
+  const [typing, setTyping] = useState(false);
 
   // Poll the running job; refresh the orb once it ends.
   useEffect(() => {
@@ -92,28 +93,34 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
     return () => window.clearInterval(id);
   }, [state?.job_id, running, queryClient]);
 
-  async function pickFolder() {
+  // Live 2026-10-26: a folder dialog never shows .json or .zip files, so a
+  // ChatGPT export could not be picked. One button per kind; a pick imports.
+  async function pick(kind: "folder" | "file") {
     setPicking(true);
     setError("");
     try {
-      const res = await fetch("/api/wiki/import/pick-folder", { method: "POST" });
+      const res = await fetch(`/api/wiki/import/pick-${kind}`, { method: "POST" });
       if (!res.ok) {
-        setError(`${await detail(res)} Type or paste the folder path instead.`);
+        setError(`${await detail(res)} Type or paste the path instead.`);
+        setTyping(true);
         return;
       }
       const body = (await res.json()) as { path?: string; cancelled?: boolean };
-      if (body.path) setPath(body.path);
+      if (body.path) {
+        setPath(body.path);
+        await start(body.path);
+      }
     } finally {
       setPicking(false);
     }
   }
 
-  async function start() {
+  async function start(source: string = path) {
     setError("");
     const res = await fetch("/api/wiki/import", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: path.trim() }),
+      body: JSON.stringify({ path: source.trim() }),
     });
     if (!res.ok) {
       setError(await detail(res));
@@ -128,7 +135,8 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
     const res = await fetch("/api/wiki/wipe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: confirm.trim() }),
+      // The server still wants the phrase; the second click is the person's yes.
+      body: JSON.stringify({ confirm: "DELETE ALL NOTES" }),
     });
     if (!res.ok) {
       setError(await detail(res));
@@ -136,7 +144,6 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
     }
     const body = (await res.json()) as { pages: number; backup: string };
     setWiped(`Deleted ${body.pages} notes. A copy of everything is in ${body.backup}.`);
-    setConfirm("");
     setWiping(false);
     void queryClient.invalidateQueries({ queryKey: ["orb"] });
     void queryClient.invalidateQueries({ queryKey: ["orb2"] });
@@ -175,41 +182,60 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
             changed.
           </p>
           <div className="flex gap-2">
-            <input
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="C:\AI DATA"
-              aria-label="Folder or file to import"
-              className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/50 px-2 py-1.5 outline-none focus:border-cyan-300/60"
-            />
             <button
               type="button"
-              onClick={() => void pickFolder()}
+              onClick={() => void pick("file")}
               disabled={picking || running}
-              className="flex items-center gap-1 rounded-md border border-white/10 px-2 hover:border-cyan-300/60 disabled:opacity-50"
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-cyan-500/80 px-2 py-1.5 font-medium text-black hover:bg-cyan-400 disabled:opacity-40"
             >
-              <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Browse
+              <FileArchive className="h-3.5 w-3.5" aria-hidden /> Choose file (.zip, .json)
+            </button>
+            <button
+              type="button"
+              onClick={() => void pick("folder")}
+              disabled={picking || running}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-white/10 px-2 py-1.5 hover:border-cyan-300/60 disabled:opacity-40"
+            >
+              <FolderOpen className="h-3.5 w-3.5" aria-hidden /> Choose folder
             </button>
           </div>
-          <div className="mt-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => void start()}
-              disabled={!path.trim() || running}
-              className="rounded-md bg-cyan-500/80 px-3 py-1.5 font-medium text-black hover:bg-cyan-400 disabled:opacity-40"
-            >
-              Import
-            </button>
-            {running && (
+          {path && !typing && <p className="mt-2 truncate text-slate-400">{path}</p>}
+          {typing ? (
+            <div className="mt-2 flex gap-2">
+              <input
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="C:\AI DATA"
+                aria-label="Folder or file to import"
+                className="min-w-0 flex-1 rounded-md border border-white/10 bg-black/50 px-2 py-1.5 outline-none focus:border-cyan-300/60"
+              />
               <button
                 type="button"
-                onClick={() => void cancel()}
-                className="rounded-md border border-white/10 px-3 py-1.5 hover:border-red-300/60"
+                onClick={() => void start()}
+                disabled={!path.trim() || running}
+                className="rounded-md bg-cyan-500/80 px-3 py-1.5 font-medium text-black hover:bg-cyan-400 disabled:opacity-40"
               >
-                Cancel
+                Import
               </button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setTyping(true)}
+              className="mt-2 flex items-center gap-1 text-slate-500 hover:text-slate-300"
+            >
+              <Keyboard className="h-3 w-3" aria-hidden /> Type a path instead
+            </button>
+          )}
+          {running && (
+            <button
+              type="button"
+              onClick={() => void cancel()}
+              className="mt-2 rounded-md border border-white/10 px-3 py-1.5 hover:border-red-300/60"
+            >
+              Cancel
+            </button>
+          )}
           <div className="mt-4 border-t border-white/10 pt-3">
             {!wiping ? (
               <button
@@ -222,36 +248,24 @@ export function MemoryOrbImport({ defaultOpen = false }: { defaultOpen?: boolean
               </button>
             ) : (
               <div className="space-y-2">
-                <p className="text-slate-400">
-                  Every note in memory is removed and the search index emptied. A full copy is saved
-                  first. Type DELETE ALL NOTES to confirm.
+                <p className="text-slate-300">
+                  Delete every note in memory and empty its search? A full copy is saved first.
                 </p>
                 <div className="flex gap-2">
-                  <input
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    placeholder="DELETE ALL NOTES"
-                    aria-label="Type DELETE ALL NOTES to confirm"
-                    autoFocus
-                    className="min-w-0 flex-1 rounded-md border border-red-400/30 bg-black/50 px-2 py-1.5 outline-none focus:border-red-300/70"
-                  />
                   <button
                     type="button"
                     onClick={() => void wipe()}
-                    disabled={confirm.trim() !== "DELETE ALL NOTES" || running}
+                    disabled={running}
                     className="rounded-md bg-red-500/80 px-3 py-1.5 font-medium text-black hover:bg-red-400 disabled:opacity-40"
                   >
-                    Delete
+                    Yes, delete all notes
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setWiping(false);
-                      setConfirm("");
-                    }}
+                    onClick={() => setWiping(false)}
                     className="rounded-md border border-white/10 px-2 hover:border-cyan-300/60"
                   >
-                    Keep
+                    Keep them
                   </button>
                 </div>
               </div>

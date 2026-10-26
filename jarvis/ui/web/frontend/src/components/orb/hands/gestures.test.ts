@@ -108,7 +108,8 @@ describe("each pose held still does only its own thing", () => {
   const hold = (pose: SynthPose) => run(new GestureEngine(), repeat(framesFor(1600), () => [hand(0.4, 0.5, pose)])).actions;
   it.each<[SynthPose, string[]]>([
     ["point", ["hover"]],
-    ["open", []],
+    // An open palm held still is the "push" (zoom out) from the holo page.
+    ["open", ["push"]],
     ["fist", []],
     ["peace", ["reset"]],
     ["thumbs", ["confirm"]],

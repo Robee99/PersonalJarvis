@@ -53,6 +53,9 @@ class Page:
 
     name: str
     body: str
+    #: The conversation's id for a one-conversation page, so the same chat in
+    #: two exports (an older and a newer download) becomes one page.
+    key: str = ""
 
 
 class NoText(ValueError):
@@ -521,7 +524,10 @@ def conversation_pages(path: Path, raw: bytes) -> list[Page] | None:
         return None
     names = _unique(c.title for c in convs)
     pairs = zip(names, convs, strict=True)
-    return [Page(name, render_conversation(c, path.name)) for name, c in pairs]
+    return [
+        Page(name, render_conversation(c, path.name), key=_clean_id(c.conversation_id))
+        for name, c in pairs
+    ]
 
 
 # --- documents -------------------------------------------------------------

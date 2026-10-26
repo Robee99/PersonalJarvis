@@ -280,6 +280,8 @@ export function MemoryOrbView({
   const groupLabel = (group: OrbGroup) => t(`orb2.memory.group.${group}`);
   const [hidden, setHidden] = useState<Set<OrbGroup>>(new Set());
   const [query, setQuery] = useState("");
+  // Text boxes stay behind icons so the map has the screen (Roberto 2026-10-26).
+  const [searchOpen, setSearchOpen] = useState(false);
   const settledQuery = useDebounced(query, 180);
   const [hover, setHover] = useState<OrbNode | null>(null);
   const [picked, setPicked] = useState<OrbNode | null>(null);
@@ -819,7 +821,18 @@ export function MemoryOrbView({
         </div>
         {mode === "memory" && (
           <>
-            <div className="pointer-events-auto ml-auto w-72">
+            <div className={cn("pointer-events-auto ml-auto", (searchOpen || query) && "w-72")}>
+              {!searchOpen && !query ? (
+                <button
+                  type="button"
+                  aria-label={t("orb2.memory.search_label")}
+                  title={t("orb2.memory.search_label")}
+                  onClick={() => setSearchOpen(true)}
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-cyan-400/20 bg-black/50 text-slate-300 backdrop-blur hover:border-cyan-300/60"
+                >
+                  <Search className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              ) : (
               <label className="flex h-9 items-center gap-2 rounded-full border border-cyan-400/20 bg-black/50 px-3 text-slate-300 backdrop-blur focus-within:border-cyan-300/60">
                 <Search className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 <input
@@ -827,18 +840,28 @@ export function MemoryOrbView({
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && hits[0]) focusNode(hits[0]);
-                    if (e.key === "Escape") setQuery("");
+                    if (e.key === "Escape") {
+                      setQuery("");
+                      setSearchOpen(false);
+                    }
                   }}
+                  autoFocus
                   placeholder={t("orb2.memory.search_placeholder")}
                   aria-label={t("orb2.memory.search_label")}
                   className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-slate-500"
                 />
-                {query && (
-                  <button type="button" aria-label={t("orb2.rail.clear")} onClick={() => setQuery("")}>
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  aria-label={t("orb2.rail.clear")}
+                  onClick={() => {
+                    setQuery("");
+                    setSearchOpen(false);
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </label>
+              )}
               {searching && (
                 <div
                   data-testid="memory-orb-results"

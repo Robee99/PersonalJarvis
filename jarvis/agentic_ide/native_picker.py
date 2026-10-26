@@ -429,6 +429,20 @@ def choose_folder(*, start: str | None = None, timeout: float = DEFAULT_TIMEOUT_
         return PickResult(error="No folder window can be opened here.")
     argv, env_extra = built
 
+    answer = _run(argv, env_extra, timeout)
+    if isinstance(answer, PickResult):
+        return answer
+    try:
+        picked = Path(answer).expanduser()
+        if not picked.is_dir():
+            return PickResult(error=f"That is not a folder any more: {picked}")
+    except OSError as exc:
+        return PickResult(error=f"Could not read that folder: {exc}")
+    return PickResult(path=str(picked))
+
+
+def _run(argv: list[str], env_extra: dict[str, str], timeout: float) -> str | PickResult:
+    """Run one dialog helper; the chosen path, or the cancellation / error."""
     env = {**os.environ, **env_extra}
     _let_the_dialog_take_the_foreground()
     try:
@@ -467,13 +481,111 @@ def choose_folder(*, start: str | None = None, timeout: float = DEFAULT_TIMEOUT_
             logger.warning("Agentic IDE: folder dialog failed: {}", stderr)
             return PickResult(error="The folder window could not be opened.")
         return PickResult(cancelled=True)
+    return chosen
 
-    try:
-        picked = Path(chosen).expanduser()
-        if not picked.is_dir():
-            return PickResult(error=f"That is not a folder any more: {picked}")
-    except OSError as exc:
-        return PickResult(error=f"Could not read that folder: {exc}")
+
+# The file twin of the folder dialog, for imports: a ChatGPT or Claude export
+# is a .zip or loose .json files, which a folder dialog never shows (live
+# 2026-10-26: "the json files don't show on import data"). WinForms'
+# OpenFileDialog is the modern Explorer-style dialog on every supported
+# Windows, so no COM declaration is needed; the owner form is the same 1x1
+# topmost one as above.
+_WINDOWS_FILE_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$owner = New-Object System.Windows.Forms.Form
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.ShowInTaskbar = $false
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$owner.MinimumSize = New-Object System.Drawing.Size(1, 1)
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$mouse = [System.Windows.Forms.Cursor]::Position
+$area = [System.Windows.Forms.Screen]::FromPoint($mouse).WorkingArea
+$owner.Location = New-Object System.Drawing.Point(
+    ($area.Left + [int]($area.Width / 2)),
+    ($area.Top + [int]($area.Height / 2)))
+$owner.Opacity = 0.01
+$owner.TopMost = $true
+$owner.Show()
+$owner.Activate()
+
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = $env:JARVIS_PICKER_TITLE
+$dialog.Filter = $env:JARVIS_PICKER_FILTER
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$start = $env:JARVIS_PICKER_START
+if ($start) { $dialog.InitialDirectory = $start }
+$picked = $null
+if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+    $picked = $dialog.FileName
+}
+$owner.Dispose()
+if ($picked) {
+    Write-Output '__BEGIN__'
+    Write-Output $picked
+    Write-Output '__END__'
+}
+"""
+
+
+def _file_command(
+    start: str | None, backend: str, title: str, patterns: tuple[str, ...]
+) -> tuple[list[str], dict[str, str]] | None:
+    globs = [f"*.{p.lstrip('.*')}" for p in patterns]
+    if sys.platform == "win32":
+        env_extra = {
+            "JARVIS_PICKER_TITLE": title,
+            "JARVIS_PICKER_FILTER": f"Supported files|{';'.join(globs)}|All files|*.*",
+        }
+        if start:
+            env_extra["JARVIS_PICKER_START"] = start
+        return (
+            [backend, "-STA", "-NoProfile", "-NonInteractive", "-Command",
+             _fill(_WINDOWS_FILE_SCRIPT)],
+            env_extra,
+        )
+    if sys.platform == "darwin":
+        script = (
+            "try\n"
+            f'set chosen to choose file with prompt "{title}"\n'
+            "on error number -128\nreturn \"\"\nend try\n"
+            f'return "{_BEGIN}" & linefeed & POSIX path of chosen & linefeed & "{_END}"'
+        )
+        return ["osascript", "-e", script], {}
+    if backend in {"zenity", "qarma", "matedialog"}:
+        return [backend, "--file-selection", f"--title={title}",
+                f"--file-filter={' '.join(globs)}", "--file-filter=*"], {}
+    if backend == "kdialog":
+        return [backend, "--getopenfilename", start or str(Path.home()), " ".join(globs)], {}
+    return None
+
+
+def choose_file(
+    *,
+    title: str = "Choose a file",
+    patterns: tuple[str, ...] = (),
+    start: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT_S,
+) -> PickResult:
+    """Show the system file dialog; ``patterns`` are extensions such as ``("zip", "json")``."""
+    probe = support()
+    if not probe.available or probe.backend is None:
+        return PickResult(error=probe.reason or "No file window can be opened here.")
+    resolved_start = start if start and Path(start).expanduser().is_dir() else None
+    built = _file_command(resolved_start, probe.backend, title, patterns or ("*",))
+    if built is None:
+        return PickResult(error="No file window can be opened here.")
+    argv, env_extra = built
+    answer = _run(argv, env_extra, timeout)
+    if isinstance(answer, PickResult):
+        return answer
+    picked = Path(answer).expanduser()
+    if not picked.is_file():
+        return PickResult(error=f"That is not a file any more: {picked}")
     return PickResult(path=str(picked))
 
 
@@ -481,6 +593,7 @@ __all__ = [
     "DEFAULT_TIMEOUT_S",
     "PickResult",
     "PickerSupport",
+    "choose_file",
     "choose_folder",
     "support",
 ]

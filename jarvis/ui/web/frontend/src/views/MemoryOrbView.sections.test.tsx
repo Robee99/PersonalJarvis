@@ -138,8 +138,10 @@ describe("MemoryOrbView sections", () => {
     expect(current()).toContain("Import · old");
 
     // Typing a bracket into a text field types it; the map stays put.
+    // The search box sits behind its icon until opened.
+    fireEvent.click(screen.getByRole("button", { name: "Search the memory orb" }));
     const steps = framed.space.length;
-    await press("]", screen.getByLabelText("Search the memory orb"));
+    await press("]", screen.getByRole("textbox", { name: "Search the memory orb" }));
     expect(framed.space).toHaveLength(steps);
   });
 

@@ -59,6 +59,7 @@ describe("Import Data on the memory orb", () => {
       </QueryClientProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: /import data/i }));
+    fireEvent.click(screen.getByRole("button", { name: /type a path instead/i }));
     fireEvent.change(screen.getByLabelText("Folder or file to import"), { target: { value: "C:\\AI DATA" } });
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
 
@@ -83,8 +84,51 @@ describe("Import Data on the memory orb", () => {
       </QueryClientProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: /import data/i }));
+    fireEvent.click(screen.getByRole("button", { name: /type a path instead/i }));
     fireEvent.change(screen.getByLabelText("Folder or file to import"), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
     expect((await screen.findByRole("alert")).textContent).toBe("That folder is already part of Jarvis memory.");
+  });
+
+  it("hides the path box until asked and imports a picked export file at once", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/wiki/import/pick-file") return json({ path: "C:\\Users\\r\\Downloads\\export.zip" });
+      if (url === "/api/wiki/import") return json({ ...base, running: false, phase: "done" });
+      return json({}, 404);
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryOrbImport />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /import data/i }));
+    expect(screen.queryByLabelText("Folder or file to import")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /choose file/i }));
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/wiki/import")).toBe(true),
+    );
+    const started = fetchMock.mock.calls.find(([u]) => String(u) === "/api/wiki/import");
+    expect(JSON.parse(String(started?.[1]?.body))).toEqual({ path: "C:\\Users\\r\\Downloads\\export.zip" });
+  });
+
+  it("deletes all notes with a second click, no typing", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(json({ pages: 2130, backup: "C:\\wiki-backups\\x.tar.gz" }));
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryOrbImport />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /import data/i }));
+    fireEvent.click(screen.getByRole("button", { name: /delete all notes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, delete all notes/i }));
+
+    expect((await screen.findByText(/Deleted 2130 notes/)).textContent).toContain("wiki-backups");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/wiki/wipe");
+    expect(JSON.parse(String(init?.body))).toEqual({ confirm: "DELETE ALL NOTES" });
   });
 });

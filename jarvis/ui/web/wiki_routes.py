@@ -1002,6 +1002,30 @@ async def pick_import_folder() -> dict[str, Any]:
     return {"path": result.path, "cancelled": result.cancelled}
 
 
+#: What the import file dialog offers: chat exports, notes and documents.
+_IMPORT_FILE_TYPES = (
+    "zip", "json", "jsonl", "ndjson", "md", "txt", "pdf", "docx", "pptx", "xlsx", "html", "csv",
+)
+
+
+@router.post("/import/pick-file")
+async def pick_import_file() -> dict[str, Any]:
+    """Open the system file dialog for an import: a chat export .zip or .json (desktop only)."""
+    try:
+        from jarvis.agentic_ide import native_picker
+    except Exception as exc:  # noqa: BLE001 — no picker module on this install
+        raise HTTPException(status_code=501, detail="no file dialog here") from exc
+    result = await asyncio.to_thread(
+        native_picker.choose_file,
+        title="Choose a file to import into memory",
+        patterns=_IMPORT_FILE_TYPES,
+        start=str(Path.home() / "Downloads"),
+    )
+    if result.error:
+        raise HTTPException(status_code=501, detail=result.error)
+    return {"path": result.path, "cancelled": result.cancelled}
+
+
 @router.post("/import", openapi_extra={"x-jarvis-risk-tier": "monitor"})
 async def start_wiki_import(request: Request, payload: WikiImportRequest) -> dict[str, Any]:
     """Import a folder (an Obsidian vault, a notes folder) or one file.

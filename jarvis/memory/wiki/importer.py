@@ -256,6 +256,32 @@ def write_page_atomic(target: Path, content: str) -> None:
             tmp.unlink()
 
 
+_CHAT_ID = re.compile(r'<!-- jarvis-conversation id="([^"]+)"')
+
+
+def _chat_pages(imports: Path) -> dict[str, Path]:
+    """Conversation id -> page, for every conversation page already imported.
+
+    Live 2026-10-26 Roberto had the same ChatGPT history twice (C:\\AI DATA
+    from July and a newer export ZIP); without this every chat in both became
+    two pages. Only the head of each page is read: the marker sits under the
+    title.
+    """
+    found: dict[str, Path] = {}
+    if not imports.is_dir():
+        return found
+    for page in imports.rglob("*.md"):
+        try:
+            with page.open("r", encoding="utf-8", errors="replace") as fh:
+                head = fh.read(1024)
+        except OSError:  # an unreadable page simply is not matched
+            continue
+        match = _CHAT_ID.search(head)
+        if match:
+            found.setdefault(match.group(1), page)
+    return found
+
+
 class _Indexer:
     """Upserts written pages into the FTS index, one transaction per batch."""
 
@@ -265,6 +291,18 @@ class _Indexer:
         self._pending: list[Path] = []
         self._conn: sqlite3.Connection | None = None
         self.indexed = 0
+        self._chats: dict[str, Path] | None = None
+
+    def chat_page(self, key: str) -> Path | None:
+        """The page an earlier import already wrote for conversation ``key``."""
+        if self._chats is None:
+            self._chats = _chat_pages(self._vault_root / IMPORT_DIR)
+        return self._chats.get(key)
+
+    def remember_chat(self, key: str, page: Path) -> None:
+        if self._chats is None:
+            self._chats = _chat_pages(self._vault_root / IMPORT_DIR)
+        self._chats.setdefault(key, page)
 
     def add(self, path: Path) -> None:
         self._pending.append(path)
@@ -424,6 +462,10 @@ def _import_content(
         except ImportRefused:  # reported per page in the job's problems list
             _fail(progress, relative, "could not name its page")
             continue
+        if page.key:
+            # The same chat from another export updates its first page.
+            target = indexer.chat_page(page.key) or target
+            indexer.remember_chat(page.key, target)
         _write(target, body, relative, progress, indexer)
 
 
@@ -459,6 +501,15 @@ MAX_ZIP_TOTAL_BYTES: Final[int] = 8 * 1024 * 1024 * 1024
 MAX_ZIP_RATIO: Final[int] = 200
 #: ZIPs inside a ZIP are opened this many levels deep (a Claude export bundle).
 MAX_ZIP_DEPTH: Final[int] = 2
+
+
+_PICTURES: Final[frozenset[str]] = frozenset(
+    {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".tif", ".tiff", ".ico"}
+)
+_AUDIO: Final[frozenset[str]] = frozenset({".wav", ".mp3", ".m4a", ".ogg", ".flac"})
+_MEDIA_SUFFIXES: Final[frozenset[str]] = (
+    _PICTURES | _AUDIO | frozenset({".mp4", ".mov", ".webm", ".mkv", ".avi"})
+)
 
 
 def _repeats_an_export(path: Path) -> bool:
@@ -534,6 +585,11 @@ def _import_zip(
             progress.total_bytes += info.file_size
             if info.compress_size and info.file_size / info.compress_size > MAX_ZIP_RATIO:
                 _skip(progress, inner, "compressed suspiciously well")
+                continue
+            if suffix in _MEDIA_SUFFIXES:
+                # Never read: a ChatGPT export ZIP is gigabytes of pictures.
+                kind = "image" if suffix in _PICTURES else "audio" if suffix in _AUDIO else "video"
+                _skip(progress, inner, NO_TEXT_REASONS[kind])
                 continue
             if has_export and member.name.lower() == "chat.html":
                 _skip(progress, inner, "the same chats as the export's conversations files")
