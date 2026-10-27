@@ -227,12 +227,19 @@ def test_other_web_requests_go_to_the_brain(text: str) -> None:
     assert pc_reflex.parse_url_command(text) is None
 
 
-def test_url_reflex_opens_the_browser(monkeypatch: pytest.MonkeyPatch) -> None:
-    opened: list[str] = []
+def test_url_reflex_opens_the_browser_already_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.platform import youtube_play
+
+    opened: list[tuple[str, str]] = []
+
+    def opener(url: str, browser: str) -> str:
+        opened.append((url, browser))
+        return "Chrome"
+
     monkeypatch.setattr(pc_reflex.sys, "platform", "win32")
-    monkeypatch.setattr("os.startfile", opened.append, raising=False)
-    assert pc_reflex.url_reflex("Open YouTube dot com") == "Opened youtube.com in your browser."
-    assert opened == ["https://youtube.com"]
+    monkeypatch.setattr(youtube_play, "open_in_browser", opener)
+    assert pc_reflex.url_reflex("Open YouTube dot com") == "Opened youtube.com in Chrome."
+    assert opened == [("https://youtube.com", "")]
 
 
 @pytest.mark.parametrize(

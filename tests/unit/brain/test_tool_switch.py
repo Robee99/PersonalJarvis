@@ -26,6 +26,7 @@ from jarvis.brain.tool_switch import (
     ENABLE_TOOLS,
     EnableToolsTool,
     ToolSwitch,
+    one_set_of_hands,
     wants_switch,
 )
 from jarvis.brain.tool_use_loop import ToolUseLoop
@@ -453,3 +454,45 @@ def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None
     switch.open_turn("use playwright to open example.com", core=("pc_pilot",))
 
     assert {"pc_pilot", "playwright/browser_navigate"} <= set(switch.visible())
+
+
+def test_with_the_pilot_the_other_hands_leave_the_turn_for_good() -> None:
+    """Live 2026-10-27: enable_tools brought back Playwright and my_chrome.
+
+    Gemma then mixed refs between two browsers and typed into a terminal.
+    """
+    tools = _desktop_registry()
+    tools["windows-desktop/PowerShell"] = _Tool(
+        "windows-desktop/PowerShell", "Run PowerShell", is_mcp_tool=True
+    )
+    surface = one_set_of_hands(tools, "now go to youtube and search codeacus and play the video")
+    switch = _switch(surface)
+    switch.open_turn("try again", core=("pc_pilot",))
+
+    added = switch.enable_for("navigate to YouTube and search", ["playwright/browser_type"])
+
+    assert not {"computer_use", "app_control", "my_chrome"} & set(surface)
+    assert not any(n.startswith("playwright/") for n in surface)
+    assert not any(n.startswith("playwright/") or n == "my_chrome" for n in added)
+    assert "windows-desktop/Click" not in surface
+    assert "windows-desktop/PowerShell" in surface
+    assert "pc_pilot" in surface
+
+
+@pytest.mark.parametrize(
+    ("utterance", "kept"),
+    [
+        ("use computer use to click on roberto", "computer_use"),
+        ("use playwright to open example.com", "playwright/browser_navigate"),
+        ("use my_chrome to open github", "my_chrome"),
+        ("use windows desktop mcp to click start", "windows-desktop/Click"),
+    ],
+)
+def test_hands_the_owner_names_stay(utterance: str, kept: str) -> None:
+    assert kept in one_set_of_hands(_desktop_registry(), utterance)
+
+
+def test_without_the_pilot_nothing_is_taken_away() -> None:
+    tools = _desktop_registry()
+    del tools["pc_pilot"]
+    assert one_set_of_hands(tools, "open youtube") == tools

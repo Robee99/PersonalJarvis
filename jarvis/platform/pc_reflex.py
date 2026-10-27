@@ -716,15 +716,16 @@ def url_reflex(text: str) -> str | None:
     url = parse_url_command(text)
     if url is None or sys.platform != "win32":
         return None
-    import os  # noqa: PLC0415
+    from jarvis.platform.youtube_play import open_in_browser  # noqa: PLC0415
 
     try:
-        os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606 - a fixed https URL, opened by the browser
+        # The browser already open (his signed-in Chrome), not a cold default.
+        where = open_in_browser(url, "")
     except OSError as exc:
         log.warning("url reflex failed: %s", exc)
         return None
     site = url.removeprefix("https://").rstrip("/")
-    return f"Opened {site} in your browser."
+    return f"Opened {site} in {where}."
 
 
 _MEDIA_NOUN = (

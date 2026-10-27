@@ -479,6 +479,26 @@ class _StepMirror:
 # ------------------------------------------------------------------- turn
 
 
+#: How long a message sent while Jarvis boots waits for the brain. Live
+#: 2026-10-27 nine sends in the first half minute after a restart each failed
+#: at once with "still starting up"; the message now waits and then runs.
+BRAIN_READY_WAIT_S = 120.0
+
+
+async def _brain_when_ready(wait_s: float | None = None) -> Any:
+    """The brain manager once it can answer, or ``None`` after ``wait_s``."""
+    if wait_s is None:
+        wait_s = BRAIN_READY_WAIT_S
+    deadline = time.monotonic() + wait_s
+    while True:
+        brain = brain_manager()
+        if brain is not None and callable(getattr(brain, "generate", None)):
+            return brain
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(0.5)
+
+
 async def run_brain_turn(
     handle: TurnHandle,
     text: str,
@@ -515,8 +535,8 @@ async def run_brain_turn(
             },
         )
 
-    brain = brain_manager()
-    if brain is None or not callable(getattr(brain, "generate", None)):
+    brain = await _brain_when_ready()
+    if brain is None:
         await finish(
             "error", {}, "Jarvis' brain is still starting up. Give it a moment and send again."
         )

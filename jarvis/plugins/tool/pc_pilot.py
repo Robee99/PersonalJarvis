@@ -437,11 +437,24 @@ class _Run:
     shell: bool = False
 
 
-def _launch(kind: str, value: str) -> None:
-    """Open a settings page, URL, folder or shell place (never an app; see open_app)."""
+def _launch(kind: str, value: str) -> str:
+    """Open a settings page, URL, folder or shell place (never an app; see open_app).
+
+    A web page opens in the browser the owner already has running (live
+    2026-10-27 the https default was Edge while he worked in Chrome, so the
+    page went to a cold Edge and the next steps to another window). Returns
+    that browser's exe name, or ``""``.
+    """
     if kind == "shell" or (kind == "system" and value.startswith("shell:")):
         subprocess.Popen(["explorer.exe", value], shell=False)  # noqa: S603, S607 - fixed program
-        return
+        return ""
+    if kind == "url":
+        from jarvis.platform.open_path import preferred_browser_exe  # noqa: PLC0415
+
+        exe = preferred_browser_exe()
+        if exe:
+            subprocess.Popen([exe, value], shell=False)  # noqa: S603 - a browser and an https URL
+            return Path(exe).name
     if not hasattr(os, "startfile"):
         raise StepFailed("Opening that needs Windows.")
     if kind == "path" and not Path(value).exists():
@@ -450,6 +463,7 @@ def _launch(kind: str, value: str) -> None:
         os.startfile(value)  # type: ignore[attr-defined]  # noqa: S606 - the owner's own request
     except FileNotFoundError:
         raise StepFailed(f"{value} is not installed on this PC.") from None
+    return ""
 
 
 class PcPilot:
@@ -627,14 +641,21 @@ class PcPilot:
             result = await opener.execute({"app_name": value}, ctx)
             if not getattr(result, "success", False):
                 raise StepFailed(str(getattr(result, "error", "") or f"Could not open {value}."))
-        else:
-            await asyncio.to_thread(_launch, kind, value)
+        browser = ""
+        if kind != "app":
+            browser = await asyncio.to_thread(_launch, kind, value)
         # Windows' own tools are titled by the name people use for them.
         hint = {"settings": "settings", "url": "", "shell": "", "system": _norm(what),
                 "path": Path(value).name}.get(kind, value)
         run.window = await asyncio.to_thread(
-            self._wait_for_window, desk, before, hint, kind == "url", kind in ("system", "path")
+            self._wait_for_window, desk, before, hint, kind == "url",
+            kind in ("system", "path", "url"), browser,
         )
+        if run.window is None and kind == "url":
+            raise StepFailed(
+                f"{value} was sent to the browser but no browser window came up. "
+                "Call again in a moment."
+            )
         if run.window is None:
             # A slow program (Device Manager took over 15 s on a busy PC):
             # say so, and never let the next step land in another window.
@@ -668,7 +689,8 @@ class PcPilot:
 
     # -- blocking helpers (run in a thread) ---------------------------------
     def _wait_for_window(
-        self, desk: Desk, before: set[int], hint: str, web: bool = False, strict: bool = False
+        self, desk: Desk, before: set[int], hint: str, web: bool = False, strict: bool = False,
+        browser: str = "",
     ) -> Window | None:
         deadline = time.monotonic() + _OPEN_WAIT_S
         if web:
@@ -678,9 +700,17 @@ class PcPilot:
         while True:
             wins = desk.windows()
             if web:
-                browser = next((w for w in wins if w.exe.casefold() in _BROWSER_EXES), None)
-                if browser is not None:
-                    return browser
+                # The browser the page went to; any other only when that is unknown.
+                exes = {browser.casefold()} if browser else _BROWSER_EXES
+                page = next((w for w in wins if w.exe.casefold() in exes), None)
+                if page is not None:
+                    return page
+                if time.monotonic() > deadline:
+                    # Never another program's window: the next steps would
+                    # type into it (live 2026-10-27, a Hermes terminal).
+                    return None
+                self._sleep(0.25)
+                continue
             if hint:
                 named = _match_window(wins, hint)
                 if named is not None:

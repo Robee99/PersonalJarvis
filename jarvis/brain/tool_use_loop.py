@@ -1000,8 +1000,9 @@ class ToolUseLoop:
         a request about the person's own open browser (a profile, a signed-in
         tab), which the browser tools cannot reach.
         """
-        tool = self._tools.get("computer_use")
-        if tool is None or any(t.get("name") == "computer_use" for t in payload):
+        # The PC pilot, when here, is the only hands (tool_switch.one_set_of_hands).
+        tool = self._tools.get("pc_pilot") or self._tools.get("computer_use")
+        if tool is None or any(t.get("name") == tool.name for t in payload):
             return payload
         has_browser = any(
             str(t.get("name", "")).rsplit("/", 1)[-1] == "browser_navigate" for t in payload

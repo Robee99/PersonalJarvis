@@ -31,10 +31,14 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _BROWSER = r"(?:my\s+|the\s+)?(?:google\s+)?(?P<{name}>chrome|edge|browser)"
-_LEAD = r"^\s*(?:(?:please|jarvis|hey\s+jarvis|ok(?:ay)?|can\s+you|could\s+you)[,\s]+)*"
+_LEAD = (
+    r"^\s*(?:(?:please|jarvis|hey\s+jarvis|ok(?:ay)?|can\s+you|could\s+you|now|"
+    r"(?:very\s+)?good|great|nice)[,\s]+)*"
+)
 _JOIN = r"\s*(?:,|\band\b|\bthen\b|\band\s+then\b)?\s*"
 _ASK = (
-    r"(?P<verb>play|search\s+for|search|look\s+up|find)(?:\s+(?:the\s+)?(?:song|video)(?:\s+called)?)?"
+    r"(?P<verb>play|search\s+for|search|look\s+up|find|open(?=\s+(?:the|this|that)\s+video))"
+    r"(?:\s+(?:the|this|that)?\s*(?:song|video)(?:\s+called)?)?(?:\s+this)?"
 )
 _END = r"\s*(?:please|thanks?|now)?[.!\s]*$"
 _OPEN_THEN_PLAY = re.compile(
@@ -97,11 +101,26 @@ class YouTubeAsk:
     browser: str
 
 
+#: "... and play the video" after a search: the search's top result plays.
+#: Live 2026-10-27 "now go to youtube and search this X and play the video".
+_PLAY_TAIL = re.compile(
+    r"\s*(?:,|\band\b)?\s*(?:then\s+)?play\s+(?:it|(?:the|that|this)?\s*(?:first|top)?\s*"
+    r"(?:video|one|result))[.!\s]*$",
+    re.IGNORECASE,
+)
+
+
 def parse_youtube_ask(text: str) -> YouTubeAsk | None:
     """The video this utterance plainly asks to play or search on YouTube, else ``None``."""
     text = (text or "").strip()
     if not text or len(text) > 200 or "youtube" not in text.lower():
         return None
+    # Typed shorthand: "open youtube n play x".
+    text = re.sub(r"\s+n\s+", " and ", text)
+    tail = _PLAY_TAIL.search(text)
+    then_play = tail is not None and tail.start() > 0
+    if then_play:
+        text = text[: tail.start()]
     hinglish = _HINGLISH.match(text)
     if hinglish is not None:
         query = hinglish.group("q").strip(" .,!")
@@ -123,7 +142,10 @@ def parse_youtube_ask(text: str) -> YouTubeAsk | None:
         (m.group(g) for g in ("b1", "b2", "b3") if g in m.re.groupindex and m.group(g)), ""
     )
     browser = named.lower() if named.lower() in ("chrome", "edge") else ""
-    return YouTubeAsk(query=query, play=m.group("verb").lower() == "play", browser=browser)
+    verb = m.group("verb").lower()
+    return YouTubeAsk(
+        query=query, play=then_play or verb in ("play", "open"), browser=browser
+    )
 
 
 def top_video(query: str) -> tuple[str, str] | None:
@@ -169,6 +191,11 @@ def _browser_exe(browser: str) -> str | None:
     return None
 
 
+_SPOKEN_BROWSER = {
+    "chrome.exe": "Chrome", "msedge.exe": "Edge", "firefox.exe": "Firefox", "brave.exe": "Brave",
+}
+
+
 def open_in_browser(url: str, browser: str) -> str:
     """Open ``url`` in the named browser (a new tab in its open window), else the default.
 
@@ -178,6 +205,14 @@ def open_in_browser(url: str, browser: str) -> str:
     if exe:
         subprocess.Popen([exe, url])  # noqa: S603 - the installed browser and an https URL
         return {"chrome": "Chrome", "edge": "Edge"}[browser]
+    # None named: the browser the owner already has open (live 2026-10-27 the
+    # default was Edge while he worked in Chrome), else the default.
+    from jarvis.platform.open_path import preferred_browser_exe  # noqa: PLC0415
+
+    exe = preferred_browser_exe()
+    if exe:
+        subprocess.Popen([exe, url])  # noqa: S603 - the installed browser and an https URL
+        return _SPOKEN_BROWSER.get(Path(exe).name.casefold(), "your browser")
     os.startfile(url)  # type: ignore[attr-defined]  # noqa: S606 - an https URL, opened by the browser
     return "your browser"
 

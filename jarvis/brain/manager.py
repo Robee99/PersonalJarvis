@@ -61,6 +61,7 @@ from jarvis.brain.tool_switch import (
     ENABLE_TOOLS,
     EnableToolsTool,
     ToolSwitch,
+    one_set_of_hands,
     wants_switch,
 )
 from jarvis.brain.turn_override import TurnOverride
@@ -4163,6 +4164,8 @@ class BrainManager:
             own_chrome = self._my_chrome()
             if own_chrome is not None:
                 surface[MY_CHROME] = own_chrome
+        # The PC pilot is the one pair of hands; the others leave the turn.
+        surface = one_set_of_hands(surface, query)
         switch = ToolSwitch(surface, _relevant_tool_names)
         surface[ENABLE_TOOLS] = EnableToolsTool(switch)
         core = getattr(self._config.brain, "tool_switch_core", None) or DEFAULT_CORE

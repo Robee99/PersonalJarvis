@@ -27,6 +27,21 @@ from jarvis.platform.youtube_play import YouTubeAsk, parse_youtube_ask, youtube_
         ("play despacito on youtube in edge", YouTubeAsk("despacito", True, "edge")),
         ("open youtube and search for lofi beats", YouTubeAsk("lofi beats", False, "")),
         ("youtube pe arijit singh ke gaane chalao", YouTubeAsk("arijit singh ke gaane", True, "")),
+        # Live 2026-10-27, typed by the owner: each went through five tools and failed.
+        (
+            "now go to youtube and search this codeacus your local harness is nerfed and "
+            "play the video",
+            YouTubeAsk("codeacus your local harness is nerfed", True, ""),
+        ),
+        (
+            "very good now go to youtube and search this codeacus your local harness is nerfed",
+            YouTubeAsk("codeacus your local harness is nerfed", False, ""),
+        ),
+        (
+            "open youtube n open this video your local ai is nerfed by codeacus",
+            YouTubeAsk("your local ai is nerfed by codeacus", True, ""),
+        ),
+        ("go to youtube search lofi and play the first video", YouTubeAsk("lofi", True, "")),
     ],
 )
 def test_plain_asks_parse(text: str, ask: YouTubeAsk) -> None:
@@ -42,6 +57,8 @@ def test_plain_asks_parse(text: str, ask: YouTubeAsk) -> None:
         "open youtube music and play x",
         "play the next song",
         "open youtube.com",
+        "open youtube and open settings",
+        "play youtube",
     ],
 )
 def test_everything_else_stays_with_the_brain(text: str) -> None:

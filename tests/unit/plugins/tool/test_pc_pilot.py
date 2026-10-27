@@ -324,3 +324,28 @@ def test_key_names() -> None:
     assert key_codes("Volume Up".replace(" ", "")) == [0xAF]
     with pytest.raises(ValueError):
         key_codes("hyper+q")
+
+
+TERMINAL = Window(handle=7, title=r"C:\hermes\venv\Scripts\pythonw.exe", exe="WindowsTerminal.exe")
+EDGE = Window(handle=8, title="New tab - Microsoft Edge", exe="msedge.exe")
+CHROME = Window(handle=9, title="YouTube - Google Chrome", exe="chrome.exe")
+
+
+def test_a_page_is_worked_in_the_browser_it_went_to(tmp_path: Path) -> None:
+    """Live 2026-10-27 the page went to Chrome; Edge sat open behind it."""
+    desk = FakeDesk([TERMINAL, EDGE, CHROME])
+    pilot = _pilot(desk, tmp_path)
+    found = pilot._wait_for_window(desk, set(), "", web=True, strict=True, browser="chrome.exe")
+    assert found == CHROME
+
+
+def test_no_browser_window_never_falls_back_to_another_program(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live 2026-10-27 the search text was typed into a Hermes terminal."""
+    import jarvis.plugins.tool.pc_pilot as pilot_module
+
+    monkeypatch.setattr(pilot_module, "_OPEN_WAIT_S", 0.0)
+    desk = FakeDesk([TERMINAL], front=TERMINAL.handle)
+    pilot = _pilot(desk, tmp_path)
+    assert pilot._wait_for_window(desk, set(), "", web=True, strict=True) is None

@@ -429,6 +429,8 @@ async def test_no_brain_yet_is_a_clear_error_not_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: None)
+    # The wait for a booting brain is bounded; it still ends in a clear error.
+    monkeypatch.setattr(runner_brain, "BRAIN_READY_WAIT_S", 0.0)
     svc = _service(None)
     session = _jarvis_session(svc, tmp_path)
     q = svc.subscribe(session.session_id)
@@ -487,3 +489,21 @@ def test_step_mirror_ignores_another_turns_events():
         assert rows[0][1]["name"] == "Read"
 
     asyncio.run(scenario())
+
+
+async def test_a_message_sent_while_jarvis_boots_waits_for_the_brain(monkeypatch):
+    """Live 2026-10-27: nine sends right after a restart each failed at once."""
+    ready = SimpleNamespace(generate=lambda *a, **k: None)
+    answers = iter([None, None, ready])
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: next(answers))
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    assert await runner_brain._brain_when_ready(wait_s=60) is ready
+
+
+async def test_a_brain_that_never_comes_up_still_ends_the_wait(monkeypatch):
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: None)
+    assert await runner_brain._brain_when_ready(wait_s=0) is None
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None

@@ -180,6 +180,67 @@ _SAYS_BROWSER_SERVER = re.compile(
     r"\b(playwright|headless|agent\s+browser|browser\s+server|compare\s+prices?)\b", re.I
 )
 
+#: Desktop-server tools that point, click, type or launch: the pilot's job.
+#: Their servers' other tools (PowerShell, files, clipboard) stay.
+_POINTER_TAILS = frozenset({
+    "App", "Click", "Type", "Scroll", "Move", "Shortcut", "Snapshot", "MultiSelect",
+    "MultiEdit", "Wait",
+})
+#: The hands that stay out when the pilot is here, unless the owner names them.
+_SAYS_SCREEN_HANDS = re.compile(r"\bcomputer[\s_-]*use\b|\bscreen\s+control\b", re.I)
+_SAYS_MY_CHROME = re.compile(r"\bmy[_\s]chrome\b|\bbrowser\s*skill\b", re.I)
+
+
+def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
+    """With the PC pilot registered, the turn's surface without the other hands.
+
+    Live 2026-10-27 "go to youtube, search X and play the video" went through
+    computer_use, my_chrome, the Playwright browser, Windows-MCP and the pilot
+    in one turn, each failing its own way (a ref from another browser's page,
+    an about:blank tab, a click in a Hermes terminal). The owner asked for
+    the extra layers to go. The pilot opens apps, Settings pages and sites
+    in the owner's own browser and works them by name, so the others leave
+    the turn completely: ``enable_tools`` cannot bring them back either. A
+    request that names one ("use computer use", "playwright", "compare
+    prices", "use Windows MCP") keeps it.
+    """
+    if PILOT not in surface:
+        return surface
+    text = query or ""
+    keep_browser = bool(_SAYS_BROWSER_SERVER.search(text))
+    said = set(re.findall(r"[a-z0-9]+", text.casefold()))
+
+    def named(server: str) -> bool:
+        words = set(re.findall(r"[a-z0-9]+", server.casefold())) - {"mcp", "server"}
+        return bool(words and words <= said)
+
+    servers: dict[str, set[str]] = {}
+    for name, tool in surface.items():
+        server = server_of(name, tool)
+        if server:
+            servers.setdefault(server, set()).add(name.rsplit("/", 1)[-1])
+    pointer = {
+        srv for srv, tails in servers.items()
+        if srv == _RAW_APP_SERVER or {"Snapshot", "Click"} <= tails
+    }
+
+    def extra(name: str, tool: Tool) -> bool:
+        if name == SCREEN_HANDS:
+            return not _SAYS_SCREEN_HANDS.search(text)
+        if name == OWN_BROWSER_HANDS:
+            return not _SAYS_MY_CHROME.search(text)
+        if name == APP_HANDS:
+            return True
+        if name == "compare_prices" or _is_browser_tool(name):
+            return not keep_browser
+        server = server_of(name, tool)
+        if server in pointer and not named(server):
+            return server == _RAW_APP_SERVER or name.rsplit("/", 1)[-1] in _POINTER_TAILS
+        return False
+
+    return {n: t for n, t in surface.items() if not extra(n, t)}
+
+
 #: The one-call background app driver (desktop_driver.py) and the raw server it
 #: replaces on the opening surface: Gemma copied example ids out of the raw
 #: CUA tools' descriptions and typed into the wrong control (live 2026-10-25).
