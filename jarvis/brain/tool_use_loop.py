@@ -1959,17 +1959,18 @@ class ToolUseLoop:
                     if tool_result_payload.get("success")
                     else (refusal or str(tool_result_payload.get("output") or ""))[:400]
                 )
-                if self._control is not None:
-                    # The verifier's only evidence that something happened.
-                    body = tool_result_payload.get("output")
-                    if body in (None, ""):
-                        body = tool_result_payload.get("error") or ""
-                    tool_log.append(ToolRecord(
-                        name=tool_name,
-                        ok=bool(tool_result_payload.get("success")),
-                        blocked=bool(tool_result_payload.get("blocked")),
-                        preview=str(body)[:200],
-                    ))
+                # The action ledger also feeds retry/honesty checks without an
+                # optional verifier. Otherwise a real click/scroll is reported
+                # as "I did not start an action" after successful execution.
+                body = tool_result_payload.get("output")
+                if body in (None, ""):
+                    body = tool_result_payload.get("error") or ""
+                tool_log.append(ToolRecord(
+                    name=tool_name,
+                    ok=bool(tool_result_payload.get("success")),
+                    blocked=bool(tool_result_payload.get("blocked")),
+                    preview=str(body)[:200],
+                ))
                 # A tool just finished — another active-work boundary. Reset the
                 # no-progress deadline so a slow tool (a vision capture, an MCP
                 # round-trip) does not count as a stall.

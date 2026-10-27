@@ -227,6 +227,15 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
     if PILOT not in surface:
         return surface
     text = query or ""
+    external_followup = bool(
+        getattr(surface[PILOT], "has_recent_target", False)
+        and re.search(r"\bscroll\w*\b", text, re.I)
+        and not _JARVIS_NAMED.search(text)
+    )
+    external_pointer_request = (
+        bool(_POINTER_WORDS.search(text)) and not _JARVIS_NAMED.search(text)
+    )
+    external_request = names_other_program(text) or external_pointer_request or external_followup
     keep_browser = bool(_SAYS_BROWSER_SERVER.search(text))
     said = set(re.findall(r"[a-z0-9]+", text.casefold()))
 
@@ -253,6 +262,12 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
             return True
         if name == "spotify":
             return bool(_SAYS_YOUTUBE.search(text)) and not _SAYS_SPOTIFY.search(text)
+        if name == "youtube_music":
+            return bool(_SAYS_YOUTUBE.search(text)) and not re.search(
+                r"\byoutube\s+music\b", text, re.I,
+            )
+        if name.replace("-", "_").startswith("app_ui_"):
+            return external_request
         if name == "compare_prices" or _is_browser_tool(name):
             return not keep_browser
         server = server_of(name, tool)

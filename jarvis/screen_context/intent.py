@@ -495,9 +495,9 @@ _OPERATION_EXPLANATION_CLAUSE_RE: re.Pattern[str] = re.compile(
 _SCREEN_OPERATION_CLAUSE_RE: re.Pattern[str] = re.compile(
     # English imperatives and request forms, including "would you mind clicking".
     rf"^(?:please\s+)?{_EN_ACTION}\b"
-    rf"|^(?:can|could|will)\s+you\s+(?:please\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
+    rf"|^(?:can|could|will)\s+(?:you|u)\s+(?:please\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
     rf"|^would\s+you\s+(?:please\s+)?(?:mind\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
-    rf"|^i\s+(?:want|need)\s+you\s+to\s+[^.?!]{{0,72}}?{_EN_ACTION}\b"
+    rf"|\bi\s+(?:want|need)\s+(?:you|u)\s+(?:to\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
     # German: allow the object before the final infinitive ("Bitte den Knopf anklicken").
     rf"|^(?:bitte\s+)?{_DE_ACTION}\b"  # i18n-allow
     rf"|^bitte\s+[^.?!]{{0,96}}?{_DE_ACTION}\b"  # i18n-allow

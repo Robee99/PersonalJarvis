@@ -582,3 +582,29 @@ async def test_a_claim_repeated_after_the_retry_is_replaced_with_the_truth() -> 
     assert executor.calls == 0
     assert len(brain.requests) == 2
     assert out.text.startswith("I did not start an action for that")
+
+
+async def test_successful_action_is_recorded_without_optional_loop_controller():
+    class PilotTool:
+        name = "pc_pilot"
+        schema = {"type": "object", "properties": {}}
+        description = "Drive the desktop"
+
+    class Brain:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, req):
+            self.calls += 1
+            if self.calls == 1:
+                yield BrainDelta(tool_call={"id": "scroll1", "name": "pc_pilot", "input": {}})
+                yield BrainDelta(finish_reason="tool_use")
+            else:
+                yield BrainDelta(content="Scrolled down in Settings.")
+                yield BrainDelta(finish_reason="stop")
+
+    brain = Brain()
+    loop = ToolUseLoop(brain, {"pc_pilot": PilotTool()}, _Executor(refusals=0))
+    result = await loop.run([BrainMessage(role="user", content="scroll down in Settings")])
+    assert brain.calls == 2
+    assert result.text == "Scrolled down in Settings."

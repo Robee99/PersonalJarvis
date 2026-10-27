@@ -496,3 +496,21 @@ def test_without_the_pilot_nothing_is_taken_away() -> None:
     tools = _desktop_registry()
     del tools["pc_pilot"]
     assert one_set_of_hands(tools, "open youtube") == tools
+
+
+def test_youtube_website_request_does_not_offer_youtube_music_plugin():
+    tools = _desktop_registry()
+    tools["youtube_music"] = _Tool("youtube_music", "Play music")
+    utterance = "open chrome click on roberto navigate to youtube then play praise the lord"
+    assert "youtube_music" not in one_set_of_hands(tools, utterance)
+    assert "youtube_music" in one_set_of_hands(tools, "play Praise the Lord in YouTube Music")
+
+
+def test_scroll_followup_on_external_target_does_not_offer_jarvis_ui():
+    tools = _desktop_registry()
+    tools["app_ui_scroll"] = _Tool("app_ui_scroll", "Scroll Jarvis")
+    tools["pc_pilot"].has_recent_target = True
+    surface = one_set_of_hands(tools, "can u scroll down")
+    assert "pc_pilot" in surface
+    assert "app_ui_scroll" not in surface
+    assert "app_ui_scroll" in one_set_of_hands(tools, "scroll down in Jarvis")

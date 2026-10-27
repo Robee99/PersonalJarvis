@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
 from jarvis.platform.win_pilot import CLICKABLE_ROLES, Control, Window, key_codes
 
@@ -98,6 +99,8 @@ _DENY_TYPING_WINDOWS = (
 )
 #: Key combinations that need a yes: they close, lock or delete.
 _ASK_KEYS = ("alt+f4", "shift+delete", "win+l", "ctrl+alt+delete", "ctrl+shift+esc")
+_ENTER_KEYS = frozenset({"enter", "return"})
+_SAFE_ENTER_TARGET = re.compile(r"\b(?:search|address|url|filter|find|query)\b", re.IGNORECASE)
 
 
 #: What the model hears at a password field (advice text, not a password).
@@ -144,6 +147,23 @@ class PilotPolicy:
             combo = str(step["keys"]).replace(" ", "").casefold()
             if combo in self.ask_keys:
                 return f"pressing {step['keys']}"
+        enters = bool(step.get("enter")) or (
+            str(step.get("keys", "")).replace(" ", "").casefold() in _ENTER_KEYS
+        )
+        if enters:
+            target = " ".join(str(step.get(key, "")) for key in ("into", "on", "app"))
+            typed = str(step.get("type", ""))
+            dangerous_text = any(
+                re.search(rf"\b{re.escape(word)}\b", typed, re.I)
+                for word in self.ask_words
+            )
+            safe_search = (
+                "type" in step
+                and bool(_SAFE_ENTER_TARGET.search(target))
+                and not dangerous_text
+            )
+            if not safe_search:
+                return "pressing Enter, which can submit or confirm an action"
         if step.get("window") == "close":
             return "closing a window"
         if "type" in step and step.get("secret"):
@@ -372,7 +392,10 @@ def best_control(controls: list[Control], target: str) -> Control | None:
 
 
 def _coords(text: str) -> tuple[int, int] | None:
-    match = re.fullmatch(r"\s*\(?\s*(\d{1,5})\s*[, ]\s*(\d{1,5})\s*\)?\s*", str(text))
+    match = re.fullmatch(
+        r"\s*\(?\s*([+-]?\d{1,5})\s*[, ]\s*([+-]?\d{1,5})\s*\)?\s*",
+        str(text),
+    )
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
@@ -382,11 +405,17 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except ValueError:
-            raw = None
+        except ValueError as exc:
+            raise ValueError("steps must be valid JSON.") from exc
     steps: list[dict[str, Any]] = []
-    if isinstance(raw, list):
-        steps = [dict(s) for s in raw if isinstance(s, dict)]
+    if raw is not None:
+        if not isinstance(raw, list):
+            raise ValueError("steps must be a list of action objects.")
+        if len(raw) > _MAX_STEPS:
+            raise ValueError(f"steps may contain at most {_MAX_STEPS} actions.")
+        if not all(isinstance(s, dict) for s in raw):
+            raise ValueError("Every item in steps must be an action object.")
+        steps = [dict(s) for s in raw]
     else:
         single = {k: args[k] for k in ("app", "into", "enter", "clear", "button", "double", "see",
                                        "secret", "on", "to", "value") if k in args}
@@ -396,7 +425,7 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
                 steps.append({**single, action: args[action]})
         if not steps and (args.get("app") or args.get("see")):
             steps.append({**single, "look": True})
-    return steps[:_MAX_STEPS]
+    return steps
 
 
 # ---------------------------------------------------------------------------
@@ -460,14 +489,20 @@ def _launch(kind: str, value: str) -> str:
     that browser's exe name, or ``""``.
     """
     if kind == "shell" or (kind == "system" and value.startswith("shell:")):
-        subprocess.Popen(["explorer.exe", value], shell=False)  # noqa: S603, S607 - fixed program
+        subprocess.Popen(  # noqa: S603, S607 - fixed program
+            ["explorer.exe", value], shell=False,
+            creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True,
+        )
         return ""
     if kind == "url":
         from jarvis.platform.open_path import preferred_browser_exe  # noqa: PLC0415
 
         exe = preferred_browser_exe()
         if exe:
-            subprocess.Popen([exe, value], shell=False)  # noqa: S603 - a browser and an https URL
+            subprocess.Popen(  # noqa: S603 - a browser and an https URL
+                [exe, value], shell=False,
+                creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True,
+            )
             return Path(exe).name
     if not hasattr(os, "startfile"):
         raise StepFailed("Opening that needs Windows.")
@@ -513,6 +548,7 @@ class PcPilot:
         "properties": {
             "steps": {
                 "type": "array",
+                "maxItems": _MAX_STEPS,
                 "description": "Steps in order; each has one action key.",
                 "items": {
                     "type": "object",
@@ -521,6 +557,10 @@ class PcPilot:
                         "app": {"type": "string"},
                         "click": {"type": "string"},
                         "type": {"type": "string"},
+                        "set": {"type": "string"},
+                        "drag": {"type": "string"},
+                        "to": {"type": "string"},
+                        "hover": {"type": "string"},
                         "into": {"type": "string"},
                         "secret": {"type": "boolean"},
                         "on": {"type": "string"},
@@ -531,13 +571,10 @@ class PcPilot:
                         "window": {"type": "string", "enum": list(_WINDOW_OPS)},
                         "wait": {"type": "number"},
                         "look": {"type": "boolean"},
+                        "see": {"type": "boolean"},
                         "button": {"type": "string", "enum": ["left", "right", "middle"]},
                         "double": {"type": "boolean"},
-                        "drag": {"type": "string"},
-                        "to": {"type": "string"},
-                        "hover": {"type": "string"},
-                        "set": {"type": "string"},
-                        "value": {"type": "string"},
+                        "value": {"type": ["string", "number"]},
                     },
                 },
             },
@@ -545,15 +582,24 @@ class PcPilot:
             "app": {"type": "string", "description": "The window to act in, e.g. 'Calculator'"},
             "click": {"type": "string"},
             "type": {"type": "string"},
+            "set": {"type": "string"},
+            "drag": {"type": "string"},
+            "to": {"type": "string"},
+            "hover": {"type": "string"},
             "into": {"type": "string"},
             "secret": {"type": "boolean"},
+            "clear": {"type": "boolean"},
+            "button": {"type": "string", "enum": ["left", "right", "middle"]},
+            "double": {"type": "boolean"},
             "enter": {"type": "boolean"},
             "keys": {"type": "string"},
             "on": {"type": "string"},
             "scroll": {"type": "string"},
             "window": {"type": "string", "enum": list(_WINDOW_OPS)},
+            "wait": {"type": "number"},
             "look": {"type": "boolean"},
             "see": {"type": "boolean", "description": "Also return a picture of the screen"},
+            "value": {"type": ["string", "number"]},
         },
     }
 
@@ -574,17 +620,42 @@ class PcPilot:
         self._audit_path = audit_path
         self._sleep = sleep
         self._last: Window | None = None
+        self._last_at = 0.0
+        self._target_unresolved = False
+
+    @property
+    def has_recent_target(self) -> bool:
+        """Keep short follow-ups on the external app rather than Jarvis's UI."""
+        return self._last is not None and time.monotonic() - self._last_at < 300
 
     # -- risk ---------------------------------------------------------------
     def risk_tier_for_args(self, args: dict[str, Any]) -> RiskTier:
         policy = self._policy_now()
-        return "ask" if any(policy.needs_yes(s) for s in _steps(args or {})) else "monitor"
+        try:
+            steps = _steps(args or {})
+        except ValueError:
+            return "monitor"  # execute() reports malformed input without taking action
+        return "ask" if any(policy.needs_yes(s) for s in steps) else "monitor"
 
     # -- run ------------------------------------------------------------------
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
-        steps = _steps(args or {})
+        try:
+            steps = _steps(args or {})
+        except ValueError as exc:
+            return ToolResult(False, None, f"Invalid steps: {exc}")
         if not steps:
             return ToolResult(False, None, "Give at least one step: open, click, type, keys ...")
+        allowed = {*_ACTIONS, "into", "enter", "clear", "button", "double", "see",
+                   "secret", "on", "to", "value"}
+        for number, step in enumerate(steps, 1):
+            unknown = set(step) - allowed
+            if unknown or not any(action in step for action in _ACTIONS):
+                return ToolResult(
+                    False, None,
+                    f"Invalid step {number}: "
+                    + (f"unknown keys {', '.join(sorted(unknown))}. " if unknown else "no action. ")
+                    + "Use open, click, type, keys or scroll; type contains the text itself.",
+                )
         desk = self._desk_now()
         if desk is None:
             return ToolResult(False, None, "The PC pilot needs Windows.")
@@ -593,6 +664,7 @@ class PcPilot:
         error = ""
         for number, step in enumerate(steps, 1):
             try:
+                run.want_picture = run.want_picture or bool(step.get("see"))
                 await self._step(desk, policy, run, step, ctx)
             except StepFailed as exc:
                 error = f"Step {number} ({_describe(step)}) failed: {exc}"
@@ -623,6 +695,8 @@ class PcPilot:
                 output = {"description": text, "_image": picture}
         if error:
             return ToolResult(False, output, error)
+        if run.window is not None:
+            self._last, self._last_at = run.window, time.monotonic()
         return ToolResult(True, output)
 
     async def _step(
@@ -654,6 +728,8 @@ class PcPilot:
 
     async def _do_open(self, desk: Desk, run: _Run, what: str, ctx: Any) -> None:
         kind, value = open_target(what)
+        self._target_unresolved = True
+        self._last, self._last_at = None, 0.0
         before = {w.handle for w in await asyncio.to_thread(desk.windows)}
         web_for = ""
         if kind == "app":
@@ -690,8 +766,9 @@ class PcPilot:
                 f"Call again with app={what!r} in a moment."
             )
         if run.window is not None:
+            self._target_unresolved = False
             self._last = run.window
-            await asyncio.to_thread(desk.activate, run.window)
+            await asyncio.to_thread(self._front, desk, run.window)
             if kind == "url":
                 run.window = await asyncio.to_thread(self._page_loaded, desk, run.window, value)
             await asyncio.to_thread(self._settle, desk, run.window)
@@ -729,14 +806,23 @@ class PcPilot:
         while True:
             wins = desk.windows()
             if web:
-                # The browser the page went to; any other only when that is unknown.
+                # Prefer the browser window that received the navigation. A
+                # process-name match alone is ambiguous when several profiles
+                # or Chrome windows are open; never pick an arbitrary one.
                 exes = {browser.casefold()} if browser else _BROWSER_EXES
-                page = next((w for w in wins if w.exe.casefold() in exes), None)
-                if page is not None:
-                    return page
+                matches = [w for w in wins if w.exe.casefold() in exes]
+                foreground = desk.foreground()
+                front = next((w for w in matches if w.handle == foreground), None)
+                if front is not None:
+                    return front
+                fresh = [w for w in matches if w.handle not in before]
+                if len(fresh) == 1:
+                    return fresh[0]
+                if not fresh and len(matches) == 1:
+                    return matches[0]
                 if time.monotonic() > deadline:
-                    # Never another program's window: the next steps would
-                    # type into it (live 2026-10-27, a Hermes terminal).
+                    # A browser process match is not enough to prove which
+                    # window received the navigation.
                     return None
                 self._sleep(0.25)
                 continue
@@ -745,13 +831,12 @@ class PcPilot:
                 if named is not None:
                     return named
             fresh = [w for w in wins if w.handle not in before]
-            if fresh:
+            if fresh and not hint:
                 return fresh[0]
             if time.monotonic() > deadline:
-                if strict:
-                    return None
-                front = desk.foreground()
-                return next((w for w in wins if w.handle == front), wins[0] if wins else None)
+                # An arbitrary foreground/new window is never evidence that
+                # the requested app opened. Do not send later input into it.
+                return None
             self._sleep(0.25)
 
     def _page_loaded(self, desk: Desk, win: Window, url: str) -> Window:
@@ -788,7 +873,10 @@ class PcPilot:
             found = _match_window(wins, str(app))
             if found is not None:
                 self._last = found
+                self._target_unresolved = False
             return found
+        if self._target_unresolved:
+            return None
         for candidate in (run.window, self._last):
             if candidate is not None and desk.is_window(candidate.handle):
                 fresh = next((w for w in wins if w.handle == candidate.handle), None)
@@ -851,7 +939,7 @@ class PcPilot:
             if op not in _WINDOW_OPS:
                 raise StepFailed(f"window must be one of {', '.join(_WINDOW_OPS)}.")
             if op == "focus":
-                desk.activate(win)
+                self._front(desk, win)
             else:
                 desk.window_op(win, op)
             run.done.append(f"{op} {win.title}")
@@ -971,9 +1059,19 @@ class PcPilot:
                 left, top = self._find(desk, run, str(step["on"])).center()
             else:
                 left, top = win_center(self._look(desk, run))
+            before = {
+                (c.role, c.name, c.bounds)
+                for c in self._look(desk, run)
+            }
             desk.scroll(left, top, notches)
+            self._sleep(0.6)
+            after = {
+                (c.role, c.name, c.bounds)
+                for c in self._look(desk, run)
+            }
+            if after == before:
+                raise StepFailed("Scroll input was sent, but visible movement could not be verified.")
             run.done.append(f"scrolled {'up' if notches > 0 else 'down'}")
-            self._sleep(_SETTLE_S)
         if "look" in step:
             run.done.append(f"read '{win.title}'")
 
@@ -998,11 +1096,7 @@ class PcPilot:
 
     def _readback(self, desk: Desk, run: _Run) -> str:
         if run.window is None or not desk.is_window(run.window.handle):
-            wins = desk.windows()
-            front = desk.foreground()
-            run.window = next((w for w in wins if w.handle == front), wins[0] if wins else None)
-        if run.window is None:
-            return "No app window is open."
+            return "No verified target window is available; no other window was selected."
         try:
             controls = self._look(desk, run)
         except Exception:  # noqa: BLE001 - an unreadable window still gets its picture

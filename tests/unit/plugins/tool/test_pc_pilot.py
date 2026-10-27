@@ -349,3 +349,64 @@ def test_no_browser_window_never_falls_back_to_another_program(
     desk = FakeDesk([TERMINAL], front=TERMINAL.handle)
     pilot = _pilot(desk, tmp_path)
     assert pilot._wait_for_window(desk, set(), "", web=True, strict=True) is None
+
+
+@pytest.mark.parametrize("step", [
+    {"navigate": {"open": "swiggy instamart", "then": "swiggy instamart"}},
+    {"type": "type", "text": "diet coke", "into": "Search"},
+])
+async def test_malformed_steps_are_rejected_before_any_input(tmp_path, step):
+    desk = FakeDesk([NOTEPAD], front=NOTEPAD.handle)
+    pilot = _pilot(desk, tmp_path)
+    result = await pilot.execute({"steps": [{"click": "Search"}, step]}, Ctx())
+    assert not result.success
+    assert "step 2" in result.error.lower()
+    assert desk.log == []
+
+
+@pytest.mark.parametrize("new_window", [False, True])
+def test_named_app_open_never_selects_unrelated_window(tmp_path, monkeypatch, new_window):
+    import jarvis.plugins.tool.pc_pilot as module
+
+    monkeypatch.setattr(module, "_OPEN_WAIT_S", 0)
+    chat = Window(50, "ChatGPT", exe="ChatGPT.exe")
+    desk = FakeDesk([chat], front=chat.handle)
+    pilot = _pilot(desk, tmp_path)
+    before = set() if new_window else {chat.handle}
+    assert pilot._wait_for_window(desk, before, "chrome") is None
+
+
+async def test_failed_open_does_not_describe_an_unrelated_window_as_target(tmp_path, monkeypatch):
+    import jarvis.plugins.tool.pc_pilot as module
+
+    monkeypatch.setattr(module, "_OPEN_WAIT_S", 0)
+    chat = Window(50, "ChatGPT", exe="ChatGPT.exe")
+    desk = FakeDesk([chat], front=chat.handle)
+    pilot = _pilot(desk, tmp_path)
+    result = await pilot.execute({"open": "chrome"}, Ctx())
+    assert not result.success
+    assert "Window: 'ChatGPT'" not in str(result.output)
+    assert desk.log == []
+
+
+@pytest.mark.parametrize(("name", "expected"), [
+    ("chrome.exe", False),
+    ("msedgewebview2.exe", True),
+])
+def test_only_embedded_webview_child_is_jarvis_window(monkeypatch, name, expected):
+    import psutil
+
+    from jarvis.platform.win_pilot import WinDesk
+
+    class Child:
+        def ppid(self):
+            return 100
+
+        def name(self):
+            return name
+
+    monkeypatch.setattr(psutil, "Process", lambda _pid: Child())
+    desk = WinDesk.__new__(WinDesk)
+    desk._own_pid = 100
+    assert desk._is_own(100)
+    assert desk._is_own(200) is expected

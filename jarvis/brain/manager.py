@@ -12417,7 +12417,14 @@ class BrainManager:
                 youtube_reflex,
                 url_reflex,
             ):
-                reflex_reply = await asyncio.to_thread(reflex, user_text)
+                if reflex is youtube_reflex:
+                    reflex_reply = await asyncio.to_thread(
+                        reflex,
+                        user_text,
+                        prior_text=self._previous_user_turn_text(use_history=use_history),
+                    )
+                else:
+                    reflex_reply = await asyncio.to_thread(reflex, user_text)
                 if reflex_reply is not None:
                     break
             if reflex_reply is None:

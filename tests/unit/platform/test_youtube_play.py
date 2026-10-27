@@ -110,22 +110,21 @@ def test_greeting_typo_and_chrome_profile_are_understood() -> None:
     )
 
 
-def test_play_it_means_the_last_thing_asked_to_play(monkeypatch) -> None:
-    monkeypatch.setattr(youtube_play, "_last_subject", "")
-    youtube_play.remember_play_subject("play i mean it by g eazy")
+def test_play_it_uses_the_previous_user_turn_not_process_global_state() -> None:
     opened: list[str] = []
     reply = youtube_play.youtube_reflex(
         "play it on youtube",
         lookup=lambda q: ("abcdefghijk", q),
         opener=lambda url, browser: opened.append(url) or "Chrome",
+        prior_text="play i mean it by g eazy on youtube",
     )
     assert reply == "Opened i mean it by g eazy on YouTube in Chrome."
 
 
-def test_play_it_with_nothing_before_goes_to_the_brain(monkeypatch) -> None:
-    monkeypatch.setattr(youtube_play, "_last_subject", "")
+def test_play_it_without_a_positive_previous_request_goes_to_the_brain() -> None:
     assert youtube_play.youtube_reflex(
-        "play it on youtube", lookup=lambda q: None, opener=lambda u, b: "Chrome"
+        "play it on youtube", lookup=lambda q: None, opener=lambda u, b: "Chrome",
+        prior_text="don't play praise the lord on youtube",
     ) is None
 
 
@@ -138,3 +137,9 @@ def test_chrome_profile_folder_is_found_by_the_persons_name(tmp_path) -> None:
     )
     assert youtube_play.chrome_profile_dir("roberto", state) == "Profile 1"
     assert youtube_play.chrome_profile_dir("nobody", state) == ""
+
+
+def test_exact_live_profile_navigation_request_parses():
+    assert parse_youtube_ask(
+        "open chrome click on roberto navigate to youtube then play praise the lord"
+    ) == YouTubeAsk("praise the lord", True, "chrome", "roberto")

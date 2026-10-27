@@ -356,7 +356,7 @@ class WinDesk:
 
         down, up = {"left": (0x2, 0x4), "right": (0x8, 0x10), "middle": (0x20, 0x40)}[button]
         with per_monitor_dpi_context():
-            self._user32.SetCursorPos(int(x), int(y))
+            self._send([self._move(int(x), int(y))])
             time.sleep(0.05)
             for _ in range(max(1, count)):
                 self._send([self._mouse(down), self._mouse(up)])
@@ -366,14 +366,14 @@ class WinDesk:
         from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
 
         with per_monitor_dpi_context():
-            self._user32.SetCursorPos(int(x), int(y))
+            self._send([self._move(int(x), int(y))])
 
     def drag(self, start: tuple[int, int], end: tuple[int, int]) -> None:
         """Press at ``start``, move in small steps like a hand, let go at ``end``."""
         from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
 
         with per_monitor_dpi_context():
-            self._user32.SetCursorPos(*start)
+            self._send([self._move(*start)])
             time.sleep(0.08)
             self._send([self._mouse(0x2)])
             time.sleep(0.12)
@@ -393,7 +393,7 @@ class WinDesk:
         from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
 
         with per_monitor_dpi_context():
-            self._user32.SetCursorPos(int(x), int(y))
+            self._send([self._move(int(x), int(y))])
             time.sleep(0.05)
             self._send([self._mouse(0x0800, (120 * notches) & 0xFFFFFFFF)])
 
@@ -484,7 +484,14 @@ class WinDesk:
         try:
             import psutil  # noqa: PLC0415
 
-            return int(psutil.Process(pid).ppid()) == self._own_pid
+            process = psutil.Process(pid)
+            # A launched browser, editor or terminal is a legitimate target,
+            # even when Jarvis is its parent. Only the embedded WebView belongs
+            # to our own UI; hiding every child made cold browser launches vanish.
+            return (
+                int(process.ppid()) == self._own_pid
+                and process.name().casefold() == "msedgewebview2.exe"
+            )
         except Exception:  # noqa: BLE001 - no psutil or a gone pid: not ours
             return False
 

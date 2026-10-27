@@ -23,6 +23,16 @@ from jarvis.screen_context.intent import (
 from jarvis.screen_context.models import VisualIntent
 
 
+@pytest.mark.parametrize("utterance", [
+    "can u scroll down",
+    "The active window visible in the background is the Windows Settings application, "
+    "specifically the section for Apps i need u scroll down on the starup apps section",
+])
+def test_live_external_scroll_is_an_action_not_permission_to_look(utterance):
+    assert requests_screen_operation(utterance)
+    assert classify(utterance).intent is VisualIntent.NONE
+
+
 @pytest.mark.parametrize(
     "utterance",
     [
