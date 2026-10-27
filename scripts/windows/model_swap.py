@@ -70,9 +70,9 @@ GEMMA_4B_DIR = (
     / "snapshots"
     / "8c5a9e4fd5482e2be20fe0bf013b4c262a8f4265"
 )
-#: The 4B profiles run all layers on the GPU with a q8_0 KV cache (one model at
-#: a time on the 8 GB card): Gemma 4 E4B at 256k measured 44 t/s, 7.5 GB VRAM
-#: (2026-10-25). Host RAM still holds the mmap'd weights.
+#: The 4B profiles run one model at a time with a q8_0 KV cache on the 8 GB
+#: card. The Gemma E4B profile is capped at its reported 131072-token training
+#: context; host RAM still holds the mmap'd weights.
 NEMOTRON_RAM_NEEDED_MIB = 5120
 GEMMA_4B_RAM_NEEDED_MIB = 5120
 UI_VENUS_DIR = Path(r"C:\Users\rober\Downloads\UI-Venus-2-9B")
@@ -99,7 +99,7 @@ MODEL_ID = {
 }
 #: The context window each profile is started with (its -c / --ctx-size).
 CTX = {
-    GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384, NEMOTRON: 150000, GEMMA_4B: 256000
+    GEMMA: 65536, QWEN: 65536, QWEN_VL: 65536, UI_VENUS: 16384, NEMOTRON: 150000, GEMMA_4B: 131072
 }
 #: Windows the main brain may be restarted with from the JARVIS context slider.
 #: Up to 65536 every layer and the KV cache fit in this 8 GB card. Above it
@@ -107,7 +107,7 @@ CTX = {
 #: for the KV cache: prompts get slower and the moved layers need RAM.
 CTX_CHOICES = {
     QWEN_VL: (8192, 16384, 24576, 32768, 49152, 65536, 98304, 131072),
-    GEMMA_4B: (32768, 65536, 131072, 256000),
+    GEMMA_4B: (32768, 65536, 131072),
 }
 #: GPU layers per window above 65536 (Qwen3-VL 8B has 36; ~115 MB each and the
 #: turbo KV is ~34.5 KB per token, so 32k more tokens displace ~10 layers).
@@ -578,8 +578,6 @@ class Swapper:
             "on",
             "--rope-scaling",
             "yarn",
-            "--rope-scale",
-            "1.953125",
             "-ngl",
             "99",
             "-t",

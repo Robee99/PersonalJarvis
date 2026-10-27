@@ -2509,10 +2509,14 @@ _TOOL_ROUTING_RULES = (
     "   → NIEMALS: cli_* Tools, MCP-Action-Tools.\n"
     "   → Bsp: 'recherchiere zu Supabase' → search_web('Supabase'), NICHT cli_supabase.\n"
     "2) AKTION auf verbundenem System (öffne, starte, deploye, migrate, liste MEINE X):\n"
-    "   → NUTZE: cli_* / MCP-Tools. Bildschirm/App bedienen: computer_use.\n"
+    "   → NUTZE: cli_* / MCP-Tools. Für Bildschirm/App-Bedienung nutze nur das "
+    "Desktop-Werkzeug, dessen Definition in diesem Turn sichtbar ist; wenn pc_pilot "
+    "angeschlossen ist, nutze pc_pilot. Führe pro Aufruf eine UI-Aktion aus und "
+    "prüfe das zurückgegebene Fenster, bevor du die nächste planst.\n"
     "   → Bsp: 'liste meine Supabase-Projekte' → cli_supabase 'supabase projects list'.\n"
-    "3) CODE SCHREIBEN/REFACTOREN/DEBUGGEN (echter Brocken):\n"
-    "   → NUTZE: spawn_worker mit der User-Utterance.\n"
+    "3) CODE SCHREIBEN/REFACTOREN/DEBUGGEN oder einen langen Bericht erstellen:\n"
+    "   → NUTZE: spawn_worker mit der User-Utterance. Desktop-Aufgaben bleiben "
+    "beim Desktop-Werkzeug und werden nicht delegiert.\n"
     "4) Unklar? → search_web (Read-only, kein Schaden) oder Rückfrage an User.\n"
     "Der Unterschied zwischen (1) und (2) liegt am Intent, nicht am Thema: "
     "'über X' = Search, 'mit X tun' = Action."
@@ -2523,16 +2527,23 @@ _TOOL_ROUTING_RULES = (
 # old wording sat under a list that did not contain the tools it named, so it
 # read as an order to refuse work the surface actually covered (PR-05).
 _TOOL_LIST_RULE = (
-    "STRENGE REGEL: Rufe ausschließlich Werkzeuge aus dieser Liste auf und "
-    "erfinde niemals einen Werkzeugnamen. Passt für die gewünschte Aktion "
-    "wirklich keines, sag ehrlich: "
-    "'Das kann ich noch nicht — mir fehlt das passende Werkzeug.' "
-    "Und behaupte NIEMALS, etwas getan zu haben, das du nicht in diesem Turn "
-    "wirklich aufgerufen hast und dessen Ergebnis du gesehen hast.\n"
-    "Call ONLY tools from the list above and never invent a tool name. If "
-    "nothing fits, say honestly: \"I can't do that yet — I don't have a "
-    "registered tool for it.\" And NEVER claim to have done something you did "
-    "not actually call in this turn."
+    "STRENGE REGEL: Die Liste oben zeigt angeschlossene Werkzeuge, nicht "
+    "unbedingt die Werkzeuge, die in diesem Turn schon aufrufbar sind. Rufe "
+    "nur Werkzeuge auf, deren Tool-Definition du in diesem Turn siehst. "
+    "Fehlt das passende Werkzeug, bitte enable_tools mit der Aufgabe in "
+    "wenigen Worten darum. Verwende danach nur ein Werkzeug, das tatsächlich "
+    "eingeblendet wurde. Wird keines eingeblendet, erkläre die Einschränkung "
+    "ehrlich. "
+    "Erfinde niemals Werkzeugnamen. Behaupte NIEMALS, etwas getan zu haben, "
+    "das du nicht in diesem Turn wirklich aufgerufen hast und dessen Ergebnis "
+    "du gesehen hast.\n"
+    "The list above shows attached tools, not necessarily the tools callable "
+    "already in this turn. Call only tools whose tool definition you can see "
+    "in this turn. If the right tool is missing, ask enable_tools for it using "
+    "the task in a few words. Then use only a tool it actually switches on. "
+    "If none is switched on, explain the limitation honestly. Never invent "
+    "tool names. NEVER claim to have done something unless you actually "
+    "called a tool in this turn and saw its result."
 )
 
 # Soft wrap width for the comma-separated tool-name list. Purely cosmetic —
@@ -5044,8 +5055,11 @@ class BrainManager:
             "Bei Aktionen: passende Tools sofort aufrufen, mehrere im selben Turn "
             "wenn noetig. Aufgaben fuer einen deiner Agenten (Karte 'Your agent "
             "society'): delegate_to_agent. Bei echten Brocken ohne passenden Agenten "
-            "(Code bauen/refactoren, langer Bericht, Multi-Step-Aufgabe): spawn_worker "
-            "mit der User-Utterance. Bildschirm/Apps bedienen: computer_use."
+            "(Code bauen/refactoren oder langer Bericht): spawn_worker mit der "
+            "User-Utterance. Bildschirm/Apps bedienen: nutze nur ein im Turn "
+            "sichtbares Desktop-Werkzeug; wenn pc_pilot angeschlossen ist, pc_pilot. "
+            "Führe eine UI-Aktion pro Aufruf aus, prüfe die Antwort und plane dann "
+            "den nächsten Schritt. Delegiere keine Desktop-Aufgabe."
         )
         parts.append(base)
 
@@ -5062,8 +5076,11 @@ class BrainManager:
         parts.append(
             (
                 "For research or current information, use search_web. For actions "
-                "on connected services, use their supplied tools; for desktop "
-                "interaction, use computer_use. Do not use action tools for a "
+                "on connected services, use their supplied tools. For desktop "
+                "interaction, use only a desktop tool whose definition is visible "
+                "in this turn; use pc_pilot when it is attached. Perform one UI "
+                "action, inspect its returned state, then choose the next action. "
+                "Do not delegate desktop interaction or use action tools for a "
                 "question merely about a topic."
             )
             if compact else _TOOL_ROUTING_RULES
@@ -5775,25 +5792,18 @@ class BrainManager:
     def _render_live_tool_block(self) -> str:
         """Render the attached tool surface for the system prompt (PR-05).
 
-        NAMES ONLY, on purpose. Every attached tool already reaches the model
-        as a complete function definition — name, description, JSON schema —
-        in the provider request itself, and the CONNECTED CLIS / AVAILABLE
-        SKILLS sections describe their own entries a second time. Repeating
-        the descriptions here would cost roughly 7k characters per turn to
-        say what the model has been told twice already, on a prompt the
-        router-block cut (8117ad73) had just brought down to ~57k. The block's
-        job is not to introduce the tools; it is to state, truthfully, WHICH
-        names exist — the exact claim the old capability render got wrong.
+        NAMES ONLY, on purpose. The provider request carries complete function
+        definitions only for tools switched on for this turn. The attached
+        names help the model discover what ``enable_tools`` can expose; they
+        are not a claim that every listed tool is currently callable. Repeating
+        every description here would cost roughly 7k characters per turn.
 
         Sorted, so the rendered text only changes when the surface changes
         and the cached system prefix survives an ordinary turn.
 
         Renders the ATTACHED surface (``self._tools``), not the turn's gated
-        subset: the per-turn gates (screenshot / create_artifact / inspect-pointer)
-        drop tools on most turns, so following them would rewrite the system
-        prefix nearly every turn and cost the provider prompt cache far more
-        than the precision is worth. Hence "aktuell angeschlossen", never
-        "in diesem Turn aufrufbar", in the header below.
+        subset. The rule below explicitly distinguishes attached names from
+        callable schemas so the static cached prefix remains truthful.
 
         Returns ``""`` when nothing is attached (tests that bypass
         ``__init__``). A completeness claim over an empty surface would be the
@@ -5822,9 +5832,10 @@ class BrainManager:
             lines.append(current)
 
         return (
-            f"DEINE WERKZEUGE — vollständige Liste der {len(names)} Namen, die "
-            "aktuell an dich angeschlossen sind. Beschreibung und Parameter "
-            "jedes Werkzeugs stehen in deinen Tool-Definitionen, nicht hier:\n"
+            f"ANGESCHLOSSENE WERKZEUGE — {len(names)} Namen. In diesem Turn "
+            "aufrufbar sind nur Werkzeuge, deren Definition du in deinen "
+            "Tool-Definitionen siehst. Bitte enable_tools für fehlende Werkzeuge; "
+            "verwendbar sind danach nur tatsächlich eingeblendete Werkzeuge:\n"
             + "\n".join(lines)
             + "\n\n"
             + _TOOL_LIST_RULE
@@ -9643,6 +9654,20 @@ class BrainManager:
             return None
 
         tid = trace_id or uuid4()
+        if (
+            plan.mode == LocalActionMode.COMPUTER_USE
+            and "pc_pilot" in getattr(self, "_tools", {})
+        ):
+            # Windows PC control has one owner when the PC Pilot is registered.
+            # Do not let this hidden screenshot-harness fast path bypass the
+            # per-turn tool switch, which narrows desktop requests to PC Pilot
+            # and suppresses the competing screen/browser drivers.
+            log.info(
+                "CU fast path: PC Pilot is registered; handing desktop request "
+                "to the turn tool switch (trace=%s)",
+                tid,
+            )
+            return None
         if plan.mode == LocalActionMode.UNSUPPORTED:
             # The gate recognised an action request but no registered capability
             # covers it. Speak its deterministic rejection (response_text)

@@ -419,6 +419,9 @@ def _desktop_registry() -> dict[str, Any]:
     tools["computer_use"] = _Tool("computer_use", "Control the screen with mouse and keyboard")
     tools["app_control"] = _Tool("app_control", "Press buttons in a desktop app")
     tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome browser")
+    tools["society_browser"] = _Tool(
+        "society_browser", "Use the society browser for web pages"
+    )
     for verb in ("Snapshot", "Click", "Type", "Scroll", "App"):
         name = f"windows-desktop/{verb}"
         tools[name] = _Tool(name, f"{verb} a Windows desktop window app", is_mcp_tool=True)
@@ -443,7 +446,7 @@ def test_the_pc_pilot_is_the_only_desktop_hands(utterance: str) -> None:
 
     on = set(switch.visible())
     assert "pc_pilot" in on
-    assert not {"computer_use", "app_control", "my_chrome"} & on
+    assert not {"computer_use", "app_control", "my_chrome", "society_browser"} & on
     assert not any(n.startswith(("windows-desktop/", "playwright/")) for n in on)
 
 
@@ -454,6 +457,51 @@ def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None
     switch.open_turn("use playwright to open example.com", core=("pc_pilot",))
 
     assert {"pc_pilot", "playwright/browser_navigate"} <= set(switch.visible())
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "use my_chrome to open YouTube",
+        "use my Chrome to open YouTube",
+        "use my browser to open YouTube",
+        "use the browser skill to open YouTube",
+    ],
+)
+def test_explicit_owner_chrome_survives_the_full_pilot_turn(utterance: str) -> None:
+    tools = _desktop_registry()
+    for name in (
+        "playwright/browser_navigate",
+        "playwright/browser_snapshot",
+        "playwright/browser_click",
+    ):
+        tools[name] = _Tool(name, "Control a separate browser", is_mcp_tool=True)
+    switch = _switch(tools)
+
+    switch.open_turn(utterance, core=("navigate", "pc_pilot"))
+
+    visible = set(switch.visible())
+    assert {"my_chrome", "pc_pilot"} <= visible
+    assert not any(name.startswith("playwright/") for name in visible)
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        ("use computer use to click the button", "computer_use"),
+        ("use app_control to click the button", "app_control"),
+        ("use Windows desktop MCP to click the button", "windows-desktop/Click"),
+    ],
+)
+def test_explicit_desktop_backend_survives_the_full_pilot_turn(
+    utterance: str, expected: str,
+) -> None:
+    tools = _desktop_registry()
+    switch = _switch(tools)
+
+    switch.open_turn(utterance, core=("pc_pilot",), keep=("computer_use",))
+
+    assert {"pc_pilot", expected} <= set(switch.visible())
 
 
 def test_with_the_pilot_the_other_hands_leave_the_turn_for_good() -> None:

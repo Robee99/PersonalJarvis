@@ -184,6 +184,24 @@ export function ArmoryMcpCatalogue() {
   const configuredCount = rows.filter((row) => row.jarvis || row.hermes).length;
   const runningCount = (inventory.data?.jarvis ?? []).filter((server) => server.status === "running").length;
   const hermesEnabledCount = (inventory.data?.hermes ?? []).filter((server) => server.enabled).length;
+  const configuredCountLabel =
+    inventory.isLoading
+      ? "…"
+      : inventory.isError || !inventory.data || inventory.data.jarvisError || inventory.data.hermesError
+        ? "—"
+        : configuredCount;
+  const runningCountLabel =
+    inventory.isLoading
+      ? "…"
+      : inventory.isError || !inventory.data || inventory.data.jarvisError
+        ? "—"
+        : runningCount;
+  const hermesEnabledCountLabel =
+    inventory.isLoading
+      ? "…"
+      : inventory.isError || !inventory.data || inventory.data.hermesError
+        ? "—"
+        : hermesEnabledCount;
   const busyKey = action.isPending && action.variables ? `${action.variables.source}:${action.variables.name}` : null;
 
   function run(next: Action) {
@@ -201,7 +219,8 @@ export function ArmoryMcpCatalogue() {
       <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-lg font-semibold text-slate-100">MCP catalogue</h2>
         <span className="text-xs text-slate-400">
-          {configuredCount} unique configured · {runningCount} JARVIS running · {hermesEnabledCount} Hermes enabled
+          {configuredCountLabel} unique configured · {runningCountLabel} JARVIS running ·{" "}
+          {hermesEnabledCountLabel} Hermes enabled
         </span>
       </div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -241,6 +260,11 @@ export function ArmoryMcpCatalogue() {
       </div>
 
       {inventory.isLoading && <p role="status" className="text-sm text-slate-400">Reading configured MCP servers…</p>}
+      {inventory.isError && (
+        <p role="alert" className="mb-2 text-xs text-amber-200">
+          Could not read configured MCP servers.
+        </p>
+      )}
       {inventory.data?.jarvisError && <p role="alert" className="mb-2 text-xs text-amber-200">JARVIS list: {inventory.data.jarvisError}</p>}
       {inventory.data?.hermesError && <p role="alert" className="mb-2 text-xs text-amber-200">Hermes list: {inventory.data.hermesError}</p>}
       {catalog.isError && <p role="alert" className="mb-2 text-xs text-amber-200">Could not load Hermes&apos;s optional MCP catalog.</p>}

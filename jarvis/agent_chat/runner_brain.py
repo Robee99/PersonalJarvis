@@ -150,6 +150,8 @@ def build_override(
     kit_tools: Mapping[str, Tool] | None = None,
     system_extra: str = "",
     required_tool_name: str = "",
+    user_text: str = "",
+    selected_tool_names: tuple[str, ...] = (),
 ) -> TurnOverride:
     """The pick for this turn: the session's provider / model / effort, the
     surface's hands (its kit's tools, else the folder's), and the tool context
@@ -161,6 +163,41 @@ def build_override(
     reasoning_effort: ReasoningEffort | None = (
         effort if effort in _EFFORTS else None  # type: ignore[assignment]
     )
+
+    def pilot_hands_filter(tools: dict[str, Tool]) -> dict[str, Tool]:
+        """Reapply the desktop/browser hand policy after Add-menu tools join."""
+        if "pc_pilot" not in tools:
+            return tools
+        from jarvis.brain.tool_switch import one_set_of_hands  # noqa: PLC0415
+
+        hints = [user_text]
+        seen_hints: set[str] = set()
+        for name in selected_tool_names:
+            hint = ""
+            if name == "my_chrome":
+                hint = "use my_chrome"
+            elif name == "computer_use":
+                hint = "use computer use"
+            elif name == "app_control":
+                hint = "use app_control"
+            elif name == "pc_pilot":
+                hint = "use pc_pilot"
+            elif name == "society_browser":
+                hint = "use society browser"
+            elif name.startswith("playwright/"):
+                hint = "use playwright"
+            else:
+                tool = tools.get(name)
+                if getattr(tool, "is_mcp_tool", False) and "/" in name:
+                    server = name.split("/", 1)[0].replace("-", " ")
+                    hint = f"use {server} MCP"
+                    if name.rsplit("/", 1)[-1].startswith("browser_"):
+                        hint += " browser server"
+            if hint and hint not in seen_hints:
+                hints.append(hint)
+                seen_hints.add(hint)
+        return one_set_of_hands(tools, " ".join(hints))
+
     return TurnOverride(
         provider=provider,
         model=model,
@@ -169,6 +206,7 @@ def build_override(
             dict(kit_tools) if kit_tools is not None else folder_tools(cwd, stance=stance)
         ),
         tool_filter=_compose_filters(
+            pilot_hands_filter,
             kit.tool_filter,
             kit.session_tool_filter(session) if kit.session_tool_filter is not None else None,
             plan_filter if stance == PLAN_STANCE else None,
@@ -576,6 +614,10 @@ async def run_brain_turn(
         kit_tools=kit_tools,
         system_extra=system_extra,
         required_tool_name=required_tool_name,
+        user_text=text,
+        selected_tool_names=tuple(
+            name for row in (choices if tool_choices else []) for name in row.tool_names
+        ),
     )
     _note_skill_trigger(brain, text)
     if vision_images:

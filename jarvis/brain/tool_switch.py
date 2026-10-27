@@ -177,7 +177,9 @@ def names_other_program(text: str) -> bool:
 PILOT = "pc_pilot"
 #: Words that keep a web job on the browser servers instead of the pilot.
 _SAYS_BROWSER_SERVER = re.compile(
-    r"\b(playwright|headless|agent\s+browser|browser\s+server|compare\s+prices?)\b", re.I
+    r"\b(playwright|headless|agent\s+browser|browser\s+server|"
+    r"society[\s_-]*browser|compare\s+prices?)\b",
+    re.I,
 )
 
 #: Desktop-server tools that point, click, type or launch: the pilot's job.
@@ -188,7 +190,12 @@ _POINTER_TAILS = frozenset({
 })
 #: The hands that stay out when the pilot is here, unless the owner names them.
 _SAYS_SCREEN_HANDS = re.compile(r"\bcomputer[\s_-]*use\b|\bscreen\s+control\b", re.I)
-_SAYS_MY_CHROME = re.compile(r"\bmy[_\s]chrome\b|\bbrowser\s*skill\b", re.I)
+_SAYS_APP_HANDS = re.compile(r"\bapp[\s_-]*control\b|\bcua[\s_-]*driver\b", re.I)
+_SAYS_MY_CHROME = re.compile(
+    r"\bmy[_\s]+chrome\b|\bmy\s+(?:own\s+)?(?:google\s+)?chrome\b|"
+    r"\bmy\s+browser\b|\bbrowser\s*skill\b",
+    re.I,
+)
 #: Live 2026-10-27 "open youtube.com then play i mean it by g eazy" opened
 #: YouTube and then searched a Spotify that was never connected.
 _SAYS_YOUTUBE = re.compile(r"\byou\s*tu+b+e?\b", re.I)
@@ -222,7 +229,8 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
     in the owner's own browser and works them by name, so the others leave
     the turn completely: ``enable_tools`` cannot bring them back either. A
     request that names one ("use computer use", "playwright", "compare
-    prices", "use Windows MCP") keeps it.
+    prices", "use Windows MCP", or "my Chrome") keeps that hand on the
+    opening surface.
     """
     if PILOT not in surface:
         return surface
@@ -257,9 +265,11 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
         if name == SCREEN_HANDS:
             return not _SAYS_SCREEN_HANDS.search(text)
         if name == OWN_BROWSER_HANDS:
-            return not _SAYS_MY_CHROME.search(text)
+            return not (
+                _SAYS_MY_CHROME.search(text) or wants_own_browser(text)
+            )
         if name == APP_HANDS:
-            return True
+            return not _SAYS_APP_HANDS.search(text)
         if name == "spotify":
             return bool(_SAYS_YOUTUBE.search(text)) and not _SAYS_SPOTIFY.search(text)
         if name == "youtube_music":
@@ -309,7 +319,7 @@ def server_of(name: str, tool: Any) -> str:
 
 def _is_browser_tool(name: str) -> bool:
     tail = name.rsplit("/", 1)[-1]
-    return tail.startswith("browser_") or tail == "get_browser_state"
+    return tail.startswith("browser_") or tail in {"get_browser_state", "society_browser"}
 
 
 def _one_line(tool: Any) -> str:
@@ -432,10 +442,15 @@ class ToolSwitch:
         Screen clicking, the CUA app driver, the raw desktop servers' pointer
         tools and the browser servers leave the opening surface; the pilot
         opens a site in the owner's own browser and works the page by name.
-        A request that names a browser server or a price comparison keeps the
-        browser tools, and ``enable_tools`` can still bring any of them back.
+        A request that names a browser server or a price comparison keeps those
+        browser tools; an explicit request for the owner's Chrome keeps its
+        dedicated BrowserSkill tool. Tools removed before this switch is built
+        cannot be brought back by ``enable_tools``.
         """
         browser = bool(_SAYS_BROWSER_SERVER.search(query or ""))
+        own_browser = bool(
+            _SAYS_MY_CHROME.search(query or "") or wants_own_browser(query or "")
+        )
         desktop_servers = {
             server_of(n, t) for n, t in self._tools.items() if self._is_pointer_server(n, t)
         }
@@ -444,17 +459,37 @@ class ToolSwitch:
             tool = self._tools.get(name)
             if tool is None:
                 return False
-            if name in (SCREEN_HANDS, APP_HANDS) or server_of(name, tool) in desktop_servers:
+            if name == SCREEN_HANDS:
+                return not _SAYS_SCREEN_HANDS.search(query or "")
+            if name == APP_HANDS:
+                return not _SAYS_APP_HANDS.search(query or "")
+            if server_of(name, tool) in desktop_servers:
                 return True
-            return not browser and (name == OWN_BROWSER_HANDS or _is_browser_tool(name))
+            if name == OWN_BROWSER_HANDS:
+                return not own_browser
+            return not browser and _is_browser_tool(name)
 
         relevant = [n for n in relevant if not other_hands(n)]
+        if own_browser and OWN_BROWSER_HANDS in self._tools:
+            relevant = [
+                OWN_BROWSER_HANDS,
+                *(n for n in relevant if n != OWN_BROWSER_HANDS),
+            ]
+        named_hands = [
+            name
+            for name, pattern in (
+                (SCREEN_HANDS, _SAYS_SCREEN_HANDS),
+                (APP_HANDS, _SAYS_APP_HANDS),
+            )
+            if name in self._tools and pattern.search(query or "")
+        ]
         named = self._named_servers(query or "")
         hands = self._browser_hands(query, relevant) if browser else []
         camera = [CAMERA] if wants_camera(query or "") else []
         siblings = [n for n in self._siblings(query, relevant) if not other_hands(n)]
         self.switch_on(
             [ENABLE_TOOLS, PILOT, *core, *[n for n in keep if not other_hands(n)], *camera,
+             *named_hands,
              *hands, *relevant, *named, *siblings]
         )
         return relevant

@@ -28,6 +28,17 @@ function renderCatalogue() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("unified MCP catalogue", () => {
+  it("does not show zero counts before inventory has loaded", () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise<Response>(() => undefined),
+    );
+    renderCatalogue();
+
+    expect(
+      screen.getByText("… unique configured · … JARVIS running · … Hermes enabled"),
+    ).toBeTruthy();
+  });
+
   it("merges same-name servers across runtimes into one entry", () => {
     const rows = mergeMcpCatalogue(
       { jarvis, jarvisError: null, hermes, hermesError: null },
