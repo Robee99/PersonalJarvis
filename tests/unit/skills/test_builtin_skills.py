@@ -1,4 +1,4 @@
-"""Unit tests for the 3 built-in skills.
+"""Unit tests for the bundled built-in skills.
 
 Checks that all SKILL.md files parse, have valid frontmatter,
 all trigger payloads are semantically OK, and voice regexes compile.
@@ -100,6 +100,7 @@ def test_expected_builtin_count() -> None:
         "control-api",
         "cli-gcloud",
         "jarvis-doc-author",
+        "fable-method",
     }
     assert base.issubset(set(BUILTIN_SKILL_NAMES)), (
         f"missing base skill(s): {base - set(BUILTIN_SKILL_NAMES)}"
