@@ -8,9 +8,9 @@ description: >-
   success, inspect the real sources, make a focused change, and report what
   was actually verified.
 when_to_use: >-
-  Use for repository debugging, code changes, evidence-based audits, or
-  research that spans multiple sources when this skill is enabled, or when the
-  user explicitly asks for the Fable Method. Do not use it to operate apps or
+  Use when debugging repository code, making changes, conducting evidence-based
+  audits, or researching multiple sources when this skill is enabled, or when
+  the user explicitly asks for the Fable Method. Do not use it to operate apps or
   replace computer-use routing. Skip simple questions and tiny edits. Jarvis's
   existing tool routing, safety, and user authorization rules remain in force.
 category: meta
