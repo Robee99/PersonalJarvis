@@ -47,6 +47,10 @@ class Control:
         return left + width // 2, top + height // 2
 
 
+class UIAQueryError(RuntimeError):
+    """The Windows accessibility provider could not enumerate a window."""
+
+
 #: Control types the pilot lists, clickable ones first.
 CLICKABLE_ROLES = (
     "Button", "SplitButton", "Hyperlink", "MenuItem", "ListItem", "TabItem",
@@ -226,54 +230,69 @@ class WinDesk:
 
         from jarvis.core.win32_dpi import per_monitor_dpi_context  # noqa: PLC0415
 
-        uia = IUIA()
-        dll, client = uia.UIA_dll, uia.iuia
-        roles = [*CLICKABLE_ROLES, *READABLE_ROLES]
-        conditions = [
-            client.CreatePropertyCondition(
-                dll.UIA_ControlTypePropertyId, uia.known_control_types[r]
-            )
-            for r in roles
-            if r in uia.known_control_types
-        ]
-        cache = client.CreateCacheRequest()
-        for prop in (
-            dll.UIA_NamePropertyId, dll.UIA_ControlTypePropertyId,
-            dll.UIA_BoundingRectanglePropertyId, dll.UIA_IsEnabledPropertyId,
-            dll.UIA_IsOffscreenPropertyId, dll.UIA_IsPasswordPropertyId,
-            dll.UIA_HasKeyboardFocusPropertyId,
-        ):
-            cache.AddProperty(prop)
-        with per_monitor_dpi_context():
-            root = client.ElementFromHandle(handle)
-            found = root.FindAllBuildCache(
-                dll.TreeScope_Descendants, client.CreateOrConditionFromArray(conditions), cache
-            )
-            count = min(int(found.Length), limit)
-            out: list[Control] = []
-            for i in range(count):
-                try:
-                    el = found.GetElement(i)
-                    if bool(el.CachedIsOffscreen):
-                        continue
-                    name = " ".join(str(el.CachedName or "").split())
-                    rect = el.CachedBoundingRectangle
-                    width = int(rect.right) - int(rect.left)
-                    height = int(rect.bottom) - int(rect.top)
-                    role = str(uia.known_control_type_ids.get(int(el.CachedControlType), ""))
-                    if width <= 0 or height <= 0 or (not name and role != "Edit"):
-                        continue
-                    out.append(Control(
-                        name=name,
-                        role=role,
-                        bounds=(int(rect.left), int(rect.top), width, height),
-                        enabled=bool(el.CachedIsEnabled),
-                        focused=bool(el.CachedHasKeyboardFocus),
-                        password=bool(el.CachedIsPassword),
-                        ref=el,
-                    ))
-                except Exception:  # noqa: BLE001, S112 - a control that vanished mid-read is skipped
+        for attempt in range(2):
+            try:
+                uia = IUIA()
+                dll, client = uia.UIA_dll, uia.iuia
+                roles = [*CLICKABLE_ROLES, *READABLE_ROLES]
+                conditions = [
+                    client.CreatePropertyCondition(
+                        dll.UIA_ControlTypePropertyId, uia.known_control_types[r]
+                    )
+                    for r in roles
+                    if r in uia.known_control_types
+                ]
+                cache = client.CreateCacheRequest()
+                for prop in (
+                    dll.UIA_NamePropertyId, dll.UIA_ControlTypePropertyId,
+                    dll.UIA_BoundingRectanglePropertyId, dll.UIA_IsEnabledPropertyId,
+                    dll.UIA_IsOffscreenPropertyId, dll.UIA_IsPasswordPropertyId,
+                    dll.UIA_HasKeyboardFocusPropertyId,
+                ):
+                    cache.AddProperty(prop)
+                with per_monitor_dpi_context():
+                    root = client.ElementFromHandle(handle)
+                    found = root.FindAllBuildCache(
+                        dll.TreeScope_Descendants,
+                        client.CreateOrConditionFromArray(conditions),
+                        cache,
+                    )
+                    count = min(int(found.Length), limit)
+                break
+            except Exception as exc:  # noqa: BLE001 - Chromium's UIA provider can fail transiently
+                if attempt == 0:
+                    log.debug("Windows UIA enumeration failed; retrying once", exc_info=True)
+                    time.sleep(0.15)
                     continue
+                log.warning("Windows UIA enumeration failed twice for window %s", handle)
+                raise UIAQueryError(
+                    "Windows UI Automation could not enumerate this window after one retry."
+                ) from exc
+
+        out: list[Control] = []
+        for i in range(count):
+            try:
+                el = found.GetElement(i)
+                if bool(el.CachedIsOffscreen):
+                    continue
+                name = " ".join(str(el.CachedName or "").split())
+                rect = el.CachedBoundingRectangle
+                width = int(rect.right) - int(rect.left)
+                height = int(rect.bottom) - int(rect.top)
+                role = str(uia.known_control_type_ids.get(int(el.CachedControlType), ""))
+                if width <= 0 or height <= 0 or (not name and role != "Edit"):
+                    continue
+                out.append(Control(
+                    name=name,
+                    role=role,
+                    bounds=(int(rect.left), int(rect.top), width, height),
+                    enabled=bool(el.CachedIsEnabled),
+                    focused=bool(el.CachedHasKeyboardFocus),
+                    password=bool(el.CachedIsPassword),
+                    ref=el,
+                ))
+            except Exception:  # noqa: BLE001, S112 - a control that vanished mid-read is skipped
+                continue
         return out
 
     def invoke(self, control: Control) -> bool:

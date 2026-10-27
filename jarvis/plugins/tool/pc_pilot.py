@@ -51,7 +51,13 @@ from typing import Any, Protocol
 
 from jarvis.core.process_utils import NO_WINDOW_CREATIONFLAGS
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
-from jarvis.platform.win_pilot import CLICKABLE_ROLES, Control, Window, key_codes
+from jarvis.platform.win_pilot import (
+    CLICKABLE_ROLES,
+    Control,
+    UIAQueryError,
+    Window,
+    key_codes,
+)
 
 log = logging.getLogger(__name__)
 
@@ -76,8 +82,10 @@ _NOT_INSTALLED = re.compile(r"not (?:be )?found|not installed|no app", re.IGNORE
 _PAGE_WAIT_S = 8.0
 #: Keys that open a shell surface (Start, search, Run, notifications, clipboard).
 _SHELL_KEYS = frozenset({"win", "windows", "win+s", "win+r", "win+a", "win+n", "win+v", "win+."})
-_ACTIONS = ("open", "app", "click", "set", "drag", "hover", "type", "keys", "scroll", "window",
-            "wait", "look")
+_ACTIONS = (
+    "open", "navigate", "app", "click", "set", "drag", "hover", "type", "keys",
+    "scroll", "window", "wait", "look",
+)
 _WINDOW_OPS = ("focus", "minimize", "maximize", "restore", "close")
 
 # ---------------------------------------------------------------------------
@@ -257,6 +265,7 @@ _SHELL_FOLDERS = {
 }
 _BROWSER_EXES = frozenset({"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
                            "vivaldi.exe"})
+_SEARCH_PAGE_TITLE = re.compile(r"\b(?:duckduckgo|google search|bing|yahoo search)\b", re.I)
 #: Windows' own tools and apps people name, and what starts them.
 _SYSTEM_TOOLS: dict[str, str] = {
     "device manager": "devmgmt.msc",
@@ -419,12 +428,21 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         single = {k: args[k] for k in ("app", "into", "enter", "clear", "button", "double", "see",
                                        "secret", "on", "to", "value") if k in args}
-        for action in ("open", "click", "set", "drag", "hover", "type", "keys", "scroll", "window",
-                       "wait", "look"):
+        for action in ("open", "navigate", "click", "set", "drag", "hover", "type", "keys",
+                       "scroll", "window", "wait", "look"):
             if args.get(action) not in (None, "", False):
                 steps.append({**single, action: args[action]})
         if not steps and (args.get("app") or args.get("see")):
             steps.append({**single, "look": True})
+    for step in steps:
+        if "navigate" in step:
+            if "open" in step:
+                raise ValueError("Use either open or navigate for a step, not both.")
+            if not isinstance(step["navigate"], str) or not step["navigate"].strip():
+                raise ValueError("navigate must contain a URL or page name as text.")
+            # Models commonly use the natural action name "navigate" even
+            # though the underlying operation is opening a URL in the browser.
+            step["open"] = step.pop("navigate")
     return steps
 
 
@@ -472,11 +490,12 @@ class _Run:
 
 
 def web_lookup_url(name: str) -> str:
-    """A browser address that lands on ``name``'s own website.
-
-    DuckDuckGo's ``!ducky`` goes straight to the top result, free and with no
-    key, so "Swiggy Instamart" opens swiggy.com/instamart rather than a list.
-    """
+    """Resolve well-known services directly; search is only a generic fallback."""
+    compact = re.sub(r"[^a-z0-9]+", "", name.casefold())
+    if compact in {"instamart", "swiggyinstamart", "swiginstamart", "swiggyinstomach"} or (
+        "swig" in compact and ("insta" in compact or "stomach" in compact)
+    ):
+        return "https://www.swiggy.com/instamart"
     return "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(f"!ducky {name}")
 
 
@@ -532,7 +551,8 @@ class PcPilot:
         "{\"type\":\"diet coke\",\"into\":\"Search\",\"enter\":true},{\"click\":\"Add\"}]; "
         "adding to a cart is fine, paying is asked first. A name not on screen is "
         "scrolled to. "
-        "Step keys: open (app, page, folder or URL), app (which window to act in), "
+        "Step keys: open or navigate (app, page, folder or URL; navigate reuses the current browser "
+        "window), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
         "enter=true, secret=true for a password), keys ('ctrl+s', 'enter', 'win+d'), "
         "scroll ('down'/'up'/'down 10'; on=a control to scroll inside), drag (a control "
@@ -554,6 +574,10 @@ class PcPilot:
                     "type": "object",
                     "properties": {
                         "open": {"type": "string"},
+                        "navigate": {
+                            "type": "string",
+                            "description": "Open a URL in the current browser window; alias for open",
+                        },
                         "app": {"type": "string"},
                         "click": {"type": "string"},
                         "type": {"type": "string"},
@@ -579,6 +603,10 @@ class PcPilot:
                 },
             },
             "open": {"type": "string", "description": "App, Settings page, folder or URL"},
+            "navigate": {
+                "type": "string",
+                "description": "Open a URL in the current browser window; alias for open",
+            },
             "app": {"type": "string", "description": "The window to act in, e.g. 'Calculator'"},
             "click": {"type": "string"},
             "type": {"type": "string"},
@@ -743,8 +771,28 @@ class PcPilot:
                 # no such app, but the service has a website. Its name goes to
                 # the browser, which lands on the site's own page.
                 web_for, kind, value = value, "url", web_lookup_url(value)
+        # Resolve this after the app-name-to-URL fallback above: services such
+        # as Instamart first look like app names, then become browser URLs.
+        existing_browser = (
+            run.window
+            if kind == "url"
+            and run.window is not None
+            and run.window.exe.casefold() in _BROWSER_EXES
+            and desk.is_window(run.window.handle)
+            else None
+        )
         browser = ""
-        if kind != "app":
+        if kind == "url" and existing_browser is not None:
+            # Stay in the window the user asked for (especially when Chrome is
+            # open but is not Windows' default browser). Ctrl+L avoids querying
+            # Chromium's sometimes unstable accessibility tree just to find the
+            # address bar.
+            await asyncio.to_thread(self._front, desk, existing_browser)
+            await asyncio.to_thread(desk.press, "ctrl+l")
+            await asyncio.to_thread(desk.type_text, value)
+            await asyncio.to_thread(desk.press, "enter")
+            browser = existing_browser.exe
+        elif kind != "app":
             browser = await asyncio.to_thread(_launch, kind, value)
         # Windows' own tools are titled by the name people use for them.
         hint = {"settings": "settings", "url": "", "shell": "", "system": _norm(what),
@@ -842,15 +890,31 @@ class PcPilot:
     def _page_loaded(self, desk: Desk, win: Window, url: str) -> Window:
         """The browser window once its title is the page's, not the address typed."""
         typed = _norm(re.sub(r"^https?://(www\.)?", "", url).rstrip("/"))
+        instamart = "swiggy.com/instamart" in typed
         deadline = time.monotonic() + _PAGE_WAIT_S
         while time.monotonic() < deadline:
             fresh = next((w for w in desk.windows() if w.handle == win.handle), win)
             title = _norm(fresh.title)
-            # A !ducky lookup shows DuckDuckGo's own page until it redirects.
+            if _SEARCH_PAGE_TITLE.search(title) and (
+                "duckduckgo.com" in typed or instamart
+            ):
+                raise StepFailed(
+                    f"The browser stayed on search results ('{fresh.title}') instead of opening "
+                    f"{url}; follow-up actions were stopped."
+                )
+            if instamart and not re.search(r"\b(?:swiggy|instamart)\b", title):
+                self._sleep(0.4)
+                continue
+            # A !ducky lookup may show its own page while redirecting to a site.
             hop = "duckduckgo" in typed and "duckduckgo" in title
             if title and not title.startswith(typed) and "loading" not in title and not hop:
                 return fresh
             self._sleep(0.4)
+        if instamart:
+            raise StepFailed(
+                "Could not confirm that Swiggy Instamart finished opening. "
+                "Follow-up actions were stopped."
+            )
         return win
 
     def _settle(self, desk: Desk, win: Window) -> None:
@@ -898,7 +962,13 @@ class PcPilot:
 
     def _look(self, desk: Desk, run: _Run) -> list[Control]:
         assert run.window is not None
-        run.controls = desk.controls(run.window)
+        try:
+            run.controls = desk.controls(run.window)
+        except UIAQueryError as exc:
+            raise StepFailed(
+                "Windows could not read this window's accessibility controls after retry. "
+                "The screen picture is attached; use see=true with a visible x,y target, or retry."
+            ) from exc
         return run.controls
 
     def _find(self, desk: Desk, run: _Run, target: str) -> Control:
