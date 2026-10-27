@@ -155,7 +155,7 @@ def port_free(port: int = KEPT_PORT) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         try:
             probe.bind(("127.0.0.1", port))
-        except OSError:
+        except OSError:  # A failed bind probe means this loopback port is not available.
             return False
     return True
 

@@ -369,7 +369,10 @@ def _rig(
     monkeypatch.setattr(anyio, "sleep", _no_wait)
 
     cfg = JarvisConfig()
-    cfg.brain.primary = DEEP[0]
+    # The primary provider is the one user-visible switch; enabled route tiers
+    # must follow it. Use FAST as primary so this fixture tests the configured
+    # fast/deep failover policy instead of triggering manager self-healing.
+    cfg.brain.primary = FAST[0]
     cfg.brain.route_policy = BrainRoutePolicyConfig.model_validate(POLICY)
     bus = EventBus()
     executor = None

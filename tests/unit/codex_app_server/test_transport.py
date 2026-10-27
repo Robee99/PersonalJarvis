@@ -3227,7 +3227,10 @@ def test_dedicated_profile_rejects_hardlinked_auth_file(
     home = transport._prepare_subscription_login_home()
     outside = tmp_path / "outside-auth.json"
     outside.write_text("{}", encoding="utf-8")
-    os.link(outside, home / "auth.json")
+    try:
+        os.link(outside, home / "auth.json")
+    except OSError as exc:
+        pytest.skip(f"hard links are unavailable in this test environment: {exc}")
 
     with pytest.raises(CodexSubscriptionUnavailable, match="linked credential"):
         transport._validated_subscription_home(create=False, require_marker=True)
@@ -3533,6 +3536,7 @@ def test_subscription_login_guard_covers_process_and_reaper(
     tmp_path: Path,
 ) -> None:
     import jarvis.codex_auth as auth_module
+    import jarvis.core.private_directory as private_directory
 
     cleanup_targets: list[Callable[[], None]] = []
     processes: list[object] = []
@@ -3554,6 +3558,16 @@ def test_subscription_login_guard_covers_process_and_reaper(
 
     home = tmp_path / "profile"
     home.mkdir()
+
+    def create_test_directory(path: Path, *, create: bool) -> None:
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        private_directory,
+        "ensure_owner_only_directory",
+        create_test_directory,
+    )
     profile_lock = FakeProfileProcessLock()
     monkeypatch.setattr(
         transport,
@@ -3628,6 +3642,17 @@ def test_subscription_login_spawn_failure_releases_guard(
     tmp_path: Path,
 ) -> None:
     import jarvis.codex_auth as auth_module
+    import jarvis.core.private_directory as private_directory
+
+    def create_test_directory(path: Path, *, create: bool) -> None:
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        private_directory,
+        "ensure_owner_only_directory",
+        create_test_directory,
+    )
 
     class FakeAuthService:
         def __init__(self, *_args: object, **_kwargs: object) -> None:

@@ -241,6 +241,7 @@ def test_active_polish_translates_a_family_id_into_a_card_id(monkeypatch) -> Non
     monkeypatch.setattr(
         polish_client, "family_has_key", lambda family: family.id == "openai"
     )
+    monkeypatch.setattr(polish_client, "stt_runs_on_device", lambda: False)
     request = _request(dictation=_dictation())
 
     assert pr._active_polish(request) == dictation_spec_id("openai")
@@ -254,6 +255,7 @@ def test_active_polish_is_none_without_any_key(monkeypatch) -> None:
     from jarvis.dictation import polish_client
 
     monkeypatch.setattr(polish_client, "family_has_key", lambda family: False)
+    monkeypatch.setattr(polish_client, "stt_runs_on_device", lambda: False)
 
     assert pr._active_polish(_request(dictation=_dictation())) is None
 

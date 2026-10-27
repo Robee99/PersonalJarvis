@@ -177,7 +177,7 @@ def page_text(tool_output: Any) -> str:
     body = re.sub(r"^```\w*\s*|\s*```$", "", body)
     try:
         value = json.loads(body)
-    except ValueError:
+    except ValueError:  # Plain prose is a valid answer; preserve it when it is not JSON.
         return body
     return value if isinstance(value, str) else json.dumps(value)
 

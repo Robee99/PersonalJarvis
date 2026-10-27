@@ -195,7 +195,9 @@ def test_plain_terminal_launches_the_shell_itself() -> None:
     assert argv[0]
     assert "-Command" not in argv
     assert "/k" not in argv
-    assert not any("claude" in part or "codex" in part for part in argv)
+    # The executable path may live inside the Codex runtime cache; only the
+    # shell arguments after argv[0] must be free of an agent wrapper.
+    assert not any("claude" in part or "codex" in part for part in argv[1:])
 
 
 def test_build_install_argv_uses_install_command() -> None:

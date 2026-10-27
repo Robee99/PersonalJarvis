@@ -331,7 +331,7 @@ def _response_token_limit(context_window: int) -> int:
     """Scale the reply allowance so small local windows remain usable."""
     try:
         window = int(context_window or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError):  # Invalid optional metadata uses the conservative token limit.
         window = 0
     if window <= 0:
         return MAX_TOKENS
@@ -343,7 +343,7 @@ def _context_tokens(message: BrainMessage) -> int:
     if not isinstance(content, str):
         try:
             content = json.dumps(content, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # Unserializable content falls back to measuring its text form.
             content = str(content)
     return len(content) // _CONTEXT_CHARS_PER_TOKEN + 5
 
@@ -487,7 +487,7 @@ def fit_messages_to_context(
         try:
             tool_wire = json.dumps(tools, ensure_ascii=False, default=str)
             fixed += len(tool_wire) // _CONTEXT_CHARS_PER_TOKEN
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # Keep a conservative tool-schema reserve when encoding fails.
             fixed += 512
     output_reserve = min(
         max(512, int(window * 0.15)),
@@ -712,7 +712,7 @@ async def run_api_turn(handle: TurnHandle, user_text: str) -> None:
                     argument_error = ""
                     try:
                         args = _tool_arguments(raw_args)
-                    except ValueError as exc:
+                    except ValueError as exc:  # Malformed tool arguments are returned as a tool error.
                         args = {}
                         argument_error = str(exc)
                     call_id = str(tc["id"])
@@ -847,7 +847,7 @@ async def _stream(brain: Any, req: BrainRequest, cancel: asyncio.Event):
             waiter.cancel()
             try:
                 delta: BrainDelta = nxt.result()
-            except StopAsyncIteration:
+            except StopAsyncIteration:  # The provider iterator's stop signal ends this stream normally.
                 return
             yield delta
     finally:

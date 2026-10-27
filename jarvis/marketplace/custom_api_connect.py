@@ -53,13 +53,13 @@ async def verify_api_key(
         headers[definition.auth.header_name] = credential
     elif definition.auth.mode == "query":
         extensions[QUERY_AUTH_EXTENSION] = (definition.auth.header_name, credential)
+    guarded_transport = public_only_async(transport=ApiTransport(transport))["transport"]
     pool = HttpClientPool(
         timeout_s=8,
-        transport=ApiTransport(transport),
+        transport=guarded_transport,
         client_kwargs={
             "follow_redirects": False,
             "trust_env": False,
-            **public_only_async(),
         },
     )
     try:

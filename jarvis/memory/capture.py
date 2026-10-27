@@ -101,15 +101,15 @@ def capture_reflex(
     except ValueError as exc:
         # The guard refuses secrets and oversized text: nothing is written.
         return f"I will not write that down, {h}: {exc}."
-    except LookupError as exc:
+    except LookupError as exc:  # Notebook unavailability is included in the reply below.
         problems.append(f"the memory notebook is not running ({exc})")
-    except OSError as exc:
+    except OSError as exc:  # Notebook write failures are included in the reply below.
         problems.append(f"the memory notebook could not be written ({exc})")
     if vault_root is not None:
         try:
             write_capture(vault_root, fact, now=clock())
             kept = True
-        except OSError as exc:
+        except OSError as exc:  # Capture write failures are included in the reply below.
             problems.append(f"the capture note could not be written ({exc})")
     else:
         problems.append("no notes folder is configured")

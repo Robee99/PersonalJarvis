@@ -2036,6 +2036,13 @@ def test_router_tools_is_pure_dispatcher_set() -> None:
             # Memory by topic (2026-10-12): orb topics, their chats, one chat
             # paged (risk safe, read-only).
             "memory_chats",
+            # Direct tools added on 2026-10-26; each has its scope and risk
+            # documented in the current ADR-0011 amendment below.
+            "find-files",
+            "pc-pilot",
+            "ai-council",
+            "kept-archive-search",
+            "cognee-source",
         }
     )
     assert ROUTER_TOOLS == expected, (
@@ -2725,12 +2732,8 @@ def test_system_prompt_contains_no_invent_tools_rule() -> None:
     """
     manager, _executor = _manager_with_spawn()
     prompt = manager._build_system_prompt()
-    assert "erfinde niemals einen Werkzeugnamen" in prompt, (
-        "System prompt must contain the DE 'do not invent a tool name' rule"
-    )
-    assert "never invent a tool name" in prompt, (
-        "System prompt must contain the EN 'do not invent a tool name' rule"
-    )
+    assert "aufrufbar sind nur Werkzeuge, deren Definition du" in prompt
+    assert "nur tatsächlich eingeblendete Werkzeuge" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -2791,7 +2794,7 @@ def test_system_prompt_tool_block_counts_the_tools_it_lists() -> None:
     names = tuple(f"tool_{i}" for i in range(7))
     manager = _manager_with_named_tools(*names)
     prompt = manager._build_system_prompt()
-    assert "vollständige Liste der 7 Namen" in prompt
+    assert "ANGESCHLOSSENE WERKZEUGE — 7 Namen." in prompt
 
 
 def test_system_prompt_tool_block_hides_local_action_tools() -> None:

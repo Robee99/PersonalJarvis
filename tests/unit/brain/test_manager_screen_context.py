@@ -320,11 +320,24 @@ async def test_blind_provider_is_skipped_for_a_screen_turn(
         return _FakeBrain(vision=name == "seeing")
 
     manager._get_brain = _brain  # type: ignore[method-assign]
+    dispatched_vision: list[bool] = []
+
+    def _dispatcher(brain, *, tools_override=None, **_kwargs):
+        dispatched_vision.append(brain.supports_vision)
+        recorder.tool_overrides.append(tools_override)
+        return recorder
+
+    manager._build_dispatcher = _dispatcher  # type: ignore[method-assign]
 
     result = await manager.generate("take a screenshot", use_history=False)
 
     assert result == "grounded answer"
-    assert created[0] == "blind" and set(created[1:]) == {"seeing"}
+    # The router probes the chain's vision capabilities before dispatch. The
+    # selected seeing provider can therefore be constructed twice, but the
+    # blind provider must never own the dispatcher for a screen turn.
+    attempted_chain = [name for name in created if name in {"blind", "seeing"}]
+    assert attempted_chain[0] == "blind" and set(attempted_chain[1:]) == {"seeing"}
+    assert dispatched_vision == [True]
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["images"]
 

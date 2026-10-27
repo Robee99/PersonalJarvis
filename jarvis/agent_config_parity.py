@@ -381,6 +381,7 @@ def _link(source: Path, target: Path) -> str | None:
     for directories, which is all this path is used for.
     """
     is_dir = source.is_dir()
+    target_existed = os.path.lexists(target)
     try:
         os.symlink(source, target, target_is_directory=is_dir)
         return "linked"
@@ -394,6 +395,14 @@ def _link(source: Path, target: Path) -> str | None:
             return "junction"
         except (OSError, AttributeError, ImportError) as exc:
             logger.debug("Agent setup: junction {} -> {} failed ({})", target, source, exc)
+            # CreateJunction can create its target directory before Windows
+            # rejects the reparse point (for example, on a restricted volume).
+            # That empty placeholder would prevent _share_dir from restoring
+            # the account's original directory after a failed whole-tree share.
+            # Only remove a path that was absent when this attempt began, and
+            # only with _remove's non-recursive unlink/rmdir operations.
+            if not target_existed and os.path.lexists(target):
+                _remove(target)
     return None
 
 

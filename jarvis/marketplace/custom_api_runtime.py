@@ -443,18 +443,23 @@ class CustomApiRuntime:
                     self.store.credential, definition.id
                 ):
                     continue
-                pool = self._pools.setdefault(
-                    definition.id,
-                    HttpClientPool(
+                pool = self._pools.get(definition.id)
+                if pool is None:
+                    # Compose the public-destination guard around the API
+                    # transport. Passing both via client_kwargs and the pool's
+                    # transport parameter duplicates the httpx keyword.
+                    guarded_transport = public_only_async(
+                        transport=ApiTransport(self.transport)
+                    )["transport"]
+                    pool = HttpClientPool(
                         timeout_s=45,
-                        transport=ApiTransport(self.transport),
+                        transport=guarded_transport,
                         client_kwargs={
                             "follow_redirects": False,
                             "trust_env": False,
-                            **public_only_async(),
                         },
-                    ),
-                )
+                    )
+                    self._pools[definition.id] = pool
                 if definition.connection is not None:
                     available = [
                         CustomApiCatalogTool(definition, self.store, pool, self.output_dir),

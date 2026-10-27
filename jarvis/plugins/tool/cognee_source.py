@@ -70,7 +70,7 @@ class CogneeSourceTool:
                     ),
                 )
             return ToolResult(success=False, output="", error="unsupported action")
-        except (CogneeUnavailable, OSError, ValueError) as exc:
+        except (CogneeUnavailable, OSError, ValueError) as exc:  # Surface source errors through the tool result.
             return ToolResult(success=False, output="", error=str(exc))
 
 

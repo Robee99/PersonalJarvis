@@ -187,7 +187,7 @@ class WindowControlTool:
         target = str((args or {}).get("window") or "")
         try:
             output = await asyncio.to_thread(apply, action, target)
-        except (LookupError, ValueError, RuntimeError) as exc:
+        except (LookupError, ValueError, RuntimeError) as exc:  # Return control failures directly to the caller.
             return ToolResult(success=False, output=None, error=str(exc))
         except OSError as exc:
             log.warning("window_control: %s failed", action, exc_info=True)

@@ -134,7 +134,7 @@ def deliver_result(request_id: str, payload: dict[str, Any]) -> bool:
     loop = future.get_loop()
     try:
         running = asyncio.get_running_loop()
-    except RuntimeError:
+    except RuntimeError:  # A worker thread has no running loop; schedule on the future's owner.
         running = None
     if running is loop:
         _resolve(future, payload)

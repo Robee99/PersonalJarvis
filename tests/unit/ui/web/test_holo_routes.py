@@ -81,7 +81,12 @@ def test_missing_vault_gives_no_orbs() -> None:
     assert holo_routes.vault_orbs(Path("/does/not/exist")) == []
 
 
-def test_unshipped_assets_404_instead_of_the_spa(client: TestClient) -> None:
+def test_unshipped_assets_404_instead_of_the_spa(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A developer may have the optional vendor bundle already downloaded into
+    # Jarvis's real user-data directory. Give this test an empty isolated root.
+    monkeypatch.setattr(holo_routes, "vendor_dir", lambda: tmp_path / "empty-vendor")
     assert client.get("/holo/vendor/vision_bundle.mjs").status_code == 404
     assert client.get("/holo/props/triceratops.glb").status_code == 404
     assert client.get("/api/holo/props").json() == []

@@ -148,15 +148,17 @@ async def test_calculator_buttons_are_pressed_by_their_spoken_names(tmp_path: Pa
     desk = FakeDesk(wins=[], panes={CALC.handle: [_calc_controls()]})
     pilot = _pilot(desk, tmp_path, opens=CALC)
 
-    result = await pilot.execute(
-        {"steps": [{"open": "calculator"}, {"click": "7"}, {"click": "+"}, {"click": "8"},
-                   {"click": "="}]},
-        Ctx(),
-    )
+    results = [
+        await pilot.execute(action, Ctx())
+        for action in (
+            {"open": "calculator"}, {"click": "7"}, {"click": "+"},
+            {"click": "8"}, {"click": "="},
+        )
+    ]
 
-    assert result.success, result.error
+    assert all(result.success for result in results), [result.error for result in results]
     assert [v for k, v in desk.log if k == "invoke"] == ["Seven", "Plus", "Eight", "Equals"]
-    assert "Display is 15" in str(result.output)
+    assert "Display is 15" in str(results[-1].output)
     assert pilot.pictures == []  # type: ignore[attr-defined]
 
 
@@ -267,7 +269,7 @@ async def test_a_password_goes_in_only_as_a_secret_and_is_never_echoed(tmp_path:
     ("args", "tier"),
     [
         ({"click": "Delete"}, "ask"),
-        ({"steps": [{"open": "gmail.com"}, {"click": "Send"}]}, "ask"),
+        ({"steps": [{"click": "Send"}]}, "ask"),
         ({"keys": "alt+f4"}, "ask"),
         ({"window": "close", "app": "notepad"}, "ask"),
         ({"click": "Check for updates"}, "monitor"),
@@ -275,7 +277,9 @@ async def test_a_password_goes_in_only_as_a_secret_and_is_never_echoed(tmp_path:
     ],
 )
 def test_lasting_actions_ask_first(args: dict[str, Any], tier: str) -> None:
-    assert PcPilot(policy=PilotPolicy()).risk_tier_for_args(args) == tier
+    pilot = PcPilot(policy=PilotPolicy())
+    assert pilot.risk_tier_for_args(args) == tier
+    assert pilot.requires_explicit_confirmation_for_args(args) is (tier == "ask")
 
 
 def test_the_owners_policy_file_only_adds_rules(tmp_path: Path) -> None:
@@ -410,7 +414,7 @@ async def test_malformed_steps_are_rejected_before_any_input(tmp_path, step):
     pilot = _pilot(desk, tmp_path)
     result = await pilot.execute({"steps": [{"click": "Search"}, step]}, Ctx())
     assert not result.success
-    assert "step 2" in result.error.lower()
+    assert "one ui action per call" in result.error.lower()
     assert desk.log == []
 
 

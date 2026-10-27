@@ -2,6 +2,7 @@ import { Component, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode 
 import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { useWebglSurface } from "@/hooks/useWebglSurface";
 import {
   AdditiveBlending,
   BufferGeometry,
@@ -67,22 +68,24 @@ export interface MemoryOrbSceneProps {
 
 export default function MemoryOrbScene(props: MemoryOrbSceneProps) {
   const { awake, reduced, onUnavailable, onPick } = props;
+  const hostRef = useRef<HTMLDivElement>(null);
+  const { generation } = useWebglSurface(hostRef);
   return (
-    <RenderBoundary onFail={onUnavailable}>
-      <Canvas
-        data-testid="memory-orb-canvas"
-        camera={{ position: [0, 0.8, CAMERA_DISTANCE], fov: 42, near: 0.1, far: 50 }}
-        dpr={[1, 1.5]}
-        gl={{ antialias: true, alpha: true, powerPreference: "low-power" }}
-        frameloop={!awake ? "never" : reduced ? "demand" : "always"}
-        onPointerMissed={() => onPick(null)}
-        onCreated={({ gl }) => {
-          gl.domElement.addEventListener("webglcontextlost", onUnavailable, { once: true });
-        }}
-      >
-        <OrbContent {...props} />
-      </Canvas>
-    </RenderBoundary>
+    <div ref={hostRef} className="absolute inset-0">
+      <RenderBoundary onFail={onUnavailable}>
+        <Canvas
+          key={generation}
+          data-testid="memory-orb-canvas"
+          camera={{ position: [0, 0.8, CAMERA_DISTANCE], fov: 42, near: 0.1, far: 50 }}
+          dpr={[1, 1.5]}
+          gl={{ antialias: true, alpha: true, powerPreference: "low-power" }}
+          frameloop={!awake ? "never" : reduced ? "demand" : "always"}
+          onPointerMissed={() => onPick(null)}
+        >
+          <OrbContent {...props} />
+        </Canvas>
+      </RenderBoundary>
+    </div>
   );
 }
 

@@ -122,7 +122,7 @@ class AiCouncilTool:
             if judge not in _JUDGES:
                 judge = "claude"
             open_in_chrome(council_url(topic, judge))
-        except OSError as exc:
+        except OSError as exc:  # Return browser launch failures in the tool result for the user.
             return ToolResult(success=False, output=None, error=f"Could not open Chrome: {exc}")
         return ToolResult(
             success=True,

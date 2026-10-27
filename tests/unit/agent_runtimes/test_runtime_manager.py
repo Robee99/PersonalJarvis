@@ -418,9 +418,11 @@ def _bash() -> str | None:
     import shutil
 
     found = shutil.which("bash")
-    if sys.platform == "win32" and (not found or "system32" in found.lower()):
-        # WSL's launcher is not a POSIX shell for this process; Git for
-        # Windows' bash is.
+    if sys.platform == "win32" and (
+        not found or "system32" in found.lower() or "windowsapps" in found.lower()
+    ):
+        # WSL and Windows App Execution aliases are not POSIX shells for this
+        # process; use Git for Windows' bash when it is installed.
         git_bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git/bin/bash.exe"
         return str(git_bash) if git_bash.is_file() else None
     return found

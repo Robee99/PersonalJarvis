@@ -119,7 +119,7 @@ def _local_embedding_api(model_name: str, cache_dir: Path):
                 self.send_header("Content-Length", str(len(encoded)))
                 self.end_headers()
                 self.wfile.write(encoded)
-            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:  # Send malformed requests back as HTTP errors.
                 encoded = json.dumps(
                     {"error": {"message": str(exc), "type": "invalid_request_error"}}
                 ).encode()

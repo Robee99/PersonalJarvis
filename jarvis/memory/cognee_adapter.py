@@ -171,7 +171,7 @@ class CogneeMemoryAdapter:
             )
             try:
                 worker_error = json.loads(completed.stdout.strip().splitlines()[-1]).get("error")
-            except (json.JSONDecodeError, IndexError):
+            except (json.JSONDecodeError, IndexError):  # Fall back to the worker exit code when its error record is malformed.
                 worker_error = None
             raise CogneeUnavailable(
                 str(worker_error or f"Cognee worker exited {completed.returncode}")
@@ -423,7 +423,7 @@ class CogneeMemoryAdapter:
                 continue
             try:
                 content = candidate.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            except OSError:  # Unreadable candidates are skipped while resolving an optional source.
                 continue
             if hashlib.sha256(content.encode("utf-8")).hexdigest() != content_hash:
                 continue
@@ -469,7 +469,7 @@ class CogneeMemoryAdapter:
                 continue
             try:
                 content = candidate.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            except OSError:  # Record unreadable sources as denied instead of exposing their contents.
                 denied.append(str(source_id))
                 continue
             if contains_secret(content):

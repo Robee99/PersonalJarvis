@@ -79,11 +79,18 @@ class TwoRoleFakeBrain:
     def __init__(self) -> None:
         self.extractor_responses: list[str] = []
         self.judge_responses: list[str] = []
+        self.alias_responses: list[str] = []
         self.judge_prompts: list[str] = []
+        self.alias_prompts: list[str] = []
 
     async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
         if (req.system or "").startswith("You extract"):
             queue = self.extractor_responses
+        elif req.messages and req.messages[0].content.startswith(
+            "You generate SEARCH ALIASES"
+        ):
+            self.alias_prompts.append(req.messages[0].content)
+            queue = self.alias_responses
         else:
             self.judge_prompts.append(req.messages[0].content)
             queue = self.judge_responses

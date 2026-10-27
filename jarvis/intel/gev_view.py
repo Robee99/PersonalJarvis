@@ -31,7 +31,7 @@ def _view_in(value: Any, depth: int = 0) -> dict[str, Any] | None:
             return None
         try:
             return _view_in(json.loads(value), depth + 1)
-        except ValueError:
+        except ValueError:  # Malformed nested JSON cannot provide a usable view description.
             return None
     if isinstance(value, list):
         for item in value:

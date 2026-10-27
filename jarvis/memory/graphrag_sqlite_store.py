@@ -154,7 +154,7 @@ class JarvisSQLiteVectorStore(VectorStore):
                 return str(actual).startswith(str(expected))
             if operator == "endswith":
                 return str(actual).endswith(str(expected))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # Invalid filter operands do not match stored records.
             return False
         return False
 

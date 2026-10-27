@@ -6945,7 +6945,7 @@ def test_session_instructions_place_preferences_between_persona_and_directives(
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions(
         "de",
@@ -6971,7 +6971,7 @@ def test_session_instructions_never_teach_native_voice_pipeline_control_tokens(
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: (
+        lambda *, compact=False, **_kwargs: (
             "IDENTITY\n\n"
             "ENDING THE CALL\n"
             f"Say goodbye and append {END_CALL_SIGNAL}.\n\n"
@@ -7002,7 +7002,7 @@ def test_session_instructions_anchor_clock_and_stale_knowledge_guard(monkeypatch
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions("en")
     assert datetime.now().astimezone().strftime("%Y-%m-%d") in text
@@ -7025,7 +7025,7 @@ def test_session_instructions_carry_the_precision_guard(monkeypatch):
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions("en")
     assert "Precision guard" in text

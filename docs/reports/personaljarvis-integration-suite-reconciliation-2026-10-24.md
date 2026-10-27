@@ -9,8 +9,8 @@ The uploaded personal_jarvis_integration_suite.py contains proposed standalone i
 | Integration branch | integration/jarvis-suite-repair-20261024 |
 | Base commit | 2b805e856a17aa971c743cd3736b8bf92aa80daf |
 | Base branch | codex-gemma-mcp-fix-20261014 |
-| Worktree | C:\Users\rober\Documents\Codex\2026-10-24\referenced-chatgpt-conversation-this-is-an\work\PersonalJarvis-integration |
-| Original checkouts | C:\Users\rober\PersonalJarvis and C:\Users\rober\PersonalJarvis-fork |
+| Worktree | %CODEX_WORKSPACE%\2026-10-24\referenced-chatgpt-conversation-this-is-an\work\PersonalJarvis-integration |
+| Original checkouts | %USERPROFILE%\PersonalJarvis and %USERPROFILE%\PersonalJarvis-fork |
 | Existing author identity | Robee99 <157852291+Robee99@users.noreply.github.com> |
 | Identity evidence | Existing commit 31e1dbecc56a906823db0cb5483d2a3d4f8d6088 |
 
@@ -39,7 +39,7 @@ A six-second faulthandler probe showed the sandbox blocked Windows in socket._fa
 
 Affected tests subsequently ran outside the sandbox with an offline runner that rejects socket connections except Windows' internal socketpair setup. Real Cognee runtime opt-ins were unset; storage and fixtures used synthetic temporary data. No live provider or model calls were made.
 
-The existing test environment is C:\Users\rober\Documents\Codex\2026-10-14\jarvis-build-venv\Scripts\python.exe: Python 3.13.15, HTTPX 0.28.1, httpcore 1.0.9. No packages were installed. Imports were confirmed to resolve from this worktree. The preflight import checks passed; its attempt to set shared hook configuration was denied by the sandbox, so the commit instead selects versioned hooks through a per-command Git option.
+The existing test environment is %CODEX_WORKSPACE%\2026-10-14\jarvis-build-venv\Scripts\python.exe: Python 3.13.15, HTTPX 0.28.1, httpcore 1.0.9. No packages were installed. Imports were confirmed to resolve from this worktree. The preflight import checks passed; its attempt to set shared hook configuration was denied by the sandbox, so the commit instead selects versioned hooks through a per-command Git option.
 
 ## Verification
 

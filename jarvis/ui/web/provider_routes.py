@@ -376,7 +376,7 @@ def _codex_brain_usable() -> bool:
         return True
     try:
         return bool(CodexAuthService(_codex_binary_path()).status().connected)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — missing CLI auth must report as disconnected.
         return False
 
 

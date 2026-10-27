@@ -314,7 +314,7 @@ class FindFilesTool:
             kind = "any"
         try:
             limit = max(1, min(int(args.get("limit") or _DEFAULT_LIMIT), _MAX_LIMIT))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # Invalid caller limits fall back to the bounded default.
             limit = _DEFAULT_LIMIT
         try:
             output = await asyncio.to_thread(

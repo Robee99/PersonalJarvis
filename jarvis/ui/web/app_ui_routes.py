@@ -42,7 +42,7 @@ class AppUiResultAck(BaseModel):
     response_model=AppUiResultAck,
     summary="Report the outcome of an in-app UI action to the waiting tool",
 )
-async def report_app_ui_result(body: AppUiResultBody) -> AppUiResultAck:
+def report_app_ui_result(body: AppUiResultBody) -> AppUiResultAck:
     """Deliver a window's answer; ``accepted`` is False once nothing waits for it."""
     accepted = deliver_result(
         body.request_id,

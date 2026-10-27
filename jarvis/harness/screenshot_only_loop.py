@@ -55,7 +55,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -3482,6 +3482,7 @@ async def _execute_action(
     user_goal: str,
     monitor_geom: tuple[int, int, int, int] = (0, 0, 0, 0),
     observation: Observation | None = None,
+    on_type_dispatched: Callable[[], None] | None = None,
 ) -> tuple[bool, str]:
     """Run one parsed action through the tool layer.
 
@@ -3557,6 +3558,12 @@ async def _execute_action(
             return False, f"type crash: {type(exc).__name__}: {exc}"
         success = bool(getattr(res, "success", False))
         output = str(getattr(res, "output", "") or getattr(res, "error", "") or "")
+        # A successful tool dispatch counts for the repeated-type guard even if
+        # the follow-up accessibility read-back says the text did not land.
+        # The caller can then require a re-focus click before retrying the same
+        # text, instead of blindly dispatching it again into an unknown target.
+        if success and on_type_dispatched is not None:
+            on_type_dispatched()
         # Read-back verification (claude-in-chrome parity): a dispatched type that
         # never reached the field is the #1 cause of "typed into the wrong place and
         # didn't notice". Re-read the editable field's value from the accessibility
@@ -5203,11 +5210,17 @@ async def _run_screenshot_loop(
 
             # Act.
             t_act = time.monotonic()
+            dispatched_type_text: list[str] = []
             try:
                 success, message = await _execute_action(
                     action_obj, ctx,
                     trace_id=observation.trace_id, user_goal=task_prompt,
                     monitor_geom=monitor_geom, observation=observation,
+                    on_type_dispatched=(
+                        lambda: dispatched_type_text.append(
+                            str(action_obj.get("text", "")).strip()
+                        )
+                    ) if action == "type" else None,
                 )
             except TimeoutError:
                 yield _final(
@@ -5224,6 +5237,12 @@ async def _run_screenshot_loop(
             )
 
             if not success:
+                if dispatched_type_text and dispatched_type_text[-1]:
+                    # The type tool accepted the text, but later verification
+                    # can still reject it (for example, no editable field was
+                    # readable). Suppress an immediate duplicate until a click
+                    # re-targets the input.
+                    last_typed_text = dispatched_type_text[-1]
                 # BUG-CU fix 2026-05-28: do NOT kill the whole mission on a
                 # single action miss (e.g. a click_element that found no
                 # matching UIA node, or a click that hit nothing). Feed the

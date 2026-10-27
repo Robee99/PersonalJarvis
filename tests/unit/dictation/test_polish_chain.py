@@ -74,6 +74,10 @@ def _with_keys(monkeypatch: pytest.MonkeyPatch, slots: dict[str, str]) -> None:
         return slots.get(key)
 
     monkeypatch.setattr(jarvis_config, "get_secret", _fake_get_secret)
+    # These cases pin credential ordering and user-selected families. Local
+    # recognizer privacy policy is covered separately; it must not turn every
+    # keychain fixture into an Ollama-only chain on a developer machine.
+    monkeypatch.setattr("jarvis.dictation.polish_client.stt_runs_on_device", lambda: False)
 
 
 def _ids(chain: tuple[PolishFamily, ...]) -> list[str]:

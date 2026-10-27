@@ -35,14 +35,15 @@ def _manager(
     *,
     policy: dict | None = None,
     only: tuple[str, ...] | None = None,
+    primary: str = "openrouter",
 ) -> BrainManager:
     cfg = load_config()
-    cfg.brain.primary = "openrouter"
+    cfg.brain.primary = primary
     cfg.brain.deep_brain = None
     if policy is not None:
         cfg.brain.route_policy = BrainRoutePolicyConfig.model_validate(policy)
     mgr = BrainManager.from_tier_config(
-        "router", cfg, EventBus(), provider_override="openrouter"
+        "router", cfg, EventBus(), provider_override=primary
     )
     # The Nous plugin is registered exactly as an installed entry point would
     # register it, independent of the venv's installed metadata.
@@ -109,6 +110,7 @@ def test_selecting_nous_is_what_puts_it_on_the_chain(
             "fast": {"provider": "nous", "model": "stepfun/step-3.7-flash:free"},
             "deep": {"provider": "openai", "model": "deep-model"},
         },
+        primary="nous",
     )
     assert mgr._build_fallback_chain("fast")[0] == ("nous", "stepfun/step-3.7-flash:free")
 

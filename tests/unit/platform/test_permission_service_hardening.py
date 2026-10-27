@@ -169,6 +169,45 @@ def test_a_hung_automation_read_times_out_and_the_player_is_quarantined(
         probe.release.set()
 
 
+def test_automation_guard_quarantines_when_wait_reaches_its_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard = service_module._AutomationGuard(
+        timeout_s=60.0,
+        quarantine_s=600.0,
+        clock=time.monotonic,
+    )
+    real_guard_call = service_module._GuardCall
+    calls: list[Any] = []
+
+    def capture_call(*, done: threading.Event, deadline: float) -> Any:
+        call = real_guard_call(done=done, deadline=deadline)
+        calls.append(call)
+        return call
+
+    real_wait = threading.Event.wait
+
+    def return_early(event: threading.Event, timeout: float | None = None) -> bool:
+        if calls and event is calls[0].done:
+            return False
+        return real_wait(event, timeout)
+
+    monkeypatch.setattr(service_module, "_GuardCall", capture_call)
+    monkeypatch.setattr(threading.Event, "wait", return_early)
+    release = threading.Event()
+
+    def hung_probe() -> PermissionState:
+        release.wait(5.0)
+        return PermissionState.DENIED
+
+    try:
+        result = guard.read("com.apple.Music", hung_probe, wait_s=60.0)
+        assert result.kind == "quarantined"
+        assert guard.read("com.apple.Music", hung_probe, wait_s=0.0).kind == "quarantined"
+    finally:
+        release.set()
+
+
 def test_an_automation_read_without_a_player_asks_nobody(make_env: Callable[..., Env]) -> None:
     env = make_env(installed_players=[_MUSIC], running_players=[_MUSIC])
 

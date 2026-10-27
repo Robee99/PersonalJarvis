@@ -298,7 +298,7 @@ async def test_generate_flags_executed_desktop_action_tool() -> None:
     (data/jarvis_desktop.log 16:27)."""
     router, _recorder = _build_router()
     router.manager._build_dispatcher = (  # type: ignore[method-assign]
-        lambda _brain, *, tools_override=None: _AggDispatcher(requested="computer_use")
+        lambda _brain, **_kwargs: _AggDispatcher(requested="computer_use")
     )
 
     await router.manager.generate("was ist das hier")  # i18n-allow
@@ -312,7 +312,7 @@ async def test_generate_does_not_flag_non_action_tool() -> None:
     clarify-question behaviour."""
     router, _recorder = _build_router()
     router.manager._build_dispatcher = (  # type: ignore[method-assign]
-        lambda _brain, *, tools_override=None: _AggDispatcher(requested="wiki_recall")
+        lambda _brain, **_kwargs: _AggDispatcher(requested="wiki_recall")
     )
 
     await router.manager.generate("was ist das hier")  # i18n-allow
@@ -329,7 +329,7 @@ async def test_generate_does_not_flag_requested_but_blocked_action_tool() -> Non
     clarifying question as before."""
     router, _recorder = _build_router()
     router.manager._build_dispatcher = (  # type: ignore[method-assign]
-        lambda _brain, *, tools_override=None: _AggDispatcher(
+        lambda _brain, **_kwargs: _AggDispatcher(
             requested="computer_use", executed=set()
         )
     )

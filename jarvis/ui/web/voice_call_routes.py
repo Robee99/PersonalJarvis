@@ -46,7 +46,7 @@ class BrowserStartupFailure(BaseModel):
 
 
 @router.post("/startup-failed")
-async def voice_startup_failed(body: BrowserStartupFailure) -> dict[str, bool]:
+def voice_startup_failed(body: BrowserStartupFailure) -> dict[str, bool]:
     """Release a pending wake request when browser audio could not start."""
     from jarvis.live.runtime import browser_startup_failed
 
@@ -143,7 +143,7 @@ async def voice_state(request: Request) -> dict[str, Any]:
 
 
 @router.post("/call")
-async def voice_call() -> dict[str, Any]:
+def voice_call() -> dict[str, Any]:
     """Start a voice conversation — functionally the wake word, by click.
 
     ``armed`` is ``False`` when the pipeline refused (a session already runs,
@@ -170,7 +170,7 @@ async def voice_hangup() -> dict[str, Any]:
 
 
 @router.get("/mute")
-async def voice_mute_state() -> dict[str, Any]:
+def voice_mute_state() -> dict[str, Any]:
     """Whether the user's microphone is muted for the assistant right now.
 
     The flag lives on the pipeline (``SpeechPipeline._muted``) and nowhere

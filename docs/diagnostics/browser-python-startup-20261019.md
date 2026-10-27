@@ -59,7 +59,7 @@ libraries installed. No main application dependencies were changed.
 ## Evidence and reproduction
 
 Artifacts:
-`C:\Users\rober\AppData\Local\Temp\jarvis-startup-probe-20261019\`
+`%TEMP%\jarvis-startup-probe-20261019\`
 
 - `startup.log`: original reproduced browser dependency failure.
 - `browser-real-install.log`: successful real install, timing and selected Python.
@@ -68,7 +68,7 @@ Artifacts:
 - `final-results.xml`: final 24-test result.
 
 Verified browser data:
-`C:\Users\rober\AppData\Local\Temp\jb-1019\society\browser\installed.json`.
+`%TEMP%\jb-1019\society\browser\installed.json`.
 
 The opt-in acceptance test runs with `JARVIS_BROWSER_ACCEPTANCE_ROOT` set to a
 separate test data directory. With that variable absent, it skips; it does not

@@ -699,8 +699,10 @@ def test_the_settings_route_names_the_provider_that_will_answer(
     from jarvis.core import config as jarvis_config
     from jarvis.dictation.polish import reset_polish_state
     from jarvis.dictation.polish_client import POLISH_FAMILIES
+    from jarvis.dictation import polish_client
 
     reset_polish_state()
+    monkeypatch.setattr(polish_client, "stt_runs_on_device", lambda: False)
     family = POLISH_FAMILIES[0]
     slot = family.secret_candidates[0]
     monkeypatch.setattr(
@@ -732,8 +734,10 @@ def test_a_host_with_no_key_still_gets_a_key_to_paste(
     """
     from jarvis.core import config as jarvis_config
     from jarvis.dictation.polish import reset_polish_state
+    from jarvis.dictation import polish_client
 
     reset_polish_state()
+    monkeypatch.setattr(polish_client, "stt_runs_on_device", lambda: False)
     monkeypatch.setattr(
         jarvis_config, "get_secret", lambda key, env_fallback=None: None
     )

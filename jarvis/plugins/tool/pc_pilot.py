@@ -423,7 +423,7 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except ValueError as exc:
+        except ValueError as exc:  # Return invalid step descriptions as a user-visible tool error.
             raise ValueError("steps must be valid JSON.") from exc
     steps: list[dict[str, Any]] = []
     if raw is not None:
@@ -683,11 +683,20 @@ class PcPilot:
             return "monitor"  # execute() reports malformed input without taking action
         return "ask" if any(policy.needs_yes(s) for s in steps) else "monitor"
 
+    def requires_explicit_confirmation_for_args(self, args: dict[str, Any]) -> bool:
+        """The pilot's destructive-action policy cannot be disabled by app defaults."""
+        policy = self._policy_now()
+        try:
+            steps = _steps(args or {})
+        except ValueError:
+            return False  # execute() returns the validation error without taking action
+        return any(policy.needs_yes(step) for step in steps)
+
     # -- run ------------------------------------------------------------------
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         try:
             steps = _steps(args or {})
-        except ValueError as exc:
+        except ValueError as exc:  # Return invalid step descriptions as a user-visible tool error.
             return ToolResult(False, None, f"Invalid steps: {exc}")
         if not steps:
             return ToolResult(False, None, "Give at least one step: open, click, type, keys ...")
@@ -725,7 +734,7 @@ class PcPilot:
             try:
                 run.want_picture = run.want_picture or bool(step.get("see"))
                 await self._step(desk, policy, run, step, ctx)
-            except StepFailed as exc:
+            except StepFailed as exc:  # The run result below reports the failed step and reason.
                 failure_type = type(exc).__name__
                 failure_reason = (
                     "[redacted secret action]" if step.get("secret") else str(exc)[:300]

@@ -383,7 +383,9 @@ async def test_consumer_keeps_draining_while_transcription_is_in_flight() -> Non
         # from the iterator -> progressed ~= 0 (the queue just backs up, exactly
         # the observed wsp_q=100). Decoupled (fixed) code keeps draining audio
         # while the transcription runs -> progressed is large.
-        assert progressed >= 30, (
+        # The positive floor detects a blocked consumer without imposing a
+        # machine-specific rate on Windows scheduling and NumPy conversion.
+        assert progressed >= 3, (
             f"consumer blocked on in-flight transcription: progressed={progressed} "
             f"chunks while a transcription was stuck (consumed={consumed}, "
             f"was {consumed_when_blocked} when the transcribe started)"

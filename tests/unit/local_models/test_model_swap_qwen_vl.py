@@ -23,6 +23,16 @@ def _load(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     aiohttp = ModuleType("aiohttp")
     aiohttp.web = ModuleType("aiohttp.web")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "aiohttp", aiohttp)
+    # Importing the operational script normally reads C:\\models settings.
+    # Tests pin shipped defaults and must not consume the user's live file.
+    original_is_file = Path.is_file
+
+    def isolated_is_file(path: Path) -> bool:
+        if path == Path(r"C:\models\swap-settings.json"):
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", isolated_is_file)
     spec = importlib.util.spec_from_file_location("jarvis_model_swap_under_test", SOURCE)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

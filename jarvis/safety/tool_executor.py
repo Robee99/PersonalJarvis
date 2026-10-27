@@ -795,7 +795,24 @@ class ToolExecutor:
                         "intent_confirms_args on %r raised %r — keeping confirmation",
                         tool.name, exc,
                     )
-        needs_confirm = tier_confirm or plaus_confirm
+        requires_explicit_confirmation = bool(
+            getattr(tool, "requires_explicit_confirmation", False)
+        )
+        explicit_confirmation_hook = getattr(
+            tool, "requires_explicit_confirmation_for_args", None
+        )
+        if callable(explicit_confirmation_hook):
+            try:
+                requires_explicit_confirmation = bool(explicit_confirmation_hook(args))
+            except Exception as exc:  # noqa: BLE001 — a broken safety hook fails closed
+                log.warning(
+                    "requires_explicit_confirmation_for_args on %r raised %r — "
+                    "keeping confirmation",
+                    tool.name,
+                    exc,
+                )
+                requires_explicit_confirmation = True
+        needs_confirm = tier_confirm or plaus_confirm or requires_explicit_confirmation
         # A bound chat owns its approval stance through ChatApprovalBridge.
         # Calls from voice, tasks, missions and other app surfaces use the
         # global default. This never overrides the block/read-only/cancel
@@ -803,6 +820,14 @@ class ToolExecutor:
         bypass_default = self._evaluator.bypass_permissions and not (
             config_snapshot or {}
         ).get("approval_ref")
+        if requires_explicit_confirmation:
+            bypass_default = False
+        if (config_snapshot or {}).get("require_user_confirmation"):
+            # A trusted caller may require an approval surface even when the
+            # app-wide default bypasses prompts for ordinary local actions.
+            # This is set by the Jarvis MCP boundary for external agents; the
+            # tool arguments and model cannot set it.
+            bypass_default = False
         # WHO can answer this gate — declared by the calling layer, never by
         # the model (see ``approval_surface``). It changes only how the
         # approval is obtained, never whether one is needed: ``needs_confirm``

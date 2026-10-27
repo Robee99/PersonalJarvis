@@ -125,7 +125,7 @@ class TokenStore:
         """A cheap version for noticing writes made by another app worker."""
         try:
             stat = path.stat()
-        except OSError:
+        except OSError:  # A failed stat disables the cache fast path so the token file is reread.
             return None
         return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 

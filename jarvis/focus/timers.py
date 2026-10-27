@@ -262,7 +262,7 @@ class TimerBoard:
         delay = max(0.0, -late)
         try:
             await asyncio.sleep(delay)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # Cancellation is the expected signal when a timer is removed.
             return
         self._entries.pop(entry.id, None)
         self._tasks.pop(entry.id, None)

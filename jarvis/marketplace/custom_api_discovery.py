@@ -67,13 +67,13 @@ class ApiDiscovery:
     def __init__(
         self, *, transport: Any = None, directory: dict[str, Any] | None = None, search: Any = None
     ) -> None:
+        guarded_transport = public_only_async(transport=transport)["transport"]
         self._pool = HttpClientPool(
             timeout_s=15,
-            transport=transport,
+            transport=guarded_transport,
             client_kwargs={
                 "follow_redirects": False,
                 "trust_env": False,
-                **public_only_async(),
             },
         )
         self._directory = directory
