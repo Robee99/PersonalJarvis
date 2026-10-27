@@ -224,12 +224,21 @@ _CLAIMED_DONE = re.compile(
 )
 
 
+# Live 2026-10-27 "Opened Swiggy Instamart in Chrome." with no call: a report
+# that opens with the finished verb, the way the reflexes speak.
+# "Set" and "put" read the same as an instruction, so they never count bare.
+_REPORTED_DONE = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|done|sure|sir),?\s+)?(?!set\b|put\b)(?:" + _DONE_VERBS + r")\s+\S",
+    re.IGNORECASE,
+)
+
+
 def _claims_done(text: str) -> bool:
-    """A first-person report of an action, outside a question."""
+    """A first-person or bare report of an action, outside a question."""
     for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
         if sentence.rstrip().endswith("?"):
             continue
-        if _CLAIMED_DONE.search(sentence):
+        if _CLAIMED_DONE.search(sentence) or _REPORTED_DONE.search(sentence):
             return True
     return False
 

@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -66,6 +67,10 @@ _OPEN_WAIT_S = 25.0
 _SETTLE_S = 0.45
 #: Seconds an opened window may take to finish drawing its controls.
 _OPEN_SETTLE_S = 3.0
+#: How far a click looks down a page for a name it cannot see, in scrolls.
+_FIND_SCROLLS = 8
+#: open_app's answer when no such program is on this PC.
+_NOT_INSTALLED = re.compile(r"not (?:be )?found|not installed|no app", re.IGNORECASE)
 #: Seconds a web page gets to replace the typed address with its own title.
 _PAGE_WAIT_S = 8.0
 #: Keys that open a shell surface (Start, search, Run, notifications, clipboard).
@@ -437,6 +442,15 @@ class _Run:
     shell: bool = False
 
 
+def web_lookup_url(name: str) -> str:
+    """A browser address that lands on ``name``'s own website.
+
+    DuckDuckGo's ``!ducky`` goes straight to the top result, free and with no
+    key, so "Swiggy Instamart" opens swiggy.com/instamart rather than a list.
+    """
+    return "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(f"!ducky {name}")
+
+
 def _launch(kind: str, value: str) -> str:
     """Open a settings page, URL, folder or shell place (never an app; see open_app).
 
@@ -478,6 +492,11 @@ class PcPilot:
         "'steps', e.g. [{\"open\":\"calculator\"},{\"click\":\"7\"},{\"click\":\"plus\"},"
         "{\"click\":\"8\"},{\"click\":\"equals\"}] or [{\"open\":\"settings windows update\"},"
         "{\"click\":\"Check for updates\"}] or [{\"open\":\"notepad\"},{\"type\":\"hello\"}]. "
+        "Websites work the same way in the owner's own Chrome: shopping sites such as "
+        "Swiggy Instamart, Amazon or Blinkit, e.g. [{\"open\":\"swiggy instamart\"},"
+        "{\"type\":\"diet coke\",\"into\":\"Search\",\"enter\":true},{\"click\":\"Add\"}]; "
+        "adding to a cart is fine, paying is asked first. A name not on screen is "
+        "scrolled to. "
         "Step keys: open (app, page, folder or URL), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
         "enter=true, secret=true for a password), keys ('ctrl+s', 'enter', 'win+d'), "
@@ -636,11 +655,18 @@ class PcPilot:
     async def _do_open(self, desk: Desk, run: _Run, what: str, ctx: Any) -> None:
         kind, value = open_target(what)
         before = {w.handle for w in await asyncio.to_thread(desk.windows)}
+        web_for = ""
         if kind == "app":
             opener = self._open_app_now()
             result = await opener.execute({"app_name": value}, ctx)
             if not getattr(result, "success", False):
-                raise StepFailed(str(getattr(result, "error", "") or f"Could not open {value}."))
+                error = str(getattr(result, "error", "") or f"Could not open {value}.")
+                if not _NOT_INSTALLED.search(error):
+                    raise StepFailed(error)
+                # Live 2026-10-27 "open swiggy instamart and add ... to my cart":
+                # no such app, but the service has a website. Its name goes to
+                # the browser, which lands on the site's own page.
+                web_for, kind, value = value, "url", web_lookup_url(value)
         browser = ""
         if kind != "app":
             browser = await asyncio.to_thread(_launch, kind, value)
@@ -685,7 +711,10 @@ class PcPilot:
                 wins = await asyncio.to_thread(desk.windows)
                 run.window = next((w for w in wins if w.handle == front), run.window)
                 self._last = run.window
-        run.done.append(f"opened {what}")
+        run.done.append(
+            f"opened {what}" if not web_for
+            else f"found no app named {web_for!r}, so opened its website in the browser"
+        )
 
     # -- blocking helpers (run in a thread) ---------------------------------
     def _wait_for_window(
@@ -732,7 +761,9 @@ class PcPilot:
         while time.monotonic() < deadline:
             fresh = next((w for w in desk.windows() if w.handle == win.handle), win)
             title = _norm(fresh.title)
-            if title and not title.startswith(typed) and "loading" not in title:
+            # A !ducky lookup shows DuckDuckGo's own page until it redirects.
+            hop = "duckduckgo" in typed and "duckduckgo" in title
+            if title and not title.startswith(typed) and "loading" not in title and not hop:
                 return fresh
             self._sleep(0.4)
         return win
@@ -788,6 +819,20 @@ class PcPilot:
             # A page or pane that is still loading: look once more.
             self._sleep(0.9)
             control = best_control(self._look(desk, run), target)
+        scrolls = 0
+        while control is None and scrolls < _FIND_SCROLLS and _coords(target) is None:
+            # Settings and long web pages only build the rows in view: live
+            # 2026-10-27 "More sound settings" sat below the fold of Sound.
+            # Scroll down and look again until the page stops moving.
+            seen = {(c.role, c.name, c.bounds) for c in run.controls}
+            desk.scroll(*win_center(run.controls), -5)
+            scrolls += 1
+            self._sleep(0.6)
+            control = best_control(self._look(desk, run), target)
+            if control is None and {(c.role, c.name, c.bounds) for c in run.controls} == seen:
+                break
+        if control is not None and scrolls:
+            run.done.append(f"scrolled down to {control.name}")
         if control is None:
             raise StepFailed(
                 f"No control named like {target!r} in '{run.window.title}'. "  # type: ignore[union-attr]

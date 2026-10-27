@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 _BROWSER = r"(?:my\s+|the\s+)?(?:google\s+)?(?P<{name}>chrome|edge|browser)"
 _LEAD = (
-    r"^\s*(?:(?:please|jarvis|hey\s+jarvis|ok(?:ay)?|can\s+you|could\s+you|now|"
+    r"^\s*(?:(?:please|jarvis|hey\s+jarvis|hi|hello|hey|ok(?:ay)?|can\s+you|could\s+you|now|"
     r"(?:very\s+)?good|great|nice)[,\s]+)*"
 )
 _JOIN = r"\s*(?:,|\band\b|\bthen\b|\band\s+then\b)?\s*"
@@ -45,6 +45,10 @@ _OPEN_THEN_PLAY = re.compile(
     _LEAD
     + r"(?:(?:go\s+to|open|launch|use|in|on)\s+"
     + _BROWSER.format(name="b1")
+    + _JOIN
+    + r")?"
+    # "click on roberto": the Chrome profile to open it in.
+    + r"(?:click\s+on\s+(?P<profile>[a-z][\w.-]*?)(?:['\u2019]s)?(?:\s+profile)?"
     + _JOIN
     + r")?(?:(?:open|go\s+to|on|in)\s+)?(?:my\s+|the\s+)?youtube(?:\.com)?\s*(?:(?:in|on)\s+"
     + _BROWSER.format(name="b2")
@@ -85,6 +89,33 @@ _SECOND_JOB = re.compile(
     re.IGNORECASE,
 )
 
+_SAYS_YOUTUBE = re.compile(r"\byou\s*tu+b+e?\b", re.IGNORECASE)
+#: What "it" stands for in "play it on youtube": the last thing asked to play.
+#: Live 2026-10-27 that played the film "It" after "play i mean it by g eazy".
+_PRONOUN = re.compile(
+    r"^(?:it|this|that|the\s+same|(?:the|this|that)\s+(?:song|track|video|one))(?:\s+again)?$",
+    re.IGNORECASE,
+)
+_PLAY_SUBJECT = re.compile(
+    r"\bplay\s+(?:the\s+)?(?:song|video|track)?\s*(?:called\s+)?(?P<x>.+?)"
+    r"(?:\s+(?:on|in|from|using|with)\s+(?:youtube|spotify|chrome|edge|my|the|music)\b.*)?"
+    r"[.!?\s]*$",
+    re.IGNORECASE,
+)
+_last_subject = ""
+
+
+def remember_play_subject(text: str) -> None:
+    """Keep what this utterance asks to play, for a later "play it"."""
+    global _last_subject
+    found = _PLAY_SUBJECT.search(text or "")
+    if found is None:
+        return
+    subject = found.group("x").strip(" .,!")
+    if subject and not _PRONOUN.match(subject) and len(subject) <= 120:
+        _last_subject = subject
+
+
 _SEARCH = "https://www.youtube.com/results"
 _VIDEO_ID = re.compile(r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"')
 _TITLE = re.compile(r'"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"')
@@ -99,6 +130,8 @@ class YouTubeAsk:
     play: bool
     #: "chrome", "edge" or "" for the default browser.
     browser: str
+    #: A Chrome profile named in the ask ("click on roberto"), else "".
+    profile: str = ""
 
 
 #: "... and play the video" after a search: the search's top result plays.
@@ -113,10 +146,11 @@ _PLAY_TAIL = re.compile(
 def parse_youtube_ask(text: str) -> YouTubeAsk | None:
     """The video this utterance plainly asks to play or search on YouTube, else ``None``."""
     text = (text or "").strip()
-    if not text or len(text) > 200 or "youtube" not in text.lower():
+    if not text or len(text) > 200 or not _SAYS_YOUTUBE.search(text):
         return None
-    # Typed shorthand: "open youtube n play x".
+    # Typed shorthand: "open youtube n play x"; typos: "youtubbe.com".
     text = re.sub(r"\s+n\s+", " and ", text)
+    text = _SAYS_YOUTUBE.sub("youtube", text)
     tail = _PLAY_TAIL.search(text)
     then_play = tail is not None and tail.start() > 0
     if then_play:
@@ -143,8 +177,10 @@ def parse_youtube_ask(text: str) -> YouTubeAsk | None:
     )
     browser = named.lower() if named.lower() in ("chrome", "edge") else ""
     verb = m.group("verb").lower()
+    profile = m.group("profile") if "profile" in m.re.groupindex else ""
     return YouTubeAsk(
-        query=query, play=then_play or verb in ("play", "open"), browser=browser
+        query=query, play=then_play or verb in ("play", "open"), browser=browser,
+        profile=(profile or "").lower(),
     )
 
 
@@ -196,14 +232,38 @@ _SPOKEN_BROWSER = {
 }
 
 
-def open_in_browser(url: str, browser: str) -> str:
+def chrome_profile_dir(name: str, local_state: Path | None = None) -> str:
+    """The Chrome profile folder ("Default", "Profile 1") whose person is ``name``, or ""."""
+    want = (name or "").strip().casefold()
+    if not want:
+        return ""
+    if local_state is None:
+        user_data = Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/User Data"
+        local_state = user_data / "Local State"
+    try:
+        cache = json.loads(local_state.read_text(encoding="utf-8"))["profile"]["info_cache"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    for folder, info in cache.items():
+        keys = ("name", "gaia_given_name", "gaia_name", "user_name")
+        names = [str(info.get(k) or "") for k in keys]
+        if any(n.casefold().startswith(want) for n in names if n):
+            return str(folder)
+    return ""
+
+
+def open_in_browser(url: str, browser: str, profile: str = "") -> str:
     """Open ``url`` in the named browser (a new tab in its open window), else the default.
 
-    Returns the browser that opened it, as spoken ("Chrome", "Edge", "your browser").
+    ``profile`` names a Chrome person ("roberto"); the tab opens in that
+    profile's window. Returns the browser that opened it, as spoken
+    ("Chrome", "Edge", "your browser").
     """
     exe = _browser_exe(browser) if browser else None
     if exe:
-        subprocess.Popen([exe, url])  # noqa: S603 - the installed browser and an https URL
+        folder = chrome_profile_dir(profile) if profile and browser == "chrome" else ""
+        extra = [f"--profile-directory={folder}"] if folder else []
+        subprocess.Popen([exe, *extra, url])  # noqa: S603 - the installed browser and an https URL
         return {"chrome": "Chrome", "edge": "Edge"}[browser]
     # None named: the browser the owner already has open (live 2026-10-27 the
     # default was Edge while he worked in Chrome), else the default.
@@ -229,8 +289,19 @@ def youtube_reflex(
     ``lookup`` and ``opener`` are injectable for tests.
     """
     ask = parse_youtube_ask(text)
+    earlier = _last_subject
+    remember_play_subject(text)
     if ask is None or (opener is None and platform != "win32"):
         return None
+    if _PRONOUN.match(ask.query):
+        if not earlier:
+            return None  # nothing said before to stand for "it": the brain asks
+        ask = YouTubeAsk(query=earlier, play=ask.play, browser=ask.browser, profile=ask.profile)
+    if ask.profile:
+        named_opener = opener or open_in_browser
+
+        def opener(url: str, browser: str) -> str:
+            return named_opener(url, browser or "chrome", profile=ask.profile)
     opener = opener or open_in_browser
     results = f"{_SEARCH}?{urllib.parse.urlencode({'search_query': ask.query})}"
     found = lookup(ask.query) if ask.play else None

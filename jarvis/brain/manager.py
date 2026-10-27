@@ -4179,6 +4179,22 @@ class BrainManager:
         )
         return surface, switch
 
+    async def _gev_fly_reflex(self, user_text: str, trace_id: Any) -> str | None:
+        """Fly God's Eye View to a plainly named place with its own tool (intel/gev_fly.py)."""
+        from jarvis.intel.gev_fly import fly_reply, parse_fly_request, view_tool
+
+        place = parse_fly_request(user_text)
+        tool = view_tool(self._tools) if place else None
+        if tool is None or self._tool_executor is None:
+            return None
+        result = await self._tool_executor.execute(
+            tool, {"area": {"place": place}}, user_utterance=user_text, trace_id=trace_id,
+        )
+        if not result.success:
+            log.info("gev fly reflex: %s failed: %s", place, result.error)
+            return None  # the brain gets the turn and can report or retry
+        return fly_reply(place, result.output)
+
     def _my_chrome(self) -> Tool | None:
         """One BrowserSkill tool per manager, so its Chrome session spans turns."""
         cached = getattr(self, "_my_chrome_tool", None)
@@ -12404,6 +12420,8 @@ class BrainManager:
                 reflex_reply = await asyncio.to_thread(reflex, user_text)
                 if reflex_reply is not None:
                     break
+            if reflex_reply is None:
+                reflex_reply = await self._gev_fly_reflex(user_text, turn_trace_id)
             if reflex_reply is not None:
                 await self._record_response_side_effects(
                     user_text=user_text,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from jarvis.platform import youtube_play
 from jarvis.platform.youtube_play import YouTubeAsk, parse_youtube_ask, youtube_reflex
 
 
@@ -98,3 +99,42 @@ def test_no_result_opens_the_search_and_says_so() -> None:
 
 def test_off_windows_without_an_opener_nothing_happens() -> None:
     assert youtube_reflex("play x on youtube", platform="linux") is None
+
+
+def test_greeting_typo_and_chrome_profile_are_understood() -> None:
+    ask = youtube_play.parse_youtube_ask(
+        "hi open chrome click on roberto and open youtubbe.com then play i mean it by g eazy"
+    )
+    assert ask == youtube_play.YouTubeAsk(
+        query="i mean it by g eazy", play=True, browser="chrome", profile="roberto"
+    )
+
+
+def test_play_it_means_the_last_thing_asked_to_play(monkeypatch) -> None:
+    monkeypatch.setattr(youtube_play, "_last_subject", "")
+    youtube_play.remember_play_subject("play i mean it by g eazy")
+    opened: list[str] = []
+    reply = youtube_play.youtube_reflex(
+        "play it on youtube",
+        lookup=lambda q: ("abcdefghijk", q),
+        opener=lambda url, browser: opened.append(url) or "Chrome",
+    )
+    assert reply == "Opened i mean it by g eazy on YouTube in Chrome."
+
+
+def test_play_it_with_nothing_before_goes_to_the_brain(monkeypatch) -> None:
+    monkeypatch.setattr(youtube_play, "_last_subject", "")
+    assert youtube_play.youtube_reflex(
+        "play it on youtube", lookup=lambda q: None, opener=lambda u, b: "Chrome"
+    ) is None
+
+
+def test_chrome_profile_folder_is_found_by_the_persons_name(tmp_path) -> None:
+    state = tmp_path / "Local State"
+    state.write_text(
+        '{"profile":{"info_cache":{"Default":{"name":"Work"},'
+        '"Profile 1":{"name":"Person 1","gaia_given_name":"Roberto"}}}}',
+        encoding="utf-8",
+    )
+    assert youtube_play.chrome_profile_dir("roberto", state) == "Profile 1"
+    assert youtube_play.chrome_profile_dir("nobody", state) == ""

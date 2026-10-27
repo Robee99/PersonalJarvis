@@ -189,6 +189,26 @@ _POINTER_TAILS = frozenset({
 #: The hands that stay out when the pilot is here, unless the owner names them.
 _SAYS_SCREEN_HANDS = re.compile(r"\bcomputer[\s_-]*use\b|\bscreen\s+control\b", re.I)
 _SAYS_MY_CHROME = re.compile(r"\bmy[_\s]chrome\b|\bbrowser\s*skill\b", re.I)
+#: Live 2026-10-27 "open youtube.com then play i mean it by g eazy" opened
+#: YouTube and then searched a Spotify that was never connected.
+_SAYS_YOUTUBE = re.compile(r"\byou\s*tu+b+e?\b", re.I)
+_SAYS_SPOTIFY = re.compile(r"\bspotify\b", re.I)
+#: GEV's tool that moves the globe. Live 2026-10-27 "fly me to Mumbai in God's
+#: Eye View" got eight of GEV's data tools ranked above it (every one of them
+#: shares "gods eye view"), so Gemma answered with rocket launches.
+GEV_VIEW_TAIL = "show_in_gods_eye_view"
+_SAYS_GEV = re.compile(
+    r"\bgods?['\u2019]?\s*s?\s*eye\b|\bgev\b|\bglobe\b|\bworld\s+(?:screen|map|view)\b"
+    r"|\bfly\s+(?:me\s+)?(?:to|over)\b",
+    re.I,
+)
+
+
+def pinned_for_request(tools: Iterable[str], query: str) -> list[str]:
+    """Tools a request needs whatever the word ranking says, best first."""
+    if not _SAYS_GEV.search(query or ""):
+        return []
+    return [n for n in tools if n.rsplit("/", 1)[-1] == GEV_VIEW_TAIL]
 
 
 def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
@@ -231,6 +251,8 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
             return not _SAYS_MY_CHROME.search(text)
         if name == APP_HANDS:
             return True
+        if name == "spotify":
+            return bool(_SAYS_YOUTUBE.search(text)) and not _SAYS_SPOTIFY.search(text)
         if name == "compare_prices" or _is_browser_tool(name):
             return not keep_browser
         server = server_of(name, tool)
@@ -329,6 +351,8 @@ class ToolSwitch:
         relevant = [
             n for n in relevant if n not in _ONLY_WHEN_SAID or _ONLY_WHEN_SAID[n].search(query)
         ]
+        pinned = pinned_for_request(self._tools, query)
+        relevant = [*pinned, *[n for n in relevant if n not in pinned]]
         if PILOT in self._tools:
             return self._open_pilot_turn(query, relevant, core=core, keep=keep)
         if SCREEN_HANDS in self._tools and wants_browser_window_control(query or ""):
