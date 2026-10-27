@@ -25,6 +25,7 @@ from jarvis.plugins.tool.pc_pilot import (
     PcPilot,
     PilotPolicy,
     best_control,
+    _match_window,
     open_target,
     settings_uri,
 )
@@ -337,6 +338,55 @@ def test_a_page_is_worked_in_the_browser_it_went_to(tmp_path: Path) -> None:
     pilot = _pilot(desk, tmp_path)
     found = pilot._wait_for_window(desk, set(), "", web=True, strict=True, browser="chrome.exe")
     assert found == CHROME
+
+
+async def test_open_url_reuses_last_verified_browser(tmp_path: Path, monkeypatch) -> None:
+    import jarvis.plugins.tool.pc_pilot as module
+
+    monkeypatch.setattr(module, "_PAGE_WAIT_S", 0)
+    monkeypatch.setattr(module, "_OPEN_SETTLE_S", 0)
+    desk = FakeDesk([TERMINAL, EDGE, CHROME], front=EDGE.handle)
+    pilot = _pilot(desk, tmp_path)
+    pilot._last = CHROME
+    pilot._last_at = 1.0
+
+    def unexpected_launch(*_args):
+        pytest.fail("a verified current browser must be reused before the default")
+
+    monkeypatch.setattr(module, "_launch", unexpected_launch)
+    result = await pilot.execute({"open": "https://example.com"}, Ctx())
+
+    assert result.success
+    assert ("activate", CHROME.title) in desk.log
+    assert ("press", "ctrl+l") in desk.log
+    assert ("type", "https://example.com") in desk.log
+    assert ("press", "enter") in desk.log
+
+
+def test_swiggy_instamart_alias_matches_its_browser_title() -> None:
+    instamart = Window(
+        10, "Online Grocery Store | Instamart - Google Chrome", exe="chrome.exe"
+    )
+    other = Window(11, "Instamart - Google Chrome", exe="chrome.exe")
+
+    assert _match_window([instamart], "Swiggy Instamart") == instamart
+    assert _match_window([instamart, other], "Swiggy Instamart") is None
+    assert _match_window(
+        [instamart, other], "Swiggy Instamart", preferred_handle=other.handle
+    ) == other
+
+
+async def test_multiple_ui_actions_in_one_step_are_rejected(tmp_path: Path) -> None:
+    desk = FakeDesk([CHROME], front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"click": "Search", "wait": 1}]}, Ctx()
+    )
+
+    assert not result.success
+    assert "exactly one UI action" in result.error
+    assert desk.log == []
 
 
 def test_no_browser_window_never_falls_back_to_another_program(
