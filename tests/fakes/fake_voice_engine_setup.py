@@ -26,6 +26,8 @@ class FakeSetupWorld:
     ollama_running: bool = True
     ollama_installed: bool = True
     configured_llm: str = ""
+    #: "openai": the model is served by another server; Ollama is never touched.
+    llm_api: str = "ollama"
     voice: str = "pocket"
     languages: list[str] = field(default_factory=lambda: ["de", "en"])
     fail_command: str = ""
@@ -102,4 +104,5 @@ class FakeSetupWorld:
             selftest=self.selftest if self.selftest_report is not None else None,
             unsupported=lambda: self.blocked,
             package_source=package_source,
+            llm_api=lambda: self.llm_api,
         )

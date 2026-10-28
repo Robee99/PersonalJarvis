@@ -51,7 +51,7 @@ def _manager() -> tuple[BrainManager, _RecordingDispatcher]:
     rec = _RecordingDispatcher()
     m._build_fallback_chain = lambda _l: [("fake", "fake-model")]  # type: ignore[method-assign]
     m._get_brain = lambda _n, _mo: _FakeBrain()  # type: ignore[method-assign]
-    m._build_dispatcher = lambda _b, *, tools_override=None: rec  # type: ignore[method-assign]
+    m._build_dispatcher = lambda _b, **_kw: rec  # type: ignore[method-assign]
 
     async def _screen_not_requested(*_args, **_kwargs) -> TurnScreenContext:
         return TurnScreenContext(status="none")

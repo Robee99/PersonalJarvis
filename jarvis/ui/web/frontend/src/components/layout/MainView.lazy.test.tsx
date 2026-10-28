@@ -62,15 +62,13 @@ describe("MainView lazy sections", () => {
 
   it("keeps the default section statically imported", () => {
     // The first-paint section must not cost an extra round trip on startup.
-    // That section is the surface shell, which picks the mission deck or the
-    // classic chat view from the stored preference — EITHER can be the first
-    // thing painted, so the shell (and with it both surfaces) has to travel in
-    // the entry chunk rather than behind a lazy boundary.
+    // That section is the surface shell (the front page). The mission deck
+    // left the front page on 2026-08-23 and is its own "deck" section now, so
+    // it loads lazily like every other section.
     const source = readFileSync(MAIN_VIEW, "utf8");
     expect(source).toMatch(/import \{ ChatsSurface \} from "@\/views\/ChatsSurface"/);
     expect(lazyViews.some((v) => v.exportName === "ChatsSurface")).toBe(false);
     expect(lazyViews.some((v) => v.exportName === "ChatsView")).toBe(false);
-    expect(lazyViews.some((v) => v.exportName === "MissionDeckView")).toBe(false);
   });
 
   it.each(lazyViewsDeclaredInMainView().map((v) => [v.modulePath, v.exportName]))(

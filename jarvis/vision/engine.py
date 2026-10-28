@@ -28,6 +28,7 @@ from jarvis.core.events import ObservationCaptured
 from jarvis.core.protocols import CancelToken, Observation, UIANode
 
 from .cache import VisionCache
+from .omniparser_source import OmniParserSource
 from .screenshot import ScreenshotSource
 from .tree_factory import make_ui_tree_source
 from .uia_tree import UIATreeSource
@@ -68,6 +69,7 @@ class VisionEngine:
         cache: VisionCache | None = None,
         bus: EventBus | None = None,
         monitor_strategy: Literal["foreground", "primary", "all"] = "foreground",
+        omniparser_source: OmniParserSource | None = None,
     ) -> None:
         # ``monitor_strategy`` selects which screen the screenshot source captures.
         # Default "foreground" preserves behaviour for non-CU callers; the factory
@@ -82,6 +84,13 @@ class VisionEngine:
         self._uia_source = uia_source or make_ui_tree_source()
         self._cache = cache or VisionCache()
         self._bus = bus
+        # Optional visual grounding only runs when explicitly configured and
+        # native UIA returned no elements. It never owns the action path.
+        self._omniparser_source = (
+            omniparser_source
+            if omniparser_source is not None
+            else OmniParserSource.from_environment()
+        )
         self._last_active_window: str = ""
 
     # ---- Public API --------------------------------------------------------
@@ -146,6 +155,8 @@ class VisionEngine:
         await self._screenshot_source.close()
         await self._uia_source.close()
         self._cache.clear()
+        if self._omniparser_source is not None:
+            await self._omniparser_source.close()
 
     # ---- Heuristics ---------------------------------------------------------
 
@@ -210,20 +221,48 @@ class VisionEngine:
     ) -> Observation | None:
         if mode == "screenshot":
             # Returns None on transient BitBlt failure — propagate to observe().
-            return await self._screenshot_source.observe(
+            shot = await self._screenshot_source.observe(
                 cancel_token=cancel_token,
                 window_title_filter=window_title_filter,
             )
+            if shot is None:
+                return None
+            return await self._add_visual_grounding(shot, cancel_token=cancel_token)
         if mode == "ui_tree":
             return await self._uia_source.observe(
                 cancel_token=cancel_token,
                 window_title_filter=window_title_filter,
             )
         # composite
-        return await self._compose(
+        observation = await self._compose(
             cancel_token=cancel_token,
             window_title_filter=window_title_filter,
         )
+        if observation is None:
+            return None
+        return await self._add_visual_grounding(observation, cancel_token=cancel_token)
+
+    async def _add_visual_grounding(
+        self,
+        observation: Observation,
+        *,
+        cancel_token: CancelToken | None,
+    ) -> Observation:
+        """Use local OmniParser only to fill an otherwise empty visual tree."""
+        source = self._omniparser_source
+        if source is None or observation.nodes or not observation.screenshot_path:
+            return observation
+        nodes = await source.observe(
+            observation.screenshot_path,
+            observation.monitor_geom,
+            cancel_token=cancel_token,
+        )
+        if not nodes:
+            return observation
+        logger.info("Local OmniParser grounded %d interactive icon regions", len(nodes))
+        stats = dict(observation.pruning_stats)
+        stats.update({"omniparser_nodes": len(nodes)})
+        return replace(observation, nodes=nodes, source="full", pruning_stats=stats)
 
     async def _compose(
         self,

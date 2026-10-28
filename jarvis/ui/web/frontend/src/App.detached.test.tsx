@@ -56,6 +56,7 @@ vi.mock("@/components/voice/BrowserRealtimeControl", () => ({
   hasEmbeddedDesktopBridge: () => false,
 }));
 vi.mock("@/components/ToastLayer", () => ({ ToastLayer: () => null }));
+vi.mock("@/components/agentchat/VisionControls", () => ({ VisionControls: () => null }));
 vi.mock("@/components/EditContextMenu", () => ({ EditContextMenu: () => null }));
 vi.mock("@/components/JarvisDock", () => ({ JarvisDock: () => null }));
 vi.mock("@/components/CliConnectPoller", () => ({ CliConnectPoller: () => null }));
@@ -79,6 +80,7 @@ afterEach(() => {
 
 describe("App shell around detached coding views", () => {
   it("keeps the main sidebar while Settings floats over the app", () => {
+    useEventStore.setState({ activeSection: "skills" });
     render(<App />);
     expect(screen.getByTestId("sidebar")).toBeTruthy();
 
@@ -97,6 +99,16 @@ describe("App shell around detached coding views", () => {
       screen.getByTestId("main-view").parentElement?.classList.contains("jarvis-section-stage"),
     ).toBe(true);
     expect(document.documentElement.classList.contains("jarvis-wallpaper")).toBe(false);
+  });
+
+  it.each(["agents", "docs", "memory", "chats", "intelligence", "orbital"] as const)("gives the %s section the whole window", (section) => {
+    useEventStore.setState({ activeSection: section });
+
+    render(<App />);
+
+    expect(screen.queryByTestId("sidebar")).toBeNull();
+    expect(screen.queryByTestId("sidebar-resizer")).toBeNull();
+    expect(screen.getByTestId("main-view")).toBeTruthy();
   });
 
   it("keeps the sidebar reachable in the main window", () => {

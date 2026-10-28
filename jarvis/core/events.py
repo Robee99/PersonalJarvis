@@ -611,7 +611,7 @@ class UiLanguageChanged(Event):
     Emitted by the settings endpoint and (indirectly, via ``ConfigReloaded``) by
     a voice command / the Control API. Distinct from the reply language.
     """
-    language: str = ""  # "en" | "de" | "es"
+    language: str = ""  # "en" | "de" | "es" | "zh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -777,6 +777,22 @@ class MemoryUpdated(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryFileWrite(Event):
+    """An agent's persistent memory file is being written, or the write settled.
+
+    Published by ``jarvis.memory.write_feedback`` around the real write:
+    ``pending`` first, then ``saved`` only after the file was replaced on
+    disk, ``unchanged`` for a no-op, ``failed`` when the write raised. Both
+    steps share ``update_id``. Carries no path, entry text or error detail.
+    """
+    update_id: str = ""
+    agent_id: str = ""
+    file: str = ""           # bare name, e.g. "MEMORY.md"; "" when not known yet
+    phase: str = "pending"   # pending | saved | unchanged | failed
+    operation: str = "edit"  # add | replace | remove | edit
+
+
+@dataclass(frozen=True, slots=True)
 class ProfileUpdated(Event):
     """The Curator wrote a fact to USER.md / people/*.md.
 
@@ -833,6 +849,23 @@ class SystemStateChanged(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationStateChanged(Event):
+    """Where the assistant's current turn stands, for voice and chat alike.
+
+    ``SystemStateChanged`` carries the microphone side (listening, thinking,
+    speaking); this carries what only the brain knows: it is ACTING with a
+    tool, the user INTERRUPTED it, a "stop" CANCELLED it, a "continue"
+    RESUMED it, or the turn COMPLETED. ``detail`` is a short, user-safe label
+    (a tool name, what was stopped); never prompt text or secrets.
+    """
+    #: LISTENING | THINKING | ACTING | SPEAKING | INTERRUPTED | CANCELLED |
+    #: RESUMED | COMPLETED
+    state: str = "COMPLETED"
+    detail: str = ""
+    session_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class NavigateSidebar(Event):
     """Ask the desktop UI to switch the active sidebar section.
 
@@ -845,6 +878,68 @@ class NavigateSidebar(Event):
     parity test.
     """
     section: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AppUiRequest(Event):
+    """Ask the desktop app's main window to read or use its own visible controls.
+
+    Published by :class:`jarvis.core.app_ui_bridge.AppUiBridge` for the
+    ``app_ui_*`` router tools and for ``navigate``'s ``then`` click. The main
+    window (``src/lib/appUi.ts``, wired in ``useWebSocket.ts``; never a
+    detached solo window) performs the action and posts the outcome to
+    ``POST /api/app-ui/result`` under the same ``request_id``.
+
+    ``action`` is ``snapshot`` (list the visible controls with short refs),
+    ``click`` (by ``ref`` or ``label``), ``type`` (``text`` into a field found by
+    ``ref`` or ``label``; ``submit`` presses Enter) or ``scroll``
+    (``direction`` up / down / top / bottom). ``wait_ms`` is how long a click
+    or type by label may wait for the control to appear, so a click right after
+    a section switch can wait for the view to render.
+    """
+    request_id: str = ""
+    action: str = ""
+    ref: str = ""
+    label: str = ""
+    text: str = ""
+    submit: bool = False
+    direction: str = ""
+    wait_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorldIntelCommand(Event):
+    """Ask the World screen to change what its incident panel and globe show.
+
+    Published by the ``world_globe`` tool (``jarvis/intel/mcp_tools.py``)
+    right after a ``NavigateSidebar("world-intelligence")``. The frontend
+    (``useWebSocket.ts``) hands it to the shared intel store, so the panel and
+    whichever globe is showing change together.
+
+    ``action`` is ``focus`` (select ``event_id`` and fly to it), ``filter``
+    (replace the filters; empty fields clear theirs), ``reset`` (no filter,
+    no selection, the whole globe), ``watch`` (play the live news channel
+    or camera ``stream``, a key from ``jarvis.intel.live``) or ``view`` (fly
+    the embedded God's Eye View to the camera in ``view``).
+    """
+    action: str = ""
+    event_id: str = ""
+    hours: float = 0.0
+    #: Comma-separated kinds ("earthquake,cyclone"), or "" for all.
+    kinds: str = ""
+    #: "hazard", "unrest" or "".
+    category: str = ""
+    #: A region id from ``jarvis.intel.query.REGIONS``, or "".
+    region: str = ""
+    #: 0..4, or -1 for no minimum.
+    min_severity: int = -1
+    #: Comma-separated evidence classes, or "" for all.
+    evidence: str = ""
+    #: A live stream key for ``watch``.
+    stream: str = ""
+    #: ``view``: a God's Eye View camera view as JSON (``{"camera": {...}, ...}``),
+    #: from GEV's own ``show_in_gods_eye_view`` result (jarvis/intel/gev_view.py).
+    view: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1290,15 +1385,14 @@ class VoiceInputHeld(Event):
 class VoiceSpeakerMuteChanged(Event):
     """Authoritative broadcast that the assistant's voice went silent or audible.
 
-    Speaker mute is TTS volume 0 for the running session (nothing is written
-    to ``jarvis.toml`` by a mute). Every writer — the orb/pet speaker disc, the
-    in-app speaker button through ``PUT /api/settings/tts-volume`` — ends in
-    ``SpeechPipeline.set_tts_volume``, and that one choke point publishes this
-    event whenever the muted-ness flips. Surfaces mirror it; none of them keeps
-    its own truth.
+    Session-only speaker mute is independent of microphone and volume. The
+    pipeline publishes a complete snapshot after either output setting changes.
+    Revision orders updates across UI threads and reconnecting playback sinks.
     """
     muted: bool = False
     source: str = ""
+    volume: float = 1.0
+    revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1483,6 +1577,59 @@ class AppshotTaken(Event):
     target_label: str = ""
     width: int = 0
     height: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AppshotEditRequested(Event):
+    """The user clicked the appshot card in the screen corner: open the editor.
+
+    The app shows its window and opens the appshot editor on the picture held
+    as the last appshot. ``appshot_id`` is empty when none is kept any more.
+    """
+
+    appshot_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class JarvisXItemCreated(Event):
+    """Jarvis X saved a new screenshot or recording to its library.
+
+    Metadata only; the file is served by ``/api/jarvisx/items/<id>/file``.
+    """
+
+    id: str = ""
+    #: ``image`` | ``video``.
+    kind: str = ""
+    #: ``region`` | ``window`` | ``fullscreen``.
+    mode: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class JarvisXItemUpdated(Event):
+    """A library item changed (an annotated copy was saved)."""
+
+    id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class JarvisXItemDeleted(Event):
+    """A library item and its files were deleted."""
+
+    id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class JarvisXRecordingChanged(Event):
+    """A Jarvis X screen recording started or stopped.
+
+    Published on start and on stop only (not per second); a UI that shows a
+    running timer counts ``elapsed_s`` forward itself.
+    """
+
+    recording: bool = False
+    #: ``region`` | ``fullscreen`` while recording, ``""`` once stopped.
+    mode: str = ""
+    elapsed_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1806,6 +1953,24 @@ class BrainTurnStarted(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class BrainRouteSelected(Event):
+    """``[brain.route_policy]`` picked a tier for a turn, and why.
+
+    ``chain`` is ``provider:model`` per attempt and ``excluded`` is
+    ``tier:provider:why`` per skipped target. No prompt text, no secrets.
+    ``outcome`` is filled for an escalation (the delegate's typed result).
+    """
+
+    tier: str = ""
+    reason: str = ""
+    intent_level: str = ""
+    chain: tuple[str, ...] = ()
+    excluded: tuple[str, ...] = ()
+    outcome: str = ""
+    elapsed_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class BrainTurnCompleted(Event):
     tokens_in: int = 0
     tokens_out: int = 0
@@ -2006,6 +2171,7 @@ class BrowserVoiceRequested(Event):
     """A desktop trigger hands a voice call to the browser media owner."""
 
     action: Literal["start", "stop"] = "start"
+    request_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2449,6 +2615,50 @@ class SocietyMessageSent(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class SocietyResultPosted(Event):
+    """An agent finished (or gave up on) a piece of work: a RESULT on the board.
+
+    Published by :class:`jarvis.society.world_feed.WorldFeed` after the
+    envelope is stored. Carries no text — the result itself stays behind
+    ``GET /api/society/events``. The level system pays the agent for it
+    (``jarvis/progression``); the Verse may celebrate it.
+    """
+
+    #: The board envelope's uuid7, stable for dedupe.
+    event_id: str = ""
+    agent_id: str = ""
+    #: ``done`` or ``blocked`` (the RESULT payload's own status).
+    status: str = ""
+    society_trace: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressionAwarded(Event):
+    """A subject of the Jarvis Verse level system earned XP.
+
+    Published by :class:`jarvis.progression.service.ProgressionService`
+    after the award is stored. ``level > previous_level`` is a level-up;
+    ``unlocked`` names the cosmetics that level-up opened
+    (``jarvis/progression/rules.py`` REWARDS). The Verse animates it.
+    """
+
+    seq: int = 0
+    #: ``person``, ``agent:<agent_id>`` or ``pet:<pet_id>``.
+    subject_id: str = ""
+    subject_kind: str = ""
+    #: The rule that paid (``RULES`` source id).
+    xp_source: str = ""
+    xp: int = 0
+    total_xp: int = 0
+    level: int = 1
+    previous_level: int = 1
+    title: str = ""
+    unlocked: tuple[str, ...] = ()
+    #: Agent looks (``LOOK_UNLOCKS``) this level-up opened; agents only.
+    unlocked_looks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SocietyRoomChanged(Event):
     """A bounded group discussion opened or settled (``jarvis/society/rooms.py``).
 
@@ -2546,7 +2756,7 @@ class MarketplaceItemInstalled(Event):
     usable right now (a skill that validated), False when it
     still needs the user (a plugin waiting to be connected).
     """
-    kind: str = ""  # "skill" | "plugin"
+    kind: str = ""  # "skill" | "plugin" | "agent"
     item_id: str = ""
     title: str = ""
     ready: bool = False

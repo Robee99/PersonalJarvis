@@ -153,6 +153,13 @@ async def test_critic_walks_to_next_api_family_after_invalid_verdict(
         "jarvis.missions.critic.runner._resolve_critic_provider_model",
         lambda: ("antigravity", None),
     )
+    # Keep this test on the API-family walk even when the developer machine has
+    # a signed-in Codex/Claude subscription; this test replaces the API critic
+    # itself and must never spawn a real subscription CLI.
+    monkeypatch.setattr(
+        "jarvis.missions.critic.runner._critic_subscription_only",
+        lambda _provider: False,
+    )
     monkeypatch.setattr(
         "jarvis.missions.critic.runner._claude_cli_critic_viable",
         lambda: False,

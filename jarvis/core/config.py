@@ -174,6 +174,9 @@ PROVIDER_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
     # NVIDIA NIM (OpenAI-compatible). Only the build.nvidia.com key (nvapi-),
     # not the legacy NGC key. One key, many NVIDIA-hosted models.
     "nvidia": (("nvidia_api_key", "NVIDIA_API_KEY"),),
+    # Nous Portal (OpenAI-compatible cloud host, portal.nousresearch.com).
+    # One sk-nous- key reaches the Hermes family and the :free routes.
+    "nous": (("nous_api_key", "NOUS_API_KEY"),),
     "gemini": (
         ("gemini_api_key", "GEMINI_API_KEY"),
         ("google_aistudio_api_key", "GOOGLE_AIStudio_API_KEY"),
@@ -267,6 +270,10 @@ JARVIS_AGENT_SECRET_CANDIDATES: dict[str, tuple[tuple[str, str], ...]] = {
         ("jarvis_agent_nvidia_api_key", "JARVIS_AGENT_NVIDIA_API_KEY"),
         *PROVIDER_SECRET_CANDIDATES["nvidia"],
     ),
+    "nous": (
+        ("jarvis_agent_nous_api_key", "JARVIS_AGENT_NOUS_API_KEY"),
+        *PROVIDER_SECRET_CANDIDATES["nous"],
+    ),
     "vertex": (
         ("jarvis_agent_vertex_api_key", "JARVIS_AGENT_VERTEX_API_KEY"),
         *PROVIDER_SECRET_CANDIDATES["vertex"],
@@ -299,6 +306,13 @@ class PersonaConfig(BaseModel):
     # Explicit so the "legacy name key is ignored" contract above cannot be
     # silently broken by a future base-class / project-wide model_config change.
     model_config = ConfigDict(extra="ignore")
+
+    # The voice's register (jarvis/brain/JARVIS_PERSONA.md): ``butler`` is the
+    # prompt pack's JARVIS (owner's choice 2026-10-25), ``companion`` the warm
+    # friend that never uses an honorific. ``honorific`` is how the butler
+    # addresses the owner; empty means by name only.
+    style: Literal["butler", "companion"] = "butler"
+    honorific: str = Field(default="Sir", max_length=24)
 
 
 class WakeWordConfig(BaseModel):
@@ -851,6 +865,16 @@ class BrainProviderConfig(BaseModel):
 
     model: str | None = None
     deep_model: str | None = None  # Optional: stronger reasoning model
+    # Context-size hint for self-hosted OpenAI-compatible servers. For
+    # local-openai this is the server's actual n_ctx / loaded-model limit; it
+    # lets the prompt and tool fitter stay inside llama.cpp's context window.
+    # None uses the provider's conservative default.
+    context_window: int | None = Field(default=None, ge=1024, le=1_048_576)
+    # Optional per-request cap for local OpenAI-compatible tool schemas.
+    # llama.cpp builds a grammar from the complete list and can reject overly
+    # large surfaces before inference. ``None`` keeps the adapter's safe cap;
+    # ``0`` opts out for a server that has been verified with larger lists.
+    max_tools: int | None = Field(default=None, ge=0, le=2_048)
     # Canonical model for tool-bearing turns. ``cu_model`` remains a
     # compatibility alias for installations predating the Tool Model rename.
     tool_model: str | None = Field(
@@ -875,7 +899,8 @@ class BrainProviderConfig(BaseModel):
     #             needs no reasoning).
     # ``-1``    → dynamic-auto (provider decides per request).
     # ``> 0``   → fixed token cap for the thinking portion.
-    # Currently only evaluated by ``GeminiBrain``; other providers ignore it.
+    # Evaluated by ``GeminiBrain``; ``NousBrain`` and ``HermesBrain`` read ``0``
+    # as "never think". Other providers ignore it.
     thinking_budget: int | None = None
     # Per-model Ollama options keyed by model tag (``"qwen3.5:9b"``), read by
     # the Ollama brain plugin on every turn. Only meaningful for the Ollama
@@ -1590,6 +1615,64 @@ class EvidenceDomainsConfig(BaseModel):
     )
 
 
+class RouteTargetConfig(BaseModel):
+    """One routing target: a configured provider id and an optional model.
+
+    ``local`` declares that this target runs on this machine (a local model
+    server), so images may go to it. A provider id alone cannot tell: a
+    loopback gateway can forward to a cloud model. Unset means "may leave the
+    device", the safe reading.
+    """
+
+    provider: str = ""
+    model: str | None = None
+    local: bool = False
+
+
+class RouteEscalationConfig(BaseModel):
+    """Bounded escalation to a delegate agent (Paperclip), never a direct call.
+
+    ``agent`` names the Paperclip agent that takes the task (for example the
+    install's Claude agent). ``trigger_phrases`` are the words that count as an
+    explicit request; nothing else escalates, so the delegate is never an
+    automatic fallback. ``deadline_s`` bounds how long a voice turn waits for
+    the delegate before it reports a recoverable timeout.
+    """
+
+    enabled: bool = False
+    via: str = "paperclip"
+    agent: str = ""
+    trigger_phrases: list[str] = Field(default_factory=list)
+    deadline_s: float = Field(default=180.0, ge=5.0, le=3600.0)
+    poll_interval_s: float = Field(default=3.0, ge=0.5, le=60.0)
+    max_per_session: int = Field(default=5, ge=0, le=100)
+    max_context_chars: int = Field(default=4000, ge=200, le=50_000)
+
+
+class BrainRoutePolicyConfig(BaseModel):
+    """``[brain.route_policy]``: configured fast/deep/escalation routing.
+
+    Off by default, so an install without this table keeps the normal chain.
+    When enabled, ``jarvis.brain.route_policy.decide_route`` picks the tier per
+    turn from the intent level and the targets' declared capabilities, and the
+    deny lists keep listed providers or model prefixes off every chain (for
+    example to make sure a delegate is the only way to reach a given family).
+    ``allow_cloud_vision`` is the explicit consent for screenshots, camera
+    frames and dropped images to reach a target not marked ``local``; while it
+    is off such a turn uses local targets only or says it cannot look.
+    ``test_override_tier`` pins a tier only while JARVIS_ROUTE_POLICY_TEST_MODE=1.
+    """
+
+    enabled: bool = False
+    fast: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    deep: RouteTargetConfig = Field(default_factory=RouteTargetConfig)
+    escalation: RouteEscalationConfig = Field(default_factory=RouteEscalationConfig)
+    deny_providers: list[str] = Field(default_factory=list)
+    deny_model_prefixes: list[str] = Field(default_factory=list)
+    allow_cloud_vision: bool = False
+    test_override_tier: str | None = None
+
+
 class BrainConfig(BaseModel):
     # populate_by_name=True lets callers use the Python field name alongside the
     # validation aliases (needed so both new and old TOML keys populate the fields).
@@ -1613,6 +1696,13 @@ class BrainConfig(BaseModel):
     # a live cut-off report; kept configurable so an operator can trade speech
     # length against latency/cost. ~8192 tokens ≈ several minutes of speech.
     max_tokens: int = Field(default=32_768, ge=256, le=32_768)
+    # The tool switch (jarvis/brain/tool_switch.py): a turn sees a few core
+    # tools plus the ones the request names, and an ``enable_tools`` switch
+    # for the rest. ``auto`` = on for a local model or a window of 128k or
+    # less; ``on`` / ``off`` force it. ``tool_switch_core`` replaces the
+    # always-on set (``None`` = the shipped one).
+    tool_switch: Literal["auto", "on", "off"] = "auto"
+    tool_switch_core: list[str] | None = None
     # Phase 5 tiered routing — Wave-4 migration: the ``sub_jarvis`` tier was
     # replaced by the Jarvis-Agent bridge (see docs/jarvis-agents-bridge.md §11).
     # Only ``router`` remains as a tier; the heavy worker runs as an external
@@ -1645,6 +1735,8 @@ class BrainConfig(BaseModel):
     reply_language: str = "auto"
     # Persona mandate Phase 3: deterministic spawn heuristic for the router.
     routing: BrainRoutingConfig = Field(default_factory=BrainRoutingConfig)
+    # Configured fast/deep/escalation routing (off unless the table enables it).
+    route_policy: BrainRoutePolicyConfig = Field(default_factory=BrainRoutePolicyConfig)
     # Persona mandate Phase 4: plausibility thresholds for tool execution.
     plausibility: BrainPlausibilityConfig = Field(
         default_factory=BrainPlausibilityConfig,
@@ -1912,6 +2004,34 @@ class JarvisLearningConfig(BaseModel):
     timeout_s: float = Field(default=90.0, ge=5.0, le=600.0)
 
 
+class CogneeMemoryConfig(BaseModel):
+    """Optional, isolated Cognee semantic index over explicitly authorized wiki pages."""
+
+    enabled: bool = False
+    python_executable: str = ""
+    worker_script: str = ""
+    data_dir: str = ""
+    dataset_name: str = "jarvis-authorized-wiki"
+    timeout_s: float = Field(default=90.0, ge=5.0, le=300.0)
+
+
+class GraphRagMemoryConfig(BaseModel):
+    """Optional GraphRAG corpus for bounded, local-only wiki analysis."""
+
+    enabled: bool = False
+    python_executable: str = ""
+    worker_script: str = ""
+    data_dir: str = ""
+    # Local Qwen llama.cpp endpoint. The isolated worker supplies its own
+    # CPU-only FastEmbed endpoint; no hosted provider or API key is used.
+    api_base: str = "http://127.0.0.1:11440/v1"
+    chat_model: str = "qwen3-vl-8b"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    timeout_s: float = Field(default=300.0, ge=10.0, le=1800.0)
+    max_sources: int = Field(default=200, ge=1, le=2000)
+    max_source_chars: int = Field(default=40_000, ge=256, le=500_000)
+
+
 class MemoryConfig(BaseModel):
     recall_store: str = "sqlite"
     # chromadb was removed (2026-06-28); there is no chroma backend in
@@ -1921,6 +2041,8 @@ class MemoryConfig(BaseModel):
     retention_days_recall: int = 90
     data_dir: str = "./data"
     wiki: WikiMemoryConfig = Field(default_factory=WikiMemoryConfig)
+    cognee: CogneeMemoryConfig = Field(default_factory=CogneeMemoryConfig)
+    graphrag: GraphRagMemoryConfig = Field(default_factory=GraphRagMemoryConfig)
     legacy_curator: LegacyCuratorConfig = Field(default_factory=LegacyCuratorConfig)
     learning: JarvisLearningConfig = Field(default_factory=JarvisLearningConfig)
 
@@ -1934,6 +2056,9 @@ class SafetyBlacklistConfig(BaseModel):
 
 
 class SafetyConfig(BaseModel):
+    # App-owned executions run without permission prompts unless the person
+    # selects Ask. Chat sessions keep their own explicitly selected stance.
+    approval_mode: Literal["bypass", "ask"] = "bypass"
     default_tier: RiskTier = "safe"
     always_confirm_tiers: list[RiskTier] = Field(default_factory=lambda: ["ask"])
     always_block_tiers: list[RiskTier] = Field(default_factory=lambda: ["block"])
@@ -2143,17 +2268,18 @@ class UIConfig(BaseModel):
     # value, so a voice command or the Control API can change it and the open UI
     # switches live (a ConfigReloaded / UiLanguageChanged event reaches the
     # frontend over /ws). Distinct from brain.reply_language (what Jarvis SPEAKS).
-    language: Literal["en", "de", "es"] = "en"
-    # Colour theme of the whole desktop app: "dark" (the product default —
-    # matte black + signal yellow), "light" (warm paper + dark gold), or
-    # "system" (follow the OS appearance, re-evaluated live when the OS flips).
+    language: Literal["en", "de", "es", "zh"] = "en"
+    # Colour theme of the whole desktop app: "jarvis" (this build's default),
+    # "dark" (matte black + signal yellow), "light" (warm paper + dark gold), or
+    # "system" (follow the OS appearance, re-evaluated live when the OS flips),
+    # or "jarvis" (the dark theme with a cyan arc-reactor palette).
     # Persisted here rather than only in the browser so the CHOICE survives a
     # cleared web store, so the native window frame can be painted in the right
     # colour before the web view has loaded anything (jarvis/ui/shell/window.py),
     # and so `jarvis api settings put-appearance` can drive it like every other
     # user-facing action. The frontend caches it in localStorage purely to paint
     # the boot splash without waiting for HTTP.
-    theme: Literal["dark", "light", "system"] = "dark"
+    theme: Literal["dark", "light", "system", "jarvis"] = "jarvis"
     # Dev mode: the frontend is not mounted from frontend/dist/ but loaded from
     # a running Vite dev server (HMR). Activated via ENV JARVIS_DEV=1 or CLI
     # --dev; the fields here simply hold the parameters.
@@ -2382,6 +2508,19 @@ class BackgroundConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
     keep_agents_running: bool = True
+    # Independent server ownership is opt-in for existing integrated desktops.
+    # A client never stops this server or inherits its provider credentials.
+    persistent_server: bool = False
+    server_url: str = ""
+
+    @field_validator("server_url")
+    @classmethod
+    def validate_server_url(cls, value: str) -> str:
+        if not value.strip():
+            return ""
+        from jarvis.core.server_endpoint import server_endpoint
+
+        return server_endpoint(value)
 
 
 class TelemetryConfig(BaseModel):
@@ -2674,6 +2813,12 @@ class ScreenContextConfig(BaseModel):
     #: (§3), so this only does anything when a local OCR engine is present.
     ocr_enabled: bool = False
 
+    #: Windows' built-in OCR (Windows.Media.Ocr) reads a screen whose
+    #: accessibility text is sparse even with ``ocr_enabled`` off: it ships
+    #: with Windows, needs no download and read a full screen in 54 ms on the
+    #: PC. Read by ``ScreenContextService``; ``false`` turns it off.
+    windows_ocr: bool = True
+
 
 class AppshotConfig(BaseModel):
     """Top-level ``[appshot]`` config — show the assistant the front window.
@@ -2690,10 +2835,27 @@ class AppshotConfig(BaseModel):
 
     model_config = {"extra": "allow"}
 
-    #: Global shortcut. ``alt+alt`` means both Alt keys pressed together (read
-    #: by ``jarvis.appshot.gesture``); any other value is an ordinary combo in
-    #: the shared hotkey syntax; an empty string switches the shortcut off.
+    #: Global shortcut. ``alt+alt`` / ``shift+shift`` / ``ctrl+ctrl`` mean both
+    #: keys of that pair pressed together (read by ``jarvis.appshot.gesture``);
+    #: any other value is an ordinary combo in the shared hotkey syntax; an
+    #: empty string switches the shortcut off.
     hotkey: str = "alt+alt"
+
+    #: Global shortcut for an AREA appshot: the screens dim, the user drags a
+    #: rectangle, and exactly that part is captured (``jarvis.appshot.region``).
+    #: Same syntax as ``hotkey``; an empty string switches it off. Both Shift
+    #: keys pairs with both-Alt for the window, exists on every keyboard and
+    #: collides with no app or OS shortcut.
+    region_hotkey: str = "shift+shift"
+
+    #: One shortcut selects a recording area; pressing it again stops and saves.
+    recording_hotkey: str = "ctrl+shift+9"
+
+    #: Recording preferences are snapshotted when selection starts.
+    recording_resolution: Literal["720p", "1080p", "1440p", "2160p", "native"] = "1080p"
+    recording_fps: Literal[30, 60, 120] = 60
+    recording_bitrate_mbps: int = Field(default=12, ge=1, le=100, strict=True)
+    recording_system_audio: bool = False
 
     #: Where a shortcut appshot goes. ``auto``: into the running voice call,
     #: otherwise onto the next message. ``message``: always onto the next
@@ -2705,6 +2867,82 @@ class AppshotConfig(BaseModel):
 
     #: Flash and thumbnail animation on the captured window.
     effect: bool = True
+
+    #: Seconds the appshot card rests in the screen corner before it slides
+    #: away (read by ``jarvis.appshot.card_actions``); ``0`` keeps it there
+    #: until the user closes it.
+    card_seconds: int = Field(default=6, ge=0, le=600)
+
+    #: Keep every appshot (and its saved edit) in the gallery on the Appshots
+    #: page, under ``<data dir>/appshots/`` (read by ``jarvis.appshot.service``
+    #: and ``jarvis.appshot.library``). Off: nothing new is written there.
+    library: bool = True
+
+    #: Delete old captures automatically: only the newest N screenshots and
+    #: the newest N screen recordings stay in the gallery (read by
+    #: ``jarvis.appshot.retention``). ``0`` keeps everything.
+    keep_newest: int = Field(default=0, ge=0, le=500)
+
+    #: Put every appshot taken by shortcut or button on the system clipboard
+    #: too, so Ctrl/Cmd+V pastes it into any app right away (read by
+    #: ``jarvis.appshot.service``). Looks the assistant takes never copy.
+    copy_to_clipboard: bool = True
+
+
+class JarvisXConfig(BaseModel):
+    """Top-level ``[jarvisx]`` config — the built-in screenshot and screen recorder.
+
+    Jarvis X is a plain capture tool (``jarvis/jarvisx/``): region, window and
+    full-screen screenshots plus region / full-screen recordings, each on its
+    own global shortcut, saved to a folder and kept in a local library. It
+    never involves the assistant: no Screen Context privacy pipeline, no
+    delivery into a conversation. Every key below is read by
+    ``jarvis.jarvisx`` (AP-31).
+    """
+
+    model_config = {"extra": "allow"}
+
+    #: Master switch: off disarms every shortcut and refuses new captures.
+    #: The library of earlier captures stays browsable.
+    enabled: bool = True
+
+    #: Global shortcuts in the shared hotkey syntax; an empty string turns
+    #: that one shortcut off. The Ctrl+Shift+digit row stays clear of the OS
+    #: screenshot keys (Win+Shift+S, Cmd+Shift+3/4/5) and every other
+    #: Jarvis default.
+    hotkey_region: str = "ctrl+shift+2"
+    hotkey_window: str = "ctrl+shift+3"
+    hotkey_fullscreen: str = "ctrl+shift+1"
+    hotkey_record_region: str = "ctrl+shift+5"
+    hotkey_record_fullscreen: str = "ctrl+shift+6"
+    #: Stops a running recording (pressing its record shortcut again does too).
+    hotkey_stop_recording: str = "ctrl+shift+4"
+
+    #: ``true``: the corner thumbnail stays until it is dismissed. ``false``:
+    #: it fades after ``thumbnail_dismiss_s`` seconds.
+    thumbnail_persist: bool = False
+    #: Clamped to 1..3600 where it is read, so a hand-edited value can never
+    #: make the config unloadable.
+    thumbnail_dismiss_s: int = 30
+
+    #: Folder new captures are saved to. Empty = the user's Pictures folder
+    #: (``Pictures/Jarvis X``), or the Jarvis data folder where there is none.
+    save_dir: str = ""
+
+    #: Also put each new screenshot on the system clipboard.
+    copy_to_clipboard: bool = True
+
+    #: Shutter sound on every capture (also gated by ``[ui].sound_effects``).
+    sound: bool = True
+
+    #: Flash plus the corner thumbnail card after every capture.
+    effect: bool = True
+
+    #: Delete old captures automatically: only the newest N screenshots and
+    #: the newest N recordings stay, files included (read by
+    #: ``jarvis.jarvisx.service``). ``0`` keeps everything. Clamped to
+    #: 0..1000 where it is read.
+    keep_newest: int = 0
 
 
 class ComputerUseConfig(BaseModel):
@@ -3052,6 +3290,9 @@ class WikiIntegrationConfig(BaseModel):
 
     enabled: bool = True
     vault_root: Path = Path("wiki/obsidian-vault")
+    # Optional read-only Kept archive search. None disables it; never infer a
+    # vault from the user's home directory.
+    kept_archive_root: Path | None = None
     subscribe_idle: bool = True  # listen for IdleEntered
     fallback_to_direct_ingest: bool = True  # when scheduler is missing
 
@@ -3286,6 +3527,27 @@ class VoiceConfig(BaseModel):
     # fraction of the no-first-frame ceiling. Any set value is clamped to <= the
     # ceiling so it can never invert and re-introduce guaranteed silence.
     no_first_frame_phrase_floor_s: float | None = None
+
+
+class BrowserVoiceConfig(BaseModel):
+    """``[browser_voice]`` — the browser-microphone voice bridge (``/ws/audio``).
+
+    On a host without its own microphone (a VPS, ``jarvis serve``) the browser
+    that presses Start holds the call: it streams the microphone to
+    ``/ws/audio`` and plays the reply. ``extra="allow"`` so an unknown future
+    key never blocks boot (AP-16).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Serves the classic STT -> brain -> TTS bridge in PIPELINE mode. Realtime
+    # mode always serves the socket, because it carries the realtime call and
+    # that call's classic fallback, so this switch does not apply there. Read
+    # by ``jarvis.browser_voice.route.browser_voice_enabled`` at connect time.
+    # Default on: before 2026-07-08 a missing section meant enabled, the
+    # headless deployment guide documents it as on, and the socket is behind
+    # the same credential check as every other route (issue #399).
+    enabled: bool = True
 
 
 class CompletenessConfig(BaseModel):
@@ -4173,7 +4435,7 @@ class MarketplaceConfig(BaseModel):
     # registry's GitHub Pages deployment; forks and air-gapped mirrors point
     # this at their own compiled index. Empty string disables the community
     # section entirely (browse shows only the shipped seed catalog).
-    community_index_url: str = "https://personaljarvis.github.io/marketplace/index.json"
+    community_index_url: str = "https://dodaios.github.io/marketplace/index.json"
     # Where the in-app Publish flow submits packages. The endpoint verifies
     # the GitHub identity and opens the registry PR as the marketplace bot;
     # forks point this at their own deployment. Empty string hides Publish,
@@ -4181,6 +4443,12 @@ class MarketplaceConfig(BaseModel):
     # retired, so a stock install offers no Publish button instead of firing
     # a request at a host that answers nothing.
     publish_endpoint: str = ""
+    # The registry repository the in-app Publish flow files submissions to
+    # when no endpoint is configured: an issue opened as the signed-in user,
+    # which the registry's intake workflow validates and publishes
+    # (docs/marketplace/agent-templates.md). This is the default path — it
+    # needs no server. Empty string hides Publish.
+    publish_registry_repo: str = "Dodaios/marketplace"
     # Client id of the marketplace GitHub App (public by design — device flow
     # needs no secret, which is why a downloadable binary can use it).
     publish_github_client_id: str = "Iv23li1YcX62KJO67whO"
@@ -4287,6 +4555,24 @@ class Phase6Config(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     safety: Phase6SafetyConfig = Field(default_factory=Phase6SafetyConfig)
+
+
+class MissionsConfig(BaseModel):
+    """``[missions]`` — how missions may spend money.
+
+    ``paid_api_fallback``: when no connected subscription has capacity, a
+    mission on a subscription install continues on the user's own API key
+    (within the per-mission and daily caps of ``jarvis/missions/capacity.py``)
+    instead of waiting. Default OFF. Read fresh on every paid decision, written
+    only through ``config_writer.set_missions_paid_api_fallback`` from the
+    Settings route — never by voice, chat or an agent tool (the path is in
+    ``jarvis/core/self_mod/forbidden.py``). No effect on an API-key-only
+    install, whose keys are its primary provider anyway.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    paid_api_fallback: bool = False
 
 
 class GlmCodingPlanConfig(BaseModel):
@@ -4478,6 +4764,24 @@ class VoiceEngineConfig(BaseModel):
     llm_model: str = ""
     #: Languages the engine loads a voice for; the first is the fallback voice.
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
+    #: Model server API: ``ollama`` (default) or ``openai`` for any
+    #: OpenAI-compatible server. With ``openai`` and no ``llm_base_url`` the
+    #: engine answers with the ``local-openai`` brain's server and model, so a
+    #: llama-server already running for the brain is the only resident model.
+    llm_api: str = "ollama"
+    #: Model server root. Empty = automatic: Ollama's configured root, or the
+    #: ``local-openai`` card's server for ``llm_api = "openai"``.
+    llm_base_url: str = ""
+
+    @field_validator("llm_api", mode="before")
+    @classmethod
+    def _known_api(cls, value: object) -> str:
+        return "openai" if str(value or "").strip().lower() == "openai" else "ollama"
+
+    @field_validator("llm_base_url", mode="before")
+    @classmethod
+    def _strip_url(cls, value: object) -> str:
+        return str(value or "").strip()
 
     @field_validator("tts", mode="before")
     @classmethod
@@ -4553,6 +4857,9 @@ class JarvisConfig(BaseModel):
     # Appshots: the front window as conversation context, on a shortcut or on
     # request (jarvis/appshot/). Captures through Screen Context above.
     appshot: AppshotConfig = Field(default_factory=AppshotConfig)
+    # Jarvis X: the built-in screenshot / screen-recording tool
+    # (jarvis/jarvisx/). Independent of Screen Context and the assistant.
+    jarvisx: JarvisXConfig = Field(default_factory=JarvisXConfig)
     # Phase 5/6 — Computer-Use-POAV-Harness (ADR-0008).
     computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
     # Low-latency local-action gate. Hidden tools only; never exposed in the
@@ -4562,6 +4869,8 @@ class JarvisConfig(BaseModel):
     review: ReviewConfig = Field(default_factory=ReviewConfig)
     # Phase 6 — mission subsystem ([phase6.safety] typed; rest raw, AP-16).
     phase6: Phase6Config = Field(default_factory=Phase6Config)
+    # [missions] — paid API fallback switch for missions (capacity policy).
+    missions: MissionsConfig = Field(default_factory=MissionsConfig)
     # Latency sprint 1 (2026-04-30) — master switches for performance levers.
     performance: PerformanceConfig = Field(default_factory=PerformanceConfig)
     # Wave 0 (omni-latency) — hot-path latency span instrumentation toggle.
@@ -4589,6 +4898,9 @@ class JarvisConfig(BaseModel):
     # Voice-flow knobs (incomplete-prompt completion buffer settings).
     # Spec: docs/superpowers/specs/2026-05-25-incomplete-prompt-completion-design.md
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    # [browser_voice] — the browser-microphone bridge for hosts without a
+    # microphone of their own (see BrowserVoiceConfig).
+    browser_voice: BrowserVoiceConfig = Field(default_factory=BrowserVoiceConfig)
     # AI Pointer — deictic-gated "what is under the mouse cursor" context.
     # Spec: docs/plans/ai-pointer/DESIGN.md
     pointer: PointerConfig = Field(default_factory=PointerConfig)
@@ -5166,6 +5478,13 @@ _FILE_BACKEND_ACTIVE: bool = False
 # still readable from the OS store, and recovery probes must not mistake the
 # currently installed file backend for a recovered platform backend.
 _PLATFORM_KEYRING_BACKEND: Any | None = None
+# A platform credential read that raises is a process-local circuit breaker for
+# NORMAL reads. Some Windows Credential Manager failures can block for many
+# seconds rather than raising promptly; retrying the retained backend for each
+# provider during brain construction multiplied that delay. Keep the backend
+# reference for explicit recovery/deletion semantics, but stop probing it until
+# a successful user-initiated recovery.
+_PLATFORM_KEYRING_READ_UNAVAILABLE: bool = False
 # The credential slot whose OS-keyring read failed most recently. On macOS a
 # user who clicks "Deny" on the Keychain prompt lands exactly here: the read
 # raises, the process degrades to the file backend, and only a fresh read of a
@@ -5444,6 +5763,7 @@ def _try_restore_platform_keyring_backend() -> bool:
     is active, including when no fallback swap had occurred.
     """
     global _FILE_BACKEND_ACTIVE, _PLATFORM_KEYRING_BACKEND
+    global _PLATFORM_KEYRING_READ_UNAVAILABLE
     if not _FILE_BACKEND_ACTIVE:
         return True
 
@@ -5504,6 +5824,7 @@ def _try_restore_platform_keyring_backend() -> bool:
 
     _PLATFORM_KEYRING_BACKEND = candidate
     _FILE_BACKEND_ACTIVE = False
+    _PLATFORM_KEYRING_READ_UNAVAILABLE = False
     logging.getLogger(__name__).info(
         "OS credential store recovered; future credential saves use the platform keyring."
     )
@@ -5572,6 +5893,7 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
         key: Secret name in the Credential Manager (e.g. "anthropic_api_key").
         env_fallback: ENV variable checked when keyring is empty (e.g. "ANTHROPIC_API_KEY").
     """
+    global _LAST_KEYRING_FAILED_SLOT, _PLATFORM_KEYRING_READ_UNAVAILABLE
     _ensure_keyring_backend()
     # H2 (open-source AP-22 / headless VPS): when the caller passes no explicit ENV
     # var, derive it from the slot name (``groq_api_key`` → ``GROQ_API_KEY``) so the
@@ -5603,10 +5925,15 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
             # a fallback, so one failed write does not hide all OS credentials.
             file_val = active_val or file_val
             platform_backend = _PLATFORM_KEYRING_BACKEND
-            if platform_backend is not None and _is_platform_keyring_backend(platform_backend):
+            if (
+                not _PLATFORM_KEYRING_READ_UNAVAILABLE
+                and platform_backend is not None
+                and _is_platform_keyring_backend(platform_backend)
+            ):
                 try:
                     platform_val = platform_backend.get_password(KEYRING_SERVICE, key)
                 except Exception:  # noqa: BLE001 — locked platform stays fallback-only
+                    _PLATFORM_KEYRING_READ_UNAVAILABLE = True
                     platform_val = None
         else:
             platform_val = active_val
@@ -5615,8 +5942,8 @@ def get_secret(key: str, env_fallback: str | None = None) -> str | None:
         # _ensure_keyring_backend saw a viable backend. Degrade to the 0600 file
         # store and retry once, so a key saved to the file fallback in a prior run
         # is still visible instead of dead-ending on the locked keyring.
-        global _LAST_KEYRING_FAILED_SLOT
         _LAST_KEYRING_FAILED_SLOT = key
+        _PLATFORM_KEYRING_READ_UNAVAILABLE = True
         if _install_file_cred_backend("keyring read failed"):
             try:
                 import keyring
@@ -5741,6 +6068,7 @@ _SECRET_BASE_FAMILIES: tuple[str, ...] = (
     "openrouter",
     "groq",
     "nvidia",
+    "nous",
     "gemini",
     "vertex",
     "grok",
@@ -6110,6 +6438,44 @@ def resolve_provider_endpoint(
         return ResolvedEndpoint(base_url=route.base_url, credential=token, via_proxy=True)
     credential = get_provider_secret(provider_id)
     return ResolvedEndpoint(base_url=route.base_url, credential=credential, via_proxy=False)
+
+
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def is_loopback_url(url: str | None) -> bool:
+    """True when ``url`` points at this machine (localhost, 127.0.0.0/8, ::1).
+
+    A server on the loopback interface is the user's own process, so it can
+    legitimately run without a client key (e.g. a local gateway that forwards
+    with its own login). Anything else — including a LAN address — is remote.
+    """
+    from urllib.parse import urlsplit
+
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    try:
+        host = (urlsplit(raw).hostname or "").lower()
+    except ValueError:  # a malformed URL is simply not loopback; callers then require a key
+        return False
+    return host in _LOOPBACK_HOSTS or host.startswith("127.")
+
+
+def configured_base_url_is_loopback(provider_id: str) -> bool:
+    """Whether ``provider_id``'s own base-URL override points at loopback.
+
+    Only the user's ``[brain.providers.<id>].base_url`` counts: the vendor
+    default is never loopback, and a team-proxy route is remote by definition.
+    Never raises.
+    """
+    try:
+        ep = resolve_provider_endpoint(provider_id)
+    except Exception:  # noqa: BLE001 — an unreadable config is "not configured"
+        return False
+    return not ep.via_proxy and is_loopback_url(ep.base_url)
 
 
 def set_secret(key: str, value: str) -> bool:

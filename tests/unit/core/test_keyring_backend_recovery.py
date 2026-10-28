@@ -50,6 +50,16 @@ class _UnavailableBackend(_MemoryBackend):
         raise RuntimeError("credential service unavailable")
 
 
+class _CountingUnavailableBackend(_UnavailableBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[str] = []
+
+    def get_password(self, service: str, username: str) -> str | None:
+        self.reads.append(username)
+        return super().get_password(service, username)
+
+
 class _ReadOnlyBackend(_MemoryBackend):
     def set_password(self, service: str, username: str, password: str) -> None:
         raise RuntimeError("WinVault write failed with error 1312")
@@ -102,9 +112,10 @@ class _DenyingSlotBackend(_MemoryBackend):
 
 
 @pytest.fixture
-def _restore_keyring_backend():
+def _restore_keyring_backend(monkeypatch: pytest.MonkeyPatch):
     original = keyring.get_keyring()
     original_platform = cfg._PLATFORM_KEYRING_BACKEND
+    monkeypatch.setattr(cfg, "_PLATFORM_KEYRING_READ_UNAVAILABLE", False)
     try:
         yield
     finally:
@@ -196,6 +207,29 @@ def test_explicit_save_keeps_file_backend_when_platform_store_is_still_unusable(
     assert cfg.set_secret("openrouter_api_key", "headless-value") is True
     assert file_backend.get_password(cfg.KEYRING_SERVICE, "openrouter_api_key") == "headless-value"
     assert keyring.get_keyring() is file_backend
+    assert cfg._FILE_BACKEND_ACTIVE is True
+
+
+def test_failed_platform_read_is_not_retried_for_every_provider_slot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    _restore_keyring_backend,
+) -> None:
+    platform_backend = _CountingUnavailableBackend()
+    keyring.set_keyring(platform_backend)
+    monkeypatch.setattr(cfg, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(cfg, "_KEYRING_BACKEND_READY", False)
+    monkeypatch.setattr(cfg, "_FILE_BACKEND_ACTIVE", False)
+    monkeypatch.setattr(cfg, "_PLATFORM_KEYRING_BACKEND", None)
+    monkeypatch.setattr(cfg, "_PLATFORM_KEYRING_READ_UNAVAILABLE", False)
+
+    assert cfg.get_secret("first_provider_key") is None
+    assert cfg.get_secret("second_provider_key") is None
+
+    # The first failure switches to the file fallback and opens the circuit;
+    # the next provider probe avoids another potentially wedged OS call.
+    assert platform_backend.reads == ["first_provider_key"]
+    assert cfg._PLATFORM_KEYRING_READ_UNAVAILABLE is True
     assert cfg._FILE_BACKEND_ACTIVE is True
 
 

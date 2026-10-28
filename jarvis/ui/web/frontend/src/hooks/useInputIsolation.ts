@@ -18,6 +18,8 @@ export type InputIsolationReport = {
   summary: string;
   remedy: string;
   can_restart_unelevated: boolean;
+  /** UAC is off: no restart can drop the rights, only turning UAC on can. */
+  uac_disabled?: boolean;
 };
 
 /** Backoff for the boot race: the window mounts before the API answers. */

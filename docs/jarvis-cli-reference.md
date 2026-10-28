@@ -153,7 +153,7 @@ _Generated from the curated command tree by `scripts/ci/gen_cli_reference.py` �
 - `jarvis marketplace connect-poll <plugin_id> <flow_id>` — Poll an in-progress OAuth connect flow.
 - `jarvis marketplace connect-start <plugin_id> --yes --dry-run` — Begin an OAuth connect flow (prints the redirect URI + flow id).
 - `jarvis marketplace disconnect <plugin_id> --yes --dry-run` — Disconnect a plugin.
-- `jarvis marketplace install <item_id> --yes --dry-run` — Install a marketplace entry by name — skill or plugin — and report it.
+- `jarvis marketplace install <item_id> --yes --dry-run` — Install a marketplace entry by name — skill, plugin or agent — and report it.
 - `jarvis marketplace list` — List marketplace plugins + their connection status.
 
 ## mcps
@@ -233,7 +233,10 @@ _Generated from the curated command tree by `scripts/ci/gen_cli_reference.py` �
 
 ## system
 
+- `jarvis system acceptance --hermes` — Run the ship checks on the running app and write a PASS/FAIL scorecard.
 - `jarvis system audio-devices --output --input` — List audio devices, or pick where the voice plays / which mic listens.
+- `jarvis system free-voice --hermes --check-model --link-memory` — Make Hermes Agent the brain for everything (superseded by ``jarvis system
+- `jarvis system local --server --model` — Run Jarvis on a local model with its own brain and tools: no Hermes,
 - `jarvis system restart --force --yes --dry-run` — Refuse a CLI restart; use the desktop UI's explicit Restart action.
 - `jarvis system status` — Report server reachability + version (GET /api/control/auth/probe).
 

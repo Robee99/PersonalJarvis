@@ -119,7 +119,7 @@ def test_every_runner_has_a_ladder_with_its_default_on_it():
         ("agy-cli", "default", "accept-edits"),  # ask is never folded onto plan
         ("agy-cli", "bypassPermissions", "skip-permissions"),
         ("api", "acceptEdits", "accept-edits"),
-        ("api", "", "ask"),
+        ("api", "", "auto"),
         ("api", "read-only", "plan"),
         # The Jarvis ladder's words, folded onto every seat's own spelling.
         ("claude-cli", "bypass", "bypassPermissions"),
@@ -132,7 +132,7 @@ def test_every_runner_has_a_ladder_with_its_default_on_it():
         ("agy-cli", "ask", "accept-edits"),
         ("grok-cli", "accept-edits", "acceptEdits"),
         ("grok-cli", "bypass", "bypassPermissions"),
-        ("jarvis", "", "ask"),
+        ("jarvis", "", "bypass"),
         ("jarvis", "acceptEdits", "accept-edits"),
         ("jarvis", "bypassPermissions", "bypass"),
         ("jarvis", "plan", "plan"),
@@ -172,6 +172,25 @@ def test_claude_planner_passes_the_cli_mode_through(monkeypatch, tmp_path: Path)
         "type": "user",
         "message": {"role": "user", "content": "hi"},
     }
+
+
+def test_claude_planner_asks_for_thinking_summaries(monkeypatch, tmp_path: Path):
+    """Print mode leaves thinking blocks empty; summaries are the thread's reasoning."""
+    from jarvis import claude_auth
+
+    monkeypatch.setattr(runner_cli, "claude_argv_prefix", lambda: ["claude"])
+    monkeypatch.setattr(runner_cli, "_registry_env", lambda _name, env: env)
+    monkeypatch.setitem(claude_auth._THINKING_DISPLAY_CACHE, ("claude",), True)
+    args = dict(
+        prompt="hi", cwd=tmp_path, model="", effort="", permission_mode="default", resume=None
+    )
+    argv = plan_claude(**args).argv
+    assert argv[argv.index("--thinking-display") + 1] == "summarized"
+    # GLM rides Claude Code against another endpoint and is never asked.
+    assert "--thinking-display" not in runner_cli.plan_glm(**args).argv
+    # An older CLI (probe False) gets no flag it would reject.
+    monkeypatch.setitem(claude_auth._THINKING_DISPLAY_CACHE, ("claude",), False)
+    assert "--thinking-display" not in plan_claude(**args).argv
 
 
 def test_claude_planner_opens_the_control_protocol(monkeypatch, tmp_path: Path):

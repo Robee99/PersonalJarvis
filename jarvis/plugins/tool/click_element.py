@@ -8,6 +8,8 @@ planner mentally computing click coordinates from a bounding box.
 Matching rules:
   - ``automation_id`` (if given) is an exact match and takes precedence.
   - ``name`` is matched case-insensitively as a substring of UIANode.name.
+    When nothing contains it, the one label whose words read closest to it
+    (a misheard "roboto" for "Roberto") is taken, if it is close enough.
   - ``role`` (if given) is matched case-insensitively (exact role string).
 Disabled elements and zero-area elements are skipped.
 
@@ -18,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from jarvis.core.protocols import ExecutionContext, ToolResult
@@ -31,10 +35,94 @@ from jarvis.plugins.tool.click import (
 
 # Re-export ``_click_windows`` as a module global so tests can patch it via
 # ``monkeypatch.setattr("jarvis.plugins.tool.click_element._click_windows", ...)``.
-__all__ = ["ClickElementTool", "_click_windows"]
+__all__ = ["ClickElementTool", "_click_windows", "matching_nodes", "visible_labels"]
 
 _VALID_BUTTONS = ("left", "right", "middle")
 _MAX_AVAILABLE_NAMES = 15
+#: How alike a spoken name and a label's words must be for the near match
+#: (SequenceMatcher ratio). "roboto"/"roberto" is 0.77; "nancy"/"roberto" 0.0.
+_NEAR_MATCH_RATIO = 0.72
+
+
+def matching_nodes(
+    nodes: Any, *, name: str = "", role: str = "", automation_id: str = ""
+) -> list[Any]:
+    """Enabled, visible nodes matching the rules in this module's docstring.
+
+    Shared with ``point_at``, which aims at the same element this tool would
+    click.
+    """
+    name_lower = name.lower()
+    role_lower = role.lower()
+    candidates = []
+    for node in nodes:
+        if not node.enabled:
+            continue
+        _, _, w, h = node.bounds
+        if w <= 0 or h <= 0:
+            continue
+        if automation_id:
+            if node.automation_id != automation_id:
+                continue
+        elif name_lower:
+            if name_lower not in (node.name or "").lower():
+                continue
+        if role_lower and (node.role or "").lower() != role_lower:
+            continue
+        candidates.append(node)
+    if candidates or automation_id or not name_lower:
+        return candidates
+    return _near_matches(nodes, name_lower, role_lower)
+
+
+def _closeness(needle: str, label: str) -> tuple[float, str]:
+    """How alike ``needle`` is to the closest run of words in ``label``, and that run."""
+    words = re.findall(r"\w+", label.lower())
+    span = max(1, len(needle.split()))
+    best = (0.0, "")
+    for i in range(len(words)):
+        piece = " ".join(words[i : i + span])
+        best = max(best, (SequenceMatcher(None, needle, piece).ratio(), piece))
+    return best
+
+
+def _near_matches(nodes: Any, name_lower: str, role_lower: str) -> list[Any]:
+    """The nodes holding the closest word when no label contains the name.
+
+    Speech-to-text hands the planner names like "roboto" for the profile
+    "Roberto" (live 2026-10-26: Chrome's profile picker, "No matching
+    element"). The closest word stands in for the name, so the nodes come
+    back in tree order exactly as a substring match on that word would
+    ("Open Roberto profile", then "More actions for Roberto"). Two different
+    words equally close mean the name is ambiguous, and a wrong click is
+    worse than none.
+    """
+    scored: list[tuple[float, str, Any]] = []
+    for node in nodes:
+        _, _, w, h = node.bounds
+        if not node.enabled or w <= 0 or h <= 0 or not (node.name or "").strip():
+            continue
+        if role_lower and (node.role or "").lower() != role_lower:
+            continue
+        score, word = _closeness(name_lower, node.name)
+        if score >= _NEAR_MATCH_RATIO:
+            scored.append((score, word, node))
+    if not scored:
+        return []
+    top = max(score for score, _, _ in scored)
+    winners = [(word, node) for score, word, node in scored if score == top]
+    if len({word for word, _ in winners}) != 1:
+        return []
+    return [node for _, node in winners]
+
+
+def visible_labels(nodes: Any, limit: int = _MAX_AVAILABLE_NAMES) -> list[str]:
+    """Labels of enabled, visible nodes, to help the model retry."""
+    return [
+        (n.name or "").strip()
+        for n in nodes
+        if n.enabled and n.bounds[2] > 0 and n.bounds[3] > 0 and (n.name or "").strip()
+    ][:limit]
 
 
 def _foreground_window_signature() -> tuple[Any, ...]:
@@ -173,34 +261,14 @@ class ClickElementTool:
                 error=f"UIA observation failed: {exc}",
             )
 
-        name_lower = name_needle.lower()
-        role_lower = role_needle.lower()
-
         # 2. Build the candidate list.
-        candidates = []
-        for node in obs.nodes:
-            if not node.enabled:
-                continue
-            _, _, w, h = node.bounds
-            if w <= 0 or h <= 0:
-                continue
-            if automation_id:
-                if node.automation_id != automation_id:
-                    continue
-            elif name_lower:
-                if name_lower not in (node.name or "").lower():
-                    continue
-            if role_lower and (node.role or "").lower() != role_lower:
-                continue
-            candidates.append(node)
+        candidates = matching_nodes(
+            obs.nodes, name=name_needle, role=role_needle, automation_id=automation_id
+        )
 
         # 3. No candidates -> list visible enabled labels to help the planner.
         if not candidates:
-            available = [
-                (n.name or "").strip()
-                for n in obs.nodes
-                if n.enabled and n.bounds[2] > 0 and n.bounds[3] > 0 and (n.name or "").strip()
-            ][:_MAX_AVAILABLE_NAMES]
+            available = visible_labels(obs.nodes)
             wanted = automation_id and f"automation_id={automation_id!r}" or f"name~{name_needle!r}"
             if role_needle:
                 wanted += f", role={role_needle!r}"

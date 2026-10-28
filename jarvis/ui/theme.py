@@ -32,7 +32,7 @@ Theme = Literal["dark", "light"]
 
 #: What the user may choose. ``system`` is an intent, not a colour — it is
 #: resolved to one of the two concrete themes by :func:`resolve_theme`.
-THEME_CHOICES: tuple[str, ...] = ("dark", "light", "system")
+THEME_CHOICES: tuple[str, ...] = ("dark", "light", "system", "jarvis")
 
 #: Window/holding-page ground per theme — ``--background`` in ``index.css``
 #: (neutral, zero saturation, v4 2026-09-02). Mirrored by the ``--jbs-bg``
@@ -55,6 +55,20 @@ HOLDING_PAGE_MUTED: dict[str, str] = {
 }
 
 _DEFAULT_THEME: Theme = "dark"
+
+# Native popup tokens, matching index.css and docs/BRAND.md.
+POPOVER_COLORS = {
+    "dark": {
+        "background": "#1c1c1c", "hover": "#262626", "border": "#383838",
+        "foreground": "#fafafa", "muted": "#a1a1a1", "faint": "#7a7a7a",
+        "accent": "#3d8bff",
+    },
+    "light": {
+        "background": "#ffffff", "hover": "#f5f5f5", "border": "#dbdbdb",
+        "foreground": "#171717", "muted": "#545454", "faint": "#6b6b6b",
+        "accent": "#096cdc",
+    },
+}
 
 
 def detect_os_theme() -> Theme | None:
@@ -168,6 +182,10 @@ def resolve_theme(configured: str | None) -> Theme:
         return value  # type: ignore[return-value]
     if value == "system":
         return detect_os_theme() or _DEFAULT_THEME
+    # The Jarvis look is the dark theme with a cyan arc-reactor palette on top;
+    # the native frame only needs to know it is dark.
+    if value == "jarvis":
+        return "dark"
     return _DEFAULT_THEME
 
 

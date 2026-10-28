@@ -11,6 +11,7 @@ from jarvis.brain.manager import (
     _classify_provider_error,
     _is_rate_limit_exc,
 )
+from jarvis.brain.route_policy import is_denied, is_policy_target, media_allowed
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +103,15 @@ class ComputerUsePlannerSelector:
 
         for idx, (provider, model) in enumerate(self.chain):
             key = (provider, model)
+            if images_attached and not images_may_reach(self.manager, provider, model):
+                self._record(
+                    provider,
+                    model,
+                    "privacy",
+                    "skipped - screenshots stay on this device (cloud vision "
+                    "is not allowed in [brain.route_policy])",
+                )
+                continue
             if provider in dead_providers:
                 self._record(provider, model, "dead", "skipped dead provider")
                 continue
@@ -245,6 +255,36 @@ class ComputerUsePlannerSelector:
         return kind
 
 
+#: Stand-in when the policy cannot be read: nothing is local, nothing consented.
+_CLOSED_POLICY = object()
+
+
+def _route_policy(manager: Any) -> Any | None:
+    getter = getattr(manager, "_route_policy", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:  # noqa: BLE001 - a broken config read must not open a cloud path
+        log.warning("[cu] route policy could not be read; screenshots stay local")
+        return _CLOSED_POLICY
+
+
+
+def images_may_reach(manager: Any, provider: str, model: str | None) -> bool:
+    """Whether a screenshot may be sent to this provider/model.
+
+    Without a routing policy nothing changes. With one, the target must not be
+    deny-listed and must be local, unless the owner allowed cloud vision.
+    """
+    policy = _route_policy(manager)
+    if policy is None:
+        return True
+    if policy is _CLOSED_POLICY:
+        return False
+    return not is_denied(policy, provider, model) and media_allowed(policy, provider, model)
+
+
 def iter_last_resort_vision(
     manager: Any, *, already_tried: set[tuple[str, str | None]],
 ) -> Iterator[tuple[str, str | None, Any]]:
@@ -273,6 +313,7 @@ def iter_last_resort_vision(
         except Exception:  # noqa: BLE001
             available = []
     seen = set(already_tried)
+    policy = _route_policy(manager)
     for provider in available:
         picker = getattr(manager, "_fast_model", None)
         model: str | None = None
@@ -285,6 +326,13 @@ def iter_last_resort_vision(
         if key in seen:
             continue
         seen.add(key)
+        # With a routing policy only its own tiers may be tried, and only
+        # those allowed to receive screenshots.
+        if policy is not None and not (
+            is_policy_target(policy, provider, model)
+            and images_may_reach(manager, provider, model)
+        ):
+            continue
         # Last-resort: a provider that cannot even be instantiated is simply
         # skipped (expected on the failure path; logging each would be noise).
         try:

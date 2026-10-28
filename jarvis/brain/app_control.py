@@ -137,8 +137,24 @@ KEYLESS_CREDENTIAL_PROBES: dict[str, str] = {
 }
 
 
+def loopback_keyless_ready(provider_id: str) -> bool:
+    """An API-key card the user pointed at a server on THIS machine.
+
+    Capability-gated (AP-21): the card must accept a server URL
+    (``supports_base_url``) and the stored override must be a loopback host —
+    a local gateway that authenticates upstream with its own login needs no
+    client key. A remote URL still needs the key. Never raises.
+    """
+    spec = get_spec(provider_id)
+    if spec is None or spec.auth_mode != "api_key" or not spec.supports_base_url:
+        return False
+    return cfg_mod.configured_base_url_is_loopback(provider_id)
+
+
 def _keyless_credential_present(provider_id: str) -> bool:
     """Whether *provider_id* authenticates without a stored key. Never raises."""
+    if loopback_keyless_ready(provider_id):
+        return True
     probe_name = KEYLESS_CREDENTIAL_PROBES.get(provider_id)
     if not probe_name:
         return False
@@ -277,6 +293,25 @@ def is_credential_present(spec: ProviderSpec, binary_path: str | None = None) ->
         # A key is the usual answer but not the only one — see
         # KEYLESS_CREDENTIAL_PROBES (Vertex's Cloud project path).
         return _keyless_credential_present(spec.id)
+    if spec.auth_mode == "claude_cli":
+        from jarvis.claude_auth import ClaudeAuthService
+
+        # An unreadable keyring does not disconnect the CLI's native login.
+        try:
+            key = cfg_mod.get_jarvis_agent_secret("claude-api")
+        except Exception as exc:  # noqa: BLE001 — subscription credentials live independently
+            log.debug("Claude API key status unavailable (%s)", type(exc).__name__)
+            key = None
+        try:
+            # Match the Claude connection card. An OAuth bearer in the API-key
+            # slot is not an API credential and cannot bypass a signed-out CLI.
+            api_key_present = bool(key and not key.startswith("sk-ant-oat"))
+            return ClaudeAuthService(
+                binary_path, api_key_present=api_key_present
+            ).status().connected
+        except Exception as exc:  # noqa: BLE001 — status must survive a missing CLI
+            log.debug("Claude credential status unavailable (%s)", type(exc).__name__)
+            return False
     if spec.auth_mode == "codex":
         if any(bool(cfg_mod.get_secret(k)) for k in spec.secret_keys):
             return True
@@ -586,6 +621,9 @@ async def _switch_brain(
 ) -> dict[str, Any]:
     if manager is None:
         manager = runtime_refs.get_brain_manager()
+    denied = _route_policy_denies(provider, cfg=cfg, manager=manager)
+    if denied:
+        return {"ok": False, "error_kind": "route_policy_denied", "error": denied}
     persisted = False
     applied_live = False
 
@@ -624,6 +662,7 @@ async def _switch_brain(
             persisted = _persist_brain_primary(provider)
 
     _set_in_memory(cfg, ["brain", "primary"], provider)
+    _follow_route_policy(old, provider, cfg=cfg, manager=manager, persist=persist)
     _sync_local_server(provider, cfg)
     return {
         "ok": True,
@@ -634,6 +673,96 @@ async def _switch_brain(
         "applied_live": applied_live,
         "requires_restart": not applied_live,
     }
+
+
+def _live_route_policy(cfg: Any, manager: Any | None) -> Any | None:
+    """The ``[brain.route_policy]`` the running Brain reads (manager first)."""
+    for source in (getattr(manager, "_config", None), cfg):
+        policy = getattr(getattr(source, "brain", None), "route_policy", None)
+        if policy is not None:
+            return policy
+    return None
+
+
+def _route_policy_denies(provider: str, *, cfg: Any, manager: Any | None) -> str | None:
+    """Why the enabled route policy would keep ``provider`` off every turn, or None.
+
+    The policy's deny lists apply to every chain, so a switch to a denied
+    provider would "succeed" and then never answer. The switch is refused
+    honestly instead; the deny list is never loosened here, so a switch can
+    never open a paid fallback the user blocked.
+    """
+    from jarvis.brain.route_policy import is_denied
+
+    policy = _live_route_policy(cfg, manager)
+    if policy is None or not bool(getattr(policy, "enabled", False)):
+        return None
+    providers = getattr(getattr(cfg, "brain", None), "providers", None) or {}
+    model = getattr(providers.get(provider), "model", None) if isinstance(providers, dict) else None
+    if not is_denied(policy, provider, model or None):
+        return None
+    return (
+        f"{provider!r} is blocked by the routing deny list (Brain > Routing), so it "
+        "could not answer. Remove it from the deny list first, then switch."
+    )
+
+
+#: Brain cards that ARE a model server (not a gateway that may forward to a
+#: cloud model, as ``hermes`` can): on the loopback interface they keep a
+#: screenshot on this machine.
+_MODEL_SERVER_BRAINS: frozenset[str] = frozenset({"local-openai", "ollama"})
+
+
+def _runs_on_this_machine(provider: str, cfg: Any) -> bool:
+    """Whether ``provider`` is a model server listening on this machine."""
+    if provider not in _MODEL_SERVER_BRAINS:
+        return False
+    from jarvis.core.config import is_loopback_url
+
+    providers = getattr(getattr(cfg, "brain", None), "providers", None) or {}
+    card = providers.get(provider)
+    base_url = str(getattr(card, "base_url", "") or "").strip()
+    # An Ollama card without an address talks to its default, 127.0.0.1:11434.
+    return is_loopback_url(base_url) if base_url else provider == "ollama"
+
+
+def _follow_route_policy(
+    old: str | None, provider: str, *, cfg: Any, manager: Any | None, persist: bool
+) -> None:
+    """Keep ``[brain.route_policy]`` behind a main-brain switch.
+
+    An enabled policy is consulted before the primary chain, so its tiers move
+    with ``brain.primary`` (see ``tiers_following_switch``); otherwise the
+    previous brain keeps answering while the UI shows the new one. Persisted
+    through ``config_writer`` only, without replacing the routing controls'
+    restore point.
+    """
+    from jarvis.brain.route_policy import tiers_following_switch
+    from jarvis.core.config import BrainRoutePolicyConfig
+
+    policy = _live_route_policy(cfg, manager)
+    edits = tiers_following_switch(
+        policy, old, provider, on_device=lambda name: _runs_on_this_machine(name, cfg)
+    )
+    if not edits:
+        return
+    if persist:
+        _persist(lambda: _import_writer().set_route_policy(edits, backup=False))
+    try:
+        current = policy.model_dump() if hasattr(policy, "model_dump") else dict(vars(policy))
+        updated = BrainRoutePolicyConfig.model_validate({**current, **edits})
+    except Exception as exc:  # noqa: BLE001 — logged; the primary switch already landed
+        log.warning("route policy could not follow the brain switch: %s", exc)
+        return
+    setter = getattr(manager, "set_route_policy", None)
+    if callable(setter):
+        setter(updated)
+    if getattr(manager, "_config", None) is not cfg:
+        _set_in_memory(cfg, ["brain", "route_policy"], updated)
+    log.info(
+        "Brain switch %r -> %r: route policy tiers %s now follow the main brain",
+        old, provider, sorted(edits),
+    )
 
 
 def _sync_local_server(provider: str, cfg: Any) -> None:
@@ -725,6 +854,8 @@ async def _switch_subagent(
             CODEX_SUBAGENT_SLUGS,
             GROK_BUILD_SUBAGENT_CANONICAL,
             GROK_BUILD_SUBAGENT_SLUGS,
+            HERMES_SUBAGENT_CANONICAL,
+            HERMES_SUBAGENT_SLUGS,
             JARVIS_TO_WORKER_SLUG,
             canonical_worker_provider,
         )
@@ -860,6 +991,26 @@ async def _switch_subagent(
             old=old,
         )
 
+    if canon in HERMES_SUBAGENT_SLUGS:
+        from jarvis.missions.workers.hermes_direct_worker import resolve_hermes_binary
+
+        if await asyncio.to_thread(resolve_hermes_binary) is None:
+            return {
+                "ok": False,
+                "error_kind": "subagent_unavailable",
+                "error": (
+                    "Hermes Agent is not installed. Install it from the Agentic IDE "
+                    "(or hermes-agent.nousresearch.com) and pick its model with "
+                    f"hermes model, then switch the {brand}."
+                ),
+            }
+        return _complete_agent_switch(
+            HERMES_SUBAGENT_CANONICAL,
+            cfg=cfg,
+            persist=persist,
+            old=old,
+        )
+
     if canon not in JARVIS_TO_WORKER_SLUG:
         # List EVERY worker-capable provider, not just the API/harness ones —
         # Codex and Antigravity route through their own workers, so omitting them
@@ -872,6 +1023,7 @@ async def _switch_subagent(
                     CODEX_SUBAGENT_CANONICAL,
                     ANTIGRAVITY_SUBAGENT_CANONICAL,
                     GROK_BUILD_SUBAGENT_CANONICAL,
+                    HERMES_SUBAGENT_CANONICAL,
                 }
             )
         )

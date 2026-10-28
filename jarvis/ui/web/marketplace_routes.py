@@ -14,6 +14,7 @@ Endpoints:
     DELETE /api/marketplace/community/plugins/{id}         — uninstall + revoke
     POST   /api/marketplace/plugins/upload/inspect         — read a dropped manifest
     POST   /api/marketplace/plugins/upload                 — install a dropped manifest
+    POST   /api/marketplace/connectors                     — add a remote MCP server by URL
 """
 
 from __future__ import annotations
@@ -52,7 +53,6 @@ from jarvis.marketplace.auth import (
     DeviceFlowHandler,
     FlowResult,
     HostedMcpDcrHandler,
-    PkceLoopbackConfig,
     PkceLoopbackHandler,
     get_registry,
     sanitize_provider_error,
@@ -60,6 +60,7 @@ from jarvis.marketplace.auth import (
 from jarvis.marketplace.catalog import (
     CATEGORY_ORDER,
     HostedMcpOAuthDcrAuth,
+    HostedMcpOpenAuth,
     InstanceBrowserAuth,
     OAuthDeviceFlowAuth,
     OAuthPkceLoopbackAuth,
@@ -76,7 +77,7 @@ from jarvis.marketplace.discord_connect import (
     on_discord_disconnected,
 )
 from jarvis.marketplace.instance_url import InstanceUrlError, normalize_instance_url
-from jarvis.marketplace.revoke import revoke_tokens
+from jarvis.marketplace.revoke import revoke_unless_shared
 from jarvis.marketplace.telegram_connect import (
     on_telegram_connected,
     on_telegram_disconnected,
@@ -155,6 +156,9 @@ class _PluginStatusMeta:
     # then says "unknown" rather than inventing a cause.
     reauth_reason: str | None = None
     reauth_at: str | None = None
+    # When the provider itself ends the refresh grant (Google: an OAuth app in
+    # Testing status). ``None`` when the provider stated no fixed lifetime.
+    refresh_expires_at: str | None = None
 
 
 def _plugin_status_meta(plugin_id: str, store: TokenStore) -> _PluginStatusMeta:
@@ -183,6 +187,7 @@ def _plugin_status_meta(plugin_id: str, store: TokenStore) -> _PluginStatusMeta:
         reauth_at=(
             tokens.reauth_at.isoformat() if tokens.needs_reauth and tokens.reauth_at else None
         ),
+        refresh_expires_at=tokens.extra.get("refresh_expires_at") or None,
     )
 
 
@@ -303,6 +308,29 @@ def _make_validator(transport: httpx.AsyncBaseTransport | None = None):
 _validate_token = _make_validator()
 
 
+async def _validate_connector_token(spec: Any, pat: PatPasteAuth, token: str) -> tuple[bool, int]:
+    """Prove a custom connector's token with an MCP handshake.
+
+    The server behind a custom connector has no REST "who am I" route to ask,
+    so the token rides in the entry's own header on an ``initialize`` — the
+    exact request the tool registry sends next. Unreachable or non-MCP
+    answers surface as a 502 with the probe's sentence, not as "rejected".
+    """
+    from jarvis.marketplace.custom_connector import (
+        ConnectorError,
+        connector_auth_headers,
+        probe_connector,
+    )
+
+    try:
+        probe = await probe_connector(
+            pat.validation_endpoint, headers=connector_auth_headers(spec, token)
+        )
+    except ConnectorError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return probe.auth == "none", probe.status
+
+
 # ----------------------------------------------------------------------
 # Read endpoints
 # ----------------------------------------------------------------------
@@ -329,7 +357,7 @@ def _mcp_live(
     today's behaviour.
     """
     transport = str(mcp.get("transport", "")).lower()
-    if transport == "http":
+    if transport in ("http", "sse"):
         if status == "connected":
             reg = _live_plugin_registry()  # the same accessor refresh uses
             if reg is not None and reg.is_bootstrapped() and reg.live_tool_count(plugin_id) == 0:
@@ -379,6 +407,7 @@ async def list_plugins(response: Response) -> dict[str, Any]:
         item["last_refreshed"] = meta.last_refreshed
         item["reauth_reason"] = meta.reauth_reason
         item["reauth_at"] = meta.reauth_at
+        item["refresh_expires_at"] = meta.refresh_expires_at
         item["unavailable_reason"] = None
         if spec.id == "amd_gpu" and spec.auth.mode == "local":
             from jarvis.marketplace.amd_mcp import amd_unavailable_reason
@@ -507,11 +536,12 @@ async def connect_pat(plugin_id: str, body: PatConnectBody, request: Request) ->
         # Only widen the call for self-hosted plugins. Every other caller (and
         # every injected test double) keeps the two-argument shape it has had
         # since the flow was written.
-        ok, status = (
-            await _validate_token(pat, token, instance_url)
-            if instance_url
-            else await _validate_token(pat, token)
-        )
+        if pat.validation_method == "mcp_initialize":
+            ok, status = await _validate_connector_token(spec, pat, token)
+        elif instance_url:
+            ok, status = await _validate_token(pat, token, instance_url)
+        else:
+            ok, status = await _validate_token(pat, token)
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
@@ -703,6 +733,27 @@ async def connect_start(
         TokenStore().save(plugin_id, Tokens(access="local-enabled"))
         _refresh_plugin_in_live_registry(plugin_id)
         return {"kind": "local", "plugin_id": plugin_id, "state": "connected"}
+    elif isinstance(spec.auth, HostedMcpOpenAuth):
+        # No sign-in to run: one answered handshake is the whole connect, so
+        # "Connected" is never shown for a server that is down or now wants
+        # credentials it did not want when it was added.
+        from jarvis.marketplace.custom_connector import ConnectorError, probe_connector
+
+        try:
+            probe = await probe_connector(spec.auth.mcp_url)
+        except ConnectorError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if probe.auth != "none":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{spec.display_name} now asks for sign-in. Remove it and add it "
+                    "again so the new sign-in is detected."
+                ),
+            )
+        TokenStore().save(plugin_id, Tokens(access="open"))
+        _refresh_plugin_in_live_registry(plugin_id)
+        return {"kind": "local", "plugin_id": plugin_id, "state": "connected"}
     elif isinstance(spec.auth, OAuthDeviceFlowAuth):
         from jarvis.marketplace.connect_helpers import is_placeholder_client_id
         from jarvis.marketplace.publisher_clients import resolve_publisher_client
@@ -736,15 +787,15 @@ async def connect_start(
         # Resolve the effective client from secrets so a reconnect uses the
         # operator's real Google client, not the catalog placeholder (the same
         # resolution the refresh scheduler uses — connect/refresh stay in sync).
+        # The shared builder also routes a shipped client's token exchange
+        # through its broker when the provider demands a secret.
         from jarvis.marketplace.connect_helpers import (
+            build_pkce_config,
             is_placeholder_client_id,
-            resolve_pkce_client,
         )
 
-        _pkce_client_id, _pkce_client_secret = resolve_pkce_client(
-            plugin_id, spec.auth.client_id, spec.auth.client_secret
-        )
-        if is_placeholder_client_id(_pkce_client_id):
+        pkce_config = build_pkce_config(plugin_id, spec.auth)
+        if is_placeholder_client_id(pkce_config.client_id):
             detail = (
                 f"oauth client not configured for plugin {plugin_id!r}: no "
                 "publisher-provisioned shared client is installed yet and "
@@ -760,33 +811,15 @@ async def connect_start(
                     "via the dialog's token fallback."
                 )
             raise HTTPException(status_code=409, detail=detail)
-        handler = PkceLoopbackHandler(
-            PkceLoopbackConfig(
-                plugin_id=plugin_id,
-                authorization_url=spec.auth.authorization_url,
-                token_url=spec.auth.token_url,
-                client_id=_pkce_client_id,
-                client_secret=_pkce_client_secret,
-                callback_port=spec.auth.callback_port or 0,
-                scopes=list(spec.auth.scopes),
-                scope_separator=spec.auth.scope_separator,
-                # Slack-specific: PKCE-enabled apps must use user_scope= per
-                # docs.slack.dev/authentication/using-pkce. When the catalog
-                # marks a plugin user-scopes-only, route the param.
-                scope_param_name=("user_scope" if spec.auth.user_scopes_only else "scope"),
-                callback_path=spec.auth.callback_path,
-                resource=spec.auth.resource,
-                offline_access=spec.auth.offline_access,
-                client_auth_method=spec.auth.client_auth_method,
-            )
-        )
+        handler = PkceLoopbackHandler(pkce_config)
     else:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"plugin {plugin_id!r} uses auth mode {spec.auth.mode!r} "
                 "which is not yet wired to /connect/start. Supported: "
-                "hosted_mcp_oauth_dcr, oauth_device_flow, oauth_pkce_loopback."
+                "hosted_mcp_oauth_dcr, hosted_mcp_open, oauth_device_flow, "
+                "oauth_pkce_loopback."
             ),
         )
 
@@ -995,7 +1028,7 @@ async def disconnect(plugin_id: str, request: Request) -> dict[str, Any]:
     try:
         tokens = store.load(plugin_id)
         if tokens is not None:
-            revocation = await revoke_tokens(spec, tokens)
+            revocation = await revoke_unless_shared(spec, tokens, store)
     except Exception as exc:  # noqa: BLE001 - never block the disconnect
         log.info("plugin %s revocation skipped: %s", plugin_id, exc)
         revocation = "failed"
@@ -1020,8 +1053,10 @@ async def disconnect(plugin_id: str, request: Request) -> dict[str, Any]:
         "plugin_id": plugin_id,
         "status": "not_connected",
         "live_applied": live_applied,
-        # "revoked" | "unsupported" | "failed" — so the UI can say honestly
-        # whether the user still has to remove the app at the provider.
+        # "revoked" | "unsupported" | "failed" | "shared" — so the UI can say
+        # honestly whether the user still has to remove the app at the
+        # provider. "shared": other connected plugins still use the same
+        # project-wide grant (Google), so it stays until the last one goes.
         "revocation": revocation,
     }
 
@@ -1031,7 +1066,9 @@ async def disconnect(plugin_id: str, request: Request) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 
 
-def _community_payload(index: Any, status: str) -> dict[str, Any]:
+def _community_payload(
+    index: Any, status: str, installed_agents: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     """Convert a fetched index into the wire shape the Plugins view renders.
 
     Every plugin entry is run through the SAME converter the install path
@@ -1051,6 +1088,7 @@ def _community_payload(index: Any, status: str) -> dict[str, Any]:
 
     plugins: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
+    agents: list[dict[str, Any]] = []
     if index is not None:
         for entry in index.plugins:
             base = {
@@ -1111,33 +1149,73 @@ def _community_payload(index: Any, status: str) -> dict[str, Any]:
                 }
             )
 
+        from jarvis.society.agent_template import validate_template
+
+        for agent_entry in index.agents:
+            template = agent_entry.agent
+            problems = validate_template(template)
+            name = str(template.get("name") or "") if isinstance(template, dict) else ""
+            agents.append(
+                {
+                    "name": agent_entry.name,
+                    "title": agent_entry.title or agent_entry.name,
+                    "description": agent_entry.description,
+                    "publisher": agent_entry.publisher,
+                    "version": agent_entry.version,
+                    "published_at": agent_entry.published_at,
+                    "categories": list(agent_entry.categories),
+                    "source_url": agent_entry.source_url,
+                    "agent": template,
+                    # Same rule the install applies, so a card never offers a
+                    # button the install would refuse.
+                    "valid": not problems,
+                    "error": problems[0] if problems else None,
+                    "installed": name.strip().lower() in installed_agents,
+                }
+            )
+
     return {
         "status": status,
         "revision": getattr(index, "revision", None),
         "generated_at": getattr(index, "generated_at", None),
         "plugins": plugins,
         "skills": skills,
+        "agents": agents,
     }
 
 
+def _installed_agent_names(request: Request) -> frozenset[str]:
+    """Names on this install's roster, from the runtime's in-memory snapshot.
+
+    No IO and no runtime start: browsing the store must not boot the society.
+    Before the society first ran, nothing is marked installed — the honest
+    answer the moment it cannot know.
+    """
+    runtime = getattr(request.app.state, "society", None)
+    roster = getattr(runtime, "roster", None)
+    if roster is None:
+        return frozenset()
+    return frozenset(agent.name.strip().lower() for agent in roster.snapshot())
+
+
 @router.get("/community", openapi_extra={"x-jarvis-readonly": True})
-async def community_browse(response: Response) -> dict[str, Any]:
+async def community_browse(request: Request, response: Response) -> dict[str, Any]:
     """The community index (TTL-cached fetch), enriched with install state."""
     from jarvis.marketplace import community_source
 
     response.headers["Cache-Control"] = "no-store"
     index, status = await community_source.get_index()
-    return _community_payload(index, status)
+    return _community_payload(index, status, _installed_agent_names(request))
 
 
 @router.post("/community/refresh")
-async def community_refresh(response: Response) -> dict[str, Any]:
+async def community_refresh(request: Request, response: Response) -> dict[str, Any]:
     """Force a re-fetch of the community index, bypassing the TTL."""
     from jarvis.marketplace import community_source
 
     response.headers["Cache-Control"] = "no-store"
     index, status = await community_source.get_index(force=True)
-    return _community_payload(index, status)
+    return _community_payload(index, status, _installed_agent_names(request))
 
 
 # ----------------------------------------------------------------------
@@ -1547,13 +1625,46 @@ async def _announce_install(request: Request, result: dict[str, Any]) -> None:
         log.debug("MarketplaceItemInstalled publish failed: %s", exc)
 
 
+async def _install_community_agent(entry: Any, request: Request) -> dict[str, Any]:
+    """A published agent template becomes a NEW teammate on this install.
+
+    The template's own rules decide (``jarvis.society.agent_template``); the
+    agent runs on this person's model, never the publisher's, and asks before
+    it acts where its runner can.
+    """
+    from .society_routes import install_template
+
+    installed = await install_template(entry.agent, request)
+    agent = installed["agent"]
+    return {
+        "ok": True,
+        "kind": "agent",
+        "id": agent.get("agent_id", entry.name),
+        "title": agent.get("name") or entry.title or entry.name,
+        "publisher": entry.publisher,
+        "version": entry.version,
+        "source_url": entry.source_url,
+        "location": "",
+        "state": "installed",
+        "ready": True,
+        "problem": None,
+        "next_action": "open",
+        "renamed_from": installed.get("renamed_from"),
+        "agent": agent,
+    }
+
+
 def _install_by_name_404(item_id: str, index: Any) -> HTTPException:
     """404 that names the closest existing entry instead of a dead end."""
     import difflib
 
     names: list[str] = []
     if index is not None:
-        names = [e.name for e in index.plugins] + [s.name for s in index.skills]
+        names = (
+            [e.name for e in index.plugins]
+            + [s.name for s in index.skills]
+            + [a.name for a in index.agents]
+        )
     close = difflib.get_close_matches(item_id, names, n=1, cutoff=0.6)
     hint = f" Closest match: {close[0]!r}." if close else ""
     return HTTPException(
@@ -1564,7 +1675,7 @@ def _install_by_name_404(item_id: str, index: Any) -> HTTPException:
 
 @router.post("/community/install/{item_id}")
 async def community_install_by_name(item_id: str, request: Request) -> dict[str, Any]:
-    """Install a marketplace entry by name — skill or plugin, one call.
+    """Install a marketplace entry by name — skill, plugin or agent, one call.
 
     The one-liner a downloader copies off a marketplace page
     (``jarvis marketplace install <name>``) never says which of the two an
@@ -1576,14 +1687,17 @@ async def community_install_by_name(item_id: str, request: Request) -> dict[str,
     from jarvis.marketplace import community_source
 
     index, _ = await community_source.get_index()
-    plugin_entry = skill_entry = None
+    plugin_entry = skill_entry = agent_entry = None
     if index is not None:
         plugin_entry = next((e for e in index.plugins if e.name == item_id), None)
         skill_entry = next((s for s in index.skills if s.name == item_id), None)
-    if plugin_entry is None and skill_entry is None:
+        agent_entry = next((a for a in index.agents if a.name == item_id), None)
+    if plugin_entry is None and skill_entry is None and agent_entry is None:
         raise _install_by_name_404(item_id, index)
 
-    if skill_entry is not None:
+    if agent_entry is not None:
+        result = await _install_community_agent(agent_entry, request)
+    elif skill_entry is not None:
         result = await _install_community_skill(skill_entry, request)
     else:
         item = await _install_community_plugin(item_id)
@@ -1615,14 +1729,17 @@ async def community_install_by_name(item_id: str, request: Request) -> dict[str,
 @router.delete("/community/plugins/{plugin_id}")
 async def community_uninstall(plugin_id: str) -> dict[str, Any]:
     """Remove an installed community plugin: revoke + drop stored tokens,
-    remove the catalog entry and its usage card, refresh the live registry."""
+    remove the catalog entry and its usage card, refresh the live registry.
+
+    A plugin the owner added here (an upload or a custom connector) lives in
+    the same override catalog and leaves the same way."""
     from jarvis.marketplace.community_install import remove_community_plugin
     from jarvis.marketplace.usage_cards.loader import delete_usage_card
 
     spec = load_catalog().by_id(plugin_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"plugin {plugin_id!r} not in catalog")
-    if spec.source != "community":
+    if spec.source not in ("community", LOCAL_PLUGIN_SOURCE):
         raise HTTPException(
             status_code=409,
             detail=f"{plugin_id!r} is a built-in plugin — disconnect it instead of uninstalling",
@@ -1650,7 +1767,7 @@ async def community_uninstall(plugin_id: str) -> dict[str, Any]:
     revocation = "unsupported"
     if tokens is not None:
         try:
-            revocation = await revoke_tokens(spec, tokens)
+            revocation = await revoke_unless_shared(spec, tokens, store)
         except Exception as exc:  # noqa: BLE001 - never block the uninstall
             log.info("plugin %s revocation skipped: %s", plugin_id, exc)
             revocation = "failed"
@@ -1867,3 +1984,88 @@ async def upload_plugin(
     item = spec.model_dump(mode="json")
     item["status"] = "not_connected"
     return {"ok": True, "plugin": item, "upload": result["upload"]}
+
+
+# ----------------------------------------------------------------------
+# Custom connector — a remote MCP server added by name and address
+# ----------------------------------------------------------------------
+
+
+class CustomConnectorBody(BaseModel):
+    name: str = Field(default="", max_length=80)
+    url: str = Field(min_length=1, max_length=2048)
+    # "auto" asks the server; the others are the owner's override from the
+    # dialog's advanced settings, still checked against what the server says.
+    auth: str = Field(default="auto", pattern="^(auto|oauth|token|none)$")
+    # The header an access token travels in; Authorization (Bearer) if unset.
+    header_name: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/connectors")
+async def add_custom_connector(body: CustomConnectorBody) -> dict[str, Any]:
+    """Adds a remote MCP server as a plugin, after asking it how to sign in.
+
+    One call instead of inspect-then-install: the probe is the inspection,
+    and a connector the server would refuse is never written. The response
+    carries the catalog item, so the dialog can start the matching connect
+    flow (browser sign-in, token dialog, or a plain enable) at once.
+    """
+    from jarvis.marketplace.community_install import install_plugin_spec
+    from jarvis.marketplace.custom_connector import (
+        ConnectorError,
+        build_connector_spec,
+        connector_id,
+        connector_url,
+        display_name_for,
+        normalize_connector_url,
+        normalize_header_name,
+        probe_connector,
+        resolve_auth,
+    )
+
+    try:
+        url = normalize_connector_url(body.url)
+        header_name = normalize_header_name(body.header_name)
+    except ConnectorError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    catalog = load_catalog()
+    for existing in catalog.plugins:
+        if connector_url(existing) == url:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This server is already added as {existing.display_name}.",
+            )
+
+    try:
+        probe = await probe_connector(url)
+        auth = resolve_auth(body.auth, probe)  # type: ignore[arg-type]  # pattern-checked
+    except ConnectorError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    display_name = display_name_for(body.name, url, probe)
+    plugin_id = connector_id(display_name, url, (p.id for p in catalog.plugins))
+    spec = build_connector_spec(
+        plugin_id=plugin_id,
+        display_name=display_name,
+        url=url,
+        auth=auth,
+        probe=probe,
+        header_name=header_name,
+    )
+    try:
+        await asyncio.to_thread(install_plugin_spec, spec)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    _refresh_plugin_in_live_registry(spec.id)
+    item = spec.model_dump(mode="json")
+    item["status"] = "not_connected"
+    return {
+        "ok": True,
+        "plugin": item,
+        "detected": {
+            "auth": auth,
+            "transport": probe.transport,
+            "server_name": probe.server_name,
+        },
+    }

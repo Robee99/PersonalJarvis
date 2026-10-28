@@ -1861,7 +1861,7 @@ def _hangup_jsons(jsons):
 
 
 @pytest.mark.asyncio
-async def test_hangup_phrase_finishes_session_with_voice_pattern():
+async def test_hangup_phrase_asks_and_finishes_only_after_separate_yes():
     provider = FakeProvider(
         [
             RealtimeEvent(
@@ -1870,6 +1870,8 @@ async def test_hangup_phrase_finishes_session_with_voice_pattern():
                 is_final=True,
             ),
             RealtimeEvent(type="turn_complete"),
+            RealtimeEvent(type="speech_started"),
+            RealtimeEvent(type="input_transcript", text="Yes", is_final=True),
         ]
     )
     jsons = []
@@ -1888,13 +1890,13 @@ async def test_hangup_phrase_finishes_session_with_voice_pattern():
 
     assert sess.hangup_reason == "voice_pattern"
     assert _hangup_jsons(jsons)
-    # The explicit closing command ends the call BEFORE any model response,
-    # exactly like the classic pre-brain HANGUP_RE path.
+    assert any(m.get("type") == "error_spoken" and "?" in m.get("text", "") for m in jsons)
+    # Neither the request nor the answer is delegated to the model.
     assert provider.session.response_requests == 0
 
 
 @pytest.mark.asyncio
-async def test_gemini_fragmented_final_chunks_accumulate_to_hangup():
+async def test_gemini_fragmented_final_chunks_request_confirmation():
     provider = FakeProvider(
         [
             RealtimeEvent(type="input_transcript", text="auf", is_final=True),  # i18n-allow
@@ -1915,8 +1917,9 @@ async def test_gemini_fragmented_final_chunks_accumulate_to_hangup():
     await sess.wait_finished()
     await sess.end(reason=sess.hangup_reason)
 
-    assert sess.hangup_reason == "voice_pattern"
-    assert _hangup_jsons(jsons)
+    assert sess.hangup_reason == ""
+    assert not _hangup_jsons(jsons)
+    assert any(m.get("type") == "error_spoken" and "?" in m.get("text", "") for m in jsons)
 
 
 @pytest.mark.asyncio
@@ -1952,7 +1955,7 @@ async def test_hangup_accumulator_resets_at_turn_boundary():
 
 
 @pytest.mark.asyncio
-async def test_end_call_tool_finishes_after_turn_complete():
+async def test_end_call_tool_cannot_bypass_voice_confirmation():
     bridge = FakeToolBridge()
     provider = FakeProvider(
         [
@@ -1981,15 +1984,12 @@ async def test_end_call_tool_finishes_after_turn_complete():
     await sess.wait_finished()
     await sess.end(reason=sess.hangup_reason)
 
-    # end_call is session lifecycle: acknowledged to the model, never routed
-    # through the tool bridge, and the hang-up waits for the goodbye turn.
-    assert ("c-end", "end_call", {"success": True}) in provider.session.tool_results
+    assert provider.session.tool_results[0][2]["success"] is False
+    assert provider.session.tool_results[0][2]["confirmation_required"] is True
     assert bridge.calls == []
-    assert sess.hangup_reason == "voice_pattern"
-    hangups = _hangup_jsons(jsons)
-    assert hangups
-    turn_completes = [m for m in jsons if m.get("type") == "turn_complete"]
-    assert turn_completes, "the model finishes its goodbye before the hang-up"
+    assert sess.hangup_reason == ""
+    assert not _hangup_jsons(jsons)
+    assert any(m.get("type") == "error_spoken" and "?" in m.get("text", "") for m in jsons)
 
 
 @pytest.mark.asyncio
@@ -6945,7 +6945,7 @@ def test_session_instructions_place_preferences_between_persona_and_directives(
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions(
         "de",
@@ -6971,7 +6971,7 @@ def test_session_instructions_never_teach_native_voice_pipeline_control_tokens(
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: (
+        lambda *, compact=False, **_kwargs: (
             "IDENTITY\n\n"
             "ENDING THE CALL\n"
             f"Say goodbye and append {END_CALL_SIGNAL}.\n\n"
@@ -7002,7 +7002,7 @@ def test_session_instructions_anchor_clock_and_stale_knowledge_guard(monkeypatch
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions("en")
     assert datetime.now().astimezone().strftime("%Y-%m-%d") in text
@@ -7025,7 +7025,7 @@ def test_session_instructions_carry_the_precision_guard(monkeypatch):
     monkeypatch.setattr(
         persona_loader,
         "load_effective_persona_prompt",
-        lambda *, compact=False: "PERSONA_MARKER",
+        lambda *, compact=False, **_kwargs: "PERSONA_MARKER",
     )
     text = session_mod._session_instructions("en")
     assert "Precision guard" in text

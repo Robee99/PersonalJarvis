@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -117,7 +120,7 @@ def test_a_global_settings_change_follows_through(native: Path) -> None:
     (native / "settings.json").write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
     ensure_parity("claude", account.id)
     settings = json.loads((account.config_dir / "settings.json").read_text(encoding="utf-8"))
-    assert settings == {"model": "sonnet"}
+    assert settings == {"model": "sonnet", "claudeMdExcludes": [_memory_pattern(native)]}
 
 
 def test_the_user_scope_mcp_servers_are_merged_without_the_identity(native: Path) -> None:
@@ -306,7 +309,9 @@ def test_an_account_skill_of_its_own_survives_the_merge(native: Path) -> None:
     assert (account.config_dir / "skills" / "git-rescue" / "SKILL.md").is_file()
 
 
-def test_a_plugin_tree_the_cli_half_filled_is_replaced_as_a_whole(native: Path) -> None:
+def test_a_plugin_tree_the_cli_half_filled_is_replaced_as_a_whole(
+    native: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Which plugins are ACTIVE lives in state files beside the marketplaces they
     name, so the user's marketplaces next to the account's own state list nothing
     the CLI can load. What was there is kept beside it, not deleted.
@@ -316,16 +321,38 @@ def test_a_plugin_tree_the_cli_half_filled_is_replaced_as_a_whole(native: Path) 
     account = _account()
     stale = account.config_dir / "plugins" / "marketplaces" / "official"
     stale.mkdir(parents=True)
+
+    real_link = agent_config_parity._link
+
+    def link_plugins(source: Path, target: Path) -> str | None:
+        if source.name == "plugins":
+            shutil.copytree(source, target)
+            return "junction"
+        return real_link(source, target)
+
+    monkeypatch.setattr(agent_config_parity, "_link", link_plugins)
     ensure_parity("claude", account.id)
     assert (account.config_dir / "plugins" / "installed_plugins.json").exists()
     assert (account.config_dir / ("plugins" + agent_config_parity.SUPERSEDED_SUFFIX)).is_dir()
 
 
-def test_the_superseded_copy_is_only_moved_aside_once(native: Path) -> None:
+def test_the_superseded_copy_is_only_moved_aside_once(
+    native: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """It runs before every spawn — a folder per spawn would be a leak."""
     (native / "plugins").mkdir(parents=True)
     account = _account()
     (account.config_dir / "plugins").mkdir(parents=True)
+
+    real_link = agent_config_parity._link
+
+    def link_plugins(source: Path, target: Path) -> str | None:
+        if source.name == "plugins":
+            shutil.copytree(source, target)
+            return "junction"
+        return real_link(source, target)
+
+    monkeypatch.setattr(agent_config_parity, "_link", link_plugins)
     ensure_parity("claude", account.id)
     ensure_parity("claude", account.id)
     stacked = list(account.config_dir.glob("plugins*" + agent_config_parity.SUPERSEDED_SUFFIX))
@@ -380,6 +407,38 @@ def test_a_host_without_links_copies_the_users_setup_instead(
     report = ensure_parity("claude", account.id)
     assert report.shared["skills"] == "copied"
     assert (account.config_dir / "skills" / "git-rescue" / "SKILL.md").is_file()
+
+
+def test_a_failed_windows_junction_does_not_leave_a_target_placeholder(
+    native: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CreateJunction may make the target directory before refusing the link."""
+    target = tmp_path / "account-plugins"
+    target.mkdir()
+    (target / "account-only.txt").write_text("preserve me", encoding="utf-8")
+
+    def refuse_symlink(*_args: object, **_kwargs: object) -> None:
+        raise OSError("symlinks are not available here")
+
+    def leave_placeholder_then_refuse(_source: str, destination: str) -> None:
+        Path(destination).mkdir()
+        raise OSError("junctions are not available here")
+
+    monkeypatch.setattr(agent_config_parity.os, "symlink", refuse_symlink)
+    monkeypatch.setattr(agent_config_parity.sys, "platform", "win32")
+    monkeypatch.setitem(
+        sys.modules,
+        "_winapi",
+        SimpleNamespace(CreateJunction=leave_placeholder_then_refuse),
+    )
+
+    how, reason = agent_config_parity._share_dir(
+        native / "skills", target, copy_fallback=False, whole=True
+    )
+    assert how is None
+    assert "cannot share that folder as a whole" in reason
+    assert (target / "account-only.txt").read_text(encoding="utf-8") == "preserve me"
+    assert not target.with_name(target.name + agent_config_parity.SUPERSEDED_SUFFIX).exists()
 
 
 def test_a_tree_that_must_not_be_copied_is_reported_instead_of_faked(
@@ -537,3 +596,60 @@ def test_a_marker_the_account_wrote_itself_is_never_overwritten(
     ensure_parity("claude", account.id)
     doc = json.loads((account.config_dir / ".claude.json").read_text(encoding="utf-8"))
     assert doc["lastOnboardingVersion"] == "2.1.226"
+
+
+# ------------------------------------------------- the user's memory loads once
+
+
+def _memory_pattern(native: Path) -> str:
+    return (native / "CLAUDE.md").as_posix()
+
+
+def _excludes(account: agent_accounts.AgentAccount) -> list[str] | None:
+    settings = json.loads((account.config_dir / "settings.json").read_text(encoding="utf-8"))
+    return settings.get("claudeMdExcludes")
+
+
+def test_a_mirrored_memory_file_is_not_read_a_second_time_from_home(native: Path) -> None:
+    """Claude Code also reads ~/.claude/CLAUDE.md as a parent folder's project file.
+
+    In a folder under the home directory a pane on an added account then got
+    the user's whole global instructions twice; a terminal gets them once.
+    """
+    account = _account()
+    ensure_parity("claude", account.id)
+    assert _excludes(account) == [_memory_pattern(native)]
+    settings = json.loads((account.config_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["model"] == "opus"  # the rest of the mirror is unchanged
+    second = ensure_parity("claude", account.id)
+    assert second.shared["settings.json"] == "current"
+
+
+def test_the_users_own_excludes_are_kept_and_extended(native: Path) -> None:
+    (native / "settings.json").write_text(
+        json.dumps({"claudeMdExcludes": ["**/vendor/CLAUDE.md"]}), encoding="utf-8"
+    )
+    account = _account()
+    ensure_parity("claude", account.id)
+    assert _excludes(account) == ["**/vendor/CLAUDE.md", _memory_pattern(native)]
+
+
+def test_an_account_with_its_own_settings_gets_the_exclusion_merged(native: Path) -> None:
+    account = _account()
+    own = account.config_dir / "settings.json"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text(json.dumps({"model": "haiku"}), encoding="utf-8")
+    ensure_parity("claude", account.id)
+    assert json.loads(own.read_text(encoding="utf-8"))["model"] == "haiku"
+    assert _excludes(account) == [_memory_pattern(native)]
+    assert ensure_parity("claude", account.id).shared["settings.json"] == "current"
+
+
+def test_an_account_with_its_own_memory_still_reads_the_users(native: Path) -> None:
+    """Its CLAUDE.md is not the user's, so home's copy is the only one it has."""
+    account = _account()
+    own = account.config_dir / "CLAUDE.md"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text("Account house style.\n", encoding="utf-8")
+    ensure_parity("claude", account.id)
+    assert _excludes(account) is None

@@ -72,12 +72,26 @@ def _explicit_mcp_json_path() -> Path | None:
 def _user_mcp_json_path() -> Path:
     from jarvis.core.paths import user_data_dir
 
-    return user_data_dir() / "mcp.json"
+    preferred = user_data_dir() / "mcp.json"
+    if preferred.exists() or os.name != "nt":
+        return preferred
+
+    # Packaged Windows launches can inherit a sandboxed LOCALAPPDATA. If that
+    # location has no MCP config, keep using the user's existing standard
+    # Jarvis config instead of silently falling back to the checkout's copy.
+    standard = Path.home() / "AppData" / "Local" / "Jarvis" / "mcp.json"
+    return standard if standard.exists() else preferred
 
 
 def _active_mcp_json_path() -> Path:
     """Resolve one durable MCP config path without probing at import time."""
     explicit = _explicit_mcp_json_path()
+    if explicit is not None and not os.environ.get("JARVIS_MCP_CONFIG", "").strip():
+        # Only the data dir pointed here (the frozen build always sets it). A
+        # data dir without its own mcp.json yet must not hide the servers the
+        # person already set up in the per-user config; that file stays theirs.
+        if not explicit.exists() and (user_path := _user_mcp_json_path()).exists():
+            return user_path
     if explicit is not None:
         return explicit
     user_path = _user_mcp_json_path()
@@ -91,7 +105,7 @@ def _read_mcp_json() -> dict[str, Any]:
     if not path.exists():
         return _empty_config()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError) as exc:
         log.warning("mcp.json not readable (%s) — using default", exc)
         return _empty_config()
@@ -138,7 +152,7 @@ def _migrate_legacy_if_needed() -> None:
     if _active_mcp_json_path().exists() or not LEGACY_STATE_PATH.exists():
         return
     try:
-        raw = json.loads(LEGACY_STATE_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(LEGACY_STATE_PATH.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return
 
@@ -270,7 +284,7 @@ def import_claude_desktop() -> tuple[int, list[str], str]:
         )
 
     try:
-        raw = json.loads(src.read_text(encoding="utf-8"))
+        raw = json.loads(src.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         # Line and column let the user fix their own file.
         return (0, [], f"Config is not valid JSON (line {exc.lineno}, column {exc.colno}).")

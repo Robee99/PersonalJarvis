@@ -74,8 +74,33 @@ def test_each_language_gets_its_own_voice(all_voices_installed) -> None:
     spanish = tts.last_voice
 
     assert german is not None and "de_DE" in german
-    assert english is not None and "en_US" in english
+    # English is the British "Jarvis" voice when it is downloaded.
+    assert english == "kokoro-en-v0_19"
     assert spanish is not None and "es_ES" in spanish
+
+
+def test_the_british_voice_speaks_as_george_and_ryan_stands_in_until_it_is_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    speakers: list[tuple[str, int]] = []
+
+    class _Engine(_FakeEngine):
+        def generate(self, text: str, speaker_id: int, speed: float) -> _FakeAudio:
+            speakers.append((self.model_id, speaker_id))
+            return _FakeAudio()
+
+    present = {"vits-piper-en_US-ryan-medium"}
+    monkeypatch.setattr(
+        "jarvis.speech.local_models.bundle_present", lambda model_id, **kw: model_id in present
+    )
+    monkeypatch.setattr(PiperLocalTTS, "_build_engine", lambda self, model_id: _Engine(model_id))
+
+    tts = PiperLocalTTS()
+    asyncio.run(_speak(tts, "Good evening.", "en-GB"))
+    present.add("kokoro-en-v0_19")
+    asyncio.run(_speak(tts, "Good evening.", "en-GB"))
+
+    assert speakers == [("vits-piper-en_US-ryan-medium", 0), ("kokoro-en-v0_19", 9)]
 
 
 def test_the_speaker_profile_survives_a_language_switch(all_voices_installed) -> None:
@@ -233,3 +258,32 @@ def test_module_exposes_the_expected_provider_surface() -> None:
     """Structural TTSProvider conformance — no inheritance, so assert it."""
     for attribute in ("synthesize", "list_voices", "name", "supports_streaming"):
         assert hasattr(piper_local.PiperLocalTTS, attribute)
+
+
+def test_a_reply_of_several_sentences_is_spoken_to_the_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sherpa-onnx stops when the streaming callback returns 0; it must return 1 to go on."""
+
+    class _Streaming(_FakeEngine):
+        sample_rate = 22_050
+
+        def generate(self, text: str, speaker_id: int, speed: float, callback=None) -> _FakeAudio:
+            whole = _FakeAudio(seconds=0.0)
+            for sentence in text.split(". "):
+                audio = _FakeAudio(seconds=0.5)
+                if callback is not None and callback(audio.samples, 0.0) == 0:
+                    break
+                self.spoken.append(sentence)
+            return whole
+
+    engines: list[_Streaming] = []
+
+    def _build(self: PiperLocalTTS, model_id: str) -> _Streaming:
+        engines.append(_Streaming(model_id))
+        return engines[-1]
+
+    monkeypatch.setattr("jarvis.speech.local_models.bundle_present", lambda model_id, **kw: True)
+    monkeypatch.setattr(PiperLocalTTS, "_build_engine", _build)
+    pcm = asyncio.run(_speak(PiperLocalTTS(), "One. Two. Three", "en-US"))
+
+    assert engines[0].spoken == ["One", "Two", "Three"]
+    assert len(pcm) == 3 * int(22_050 * 0.5) * 2

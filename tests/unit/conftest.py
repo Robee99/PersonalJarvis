@@ -34,6 +34,8 @@ history redirect).
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
 
@@ -43,3 +45,13 @@ def _polish_pass_holds_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     from jarvis.dictation import polish
 
     monkeypatch.setattr(polish, "resolve_polish_chain", lambda cfg: ())
+
+
+@pytest.fixture(autouse=True)
+def _no_honorific_left_over_from_another_test() -> Iterator[None]:
+    """A prompt build lets the butler's "Sir" through the scrubber; start each test without."""
+    from jarvis.brain.output_filter import allow_honorific
+
+    allow_honorific("")
+    yield
+    allow_honorific("")

@@ -8,11 +8,18 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import httpx
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, Request
 
 from jarvis.core.bus import EventBus
 from jarvis.state.chat_store import ChatStore
-from jarvis.ui.web.chats_routes import router as chats_router
+from jarvis.ui.web.chats_routes import (
+    IndexedConversationIds,
+    indexed_conversation_summaries,
+)
+from jarvis.ui.web.chats_routes import (
+    router as chats_router,
+)
 
 
 class _FakeBrain:
@@ -110,6 +117,62 @@ async def test_list_text_only_without_session_store() -> None:
         r = await c.get("/api/chats")
     rows = r.json()
     assert [row["kind"] for row in rows] == ["text"]
+
+
+def test_indexed_summaries_find_old_text_and_voice_threads_without_transcripts() -> None:
+    app = FastAPI()
+    app.include_router(chats_router)
+    app.state.chat_store = SimpleNamespace(
+        list_threads=lambda *, include_empty=False: [
+            {
+                "thread_id": "old-text",
+                "title": "Old indexed conversation",
+                "preview": "private transcript",
+                "created_at_ns": 1_000_000,
+                "updated_at_ns": 2_000_000,
+                "message_count": 2,
+            }
+        ]
+    )
+    app.state.session_store = SimpleNamespace(
+        get_session=lambda cid: SimpleNamespace(
+            id="v1", started_ms=3_000, ended_ms=4_000, turn_count=1
+        ) if cid == "v1" else None
+    )
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/chats/indexed-summaries",
+            "headers": [],
+            "query_string": b"",
+            "server": ("test", 80),
+            "client": ("test", 1),
+            "scheme": "http",
+            "http_version": "1.1",
+            "app": app,
+        }
+    )
+    rows = [
+        row.model_dump()
+        for row in indexed_conversation_summaries(
+            IndexedConversationIds(ids=["v1", "old-text", "missing", "old-text"]),
+            request,
+        )
+    ]
+    assert [(row["kind"], row["id"]) for row in rows] == [
+        ("voice", "v1"),
+        ("text", "old-text"),
+    ]
+    assert "messages" not in rows[0]
+    assert "messages" not in rows[1]
+    assert rows[1]["title"]
+
+
+def test_indexed_summaries_reject_more_than_one_thousand_ids() -> None:
+    with pytest.raises(ValueError):
+        IndexedConversationIds(ids=[f"thread-{index}" for index in range(1001)])
 
 
 async def test_list_hides_unsent_and_assistant_only_text_threads() -> None:

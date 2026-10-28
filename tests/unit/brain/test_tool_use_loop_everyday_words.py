@@ -129,10 +129,26 @@ def test_command_after_the_question_stands_the_guard_down(utterance: str) -> Non
         "How do I open Spotify?",
         "Why is this failing and how do I restart it?",
         "Was ist ein Container?",  # i18n-allow: definition question
+        "What is a registry key?",
+        "What are environment variables?",
     ],
 )
 def test_pure_how_to_question_still_blocks(utterance: str) -> None:
     assert _is_instructional_question(utterance) is True
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        # Live 2026-10-26: blocked, and the answer was invented.
+        "What is the largest file in my Downloads folder?",
+        "What is this computer's local IP address?",
+        "What's in C:\\Users\\rober\\Documents?",
+        "What are the biggest folders on my D drive?",
+    ],
+)
+def test_a_question_about_this_machine_is_a_lookup_not_a_how_to(utterance: str) -> None:
+    assert _is_instructional_question(utterance) is False
 
 
 @pytest.mark.asyncio

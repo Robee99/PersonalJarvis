@@ -10,6 +10,10 @@ import {
   RealtimeWebRtcTransport,
   StreamingPcm16Resampler,
 } from "./realtimeAudio";
+import { TimedPcmQueue } from "./playbackTimeline";
+import { readTimedSpeechPlayback } from "./speechPlayback";
+import { registerRealtimeAudioPreparation } from "./realtimeAudioPreparation";
+import { resetConnectBudgetForTests } from "./connectBudget";
 
 class FakePort {
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -28,13 +32,29 @@ class FakeAudioNode {
 }
 
 class FakeAudioContext {
+  static voices: Array<{ start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }> = [];
+  state = "running";
+  currentTime = 0;
+  static instances: FakeAudioContext[] = [];
+  outputTime = 0;
+  getOutputTimestamp = () => ({ contextTime: this.outputTime, performanceTime: 1 });
+  constructor() { FakeAudioContext.instances.push(this); }
   sampleRate = 48_000;
   destination = {} as AudioDestinationNode;
   audioWorklet = { addModule: vi.fn(async () => undefined) };
   resume = vi.fn(async () => undefined);
+  suspend = vi.fn(async () => { this.state = "suspended"; });
   close = vi.fn(async () => undefined);
   createMediaStreamSource = vi.fn(() => new FakeAudioNode());
-  createGain = vi.fn(() => Object.assign(new FakeAudioNode(), { gain: { value: 1 } }));
+  createGain = vi.fn(() => Object.assign(new FakeAudioNode(), { gain: {
+    value: 1, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn(),
+  } }));
+  createOscillator = vi.fn(() => {
+    const voice = { frequency: { value: 0 }, connect: vi.fn(), disconnect: vi.fn(),
+      start: vi.fn(), stop: vi.fn(), onended: null };
+    FakeAudioContext.voices.push(voice);
+    return voice;
+  });
   createMediaStreamDestination = vi.fn(() => Object.assign(new FakeAudioNode(), {
     stream: { getAudioTracks: () => ["buffered-track"], getTracks: () => [] },
   }));
@@ -126,6 +146,160 @@ function installVoiceBrowserFakes() {
 }
 
 describe("realtime audio client", () => {
+  it("uses Jarvis's selected microphone in the embedded desktop voice path", async () => {
+    installVoiceBrowserFakes();
+    const track = { stop: vi.fn() };
+    const capture = vi.fn(async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }));
+    vi.stubGlobal("navigator", { mediaDevices: {
+      getUserMedia: capture,
+      enumerateDevices: vi.fn(async () => [
+        { kind: "audioinput", deviceId: "laptop-id", label: "Microphone Array (Realtek(R) Audio)" },
+        { kind: "audioinput", deviceId: "headset-id", label: "Headset (boAt Rockerz 255 Pro+)" },
+      ]),
+    } });
+    (window as unknown as { __JARVIS_EMBEDDED_DESKTOP?: boolean }).__JARVIS_EMBEDDED_DESKTOP = true;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ selected_input: "Headset (boAt Rockerz 255 Pro+)" }))));
+    const client = new RealtimeAudioClient({}, { browserAudio: true });
+    try {
+      const connecting = client.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ type: "audio_ready", output_sample_rate: 24_000 });
+      await connecting;
+      expect(capture).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        audio: expect.objectContaining({ deviceId: { exact: "headset-id" }, echoCancellation: true }),
+      }));
+    } finally {
+      delete (window as unknown as { __JARVIS_EMBEDDED_DESKTOP?: boolean }).__JARVIS_EMBEDDED_DESKTOP;
+      FakeWebSocket.instances[0]?.receive({ type: "audio_closed" });
+      await client.disconnect();
+    }
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { sound_effects: false }, { sound_effects: undefined },
+    { input_muted: true }, { output_muted: true }, { output_volume: 0 },
+  ])("respects readiness cue mute %j", async (state) => {
+    installVoiceBrowserFakes();
+    const client = new RealtimeAudioClient();
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_ready", sound_effects: true, ...state });
+    await connecting;
+    expect(FakeAudioContext.voices).toHaveLength(0);
+    await client.disconnect();
+  });
+
+  it("plays once and cancels the cue on output mute without stopping the microphone", async () => {
+    const { track } = installVoiceBrowserFakes();
+    const client = new RealtimeAudioClient();
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_ready", sound_effects: true });
+    await connecting;
+    expect(FakeAudioContext.voices).toHaveLength(2);
+    socket.receive({ type: "output_state", muted: true, revision: 1 });
+    expect(FakeAudioContext.voices.every(voice => voice.disconnect.mock.calls.length === 1)).toBe(true);
+    expect(track.stop).not.toHaveBeenCalled();
+    socket.receive({ type: "reconnecting" });
+    socket.receive({ type: "audio_ready", sound_effects: true, output_muted: false, output_revision: 2 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(FakeAudioContext.voices).toHaveLength(2);
+    await client.disconnect();
+  });
+
+  it("plays timed source audio once and highlights only at the device clock", async () => {
+    installVoiceBrowserFakes();
+    const speakers: { muted: boolean }[] = [];
+    vi.stubGlobal("Audio", class {
+      muted = false;
+      play = async () => undefined;
+      pause = () => undefined;
+      constructor() { speakers.push(this); }
+    });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_transport", webrtc_answer_sdp: "answer", output_transport: "timed_pcm" });
+    socket.receive({ type: "audio_ready", webrtc_answer_sdp: "answer", output_transport: "timed_pcm", output_sample_rate: 24000 });
+    await connecting;
+    const context = FakeAudioContext.instances.at(-1)!;
+    const playback = FakeAudioNode.instances.find(node => node.name === "pcm-playback")!;
+    const state = playback.port.postMessage.mock.calls.map(([m]) => m).filter(m => m.type === "output_state").at(-1);
+    expect(state.muted).toBe(false);
+    expect(speakers[0].muted).toBe(true); // RTP can never double the PCM output.
+    socket.receive({ type: "speech_timing", epoch: 0, line_id: "wire-test", text: "First second",
+      char_start: 0, char_end: 12, start_ms: 1000, end_ms: 2000 });
+    socket.receive({ type: "audio_timed", epoch: 0, start_ms: 1000, end_ms: 2000,
+      sample_rate: 24000, audio: Buffer.from(new Int16Array(24000).fill(1000).buffer).toString("base64") });
+    expect(readTimedSpeechPlayback("wire-test")?.chars).toBe(0);
+    const packet = playback.port.postMessage.mock.calls.map(([m]) => m).find(m => m.type === "pcm");
+    const queue = new TimedPcmQueue(48000);
+    queue.enqueue(new Int16Array(packet.data), packet);
+    const spans = queue.render(new Float32Array(48000), 5);
+    const report = (intervals: typeof spans = []) => playback.port.onmessage?.({ data: {
+      type: "playback", generation: state.generation, spans: intervals,
+    } } as MessageEvent);
+    report(spans);
+    expect(readTimedSpeechPlayback("wire-test")?.chars).toBe(0);
+    context.outputTime = 5.05;
+    report();
+    expect(readTimedSpeechPlayback("wire-test")?.chars).toBe(5);
+    socket.receive({ type: "turn_complete" });
+    expect(readTimedSpeechPlayback("wire-test")?.chars).toBe(5);
+    socket.receive({ type: "audio_clear", epoch: 1 });
+    const flushes = playback.port.postMessage.mock.calls.length;
+    socket.receive({ type: "tts_cancel", epoch: 0 });
+    expect(playback.port.postMessage.mock.calls).toHaveLength(flushes);
+    context.outputTime = 20;
+    report(spans); // A delayed worklet message from the cancelled generation.
+    expect(readTimedSpeechPlayback("wire-test")?.chars).toBe(5);
+    socket.receive({ type: "speech_timing", epoch: 0, line_id: "stale-wire", text: "Stale",
+      char_start: 0, char_end: 5, start_ms: 1000, end_ms: 2000 });
+    expect(readTimedSpeechPlayback("stale-wire")).toBeNull();
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+    const reconnecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const freshSocket = FakeWebSocket.instances[1];
+    freshSocket.open();
+    freshSocket.receive({ type: "audio_ready", webrtc_answer_sdp: "new-answer",
+      output_transport: "timed_pcm", output_sample_rate: 24000 });
+    await reconnecting;
+    freshSocket.receive({ type: "speech_timing", epoch: 0, line_id: "new-call", text: "New",
+      char_start: 0, char_end: 3, start_ms: 0, end_ms: 1000 });
+    freshSocket.receive({ type: "audio_timed", epoch: 0, start_ms: 0, end_ms: 1000,
+      sample_rate: 24000, audio: Buffer.from(new Int16Array(24000).buffer).toString("base64") });
+    expect(readTimedSpeechPlayback("new-call")?.chars).toBe(0);
+    const newPlayer = FakeAudioNode.instances.filter(node => node.name === "pcm-playback").at(-1)!;
+    expect(newPlayer.port.postMessage.mock.calls.some(([m]) => m.type === "pcm")).toBe(true);
+    freshSocket.receive({ type: "audio_closed" });
+    await client.disconnect();
+  });
+  it("does not consume the media deadline while microphone permission is pending", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const transport = new RealtimeWebRtcTransport();
+    try {
+      await transport.createOffer({ getAudioTracks: () => [] } as unknown as MediaStream);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(transport.applyAnswer("answer")).resolves.toBeUndefined();
+    } finally {
+      transport.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("uses audio-only subscription SDP and releases microphone audio only after the peer connects", async () => {
     installVoiceBrowserFakes();
     vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
@@ -141,13 +315,15 @@ describe("realtime audio client", () => {
     expect(peer.addTrack.mock.calls[0][0]).toBe("buffered-track");
     peer.setRemoteDescription = vi.fn(async () => undefined);
     socket.open();
-    socket.receive({ type: "audio_ready", requires_webrtc_answer: true, webrtc_answer_sdp: "answer" });
+    socket.receive({ type: "audio_ready", sound_effects: true, requires_webrtc_answer: true, webrtc_answer_sdp: "answer" });
     await Promise.resolve();
     expect(gate.port.postMessage.mock.calls.some(([message]) => message.type === "start")).toBe(false);
+    expect(FakeAudioContext.voices).toHaveLength(0);
     peer.connectionState = "connected";
     peer.events.dispatchEvent(new Event("connectionstatechange"));
     await connecting;
     expect(gate.port.postMessage.mock.calls.filter(([message]) => message.type === "start")).toHaveLength(1);
+    expect(FakeAudioContext.voices).toHaveLength(2);
     socket.receive({ type: "audio_closed" });
     await client.disconnect();
   });
@@ -192,6 +368,102 @@ describe("realtime audio client", () => {
     await Promise.resolve();
     transport.close();
     await rejected;
+  });
+
+  it("negotiates an early answer but releases no input until the control connection is ready", async () => {
+    installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    let connected = false;
+    const connecting = client.connect().then(() => { connected = true; });
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    const peer = FakePeerConnection.instances[0];
+    const gate = FakeAudioNode.instances.find(node => node.name === "pcm-startup")!;
+    socket.open();
+    socket.receive({ type: "input_prefix", sample_rate: 48000, audio: "AQACAA==" });
+    socket.receive({ type: "audio_transport", webrtc_answer_sdp: "early-answer" });
+    await vi.waitFor(() => expect(peer.remoteDescriptions).toHaveLength(1));
+    expect(connected).toBe(false);
+    expect(gate.port.postMessage.mock.calls.some(([m]) => m.type === "start")).toBe(false);
+    socket.receive({ type: "audio_ready", requires_webrtc_answer: true, webrtc_answer_sdp: "early-answer" });
+    await connecting;
+    expect(peer.remoteDescriptions).toHaveLength(1);
+    expect(gate.port.postMessage.mock.calls.filter(([m]) => m.type === "start")).toHaveLength(1);
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+  });
+
+  it("gathers ICE for a silent browser track while microphone permission is pending", async () => {
+    const { track } = installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    let release!: (stream: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakePeerConnection.instances[0]?.localDescription).toBeTruthy());
+    expect(FakePeerConnection.instances[0].addTrack.mock.calls[0][0]).toBe("buffered-track");
+    expect(FakeAudioNode.instances.some(node => node.name === "pcm-startup")).toBe(false);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    const beforeMic = (client as unknown as { startupMarks: Record<string, number> }).startupMarks;
+    expect(beforeMic).toHaveProperty("offer_ready");
+    expect(beforeMic).not.toHaveProperty("microphone_ready");
+    release({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(beforeMic).toHaveProperty("microphone_ready");
+    expect(beforeMic).toHaveProperty("worklet_ready");
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_ready", requires_webrtc_answer: true, webrtc_answer_sdp: "answer" });
+    await connecting;
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+  });
+
+  it.each([true, false])("discards all retained input when muted during startup (RTP=%s)", async (webrtc) => {
+    installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: webrtc });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    const capture = FakeAudioNode.instances.find(node => node.name === "pcm-capture")!;
+    capture.port.onmessage!({ data: new Int16Array([3, 4]).buffer } as MessageEvent);
+    socket.receive({ type: "input_prefix", sample_rate: 48000, audio: "AQACAA==" });
+    socket.receive({ type: "input_mute", muted: true });
+    socket.receive({ type: "audio_ready", input_muted: true, requires_webrtc_answer: webrtc,
+      ...(webrtc ? { webrtc_answer_sdp: "answer" } : {}) });
+    await connecting;
+    const gate = FakeAudioNode.instances.find(node => node.name === "pcm-startup");
+    expect(gate?.port.postMessage.mock.calls.some(([m]) => m.type === "start") ?? false).toBe(false);
+    expect(socket.sent.filter(v => v instanceof ArrayBuffer)).toHaveLength(0);
+    socket.receive({ type: "input_mute", muted: false });
+    if (gate) expect(gate.port.postMessage).toHaveBeenLastCalledWith({ type: "start" });
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+  });
+
+  it("cannot release audio after cancellation during the media handshake", async () => {
+    const { track } = installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    const result = client.connect().catch(error => error);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    const peer = FakePeerConnection.instances[0];
+    const gate = FakeAudioNode.instances.find(node => node.name === "pcm-startup")!;
+    peer.setRemoteDescription = vi.fn(async () => undefined);
+    socket.open();
+    socket.receive({ type: "audio_transport", webrtc_answer_sdp: "answer" });
+    socket.receive({ type: "audio_ready", requires_webrtc_answer: true, webrtc_answer_sdp: "answer" });
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+    expect(await result).toBeInstanceOf(Error);
+    peer.channel.dispatchEvent(new MessageEvent("message", { data: '{"type":"session.started"}' }));
+    expect(gate.port.postMessage.mock.calls.some(([m]) => m.type === "start")).toBe(false);
+    expect(track.stop).toHaveBeenCalled();
+    expect(peer.close).toHaveBeenCalled();
   });
 
   it("uses buffered RTP and forwards input levels before the media handshake completes", async () => {
@@ -343,6 +615,10 @@ describe("realtime audio client", () => {
   });
 
   beforeEach(() => {
+    // Each case owns its clock. Fake-timer advances must not strand the next
+    // real-clock case behind a token refill timestamp from the future.
+    resetConnectBudgetForTests();
+    FakeAudioContext.voices = [];
     vi.stubGlobal("window", {
       location: { protocol: "https:", host: "app.example", hostname: "app.example" },
       __JARVIS_TOKEN: "tok",
@@ -357,7 +633,257 @@ describe("realtime audio client", () => {
     wsFakes.mintWsTicket.mockClear();
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { resetConnectBudgetForTests(); vi.unstubAllGlobals(); });
+
+  it("closes prepared local audio after microphone denial without opening a billed socket", async () => {
+    installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const events = new EventTarget();
+    Object.assign(window, {
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+    });
+    vi.useFakeTimers();
+    Object.assign(window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    const dispose = registerRealtimeAudioPreparation();
+    try {
+      await vi.advanceTimersByTimeAsync(501);
+      const context = FakeAudioContext.instances.at(-1)!;
+      expect(context.suspend).toHaveBeenCalledOnce();
+      vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new DOMException("Denied", "NotAllowedError"));
+      const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+      // jsdom's DOMException belongs to a different Error realm; the client's
+      // existing error normalization keeps its denial detail in the message.
+      await expect(client.connect()).rejects.toThrow(/Denied/);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(context.close).toHaveBeenCalledOnce();
+      expect(FakePeerConnection.instances[0].close).toHaveBeenCalledOnce();
+    } finally {
+      dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["resume", "worklet"])("bounds a hung local %s after permission and ignores late completion", async stalled => {
+    const { track } = installVoiceBrowserFakes();
+    vi.useFakeTimers();
+    Object.assign(window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    let finish!: () => void;
+    const pending = new Promise<undefined>(resolve => { finish = () => resolve(undefined); });
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        if (stalled === "resume") this.resume = vi.fn(() => pending);
+        else this.audioWorklet.addModule = vi.fn(() => pending);
+      }
+    });
+    const client = new RealtimeAudioClient({}, { requiresWebRtcOffer: true });
+    const outcome = client.connect().catch(error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(track.stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await outcome).toMatchObject({ message: "Local voice audio device did not become ready within 10 seconds" });
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(FakeAudioContext.instances.at(-1)!.close).toHaveBeenCalledOnce();
+      expect(FakePeerConnection.instances[0].close).toHaveBeenCalledOnce();
+      finish();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect((client as unknown as { startupMarks: Record<string, number> }).startupMarks).not.toHaveProperty("worklet_ready");
+    } finally {
+      await client.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["missing", "prompt", "unsupported"])("does not time out microphone permission (%s) and cancels a late grant", async permission => {
+    const { track } = installVoiceBrowserFakes();
+    if (permission !== "missing") Object.assign(navigator, { permissions: {
+      query: permission === "prompt"
+        ? vi.fn(async () => ({ state: "prompt" }))
+        : vi.fn(async () => { throw new TypeError("Unsupported microphone descriptor"); }),
+    } });
+    vi.useFakeTimers();
+    Object.assign(window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    let grant!: (stream: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(() => new Promise(resolve => { grant = resolve; }));
+    const client = new RealtimeAudioClient({}, { requiresWebRtcOffer: true });
+    let settled = false;
+    const outcome = client.connect().catch(error => { settled = true; return error; });
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(settled).toBe(false); // Choosing permission consumes no device deadline.
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      await client.disconnect();
+      expect(await outcome).toMatchObject({ message: "Voice start cancelled" });
+      expect(FakePeerConnection.instances[0].close).toHaveBeenCalledOnce();
+      grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(FakeAudioNode.instances.some(node => node.name === "pcm-capture")).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("bounds microphone hardware opening when permission is already granted", async () => {
+    const { track } = installVoiceBrowserFakes();
+    Object.assign(navigator, { permissions: { query: vi.fn(async () => ({ state: "granted" })) } });
+    vi.useFakeTimers();
+    Object.assign(window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    let grant!: (stream: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(() => new Promise(resolve => { grant = resolve; }));
+    const client = new RealtimeAudioClient({}, { requiresWebRtcOffer: true });
+    const outcome = client.connect().catch(error => error);
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await outcome).toMatchObject({ message: "Local voice audio device did not become ready within 10 seconds" });
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(FakePeerConnection.instances[0].close).toHaveBeenCalledOnce();
+      grant({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(track.stop).toHaveBeenCalledOnce();
+    } finally { await client.disconnect(); vi.useRealTimers(); }
+  });
+
+  it.each(["timeout", "stop"])("settles %s even when native audio close never settles", async action => {
+    const { track } = installVoiceBrowserFakes();
+    vi.useFakeTimers();
+    Object.assign(window, { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout });
+    let finishResume!: () => void, finishClose!: () => void;
+    const resume = new Promise<undefined>(resolve => { finishResume = () => resolve(undefined); });
+    const close = new Promise<undefined>(resolve => { finishClose = () => resolve(undefined); });
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      resume = vi.fn(() => resume);
+      close = vi.fn(() => close);
+    });
+    const client = new RealtimeAudioClient({}, { requiresWebRtcOffer: true });
+    let failure: Error | undefined;
+    const outcome = client.connect().catch((error: Error) => { failure = error; });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (action === "timeout") await vi.advanceTimersByTimeAsync(10_000);
+      else {
+        let stopped = false;
+        void client.disconnect().then(() => { stopped = true; });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(true);
+      }
+      expect(failure?.message).toMatch(action === "timeout" ? /within 10 seconds/ : /cancelled/);
+      await outcome;
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(FakeAudioContext.instances.at(-1)!.close).toHaveBeenCalledOnce();
+      expect(FakePeerConnection.instances[0].close).toHaveBeenCalledOnce();
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      // The same client can establish a fresh call while an old context is
+      // retiring. Late old worklet/close promises must not erase its socket.
+      vi.stubGlobal("AudioContext", FakeAudioContext);
+      const next = client.connect();
+      await vi.advanceTimersByTimeAsync(200);
+      const socket = FakeWebSocket.instances[0];
+      expect(socket).toBeDefined();
+      socket.open();
+      socket.receive({ type: "audio_ready", webrtc_answer_sdp: "new-answer" });
+      await next;
+      finishResume(); finishClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.close).not.toHaveBeenCalled();
+      await client.disconnect();
+    } finally {
+      finishResume(); finishClose();
+      await client.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it("separates input release request, rendered input and audible provider PCM timing", async () => {
+    installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true, webRtcStartEventRequired: false });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_ready", webrtc_answer_sdp: "answer", output_transport: "timed_pcm" });
+    await connecting;
+    const timings = () => Object.assign({}, ...socket.sent.filter(item => typeof item === "string")
+      .map(item => JSON.parse(String(item))).filter(item => item.type === "startup_timing").map(item => item.marks_ms));
+    expect(timings()).toHaveProperty("input_released");
+    expect(timings()).not.toHaveProperty("input_started");
+    const input = FakeAudioNode.instances.find(node => node.name === "pcm-startup")!;
+    input.port.onmessage!({ data: { type: "input_started" } } as MessageEvent);
+    expect(timings()).toHaveProperty("input_started");
+    expect(timings()).not.toHaveProperty("input_caught_up");
+    input.port.onmessage!({ data: { type: "input_caught_up" } } as MessageEvent);
+    socket.receiveBinary(new Int16Array([0, 0]).buffer);
+    expect(timings()).toHaveProperty("first_output_packet");
+    expect(timings()).not.toHaveProperty("first_output_audio");
+    const output = FakeAudioNode.instances.find(node => node.name === "pcm-playback")!;
+    output.port.onmessage!({ data: { type: "level", rms: 0.01 } } as MessageEvent);
+    expect(timings()).toHaveProperty("first_output_audio");
+    const batches = socket.sent.filter(item => typeof item === "string").map(item => JSON.parse(String(item)))
+      .filter(item => item.type === "startup_timing").map(item => item.marks_ms);
+    expect(batches.every(marks => Object.keys(marks).length <= 8)).toBe(true);
+    // The preceding frontend emitted maps larger than old backend allowlists,
+    // which dropped all telemetry after enough newly introduced phases.
+    expect(Object.keys(timings()).length).toBeGreaterThan(11);
+    expect(Object.assign({}, ...batches.filter(marks => Object.keys(marks).length <= 11))).toHaveProperty("input_released");
+    socket.receive({ type: "audio_closed" });
+    await client.disconnect();
+  });
+
+  it("drops muted PCM, rejects stale state and preserves mute through readiness", async () => {
+    const { track } = installVoiceBrowserFakes();
+    const client = new RealtimeAudioClient();
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "output_state", muted: true, volume: 0.4, revision: 2 });
+    socket.receive({ type: "audio_ready", output_muted: true, output_volume: 0.4, output_revision: 2 });
+    await connecting;
+    const playback = FakeAudioNode.instances.find(node => node.name === "pcm-playback")!;
+    playback.port.postMessage.mockClear();
+    socket.receiveBinary(new Int16Array([1000, 1000]).buffer);
+    socket.receive({ type: "output_state", muted: false, volume: 0.4, revision: 1 });
+    socket.receiveBinary(new Int16Array([2000, 2000]).buffer);
+    expect(playback.port.postMessage).not.toHaveBeenCalled();
+    socket.receive({ type: "output_state", muted: false, volume: 0.4, revision: 3 });
+    socket.receiveBinary(new Int16Array([3000, 3000]).buffer);
+    expect(playback.port.postMessage.mock.calls.filter(([m]) => m.type === "pcm")).toHaveLength(1);
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(socket.sent.filter(x => typeof x === "string" && x.includes("audio_stop"))).toEqual([]);
+    socket.receive({ type: "audio_stopping" });
+    socket.receive({ type: "output_state", muted: false, volume: 0.4, revision: 4 });
+    socket.receiveBinary(new Int16Array([4000, 4000]).buffer);
+    expect(playback.port.postMessage.mock.calls.filter(([m]) => m.type === "pcm")).toHaveLength(1);
+    await client.disconnect();
+  });
+
+  it("mutes live WebRTC output and newly created media without pausing its timeline", async () => {
+    vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
+    const players: Array<{ muted: boolean; volume: number; pause: ReturnType<typeof vi.fn> }> = [];
+    vi.stubGlobal("Audio", class {
+      muted = false; volume = 1;
+      play = vi.fn(async () => undefined);
+      pause = vi.fn();
+      constructor() { players.push(this); }
+    });
+    const transport = new RealtimeWebRtcTransport();
+    const stream = { getAudioTracks: () => [] } as unknown as MediaStream;
+    await transport.createOffer(stream, false);
+    expect(players[0].muted).toBe(true);
+    transport.setOutputState(false, 0.4);
+    expect(players[0]).toMatchObject({ muted: false, volume: 0.4 });
+    transport.setOutputState(true, 0.7);
+    expect(players[0].pause).not.toHaveBeenCalled();
+    await transport.createOffer(stream, false);
+    expect(players[1]).toMatchObject({ muted: true, volume: 0.7 });
+    transport.setOutputState(false, 0.7);
+    expect(players[1].muted).toBe(false);
+    transport.close();
+  });
 
   it("does not replay microphone frames captured during a reconnect", async () => {
     installVoiceBrowserFakes();
@@ -412,7 +938,7 @@ describe("realtime audio client", () => {
     installVoiceBrowserFakes();
     const client = new RealtimeAudioClient();
     const transport = { createOffer: vi.fn(async () => "v=0\r\nreplacement"),
-      applyAnswer: vi.fn(async () => undefined), close: vi.fn(), muteOutput: vi.fn() };
+      applyAnswer: vi.fn(async () => undefined), close: vi.fn(), muteOutput: vi.fn(), setOutputState: vi.fn() };
     Object.assign(client, { webRtcTransport: transport });
     const connecting = client.connect();
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
@@ -425,6 +951,31 @@ describe("realtime audio client", () => {
     await vi.waitFor(() => expect(socket.sent.some(x => typeof x === "string" && x.includes("resume-1"))).toBe(true));
     const response = socket.sent.filter(x => typeof x === "string").map(x => JSON.parse(x as string)).find(x => x.type === "reconnect_offer");
     expect(response).toEqual({ type: "reconnect_offer", request_id: "resume-1", sdp: "v=0\r\nreplacement" });
+    await client.disconnect();
+  });
+
+  it("keeps the media peer when only the Live sideband reconnects", async () => {
+    installVoiceBrowserFakes();
+    const transport = { createOffer: vi.fn(async () => "offer"),
+      applyAnswer: vi.fn(async () => undefined), close: vi.fn(), muteOutput: vi.fn(), setOutputState: vi.fn() };
+    let readyCount = 0;
+    const client = new RealtimeAudioClient({ onStatus: status => {
+      if (status === "audio_ready") readyCount += 1;
+    } });
+    Object.assign(client, { webRtcTransport: transport });
+    const connecting = client.connect();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: "audio_ready", requires_webrtc_answer: true,
+      webrtc_answer_sdp: "answer", output_sample_rate: 24000 });
+    await connecting;
+    transport.close.mockClear();
+    socket.receive({ type: "reconnecting" });
+    socket.receive({ type: "audio_ready", reuse_webrtc: true, output_sample_rate: 24000 });
+    await vi.waitFor(() => expect(readyCount).toBe(2));
+    expect(transport.close).not.toHaveBeenCalled();
+    expect(transport.applyAnswer).toHaveBeenCalledTimes(1);
     await client.disconnect();
   });
 
@@ -622,7 +1173,7 @@ describe("realtime audio client", () => {
     await vi.waitFor(() => expect(FakePeerConnection.instances).toHaveLength(1));
     await vi.waitFor(() => expect(releaseCapture).toBeTypeOf("function"));
     expect(FakeWebSocket.instances).toHaveLength(0);
-    releaseCapture?.({ getTracks: () => [track] } as unknown as MediaStream);
+    releaseCapture?.({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
     socket.open();
@@ -634,6 +1185,86 @@ describe("realtime audio client", () => {
 
     await connecting;
     await client.disconnect();
+  });
+
+  it("dispatches local startup before a 350 ms native peer stall without bypassing microphone permission", async () => {
+    const { track } = installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    let elapsed = 0, microphoneRequestedAt = -1;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    let releaseCapture!: (stream: MediaStream) => void;
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(() => {
+      microphoneRequestedAt = elapsed;
+      return new Promise<MediaStream>(resolve => { releaseCapture = resolve; });
+    });
+    vi.stubGlobal("RTCPeerConnection", class extends FakePeerConnection {
+      constructor() {
+        expect(FakeAudioContext.instances.at(-1)!.resume).toHaveBeenCalledOnce();
+        expect(wsFakes.mintWsTicket).toHaveBeenCalledOnce();
+        elapsed += 350;
+        super();
+      }
+    });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    const connecting = client.connect();
+    try {
+      expect(microphoneRequestedAt).toBe(0);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      releaseCapture({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      const marks = Object.assign({}, ...socket.sent.map(frame => JSON.parse(String(frame)))
+        .filter(frame => frame.type === "startup_timing").map(frame => frame.marks_ms));
+      expect(marks.local_requests_dispatched).toBe(0);
+      expect(marks.peer_created).toBe(350);
+      socket.receive({ type: "audio_ready", webrtc_answer_sdp: "answer" });
+      await connecting;
+      socket.close();
+    } finally {
+      await client.disconnect();
+      clock.mockRestore();
+    }
+  });
+
+  it("releases a failed start's late microphone grant while a replacement start owns its own capture", async () => {
+    const { track } = installVoiceBrowserFakes();
+    vi.stubGlobal("Audio", class { play = async () => undefined; pause = () => undefined; });
+    const replacementTrack = { stop: vi.fn() };
+    const grants: Array<(stream: MediaStream) => void> = [];
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(
+      () => new Promise<MediaStream>(resolve => { grants.push(resolve); }),
+    );
+    let failDestination = true;
+    vi.stubGlobal("AudioContext", class extends FakeAudioContext {
+      constructor() {
+        super();
+        if (failDestination) {
+          failDestination = false;
+          this.createMediaStreamDestination.mockImplementation(() => { throw new Error("Audio destination unavailable"); });
+        }
+      }
+    });
+    const client = new RealtimeAudioClient({}, { browserAudio: true, requiresWebRtcOffer: true });
+    await expect(client.connect()).rejects.toThrow("Audio destination unavailable");
+    expect(FakeAudioContext.instances.at(-1)!.close).toHaveBeenCalledOnce();
+    const replacement = client.connect();
+    try {
+      expect(grants).toHaveLength(2);
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      grants[0]({ getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream);
+      await vi.waitFor(() => expect(track.stop).toHaveBeenCalledOnce());
+      expect(replacementTrack.stop).not.toHaveBeenCalled();
+      grants[1]({ getTracks: () => [replacementTrack], getAudioTracks: () => [replacementTrack] } as unknown as MediaStream);
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      const socket = FakeWebSocket.instances[0];
+      socket.open();
+      socket.receive({ type: "audio_ready", webrtc_answer_sdp: "answer" });
+      await replacement;
+      expect(replacementTrack.stop).not.toHaveBeenCalled();
+      socket.close();
+    } finally { await client.disconnect(); }
+    expect(replacementTrack.stop).toHaveBeenCalledOnce();
   });
 
   it("fails closed before opening a socket when subscription WebRTC is missing", async () => {

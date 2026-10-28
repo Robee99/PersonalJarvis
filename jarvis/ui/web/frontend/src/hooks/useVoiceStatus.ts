@@ -31,7 +31,7 @@ export function useVoiceStatus(): void {
       .then((data) => {
         if (cancelled || !data) return;
         if (typeof data.ready === "boolean") {
-          setVoiceReady(data.ready);
+          setVoiceReady(data.ready, data.detail);
         }
       })
       .catch(() => {

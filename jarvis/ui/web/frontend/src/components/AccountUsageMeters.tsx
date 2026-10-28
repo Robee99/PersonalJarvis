@@ -24,6 +24,7 @@
  * twelve intervals.
  */
 
+import { useEffect, useState } from "react";
 import { Gauge } from "lucide-react";
 
 import { useT } from "@/i18n";
@@ -101,9 +102,96 @@ function useWindowLabel(): (window: UsageWindow) => string {
   };
 }
 
-function Meter({ window: usageWindow, now }: { window: UsageWindow; now: number }) {
+// Adapted from mmAbdelhay/jarvis's provider-capacity trend UI (MIT).
+// Original copyright 2026 Muhammad AbdElHay; see LICENSE.mmabdelhay-jarvis.
+const HISTORY_PREFIX = "jarvis:agent-account-usage:v1:";
+const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const HISTORY_MAX_POINTS = 24;
+const HISTORY_MIN_GAP_MS = 15 * 60 * 1000;
+
+type UsageHistoryPoint = { at: number; percent: number };
+
+function usageHistoryKey(usage: AccountUsage, window: UsageWindow): string {
+  return HISTORY_PREFIX + [
+    usage.account_id,
+    window.kind,
+    window.scope_label ?? "",
+    window.raw_label ?? "",
+    window.window_minutes ?? "",
+  ].map((part) => encodeURIComponent(String(part))).join(":");
+}
+
+function readUsageHistory(key: string): UsageHistoryPoint[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    const now = Date.now();
+    return raw.flatMap((point): UsageHistoryPoint[] => {
+      if (typeof point !== "object" || point === null) return [];
+      const candidate = point as Record<string, unknown>;
+      if (
+        typeof candidate.at !== "number" || !Number.isFinite(candidate.at) ||
+        typeof candidate.percent !== "number" || !Number.isFinite(candidate.percent)
+      ) return [];
+      if (candidate.at < now - HISTORY_MAX_AGE_MS || candidate.at > now + 60_000) return [];
+      return [{ at: candidate.at, percent: Math.max(0, Math.min(100, candidate.percent)) }];
+    }).slice(-HISTORY_MAX_POINTS);
+  } catch {
+    return [];
+  }
+}
+
+function useUsageHistory(usage: AccountUsage | undefined, window: UsageWindow): UsageHistoryPoint[] {
+  const key = usage ? usageHistoryKey(usage, window) : "";
+  const [points, setPoints] = useState<UsageHistoryPoint[]>(() => key ? readUsageHistory(key) : []);
+
+  useEffect(() => {
+    if (!usage || usage.status !== "ok" || usage.source !== "live" || usage.as_of === null) return;
+    const at = usage.as_of * 1000;
+    if (!Number.isFinite(at) || at > Date.now() + 60_000) return;
+    const prior = readUsageHistory(key).filter((point) => at - point.at <= HISTORY_MAX_AGE_MS);
+    const last = prior[prior.length - 1];
+    if (last && (at <= last.at || at - last.at < HISTORY_MIN_GAP_MS)) {
+      setPoints(prior);
+      return;
+    }
+    const next = [...prior, { at, percent: Math.max(0, Math.min(100, window.percent)) }]
+      .slice(-HISTORY_MAX_POINTS);
+    setPoints(next);
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch {
+      // Private browsing or a full profile must not break the usage meters.
+    }
+  }, [key, usage, window.percent]);
+
+  useEffect(() => {
+    setPoints(key ? readUsageHistory(key) : []);
+  }, [key]);
+
+  return points;
+}
+
+function UsageTrend({ points, label }: { points: UsageHistoryPoint[]; label: string }) {
+  if (points.length < 2) return null;
+  return (
+    <div className="mt-1 flex h-5 items-end gap-0.5" role="img" aria-label={`${label}: recent live usage trend`}>
+      {points.map((point, index) => (
+        <span
+          key={`${point.at}:${index}`}
+          title={`${new Date(point.at).toLocaleString()}: ${Math.round(point.percent)}% used`}
+          className="min-w-0 flex-1 rounded-t-sm bg-primary/55"
+          style={{ height: `${Math.max(8, point.percent)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+function Meter({ window: usageWindow, now, usage }: { window: UsageWindow; now: number; usage: AccountUsage | undefined }) {
   const t = useT();
   const label = useWindowLabel()(usageWindow);
+  const history = useUsageHistory(usage, usageWindow);
   const severity = usageWindow.severity in BAR_CLASS ? usageWindow.severity : "normal";
   const percent = Math.max(0, Math.min(100, usageWindow.percent));
   const resetsInMs = usageWindow.resets_at
@@ -153,6 +241,7 @@ function Meter({ window: usageWindow, now }: { window: UsageWindow; now: number 
           style={{ width: `${Math.max(percent, percent > 0 ? 2 : 0)}%` }}
         />
       </div>
+      <UsageTrend points={history} label={label} />
     </div>
   );
 }
@@ -224,6 +313,7 @@ export function AccountUsageMeters({
             key={`${window.kind}:${window.scope_label ?? ""}:${index}`}
             window={window}
             now={now}
+            usage={usage}
           />
         ))}
       </div>

@@ -9,7 +9,10 @@ config switch exists can remove quiet speech and make recognition worse.
 Until a backend supplies a processor with measured, platform-specific support,
 dictation therefore keeps the PCM byte-identical and records the missing
 capabilities in its audit telemetry. This is an explicit degradation on
-Windows, macOS, Linux, and headless hosts, not an implied feature.
+Windows, macOS, Linux, and headless hosts, not an implied feature. The one
+exception is echo cancellation through the optional ``livekit`` package
+(``jarvis.audio.echo_canceller``): it runs inside the capture stream, before
+this lane sees a sample, and is reported as ``on`` only while it really runs.
 """
 
 from __future__ import annotations
@@ -136,7 +139,7 @@ class AudioQualityAccumulator:
 
 
 def assess_desktop_audio_preprocessing(
-    *, echo_cancellation_requested: bool
+    *, echo_cancellation_requested: bool, echo_cancellation_running: bool = False
 ) -> AudioPreprocessingDecision:
     """Return the capability-tested verdict for the current raw capture path.
 
@@ -150,7 +153,11 @@ def assess_desktop_audio_preprocessing(
         noise_suppression="unavailable",
         automatic_gain_control="unavailable",
         acoustic_echo_cancellation=(
-            "unavailable" if echo_cancellation_requested else "off"
+            "off"
+            if not echo_cancellation_requested
+            else "on"
+            if echo_cancellation_running
+            else "unavailable"
         ),
     )
 

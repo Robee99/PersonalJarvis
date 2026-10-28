@@ -17,10 +17,41 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
   RunsCard: () => <section>runs</section>,
   TerminalsCard: () => <section>terminals</section>,
 }));
+// The Stark instruments poll their own endpoints; each has its own tests.
+vi.mock("@/components/stark/StarkInstruments", () => ({
+  SystemStatusPanel: () => <section>status</section>,
+  ResourcesPanel: () => <section>vitals</section>,
+  QuickAccess: () => <nav>quick</nav>,
+  StarkClock: () => <span>clock</span>,
+}));
+vi.mock("@/components/stark/ContextMeter", () => ({
+  ContextMeter: () => <section>context</section>,
+  useDeckContext: () => ({ data: undefined }),
+  fmtK: (n: number) => String(n),
+}));
+vi.mock("@/components/stark/WeatherGlobe", () => ({
+  WeatherGlobe: () => <section>weather</section>,
+  WeatherMini: () => <section>weather</section>,
+  readCity: () => null,
+}));
+vi.mock("@/components/stark/TasksPanel", () => ({ TasksPanel: () => <section>tasks</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
   LiveCounter: () => <div>counter</div>,
+  VitalsCard: () => <section>vitals</section>,
+}));
+vi.mock("@/components/deck/HudMemoryPanel", () => ({
+  HudMemoryPanel: ({ className }: { className?: string }) => (
+    <section className={className} data-testid="hud-memory">
+      memory
+    </section>
+  ),
+}));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
 }));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
@@ -53,6 +84,8 @@ vi.mock("@/hooks/useWakeWord", () => ({
 vi.mock("@/lib/voiceApi", () => ({
   requestVoiceCall: async () => ({ armed: true }),
   requestVoiceHangup: async () => {},
+  fetchTtsVolume: async () => ({ volume: 1 }),
+  setTtsVolume: async () => {},
 }));
 vi.mock("@/components/MascotGigi", () => ({
   MascotGigi: () => <div data-testid="mascot-gigi" />,
@@ -80,7 +113,18 @@ vi.mock("@/hooks/useVoiceMode", () => ({
   useVoiceMode: () => voiceModeMock.value,
 }));
 
-import { MissionDeckView } from "@/views/MissionDeckView";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MissionDeckView as Deck } from "@/views/MissionDeckView";
+
+/** The board inside a fresh query client (the command bar and badges read through it). */
+function MissionDeckView() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={client}>
+      <Deck />
+    </QueryClientProvider>
+  );
+}
 import { useDeckStore } from "@/store/deck";
 import { useEventStore } from "@/store/events";
 
@@ -124,8 +168,8 @@ describe("MissionDeckView — voice-engine header and orb", () => {
 
   test("pipeline mode names the classic brain on the header and the orb", () => {
     render(<MissionDeckView />);
-    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("BrainOpenRouter");
-    expect(screen.getByTestId("deck-stat-model").textContent).toBe("Modelgoogle/gemini-3.5-flash");
+    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("Brain OpenRouter");
+    expect(screen.getByTestId("deck-stat-model").textContent).toBe("google/gemini-3.5-flash");
     expect(screen.getByTestId("deck-orb-provider").textContent).toBe("OpenRouter");
   });
 
@@ -138,9 +182,9 @@ describe("MissionDeckView — voice-engine header and orb", () => {
       activeModel: "gemini-live-2.5-flash-preview-native-audio-dialog",
     };
     render(<MissionDeckView />);
-    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("RealtimeVertex AI Live");
+    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("Realtime Vertex AI Live");
     expect(screen.getByTestId("deck-stat-model").textContent).toBe(
-      "Modelgemini-live-2.5-flash-preview-native-audio-dialog",
+      "gemini-live-2.5-flash-preview-native-audio-dialog",
     );
     expect(screen.getByTestId("deck-orb-provider").textContent).toBe("Vertex AI Live");
     expect(screen.queryByText("OpenRouter")).toBeNull();
@@ -159,8 +203,8 @@ describe("MissionDeckView — voice-engine header and orb", () => {
       activeSessionModel: "gpt-realtime-2.1",
     };
     render(<MissionDeckView />);
-    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("RealtimeOpenAI Realtime");
-    expect(screen.getByTestId("deck-stat-model").textContent).toBe("Modelgpt-realtime-2.1");
+    expect(screen.getByTestId("deck-stat-engine").textContent).toBe("Realtime OpenAI Realtime");
+    expect(screen.getByTestId("deck-stat-model").textContent).toBe("gpt-realtime-2.1");
     expect(screen.getByTestId("deck-orb-provider").textContent).toBe("OpenAI Realtime");
   });
 

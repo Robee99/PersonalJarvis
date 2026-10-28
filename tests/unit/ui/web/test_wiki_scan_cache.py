@@ -22,12 +22,11 @@ from pathlib import Path
 
 import pytest
 
+from jarvis.memory.wiki import visible_pages
+from jarvis.memory.wiki.visible_pages import invalidate_visible_page_cache
+from jarvis.memory.wiki.visible_pages import scan_visible_pages as _scan_visible_pages_sync
 from jarvis.ui.web import wiki_routes
-from jarvis.ui.web.wiki_routes import (
-    _scan_visible_pages,
-    _scan_visible_pages_sync,
-    invalidate_visible_page_cache,
-)
+from jarvis.ui.web.wiki_routes import _scan_visible_pages
 
 
 @pytest.fixture(autouse=True)
@@ -62,13 +61,13 @@ class _ParseCounter:
 
     def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.calls: list[str] = []
-        real = wiki_routes.parse_markdown
+        real = visible_pages.parse_markdown
 
         def counting(raw: str, path: Path):  # type: ignore[no-untyped-def]
             self.calls.append(Path(path).name)
             return real(raw, path)
 
-        monkeypatch.setattr(wiki_routes, "parse_markdown", counting)
+        monkeypatch.setattr(visible_pages, "parse_markdown", counting)
 
 
 def test_unchanged_vault_is_not_reparsed(
@@ -140,13 +139,13 @@ def test_explicit_invalidation_forces_a_full_reparse(
 def test_cache_does_not_grow_without_bound(tmp_path: Path) -> None:
     """Only the few most recent vault roots stay resident."""
     roots = []
-    for index in range(wiki_routes._PARSE_CACHE_MAX_ROOTS + 3):
+    for index in range(visible_pages._PARSE_CACHE_MAX_ROOTS + 3):
         root = tmp_path / f"vault{index}"
         _write_page(root, "entities", f"page{index}", "body")
         roots.append(root)
         _scan_visible_pages_sync(root)
 
-    assert len(wiki_routes._PARSE_CACHE) == wiki_routes._PARSE_CACHE_MAX_ROOTS
+    assert len(visible_pages._PARSE_CACHE) == visible_pages._PARSE_CACHE_MAX_ROOTS
 
 
 def _symlinks_supported(tmp_path: Path) -> bool:
@@ -209,14 +208,14 @@ async def test_concurrent_requests_share_one_walk(
 ) -> None:
     """Mounting the Wiki tab fires /tree, /graph and /backlinks together."""
     started: list[Path] = []
-    real = wiki_routes._scan_visible_pages_sync
+    real = wiki_routes.scan_visible_pages
 
     def slow(root: Path):  # type: ignore[no-untyped-def]
         started.append(root)
         time.sleep(0.05)
         return real(root)
 
-    monkeypatch.setattr(wiki_routes, "_scan_visible_pages_sync", slow)
+    monkeypatch.setattr(wiki_routes, "scan_visible_pages", slow)
 
     results = await asyncio.gather(
         _scan_visible_pages(vault),
@@ -234,13 +233,13 @@ async def test_a_cancelled_request_does_not_abort_the_shared_walk(
     vault: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A client that disconnects mid-scan must not take the others down."""
-    real = wiki_routes._scan_visible_pages_sync
+    real = wiki_routes.scan_visible_pages
 
     def slow(root: Path):  # type: ignore[no-untyped-def]
         time.sleep(0.1)
         return real(root)
 
-    monkeypatch.setattr(wiki_routes, "_scan_visible_pages_sync", slow)
+    monkeypatch.setattr(wiki_routes, "scan_visible_pages", slow)
 
     leaving = asyncio.ensure_future(_scan_visible_pages(vault))
     staying = asyncio.ensure_future(_scan_visible_pages(vault))

@@ -23,6 +23,16 @@ from jarvis.screen_context.intent import (
 from jarvis.screen_context.models import VisualIntent
 
 
+@pytest.mark.parametrize("utterance", [
+    "can u scroll down",
+    "The active window visible in the background is the Windows Settings application, "
+    "specifically the section for Apps i need u scroll down on the starup apps section",
+])
+def test_live_external_scroll_is_an_action_not_permission_to_look(utterance):
+    assert requests_screen_operation(utterance)
+    assert classify(utterance).intent is VisualIntent.NONE
+
+
 @pytest.mark.parametrize(
     "utterance",
     [
@@ -352,3 +362,23 @@ def test_clarifying_question_falls_back_for_an_unknown_locale() -> None:
 def test_clarifying_question_accepts_a_full_bcp47_tag() -> None:
     assert clarifying_question("de-DE") == clarifying_question("de")
     assert clarifying_question("es_ES") == clarifying_question("es")
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    ["call this number", "reply to this email", "summarize this article", "play the second song"],
+)
+def test_a_named_thing_on_screen_is_a_look(utterance: str) -> None:
+    assert classify(utterance).intent is VisualIntent.SCREEN
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "save this number 98765 43210",
+        "tell me about that meeting we discussed",
+        "how do I forward this email",
+    ],
+)
+def test_a_thing_named_in_the_conversation_is_not(utterance: str) -> None:
+    assert classify(utterance).intent is not VisualIntent.SCREEN

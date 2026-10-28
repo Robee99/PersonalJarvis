@@ -14,6 +14,7 @@ confirmation.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -135,8 +136,16 @@ class PairBody(BaseModel):
         default="work",
         description=(
             "read = look but do not spend; work = talk to agents and post quests; "
-            "full = also governance (approvals, kill switch)."
+            "full = also governance; tools = an explicit safe/monitor Jarvis tool allowlist."
         ),
+    )
+    surface: str = Field(
+        default="agents",
+        description="agents for the ecosystem; tools for a named Jarvis tool allowlist.",
+    )
+    allowed_tools: list[str] = Field(
+        default_factory=list,
+        description="Exact Jarvis tool names permitted by a tools-surface token.",
     )
     client: str = Field(
         default="",
@@ -169,11 +178,61 @@ def agent_mcp_pair(body: PairBody) -> dict[str, Any]:
 
     if body.transport not in ("stdio", "http"):
         raise HTTPException(422, "transport must be 'stdio' or 'http'")
+    if body.surface not in {"agents", "tools"}:
+        raise HTTPException(422, "surface must be 'agents' or 'tools'")
+    if body.surface == "tools":
+        if body.scope != "tools":
+            raise HTTPException(422, "the tools surface requires scope='tools'")
+        if body.transport != "http":
+            raise HTTPException(422, "the tools surface requires HTTP transport")
+        if not body.allowed_tools:
+            raise HTTPException(422, "the tools surface requires an explicit allowed_tools list")
+    elif body.scope == "tools" or body.allowed_tools:
+        raise HTTPException(422, "scope='tools' and allowed_tools require surface='tools'")
     base_url = body.base_url.strip().rstrip("/") or None
+    if body.surface == "tools":
+        from urllib.parse import urlsplit
+
+        from jarvis.mcp.agents.bridge import api_base_url
+
+        base_url = base_url or api_base_url()
+        parts = urlsplit(base_url)
+        if (
+            parts.scheme != "http"
+            or parts.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parts.username is not None
+            or parts.password is not None
+            or parts.path not in ("", "/")
+            or parts.query
+            or parts.fragment
+        ):
+            raise HTTPException(422, "the tools surface is loopback-only")
     try:
-        token, secret = tokens.store().issue(name=body.name, scope=body.scope, client=body.client)
+        token, secret = tokens.store().issue(
+            name=body.name,
+            scope=body.scope,
+            client=body.client,
+            allowed_tools=body.allowed_tools,
+        )
     except tokens.TokenError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+    if body.surface == "tools":
+        entry = {
+            "type": "http",
+            "url": f"{base_url}/api/control/mcp",
+            "headers": {"Authorization": f"Bearer {secret}"},
+        }
+        return {
+            "token": token.to_public(),
+            "secret": secret,
+            "secret_shown_once": True,
+            "surface": "tools",
+            "allowed_tools": list(token.allowed_tools),
+            "transport": "http",
+            "config": {"mcpServers": {"jarvis": entry}},
+            "config_text": json.dumps({"mcpServers": {"jarvis": entry}}, indent=2),
+        }
 
     client_key = body.client.strip() or "claude-desktop"
     known = {t.key for t in export.targets()}

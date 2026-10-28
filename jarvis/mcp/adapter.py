@@ -11,6 +11,7 @@ knows this MCP tool exists.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -18,8 +19,18 @@ from typing import Any
 
 from jarvis.core.capabilities import Capability, get_registry
 from jarvis.core.protocols import ExecutionContext, RiskTier, ToolResult
+from jarvis.safety.command_impact import DESTRUCTIVE, classify_command
 
+from .browser_page import (
+    PAGE_ACTIONS,
+    SNAPSHOT_TOOL,
+    has_inline_snapshot,
+    links_only_to_a_file,
+)
+from .browser_page import compact as compact_page
 from .client import MCPClient
+from .desktop_labels import LABEL_HINT, SNAPSHOT_TOOLS, takes_loc_or_label, worded_label
+from .desktop_labels import repair as repair_label
 from .registry import MCPRegistry
 
 log = logging.getLogger(__name__)
@@ -242,6 +253,12 @@ class MCPToolAdapter:
         # does not fit a small local model's window.
         self.is_mcp_tool: bool = True
         self.risk_tier: RiskTier = risk_tier
+        raw_annotations = mcp_tool_def.get("annotations")
+        self._annotations: dict[str, Any] = (
+            dict(raw_annotations) if isinstance(raw_annotations, dict) else {}
+        )
+        #: The server marks the tool as only reading (``readOnlyHint``).
+        self.read_only: bool = self._annotations.get("readOnlyHint") is True
 
         # Register with the global CapabilityRegistry so the voice path
         # knows this MCP tool exists and resolve_intent can match it.
@@ -261,6 +278,58 @@ class MCPToolAdapter:
         except Exception:  # noqa: BLE001
             log.debug("MCPToolAdapter: capability registration failed for %s", _cap_id)
 
+    def risk_tier_for_args(self, args: dict[str, Any]) -> RiskTier | None:
+        """Ask first for a call that can destroy, overwrite or send.
+
+        Every MCP tool runs at the adapter's static tier (``monitor``), which
+        let a connected desktop or file server delete files or run any shell
+        command without a word. Escalate to ``ask`` when the server marks the
+        tool ``destructiveHint``, when a command argument classifies as
+        destructive (the same classifier ``run_shell`` uses), or when the tool
+        name says it deletes, overwrites, kills or sends. A tool the server
+        marks ``readOnlyHint`` keeps its tier. ``None`` keeps the static tier.
+        """
+        if self._annotations.get("readOnlyHint") is True:
+            return None
+        if self._annotations.get("destructiveHint") is True:
+            return "ask"
+        for key in _COMMAND_ARG_KEYS:
+            value = args.get(key)
+            # A list is a batch of command lines: any destructive one asks.
+            lines = value if isinstance(value, list) else [value]
+            for line in lines:
+                if isinstance(line, str) and line.strip():
+                    if classify_command(line).level == DESTRUCTIVE:
+                        return "ask"
+        words = _name_words(self._mcp_tool_name)
+        if words & _CONSEQUENTIAL_WORDS:
+            return "ask"
+        # "move" alone is the mouse (Windows-MCP Move-Tool) and must stay
+        # instant; moving a file or folder can overwrite the destination.
+        if "move" in words and words & _FILE_WORDS:
+            return "ask"
+        return None
+
+    def repair_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """A pointer call that names its target in words, sent as the point it names.
+
+        See jarvis/mcp/desktop_labels.py: Windows-MCP takes ``label`` as a
+        number its Snapshot never shows, so the model sends the control's name.
+        """
+        if not isinstance(args, dict) or not takes_loc_or_label(self._mcp_tool_name, self.schema):
+            return args
+        return repair_label(args, _LAST_SNAPSHOT.get(self._client.spec.name, ""))
+
+    def invalid_args_hint(self, args: dict[str, Any]) -> str:
+        """How to call instead, for a refusal ``repair_args`` could not prevent."""
+        if (
+            isinstance(args, dict)
+            and takes_loc_or_label(self._mcp_tool_name, self.schema)
+            and worded_label(args)
+        ):
+            return LABEL_HINT
+        return ""
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         """Call the MCP tool and map the result to a `ToolResult`.
 
@@ -272,9 +341,16 @@ class MCPToolAdapter:
         start_ns = time.time_ns()
         try:
             raw = await self._client.call_tool(self._mcp_tool_name, args)
+            output = _normalize_mcp_result(raw)
+            if self._mcp_tool_name in SNAPSHOT_TOOLS:
+                _remember_snapshot(self._client.spec.name, output)
+            if self._mcp_tool_name == "show_in_gods_eye_view":
+                output = await _show_on_world_screen(raw, output)
+            elif self._mcp_tool_name in PAGE_ACTIONS or self._mcp_tool_name == SNAPSHOT_TOOL:
+                output = await self._with_page(output)
             return ToolResult(
                 success=True,
-                output=_normalize_mcp_result(raw),
+                output=output,
             )
         except Exception as e:  # noqa: BLE001
             log.warning(
@@ -284,6 +360,99 @@ class MCPToolAdapter:
                 e,
             )
             return ToolResult(success=False, output=None, error=str(e))
+
+
+    async def _with_page(self, output: Any) -> Any:
+        """A browser answer with the page it left, as a short outline (browser_page.py).
+
+        Only a Playwright-style answer ("### Page" sections) is touched; when it
+        links to a snapshot file instead of showing the page, the page is read
+        with one ``browser_snapshot`` call. Any failure keeps the answer as it was.
+        """
+        items = output if isinstance(output, list) else [output]
+        if not items or not isinstance(items[0], str) or "### Page" not in items[0]:
+            return output
+        text = items[0]
+        page: str | None = None
+        try:
+            if links_only_to_a_file(text):
+                if self._mcp_tool_name in _SETTLING_ACTIONS:
+                    # Script-drawn pages (YouTube results) fill in after load.
+                    await asyncio.sleep(_PAGE_SETTLE_S)
+                snap = _normalize_mcp_result(await self._client.call_tool(SNAPSHOT_TOOL, {}))
+                snap_items = snap if isinstance(snap, list) else [snap]
+                if snap_items and isinstance(snap_items[0], str):
+                    page = snap_items[0]
+            elif not has_inline_snapshot(text):
+                return output
+            short = compact_page(text, page)
+        except Exception:  # noqa: BLE001 — the server's own answer still stands
+            log.warning("browser page outline failed for %s", self.name, exc_info=True)
+            return output
+        return short if not isinstance(output, list) else [short, *items[1:]]
+
+
+#: The last Snapshot answer per desktop server, which a worded label is read against.
+_LAST_SNAPSHOT: dict[str, str] = {}
+
+
+def _remember_snapshot(server: str, output: Any) -> None:
+    items = output if isinstance(output, list) else [output]
+    text = "\n".join(item for item in items if isinstance(item, str))
+    if text.strip():
+        _LAST_SNAPSHOT[server] = text
+
+
+#: Actions after which a page may still be drawing, and how long it gets.
+_SETTLING_ACTIONS = frozenset({
+    "browser_navigate", "browser_navigate_back", "browser_click", "browser_press_key",
+})
+_PAGE_SETTLE_S = 0.8
+
+
+async def _show_on_world_screen(raw: Any, output: Any) -> Any:
+    """Fly the World screen's globe to God's Eye View's answer (jarvis/intel/gev_view.py).
+
+    The result says what really happened, so the model reports the screen
+    change only when one was made.
+    """
+    from jarvis.intel.gev_view import gev_view_from_result, show_gev_view
+
+    view = gev_view_from_result(raw)
+    if view is None:
+        return output
+    try:
+        shown = await show_gev_view(view)
+    except Exception:  # noqa: BLE001 — the tool's own answer still stands
+        log.warning("God's Eye View result could not be shown on the World screen", exc_info=True)
+        shown = False
+    note = (
+        "Shown now: the World screen is open and its God's Eye View globe flew there."
+        if shown
+        else "Not shown: the Jarvis window is not connected, so only the link above exists."
+    )
+    items = output if isinstance(output, list) else [output]
+    return [*items, note]
+
+
+#: Argument names under which desktop/shell MCP servers take a command line.
+_COMMAND_ARG_KEYS: tuple[str, ...] = ("command", "cmd", "script", "shell", "commands")
+
+#: Words in a tool name that mean the call deletes, overwrites, stops or sends.
+_CONSEQUENTIAL_WORDS: frozenset[str] = frozenset({
+    "delete", "remove", "rm", "unlink", "erase", "wipe", "purge", "drop", "truncate",
+    "kill", "terminate", "shutdown", "restart", "reboot", "uninstall",
+    "write", "overwrite", "edit", "replace", "rename",
+    "send", "post", "publish", "email", "pay", "purchase", "buy", "transfer",
+})
+
+_FILE_WORDS: frozenset[str] = frozenset({"file", "files", "directory", "folder", "item", "path"})
+
+
+def _name_words(name: str) -> set[str]:
+    """``write_file`` / ``killProcess`` / ``Remove-Item`` -> lower-case words."""
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name or "")
+    return {word for word in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if word}
 
 
 def _normalize_mcp_result(raw: Any) -> Any:

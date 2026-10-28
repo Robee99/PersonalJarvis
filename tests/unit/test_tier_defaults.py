@@ -54,7 +54,7 @@ class TestTierDefaultsCatalog:
         for provider, model in TIER_DEFAULTS_BY_PROVIDER["deep"].items():
             if provider in LOCAL_PROVIDERS:
                 continue  # empty by design: plugin-side model discovery
-            if provider == "openrouter":
+            if provider in ("openrouter", "nous"):
                 continue  # deliberate free-model default; not a frontier slug
             if provider == "grok":
                 continue  # grok-4.3 serves both tiers — see the router-tier note above

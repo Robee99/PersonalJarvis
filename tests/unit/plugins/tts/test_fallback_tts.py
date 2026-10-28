@@ -174,6 +174,17 @@ def test_factory_returns_raw_provider_without_fallback():
     assert isinstance(tts, GeminiFlashTTS)  # no wrapper -> isinstance still holds
 
 
+@pytest.mark.parametrize("value", ["none", "None", "off"])
+def test_factory_reads_none_as_no_fallback(value):
+    # "none" used to be read as a provider name and built the cloud Gemini
+    # voice as a hidden backup behind a local Piper install.
+    class _Off(_Cfg):
+        fallback = value
+    tts = build_tts_from_config(_Off())
+    assert isinstance(tts, GeminiFlashTTS)
+    assert not isinstance(tts, FallbackTTS)
+
+
 def test_factory_does_not_wrap_when_fallback_equals_primary():
     class _Same(_Cfg):
         fallback = "gemini-flash-tts"

@@ -40,6 +40,8 @@ __all__ = [
     "ANTIGRAVITY_SUBAGENT_CANONICAL",
     "GROK_BUILD_SUBAGENT_SLUGS",
     "GROK_BUILD_SUBAGENT_CANONICAL",
+    "HERMES_SUBAGENT_SLUGS",
+    "HERMES_SUBAGENT_CANONICAL",
 ]
 
 
@@ -79,6 +81,12 @@ GROK_BUILD_SUBAGENT_SLUGS: Final[frozenset[str]] = frozenset(
     {"grok-build", "grok-cli", "grokbuild"}
 )
 GROK_BUILD_SUBAGENT_CANONICAL: Final[str] = "grok-build"
+
+# Hermes Agent (Nous Research) runs through the DIRECT HermesDirectWorker
+# (``hermes -z``) with its own configured models, so it has no worker-harness
+# slug either. Single source of truth for routing, readiness and the switch.
+HERMES_SUBAGENT_SLUGS: Final[frozenset[str]] = frozenset({"hermes", "hermes-agent"})
+HERMES_SUBAGENT_CANONICAL: Final[str] = "hermes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +140,10 @@ MAPPINGS: Final[tuple[ProviderMapping, ...]] = (
     # selectable subagent in the API-Keys "Subagents" tab and env/slug lookups
     # stay consistent.
     ProviderMapping("nvidia", "nvidia", "NVIDIA_API_KEY"),
+    # Nous Portal (cloud, OpenAI-compatible): in-process ApiAgentWorker like
+    # nvidia, so ``worker_slug`` is a stable identity only. Not the Hermes Agent
+    # CLI, which routes through HERMES_SUBAGENT_SLUGS instead.
+    ProviderMapping("nous", "nous", "NOUS_API_KEY"),
     # Google Cloud Vertex AI: runs through the in-process ApiAgentWorker on the
     # VertexBrain, like nvidia — there is no worker-harness slug for it, so
     # ``worker_slug`` is a stable identity for display and reverse lookup only.
@@ -276,6 +288,26 @@ def canonical_worker_provider(raw_provider: str | None) -> str | None:
     if provider == "openclaw-claude":
         return "claude-api"
     return provider
+
+
+def pinned_worker_model(config: object, provider: str) -> str:
+    """The ``[brain.worker].model`` pin when it belongs to ``provider``, else "".
+
+    The pin belongs to the worker provider the status line shows: the explicit
+    ``[brain.worker].provider``, or ``brain.primary`` when none is set (the
+    worker then inherits the router brain). Without that second case a model
+    picked in the Assistant-Agents tab was shown but never run, because the
+    inherited provider never matched an empty ``[brain.worker].provider``.
+    """
+    brain = getattr(config, "brain", None)
+    worker = getattr(brain, "worker", None)
+    model = (getattr(worker, "model", "") or "").strip() if worker is not None else ""
+    if not model:
+        return ""
+    owner = canonical_worker_provider(getattr(worker, "provider", None)) or (
+        canonical_worker_provider(getattr(brain, "primary", None))
+    )
+    return model if owner == (provider or "").strip().lower() else ""
 
 
 def validate_configured_providers(configured: Iterable[str]) -> list[str]:

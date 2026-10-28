@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetProvidersCacheForTests, useProviders } from "./useProviders";
 
+/** Reads of /api/providers; the local-only scope read (route policy) is not one. */
+function providerCalls(fetchMock: { mock: { calls: unknown[][] } }): number {
+  return fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/providers")).length;
+}
+
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response;
 }
@@ -35,7 +40,7 @@ describe("useProviders request sharing", () => {
     await waitFor(() => expect(result.current.a.loading).toBe(false));
     await waitFor(() => expect(result.current.b.loading).toBe(false));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(providerCalls(fetchMock)).toBe(1);
     expect(result.current.a.providers).toEqual([provider]);
     expect(result.current.b.providers).toEqual([provider]);
   });
@@ -51,13 +56,13 @@ describe("useProviders request sharing", () => {
       b: useProviders(),
     }));
     await waitFor(() => expect(result.current.a.loading).toBe(false));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(providerCalls(fetchMock)).toBe(1);
 
     await act(async () => {
       window.dispatchEvent(new CustomEvent("jarvis:brain-switched"));
       await Promise.resolve();
     });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(providerCalls(fetchMock)).toBe(2));
   });
 
   it("a remount starts from the last good list", async () => {

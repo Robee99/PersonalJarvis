@@ -12,8 +12,11 @@
 #
 #  Overrides cascade: jarvis.toml  →  ENV (JARVIS__SECTION__KEY=...)
 #  Any section you delete falls back to the code defaults.
-#  This template ships cloud-first defaults (no GPU, no local model,
-#  no microphone required) so it runs on a 1 vCPU / 1 GB VPS.
+#  This template ships LOCAL-FIRST defaults: Jarvis's own brain on a
+#  local llama.cpp server (Gemma 4 E4B or Nemotron Bolt E4B), local
+#  speech in and out, nothing paid and no API key needed. Paid and
+#  cloud brains are deny-listed below; each one is opt-in, never a
+#  fallback. `jarvis system local` sets the same on a running app.
 # ============================================================
 
 [profile]
@@ -26,6 +29,10 @@ language = "auto"            # "de" | "en" | "auto" (bilingual auto-detect)
 # to keep the default. The wake word is always YOUR choice — nothing is
 # preset for you.
 name = ""
+# "butler" (default): a calm English butler who addresses you with the
+# honorific below, sparingly. "companion": a warm peer, no honorific.
+style = "butler"
+honorific = "Sir"
 
 # ── Voice trigger (optional; irrelevant on a headless/browser-only host) ──
 [trigger]
@@ -45,7 +52,7 @@ sensitivity = 0.5            # 0.5..1 (values below 0.5 are lifted — the wake 
 
 # ── Speech-to-Text ──
 [stt]
-provider = "groq-api"        # groq-api | openai-api | openrouter-stt | gemini-api | vertex-stt | faster-whisper (local)
+provider = "faster-whisper"  # faster-whisper | nemotron-local (both on this machine) | groq-api | openai-api | openrouter-stt | gemini-api | vertex-stt
 device = "cpu"               # cpu | cuda — keep "cpu" unless you have a local GPU
 language = "auto"            # auto, or a weak ISO-639 preference such as "fr"
 bias_prompt = ""             # optional comma-separated vocab to stabilize proper nouns
@@ -69,16 +76,13 @@ final_overlap_seconds = 1.5
 code_switching = true
 
 # ── Text-to-Speech ──
-# Cloud default = Gemini Flash TTS (reuses your GEMINI_API_KEY). Alternatives:
-#   provider = "cartesia"    (Sonic 3.5, 42 languages — needs CARTESIA_API_KEY + [tts.cartesia] voice ids)
-#   provider = "grok-voice"  (reuses GROK_API_KEY)
-#   provider = "elevenlabs"  (needs ELEVENLABS_API_KEY)
+# Default = Piper on this machine (keyless, offline). Opt-in cloud voices:
+#   provider = "gemini-flash-tts" (GEMINI_API_KEY), "cartesia" (CARTESIA_API_KEY
+#   + [tts.cartesia] voice ids), "grok-voice" (GROK_API_KEY), "elevenlabs"
+#   (ELEVENLABS_API_KEY).
 [tts]
-provider = "gemini-flash-tts"
-fallback = "grok-voice"
-model = "gemini-3.1-flash-tts-preview"
-voice_de = "Charon"
-voice_en = "Charon"
+provider = "piper-local"
+fallback = ""
 language_code = "auto"
 streaming = true
 # Legacy TTS-only Vertex route (predates the [google] section below). Kept for
@@ -113,15 +117,20 @@ vertex_realtime_location = ""
 service_account_path = ""     # only when this machine is not signed in with gcloud
 
 # ── Brain (multi-provider; never hardcode a single vendor) ──
-# Cloud-reachable default = Gemini (needs only GEMINI_API_KEY). Switch the
-# whole stack by changing these four to "claude-api" | "openai" | "grok" |
-# "openrouter" | "vertex" and supplying that provider's key.
+# Default = Jarvis's own brain on a local llama.cpp server (the model swapper
+# fronts Gemma 4 E4B QAT on :11443 and Nemotron 3.5 Bolt E4B on :11442). No
+# key, nothing leaves the machine. To use a cloud brain instead, change these
+# four to "gemini" | "claude-api" | "openai" | "grok" | "openrouter" | "vertex",
+# supply that provider's key, and take it off deny_providers below.
 [brain]
-primary = "gemini"
-fallback = "gemini"
-deep_brain = "gemini"
-routing_provider = "gemini"
-routing_model = "gemini-3.5-flash"
+primary = "local-openai"
+fallback = "local-openai"
+deep_brain = "local-openai"
+routing_provider = "local-openai"
+routing_model = "gemma-4b-qat"
+# A small local model sees the core tools plus the ones a request needs, and
+# switches more on with `enable_tools` ("auto" does this for local brains).
+tool_switch = "auto"
 
 [brain.providers.gemini]
 model = "gemini-3.5-flash"          # fast router/voice tier
@@ -150,11 +159,60 @@ base_url = "https://openrouter.ai/api/v1"
 # "local-openai" the active Brain in-app. Keep a ready provider from another
 # family in the fallback chain (AP-22).
 [brain.providers.local-openai]
-model = "gemma-4-12b-it-qat-q4_0"
-base_url = "http://127.0.0.1:8080"
+model = "gemma-4b-qat"                     # or "nemotron-4b" at http://127.0.0.1:11442
+base_url = "http://127.0.0.1:11443"
+
+# Optional routing policy (off unless enabled). Names the provider/model for
+# simple work (fast) and for multi-step reasoning or building (deep); the other
+# tier is the one bounded fallback. Escalation hands a turn to a Paperclip agent
+# (for example a Claude agent) only when a trigger phrase is spoken; nothing
+# escalates on its own. Deny lists keep a provider family off every chain,
+# including per-turn override chains. Each tier must use a provider whose
+# endpoint is configured above (one base_url per provider).
+# Images (screenshots, camera frames, dropped files) only go to a tier marked
+# local = true. A loopback gateway that forwards to a cloud model is NOT local.
+# allow_cloud_vision = true is explicit consent to send images to the other
+# tiers; without a local tier such a turn is answered without any model.
+# The shipped policy: the local brain answers every turn, and every paid or
+# cloud brain (and Hermes) is kept off every chain, so a local failure is
+# reported, never re-routed to a paid model.
+[brain.route_policy]
+enabled = true
+allow_cloud_vision = false
+deny_providers = [
+  "claude-api", "claude-cli", "openai", "codex", "grok", "grok-build",
+  "openrouter", "vertex", "antigravity", "nvidia", "gemini", "nous", "hermes",
+  "openclaw",
+]
+
+[brain.route_policy.fast]
+provider = "local-openai"
+model = "gemma-4b-qat"
+local = true
+
+# Other shapes, for reference:
+# [brain.route_policy.deep]
+# provider = "ollama"                      # e.g. a local model server
+# model = "qwen3.6:35b-a3b"
+# local = true                             # runs on this machine
+#
+# [brain.route_policy.escalation]
+# enabled = true
+# via = "paperclip"                        # uses the saved Paperclip connection
+# agent = "claude"                         # Paperclip agent name or urlKey
+# trigger_phrases = ["ask claude"]
+# deadline_s = 180
+# max_per_session = 5
+
+# ── Voice engine ──
+# "pipeline" = local speech-to-text -> the local brain -> local text-to-speech.
+# "realtime" (a hosted speech-to-speech model) is opt-in.
+[voice]
+mode = "pipeline"
 
 # ── Safety: anti-confirmation-fatigue whitelist + hard blacklist ──
 [safety]
+approval_mode = "bypass"
 default_tier = "safe"
 always_confirm_tiers = ["ask"]
 always_block_tiers = ["block"]
@@ -182,6 +240,13 @@ input_device = "auto"        # "auto" | shortest-unique device-name token (e.g. 
 output_device = "auto"
 echo_cancellation = true       # requested; raw PortAudio reports unavailable honestly
 sample_rate = 16000          # mandatory 16 kHz (AP-L-16)
+
+# ── Browser voice (hosts without a microphone: a VPS, `jarvis serve`) ──
+# The browser that presses Start holds the call over /ws/audio. Realtime mode
+# always serves it; this switch covers the classic speech-to-text -> brain ->
+# text-to-speech bridge in pipeline mode. See docs/headless-vps-deployment.md.
+[browser_voice]
+enabled = true
 
 # ── UI / tray ──
 [ui]
@@ -244,3 +309,17 @@ auto_approve_tool_families = [
   "wiki-ingest",
   "session-latest-turn",
 ]
+
+# -- Local media understanding (jarvis/multimodal) --
+# Three read-only MCP tools for Hermes: media-describe-image,
+# media-transcribe-audio, media-understand-video. Every model call stays on
+# this computer: a non-local server_url is refused, never used. Without this
+# section Jarvis auto-detects a running llama-server that accepts images or
+# audio (started with --mmproj) and uses the downloaded faster-whisper model.
+# [multimodal]
+# server_url = "http://127.0.0.1:11439"   # "" = auto-detect on this computer
+# transcriber = "auto"                    # auto | whisper | server
+# whisper_model = ""                      # "" = [stt].model, then [stt].wake_model
+# allowed_dirs = []                       # on top of Pictures, Videos, Music, Downloads, ...
+# video_frames = 8
+# max_video_seconds = 1200

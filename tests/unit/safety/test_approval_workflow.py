@@ -45,3 +45,22 @@ async def test_duplicate_arm_is_rejected() -> None:
             workflow.arm(trace_id)
     finally:
         ticket.close()
+
+
+@pytest.mark.asyncio
+async def test_first_decision_wins_and_replay_cannot_approve_another_call() -> None:
+    workflow = ApprovalWorkflow(EventBus())
+    first_id, next_id = uuid4(), uuid4()
+    workflow.arm(first_id)
+    await workflow.approve(first_id, who="test-user")
+    await workflow.deny(first_id, reason="duplicate response")
+    assert await workflow.wait(first_id, timeout_s=0.01) == (True, "test-user")
+
+    next_ticket = workflow.arm(next_id)
+    try:
+        await workflow.approve(first_id, who="replayed response")
+        assert next_ticket.peek() is None
+        await workflow.deny(next_id, reason="declined")
+        assert await workflow.wait(next_id, timeout_s=0.01) == (False, "declined")
+    finally:
+        next_ticket.close()

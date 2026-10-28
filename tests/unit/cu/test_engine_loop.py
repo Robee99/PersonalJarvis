@@ -19,6 +19,7 @@ pytest.importorskip("PIL", reason="pillow required for frame handling")
 import jarvis.cu.engine as engine_mod
 from jarvis.cu.capture import VisualProbe, capture_stable_frame
 from jarvis.cu.geometry import MonitorInfo
+from tests.fakes.fake_permission_service import FakePermissionService
 
 MONITOR = MonitorInfo(left=0, top=0, width=192, height=108)
 
@@ -91,6 +92,9 @@ def _solid(shade: int = 30) -> tuple[tuple[int, int], bytes]:
 @pytest.fixture
 def patched(monkeypatch, tmp_path):
     """Patch every OS touchpoint of the engine to deterministic fakes."""
+    gate = FakePermissionService()
+    monkeypatch.setattr(engine_mod, "_permission_gate", lambda: gate)
+    monkeypatch.setattr(engine_mod, "_frontmost_system_consent_owner", lambda: "")
     state = SimpleNamespace(
         screen_shade=30,
         typed_lands=True,  # bool, or a list popped per verify call
@@ -175,6 +179,9 @@ def patched(monkeypatch, tmp_path):
         fake_verify_click_focus_point,
     )
     monkeypatch.setattr(engine_mod, "_foreground_title", lambda: "Test Window")
+    # Startup focus recovery has its own tests. Do not read/move a real window
+    # here or consume the foreground sequence reserved for capture race tests.
+    monkeypatch.setattr(engine_mod, "_step_off_jarvis", lambda _goal: "")
     # The per-action permission guard reads the LIVE TCC state and the window list: on
     # a macOS dev machine without a grant it would refuse every dispatched action.
     # The guard's own tests drive ``_dispatch_tool`` through a FakeTCC world instead.
@@ -374,6 +381,7 @@ def _darwin_world(monkeypatch, **tcc_kwargs):
     tcc_kwargs.setdefault("default_policy", DialogPolicy.NEVER_ANSWERED)
     tcc = FakeTCC(**tcc_kwargs)
     install_port(monkeypatch, tcc.port("darwin"))
+    monkeypatch.setattr(engine_mod, "_frontmost_system_consent_owner", lambda: "")
     return tcc
 
 
@@ -509,6 +517,7 @@ async def test_dispatch_off_macos_asks_nothing_and_changes_nothing(monkeypatch, 
 
     tcc = FakeTCC()
     install_port(monkeypatch, tcc.port(platform))
+    monkeypatch.setattr(engine_mod, "sys", SimpleNamespace(platform=platform))
     executor = FakeExecutor()
 
     ok, _detail = await engine_mod._dispatch_tool(
@@ -619,6 +628,7 @@ async def test_foreground_change_after_model_decision_refuses_action(patched):
         [
             '{"action":"click","x":500,"y":500}',
             '{"action":"fail","reason":"the target window changed"}',
+            '{"action":"fail","reason":"the target window changed"}',
         ]
     )
     executor = FakeExecutor()
@@ -647,6 +657,7 @@ async def test_same_app_window_swap_before_first_action_refuses(patched):
     brain = _FocusChangingBrain(
         [
             '{"action":"click","x":500,"y":500}',
+            '{"action":"fail","reason":"the target window changed"}',
             '{"action":"fail","reason":"the target window changed"}',
         ]
     )
@@ -1438,3 +1449,122 @@ async def test_an_ordinary_tool_failure_is_not_a_permission_block(patched):
     final = _final(await _run(_ctx(brain, executor)))
 
     assert "blocked_permission" not in final.stderr
+
+
+async def test_a_fail_right_after_a_held_back_action_gets_one_retry(patched):
+    # Live 2026-10-26: click_element was held back for a stale frame and the
+    # model gave up at once; the engine now says nothing failed and re-asks.
+    class _FocusChangingBrain(FakeBrain):
+        async def complete_text(self, *, system: str, user: str) -> str:
+            reply = await super().complete_text(system=system, user=user)
+            if len(self.calls) == 1:
+                patched.foreground_handle = 22
+            return reply
+
+    brain = _FocusChangingBrain(
+        [
+            '{"action":"click","x":500,"y":500}',
+            '{"action":"fail","reason":"the click was refused"}',
+            '{"action":"fail","reason":"still cannot"}',
+        ]
+    )
+    chunks = await _run(_ctx(brain, FakeExecutor()))
+
+    assert _final(chunks).exit_code == 5
+    assert len(brain.calls) == 3
+    assert any("fail NOT accepted" in user for _system, user in brain.calls)
+
+
+async def test_typing_the_request_itself_is_refused(patched):
+    brain = FakeBrain(
+        [
+            '{"action":"type","text":"open the thing"}',
+            '{"action":"fail","reason":"cannot"}',
+        ]
+    )
+    executor = FakeExecutor()
+
+    chunks = await _run(_ctx(brain, executor))
+
+    assert _final(chunks).exit_code == 5
+    assert not any(name == "type" for name, _args in executor.calls)
+    assert any("the user's request itself" in user for _system, user in brain.calls)
+
+
+@pytest.mark.parametrize("echo", ["click on Roberto", "In Chrome click on Roberto"])
+async def test_original_context_does_not_disable_request_echo_guard(patched, monkeypatch, echo):
+    selected = []
+    monkeypatch.setattr(engine_mod, "_step_off_jarvis", lambda goal: selected.append(goal) or "")
+    original = "In Chrome click on Roberto"
+    brain = FakeBrain([
+        '{"action":"type","text":"' + echo + '"}',
+        '{"action":"fail","reason":"stop"}',
+    ])
+    executor = FakeExecutor()
+    task = SimpleNamespace(
+        prompt="click on Roberto", env={"JARVIS_CU_ORIGINAL_REQUEST": original}, timeout_s=60,
+    )
+    chunks = [chunk async for chunk in engine_mod.run_cu_loop(
+        task, _ctx(brain, executor), cancel_token=None,
+    )]
+    assert _final(chunks).exit_code == 5
+    assert not any(name == "type_text" for name, _args in executor.calls)
+    assert any("the user's request itself" in user for _system, user in brain.calls)
+    assert original in brain.calls[0][1]
+    assert original in selected[0]
+
+
+def test_types_the_request_allows_quoted_content() -> None:
+    asked = "Problem and click on roboto"
+    assert engine_mod._types_the_request(asked, asked)
+    assert not engine_mod._types_the_request("hello world", "type hello world into notepad")
+    assert not engine_mod._types_the_request("lofi", "search youtube for lofi")
+
+
+async def test_a_missing_label_gets_one_fresh_visual_recovery(patched):
+    class MissingLabelExecutor(FakeExecutor):
+        async def execute(self, tool, args, **kwargs):
+            if tool["name"] == "click_element":
+                self.calls.append((tool["name"], dict(args)))
+                return SimpleNamespace(
+                    success=False, output=None,
+                    error=(
+                        "No matching element (name~'Roberto'). "
+                        "Available labels: ['Google Chrome']"
+                    ),
+                )
+            return await super().execute(tool, args, **kwargs)
+
+    brain = FakeBrain([
+        '{"action":"click_element","name":"Roberto"}',
+        '{"action":"fail","reason":"the label was not found"}',
+        '{"action":"click","x":500,"y":500}',
+        '{"action":"fail","reason":"cannot finish"}',
+    ])
+    executor = MissingLabelExecutor()
+    chunks = await _run(_ctx(brain, executor))
+
+    assert any(name == "click" for name, _args in executor.calls)
+    assert len(brain.calls) == 4
+    assert any(
+        "visual" in user.lower() and "label" in user.lower() for _system, user in brain.calls
+    )
+    assert _final(chunks).exit_code == 5
+
+
+async def test_visual_recovery_after_a_label_miss_is_bounded(patched):
+    class MissingLabelExecutor(FakeExecutor):
+        async def execute(self, tool, args, **kwargs):
+            self.calls.append((tool["name"], dict(args)))
+            return SimpleNamespace(success=False, output=None, error="No matching element")
+
+    brain = FakeBrain([
+        '{"action":"click_element","name":"Roberto"}',
+        '{"action":"fail","reason":"label missing"}',
+        '{"action":"fail","reason":"no visible target"}',
+    ])
+    executor = MissingLabelExecutor()
+    chunks = await _run(_ctx(brain, executor))
+    assert len(brain.calls) == 3
+    assert len(executor.calls) == 1
+    assert _final(chunks).exit_code == 5

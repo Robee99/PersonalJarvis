@@ -16,8 +16,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+import jarvis.ui.web.marketplace_routes as marketplace_routes
 from jarvis.marketplace import catalog_data, community_source
 from jarvis.marketplace.agent_plugins_loader import EXTENSION_NAMESPACE
+from jarvis.marketplace.token_store import InMemoryBackend, TokenStore
 from jarvis.marketplace.usage_cards import loader as cards_loader
 from jarvis.ui.web.marketplace_routes import router
 
@@ -84,6 +86,8 @@ def _index_payload(*plugin_entries: dict[str, Any]) -> dict[str, Any]:
 @pytest.fixture()
 def community_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect every data/ path into tmp and pre-seed a FRESH index cache."""
+    token_store = TokenStore(InMemoryBackend())
+    monkeypatch.setattr(marketplace_routes, "TokenStore", lambda: token_store)
     cache = tmp_path / "marketplace_index.json"
     cache.write_text(
         json.dumps({"fetched_at": time.time(), "index": _index_payload(_plugin_entry())}),

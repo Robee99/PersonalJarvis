@@ -229,9 +229,41 @@ def _windows_default_browser_exe() -> str | None:
     return None
 
 
+#: Browsers by process name, in the order a running one is preferred. Edge
+#: comes last: its startup boost keeps msedge.exe running with no window.
+_RUNNING_BROWSER_NAMES = ("chrome.exe", "firefox.exe", "brave.exe", "msedge.exe")
+
+
+def _windows_running_browser_exe() -> str | None:
+    """The browser the owner is already using, as an exe path, or ``None``.
+
+    Live 2026-10-27 Edge was the https default while Roberto worked in his
+    signed-in Chrome; every page Jarvis opened landed in a cold Edge instead
+    of a tab of the Chrome in front of him.
+    """
+    try:
+        import psutil  # noqa: PLC0415
+    except ImportError:  # no process list: fall back to the default browser
+        return None
+    found: dict[str, str] = {}
+    for proc in psutil.process_iter(["name", "exe"]):
+        name = str(proc.info.get("name") or "").casefold()
+        exe = proc.info.get("exe")
+        if name in _RUNNING_BROWSER_NAMES and exe and name not in found:
+            found[name] = str(exe)
+    return next((found[n] for n in _RUNNING_BROWSER_NAMES if n in found), None)
+
+
+def preferred_browser_exe() -> str | None:
+    """The browser a page should open in: the running one, else the default, else any."""
+    candidates = _windows_browser_candidates()
+    return candidates[0] if candidates else None
+
+
 def _windows_browser_candidates() -> list[str]:
-    r"""Ordered, existing browser exe paths: the user's default first, then the
-    standard install locations of mainstream browsers (Chrome/Edge/Firefox/Brave).
+    r"""Ordered, existing browser exe paths: the one already running first, then
+    the user's default, then the standard install locations of mainstream
+    browsers (Chrome/Edge/Firefox/Brave).
 
     This is what lets the desktop shell ALWAYS reach a visible browser, even when
     the OS default association silently opens nothing — e.g. a tool repointed the
@@ -251,6 +283,7 @@ def _windows_browser_candidates() -> list[str]:
             seen.add(norm)
             out.append(path)
 
+    _add(_windows_running_browser_exe())
     _add(_windows_default_browser_exe())
     roots = [
         os.environ.get("PROGRAMFILES", r"C:\Program Files"),
@@ -274,19 +307,18 @@ def _open_url_windows(url: str) -> bool:
     URL in the browser's normal, visible profile. Falls back across candidates and
     finally to ShellExecute. Returns True once a launcher is dispatched.
     """
-    host = urlparse(url).netloc
+    host = urlparse(url).hostname
     for exe in _windows_browser_candidates():
         try:
             subprocess.Popen(  # noqa: S603
                 [exe, url], creationflags=NO_WINDOW_CREATIONFLAGS, close_fds=True
             )
-            # Log only scheme://host at INFO — the full URL carries the OAuth
-            # ``state`` (a CSRF token) and ephemeral redirect_uri; keep it at DEBUG.
+            # Never log URL credentials, including one-time pairing fragments.
             log.info("open_url: launched %s -> %s", exe, host)
-            log.debug("open_url: full URL %s", url)
+            log.debug("open_url: browser launch completed")
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next candidate", exe, exc)
+            log.warning("open_url: %s failed (%s); trying next candidate", exe, type(exc).__name__)
             continue
     # Last resort: hand the URL to the OS association. It may be a UWP handler with
     # no classic exe — but it is also the path that silently opens nothing for a
@@ -299,7 +331,7 @@ def _open_url_windows(url: str) -> bool:
         )
         return True  # best-effort; ShellExecute may open nothing for a dead handler
     except OSError as exc:
-        log.warning("open_url: ShellExecute fallback failed for %s: %s", host, exc)
+        log.warning("open_url: ShellExecute fallback failed for %s: %s", host, type(exc).__name__)
         return False
 
 
@@ -345,7 +377,7 @@ def _run_opener_checked(argv: list[str]) -> bool:
             capture_output=True,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        log.warning("open_url: opener %r failed: %s", argv[0], exc)
+        log.warning("open_url: opener %r failed: %s", argv[0], type(exc).__name__)
         return False
     return proc.returncode == 0
 
@@ -355,10 +387,10 @@ def _open_url_macos(url: str) -> bool:
     ``open -a <App>`` fallbacks if the default association is broken. See
     :func:`open_url`. Honest: returns False if nothing opened.
     """
-    host = urlparse(url).netloc
+    host = urlparse(url).hostname
     if _run_opener_checked(["open", url]):
         log.info("open_url: macOS launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
+        log.debug("open_url: browser launch completed")
         return True
     for app in _MACOS_BROWSER_APPS:
         if _run_opener_checked(["open", "-a", app, url]):
@@ -375,10 +407,10 @@ def _open_url_linux(url: str) -> bool:
     opened. The direct-binary launch is fire-and-forget (the browser keeps running)
     so it mirrors the Windows direct launch — success means the process started.
     """
-    host = urlparse(url).netloc
+    host = urlparse(url).hostname
     if _run_opener_checked(["xdg-open", url]):
         log.info("open_url: Linux launched default browser -> %s", host)
-        log.debug("open_url: full URL %s", url)
+        log.debug("open_url: browser launch completed")
         return True
     for binname in _LINUX_BROWSER_BINS:
         exe = shutil.which(binname)
@@ -391,7 +423,7 @@ def _open_url_linux(url: str) -> bool:
             log.info("open_url: Linux opened via %s -> %s", binname, host)
             return True
         except OSError as exc:
-            log.warning("open_url: %s failed (%s); trying next", binname, exc)
+            log.warning("open_url: %s failed (%s); trying next", binname, type(exc).__name__)
             continue
     log.warning("open_url: Linux found no browser to open %s", host)
     return False

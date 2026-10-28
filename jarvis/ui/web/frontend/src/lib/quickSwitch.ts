@@ -1,5 +1,5 @@
 /**
- * The quick switcher's destinations and ranking — the Spotlight-style "type a
+ * The quick switcher's destinations and ranking — the "type a
  * section's name, press Enter, be there" launcher.
  *
  * Pure on purpose: what the switcher lists and in which order is the whole
@@ -22,7 +22,7 @@
  * locale, plus a few English synonyms, while the row shows the label of the
  * active language.
  */
-import { KeyRound, type LucideIcon } from "lucide-react";
+import { Gauge, KeyRound, Orbit, type LucideIcon } from "lucide-react";
 import {
   ChatIcon,
   ConnectorIcon,
@@ -68,27 +68,26 @@ export interface QuickSwitchEntry {
 
 /** English synonyms per destination — words people type that no label holds. */
 const ALIASES: Partial<Record<string, readonly string[]>> = {
+  hud: ["home", "start", "deck", "mission deck"],
   voice: ["home", "start", "talk", "speak"],
   chat: ["home", "start", "message", "conversation"],
+  orb: ["memory orb", "memory map", "import"],
   "agentic-ide": ["ide", "code", "coding", "terminal", "panes", "workspace"],
   "agentic-ide-classic": ["terminal", "grid", "panes"],
   agents: ["society", "world", "team", "routines", "schedule", "automations"],
   settings: ["preferences", "options", "config", "configuration", "general"],
   apikeys: ["keys", "credentials", "tokens", "providers"],
-  "local-models": ["ollama", "llama", "offline", "models"],
   memory: ["notes", "knowledge", "obsidian"],
   visualization: ["outputs", "results", "images", "pages"],
   costs: ["tokens", "usage", "money", "billing", "budget"],
   sessions: ["transcripts", "recordings", "history"],
-  run_inspector: ["runs", "debug", "trace"],
   computers: ["servers", "ssh", "vps", "remote", "machines"],
-  "agent-instructions": ["instructions", "system prompt", "agents md", "claude md"],
+  "agent-instructions": ["assistant", "soul", "soul md", "character", "persona", "instructions", "memory md"],
   marketplace: ["store", "shop", "install"],
   board: ["stats", "dashboard", "activity"],
   docs: ["documentation", "help", "manual"],
   feedback: ["bug", "report", "issue"],
   appshots: ["screenshot", "capture"],
-  "jarvis-actions": ["permissions", "allow", "block", "actions"],
   dictation: ["voice", "speech", "microphone", "mic", "whisper"],
   shortcuts: ["hotkeys", "keybinds", "keyboard", "quick switcher"],
   "voice-shortcuts": ["dictation hotkeys", "dictation keys"],
@@ -139,8 +138,18 @@ function tab(
  */
 function expand(item: NavItem): QuickSwitchEntry[] {
   switch (item.id) {
+    // The HUD: one place for the chat, the voice and the memory orb. Its own
+    // name first, then the words people used for its pieces — all of them
+    // land on it ("orb" keeps its id so a deep link by that name still works).
     case "chats":
       return [
+        entry(item, {
+          key: "hud",
+          labelKey: "nav.hud",
+          fallbackLabel: "HUD",
+          icon: Gauge,
+          aliases: ALIASES.hud,
+        }),
         entry(item, {
           key: "voice",
           surface: "voice",
@@ -157,6 +166,7 @@ function expand(item: NavItem): QuickSwitchEntry[] {
           icon: ChatIcon,
           aliases: ALIASES.chat,
         }),
+        tab("orb", "nav.orb", Orbit, "nav.hud"),
       ];
     case "plugins":
       return [

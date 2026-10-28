@@ -18,6 +18,9 @@ import io
 import secrets
 import threading
 
+import pytest
+
+from jarvis.screen_context import service as _service_module
 from jarvis.screen_context.models import (
     DegradationCode,
     RedactionRule,
@@ -36,6 +39,17 @@ from jarvis.screen_context.service import (
     _encode,
     settings_from_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def _accessibility_granted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests feed fake UI text; the host's real grant must not decide them.
+
+    A macOS runner has no Accessibility grant, so the real probe withheld
+    every fake node and the redaction tests saw empty text there.
+    """
+    monkeypatch.setattr(_service_module, "accessibility_permission_error", lambda: None)
+
 
 MONITORS = [
     {"left": -1920, "top": 0, "width": 3840, "height": 1080, "name": "virtual"},
@@ -553,7 +567,7 @@ async def test_ocr_sensitive_line_is_burned_out_of_delivered_pixels(monkeypatch)
     monkeypatch.setattr(
         uitext,
         "ocr_supplement_with_regions",
-        lambda _image: uitext.OcrSupplement(
+        lambda _image, **_kw: uitext.OcrSupplement(
             text="Card 4111 1111 1111 1111",
             regions=(
                 uitext.OcrTextRegion(
@@ -1072,3 +1086,313 @@ def test_describe_names_what_was_captured() -> None:
     described = context.describe()
     assert "monitor 2" in described
     assert "1920x1080" in described
+
+
+# --------------------------------------------------------------------------
+# Hand-selected areas (region appshots)
+# --------------------------------------------------------------------------
+
+
+async def test_a_selected_area_grabs_exactly_that_rectangle() -> None:
+    capturer = FakeCapturer()
+    bus = RecordingBus()
+    service = make_service(capturer=capturer, bus=bus)
+
+    outcome = await service.capture(region=(100, 200, 300, 150))
+
+    assert outcome.status == "captured"
+    assert capturer.grabs == [((100, 200, 300, 150), None)]
+    assert outcome.context.target.kind is TargetKind.REGION
+    assert outcome.context.target.reason is TargetReason.USER_REGION
+    assert outcome.context.describe().startswith("captured selected area")
+    completed = [e for e in bus.events if type(e).__name__ == "ScreenCaptureCompleted"]
+    assert completed[0].target_kind == "region"
+    assert completed[0].target_label == "selected area"
+
+
+class _VaultBesideTheEditor(FakeWindowProbe):
+    def visible_windows(self):
+        return (
+            WindowFacts(app_name="editor", title="notes", frame_rect=(0, 0, 800, 600)),
+            WindowFacts(app_name="vault", title="1Password", frame_rect=(1000, 0, 400, 400)),
+        )
+
+
+async def test_a_denylisted_window_outside_the_area_does_not_block_it() -> None:
+    capturer = FakeCapturer()
+    service = make_service(
+        settings=ScreenContextSettings(denylist=("1password",)),
+        window_probe=_VaultBesideTheEditor(),
+        capturer=capturer,
+    )
+
+    outcome = await service.capture(region=(10, 10, 400, 300))
+
+    assert outcome.status == "captured"
+    assert len(capturer.grabs) == 1
+
+
+async def test_a_denylisted_window_inside_the_area_is_never_captured() -> None:
+    capturer = FakeCapturer()
+    service = make_service(
+        settings=ScreenContextSettings(denylist=("1password",)),
+        window_probe=_VaultBesideTheEditor(),
+        capturer=capturer,
+    )
+
+    outcome = await service.capture(region=(900, 100, 400, 300))
+
+    assert outcome.status == "refused"
+    assert outcome.reason_kind == "policy"
+    assert capturer.grabs == []
+    assert "selected area" in (outcome.message or "")
+
+
+async def test_focus_settling_after_the_picker_does_not_void_an_area() -> None:
+    class SettlingFocus(FakeWindowProbe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        def foreground_snapshot(self):
+            self.reads += 1
+            if self.reads == 1:
+                return WindowSnapshot(self._facts, self._handle)
+            return WindowSnapshot(
+                WindowFacts(app_name="browser", title="docs", pid=77, frame_rect=(0, 0, 900, 700)),
+                9,
+            )
+
+    capturer = FakeCapturer()
+    service = make_service(window_probe=SettlingFocus(), capturer=capturer)
+
+    outcome = await service.capture(region=(10, 10, 400, 300))
+
+    assert outcome.status == "captured"
+    assert len(capturer.grabs) == 1
+
+
+# --------------------------------------------------------------------------
+# Frozen screens: the area is the screen at the press, not after selecting
+# --------------------------------------------------------------------------
+
+_SMALL_MONITORS = [
+    {"left": 0, "top": 0, "width": 400, "height": 100},
+    {"left": 0, "top": 0, "width": 200, "height": 100},
+    {"left": 200, "top": 0, "width": 200, "height": 100},
+]
+
+
+class _PlayingVideo:
+    """A screen whose colour changes between grabs, like a playing video."""
+
+    name = "fake-video"
+
+    def __init__(self) -> None:
+        self.colour = (255, 0, 0)
+        self.grabs: list[tuple] = []
+
+    def grab(self, bbox, *, window_handle=None):
+        self.grabs.append((tuple(bbox), window_handle))
+        width, height = int(bbox[2]), int(bbox[3])
+        return ((width, height), bytes(self.colour) * (width * height))
+
+
+@pytest.fixture
+def _sdr_monitors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No HDR duplication and no ICC lookup on the test host's real monitors."""
+    from types import SimpleNamespace
+
+    import jarvis.platform.display_color as display_color
+    import jarvis.platform.hdr_grab as hdr_grab
+
+    monkeypatch.setattr(hdr_grab, "grab_extended", lambda _bbox: None)
+    monkeypatch.setattr(
+        display_color, "display_color", lambda *_a, **_k: SimpleNamespace(icc_profile=None)
+    )
+
+
+def _centre_colour(jpeg: bytes) -> tuple[int, int, int]:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(jpeg)) as image:
+        rgb = image.convert("RGB")
+        return rgb.getpixel((rgb.width // 2, rgb.height // 2))
+
+
+@pytest.mark.usefixtures("_sdr_monitors")
+async def test_a_frozen_area_is_cut_from_the_press_not_grabbed_after_selecting() -> None:
+    screen = _PlayingVideo()
+    service = make_service(capturer=screen, displays=FakeDisplays(_SMALL_MONITORS))
+
+    frozen = await service.freeze_screens()
+    screen.colour = (0, 0, 255)  # the video played on while the user selected
+    outcome = await service.capture(region=(210, 10, 120, 60), master=True, frozen=frozen)
+
+    assert outcome.status == "captured"
+    # One grab per monitor at the press; none after the selection.
+    assert sorted(screen.grabs) == [((0, 0, 200, 100), None), ((200, 0, 200, 100), None)]
+    red, green, blue = _centre_colour(outcome.context.image)
+    assert red > 200 and blue < 60
+    assert outcome.context.target.bbox == (210, 10, 120, 60)
+
+
+@pytest.mark.usefixtures("_sdr_monitors")
+async def test_an_area_outside_the_frozen_screens_is_grabbed_live() -> None:
+    screen = _PlayingVideo()
+    service = make_service(capturer=screen, displays=FakeDisplays(_SMALL_MONITORS))
+    frozen = _service_module.FrozenScreens(
+        frames=(
+            _service_module._FrozenMonitor(
+                bbox=(0, 0, 200, 100),
+                size=(200, 100),
+                rgb=bytes((0, 255, 0)) * (200 * 100),
+                master=_service_module.MasterImage(pixels=None),
+            ),
+        )
+    )
+
+    outcome = await service.capture(region=(210, 10, 120, 60), frozen=frozen)
+
+    assert outcome.status == "captured"
+    assert screen.grabs == [((210, 10, 120, 60), None)]
+
+
+def test_a_cut_follows_backing_pixels_and_slices_the_master() -> None:
+    import numpy as np
+
+    # A macOS-style frame: 2x the monitor's points.
+    pixels = np.zeros((200, 400, 4), dtype=np.float16)
+    pixels[20:40, 60:100] = 1.0
+    frame = _service_module._FrozenMonitor(
+        bbox=(100, 0, 200, 100),
+        size=(400, 200),
+        rgb=bytes(400 * 200 * 3),
+        master=_service_module.MasterImage(pixels=pixels, hdr=True),
+    )
+    frozen = _service_module.FrozenScreens(frames=(frame,))
+
+    size, rgb, master = frozen.cut((130, 10, 20, 10))
+
+    assert size == (40, 20)
+    assert len(rgb) == 40 * 20 * 3
+    assert master.pixels.shape == (20, 40, 4)
+    assert float(master.pixels.min()) == 1.0
+    assert frozen.cut((290, 0, 20, 10)) is None  # runs off the frozen monitor
+
+
+@pytest.mark.usefixtures("_sdr_monitors")
+async def test_a_denylisted_window_in_the_frozen_frame_blocks_the_area() -> None:
+    class VaultClosesAfterThePress(FakeWindowProbe):
+        def __init__(self) -> None:
+            super().__init__()
+            self.reads = 0
+
+        def visible_windows(self):
+            self.reads += 1
+            if self.reads == 1:
+                return (
+                    WindowFacts(app_name="vault", title="1Password", frame_rect=(0, 0, 150, 90)),
+                )
+            return (WindowFacts(app_name="editor", title="notes", frame_rect=(0, 0, 400, 100)),)
+
+    screen = _PlayingVideo()
+    service = make_service(
+        settings=ScreenContextSettings(denylist=("1password",)),
+        window_probe=VaultClosesAfterThePress(),
+        capturer=screen,
+        displays=FakeDisplays(_SMALL_MONITORS),
+    )
+
+    frozen = await service.freeze_screens()
+    outcome = await service.capture(region=(10, 10, 100, 60), master=True, frozen=frozen)
+
+    assert outcome.status == "refused"
+    assert outcome.reason_kind == "policy"
+    assert outcome.context is None
+
+
+def test_a_full_depth_frame_turns_only_the_cut_area_into_8_bit() -> None:
+    import numpy as np
+
+    pixels = np.zeros((100, 200, 4), dtype=np.float16)
+    pixels[10:30, 20:60, :3] = 1.0  # SDR white at 80 nits
+    frame = _service_module._FrozenMonitor(
+        bbox=(0, 0, 200, 100),
+        size=(200, 100),
+        rgb=None,
+        master=_service_module.MasterImage(pixels=pixels, hdr=True, sdr_white_nits=80.0),
+    )
+
+    size, rgb, master = _service_module.FrozenScreens(frames=(frame,)).cut((20, 10, 40, 20))
+
+    assert size == (40, 20)
+    assert rgb == b"\xff" * (40 * 20 * 3)
+    assert master.hdr and master.pixels.shape == (20, 40, 4)
+
+
+class _RecordingOcr:
+    """Stands in for ``uitext.ocr_supplement_with_regions`` and records its calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[bool] = []
+
+    def __call__(self, _image, *, windows_only: bool = False):
+        from jarvis.screen_context import uitext
+
+        self.calls.append(windows_only)
+        line = uitext.OcrTextRegion(text="Call +91 98765 43210", bounds=(10, 10, 180, 20))
+        return uitext.OcrSupplement(text=line.text, regions=(line,), lines=(line,))
+
+
+def _windows_ocr(monkeypatch, *, ready: bool = True) -> _RecordingOcr:
+    from jarvis.screen_context import uitext
+
+    ocr = _RecordingOcr()
+    monkeypatch.setattr(uitext, "ocr_supplement_with_regions", ocr)
+    monkeypatch.setattr(uitext, "windows_ocr_ready", lambda: ready)
+    return ocr
+
+
+async def test_windows_ocr_reads_a_sparse_screen_with_the_ocr_switch_off(monkeypatch) -> None:
+    # Nemotron 3.5 Bolt E4B cannot see the image: this text is its screen.
+    ocr = _windows_ocr(monkeypatch)
+    service = make_service()
+
+    outcome = await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == [True]
+    assert outcome.context.ui_text == "Call {{1. +91 98765 43210}}"
+    assert outcome.context.ui_text_source == "ocr"
+
+
+async def test_windows_ocr_off_in_settings_reads_nothing(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch)
+    service = make_service(settings=ScreenContextSettings(windows_ocr=False))
+
+    await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == []
+
+
+async def test_a_screen_with_enough_accessibility_text_is_not_ocred(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch)
+    reader = FakeTextReader(
+        FakeObservation(
+            [FakeNode(name="A full paragraph of real accessibility text on the screen")]
+        )
+    )
+    service = make_service(ui_text_reader=reader)
+
+    await service.capture_for_turn("look at this window", locale="en")
+
+    assert ocr.calls == []
+
+
+async def test_the_ocr_switch_still_runs_every_engine(monkeypatch) -> None:
+    ocr = _windows_ocr(monkeypatch, ready=False)
+    service = make_service(settings=ScreenContextSettings(ocr_enabled=True))
+
+    await service.capture_for_turn("look at this", locale="en")
+
+    assert ocr.calls == [False]

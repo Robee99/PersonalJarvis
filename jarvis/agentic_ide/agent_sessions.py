@@ -22,10 +22,11 @@ shapes cover all of them — ASSIGNED at launch, or DISCOVERED afterwards:
   shortcut and is a trap: it means "the newest session in this folder", so three
   Codex panes in one repository would all resume the SAME conversation and two
   users' work would silently vanish. Every pane must carry its own id.
-* **Grok Build** is the Claude Code shape (``--session-id`` at launch,
-  ``--resume`` later); **OpenCode**, **Kimi Code** and **Antigravity** are
-  the Codex shape (the id is theirs to choose — a database row, a session
-  directory, a conversation UUID — and ours to find by folder and time).
+* **Grok Build** and **Pi** are the Claude Code shape (``--session-id`` at
+  launch, ``--resume`` / ``--session`` later); **OpenCode**, **Kimi Code**,
+  **Antigravity** and **Oh My Pi** are the Codex shape (the id is theirs to
+  choose — a database row, a session directory or file, a conversation UUID —
+  and ours to find by folder and time).
   Each adapter below says which.
 
 Callers never branch on an agent name (AP-21). They ask this module whether a
@@ -228,6 +229,24 @@ _ADAPTERS: dict[str, _Adapter] = {
         resume=lambda session_id: ("--resume", session_id),
         discover=None,
         exists=lambda handle, home: _grok_conversation_exists(handle, home),
+    ),
+    "pi": _Adapter(
+        kind="pi_session",
+        launch=lambda: _pi_launch(),
+        # ``--session`` takes the id (or a unique prefix of it) and reopens the
+        # file; ``--session-id`` is NOT used here because it creates a session
+        # when the id is missing, which would hide a lost conversation.
+        resume=lambda session_id: ("--session", session_id),
+        discover=None,
+        exists=lambda handle, home: _pi_conversation_exists(handle, home),
+        fork=lambda session_id: _pi_fork(session_id),
+    ),
+    "omp": _Adapter(
+        kind="omp_session",
+        launch=_discovered_launch,
+        resume=lambda session_id: ("--resume", session_id),
+        discover=lambda cwd, started, taken, home: _discover_omp(cwd, started, taken, home),
+        exists=lambda handle, home: _omp_conversation_exists(handle, home),
     ),
     "antigravity": _Adapter(
         kind="agy_session",
@@ -1309,6 +1328,160 @@ def _discover_antigravity(
     # pane's — later ones belong to panes opened in the same batch.
     _stamp, session_id = ordered[0]
     return ResumeHandle(kind="agy_session", id=session_id, captured_at=_stamp)
+
+
+# ------------------------------------------------------------ Pi, Oh My Pi
+# Both keep one JSONL file per session, named ``<ISO time>_<session id>.jsonl``
+# under ``sessions/<folder key>/`` in their agent directory; the first record
+# (Oh My Pi writes a title record before it) is ``{"type": "session", "id",
+# "timestamp", "cwd"}``. Measured on pi 1.4.0 and omp 18.12.6, 2026-10-26.
+# The folder key is each CLI's own encoding of the cwd and the two disagree,
+# so lookups go by id (a UUID) and discovery reads the header's cwd instead.
+
+#: A user turn in a session file. Opening a pane writes the header and the
+#: model choice, so the file alone is no evidence of a conversation.
+_PI_USER_TURN_MARKER = b'"role":"user"'
+#: How many leading records may come before the session header.
+_PI_HEADER_LINES = 3
+
+
+def _pi_sessions_dir(home: Path | None, default_agent_dir: Path) -> Path:
+    """The sessions folder Pi or Oh My Pi writes to.
+
+    ``PI_CODING_AGENT_DIR`` moves the whole agent directory for both CLIs (Oh
+    My Pi kept Pi's variable name); ``PI_CODING_AGENT_SESSION_DIR`` moves only
+    Pi's sessions. ``home`` is an explicit agent directory.
+    """
+    if home is not None:
+        return Path(home).expanduser() / "sessions"
+    session_dir = os.environ.get("PI_CODING_AGENT_SESSION_DIR", "").strip()
+    if session_dir and default_agent_dir.parts[-2:] == (".pi", "agent"):
+        return Path(session_dir).expanduser()
+    agent_dir = os.environ.get("PI_CODING_AGENT_DIR", "").strip()
+    base = Path(agent_dir).expanduser() if agent_dir else default_agent_dir
+    return base / "sessions"
+
+
+def _pi_root(home: Path | None = None) -> Path:
+    return _pi_sessions_dir(home, Path.home() / ".pi" / "agent")
+
+
+def _omp_root(home: Path | None = None) -> Path:
+    return _pi_sessions_dir(home, Path.home() / ".omp" / "agent")
+
+
+def _pi_launch() -> tuple[tuple[str, ...], ResumeHandle | None]:
+    # ``--session-id`` opens the session with that exact id, creating it when
+    # it does not exist yet, so the id is assigned here like Claude Code's.
+    session_id = str(uuid4())
+    return (
+        ("--session-id", session_id),
+        ResumeHandle(kind="pi_session", id=session_id, captured_at=time.time()),
+    )
+
+
+def _pi_fork(source_id: str) -> tuple[tuple[str, ...], ResumeHandle | None]:
+    # ``--fork`` copies the conversation into a new session, and the copy takes
+    # the id passed beside it (measured: the new file records the source as its
+    # ``parentSession``).
+    session_id = str(uuid4())
+    return (
+        ("--fork", source_id, "--session-id", session_id),
+        ResumeHandle(kind="pi_session", id=session_id, captured_at=time.time()),
+    )
+
+
+def _pi_session_file(root: Path, session_id: str) -> Path | None:
+    if not session_id or "/" in session_id or "\\" in session_id or "*" in session_id:
+        return None
+    if not root.is_dir():
+        return None
+    return next(root.glob(f"*/*_{session_id}.jsonl"), None)
+
+
+def _pi_log_has_user_turn(log: Path) -> bool:
+    try:
+        with log.open("rb") as handle:
+            return any(_PI_USER_TURN_MARKER in line for line in handle)
+    except OSError:  # unreadable file = no conversation to resume; the pane starts fresh
+        return False
+
+
+def _pi_conversation_exists(handle: ResumeHandle, home: Path | None = None) -> bool:
+    found = _pi_session_file(_pi_root(home), handle.id)
+    return found is not None and _pi_log_has_user_turn(found)
+
+
+def _omp_conversation_exists(handle: ResumeHandle, home: Path | None = None) -> bool:
+    found = _pi_session_file(_omp_root(home), handle.id)
+    return found is not None and _pi_log_has_user_turn(found)
+
+
+def _pi_header(path: Path) -> dict[str, Any] | None:
+    """The ``session`` record at the top of a session file, or None."""
+    try:
+        with path.open("rb") as handle:
+            for _ in range(_PI_HEADER_LINES):
+                raw = handle.readline()
+                if not raw:
+                    return None
+                try:
+                    record = json.loads(raw.decode("utf-8", errors="replace"))
+                except ValueError:  # a torn or foreign line; the header may be the next one
+                    continue
+                if isinstance(record, dict) and record.get("type") == "session":
+                    return record
+    except OSError:  # unreadable file: not a session this pane can claim
+        return None
+    return None
+
+
+def _discover_omp(
+    cwd: str,
+    started_at: float,
+    taken: Collection[str] = (),
+    home: Path | None = None,
+) -> ResumeHandle | None:
+    """The session an Oh My Pi pane in ``cwd`` started at ``started_at`` created.
+
+    Oh My Pi takes no id at launch, so the same rule as every discovered CLI
+    applies: this folder, not claimed by another pane, the earliest session
+    with a user turn at or after the pane started.
+    """
+    root = _omp_root(home)
+    if not root.is_dir():
+        return None
+    claimed = {str(t) for t in taken}
+    floor = started_at - _SKEW_S
+    files: list[tuple[float, Path]] = []
+    for path in root.glob("*/*.jsonl"):
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:  # deleted between glob and stat: not a candidate
+            continue
+        if mtime >= floor:
+            files.append((mtime, path))
+    files.sort(key=lambda item: item[0], reverse=True)
+    candidates: list[tuple[float, str]] = []
+    for _mtime, path in files[:_MAX_CANDIDATES]:
+        header = _pi_header(path)
+        if header is None:
+            continue
+        session_id = str(header.get("id") or "").strip()
+        if not session_id or session_id in claimed:
+            continue
+        if not _same_folder(str(header.get("cwd") or ""), cwd):
+            continue
+        stamp = _parse_utc(header.get("timestamp"))
+        if stamp is None or stamp < floor:
+            continue
+        if not _pi_log_has_user_turn(path):
+            continue
+        candidates.append((stamp, session_id))
+    if not candidates:
+        return None
+    stamp, session_id = min(candidates, key=lambda item: item[0])
+    return ResumeHandle(kind="omp_session", id=session_id, captured_at=stamp)
 
 
 __all__ = [

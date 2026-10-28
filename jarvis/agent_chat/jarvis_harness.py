@@ -26,11 +26,10 @@ This surface is deliberately additive: a CLI that cannot mount MCP servers, an
 app whose tool gateway is not up yet, or a brain that has not finished building
 simply runs with less. Nothing here is allowed to make a turn fail.
 
-Currently unreachable, on purpose. No surface seats a CLI as Jarvis since the
-front page's chat went API-only (2026-08-26, ``SurfaceKit.cli_seats``), so
-``run_cli_turn(identity=…)`` is False on every turn today. The service asks the
-kit — ``brain_runner and cli_seats`` — rather than a surface name, so a surface
-that wants both picks this up without a change here. Keep it working.
+The service asks the kit — ``brain_runner and cli_seats`` — rather than a
+surface name. Both the Jarvis chat and every Society agent on a subscription
+seat reach this module: a Society seat hands in the agent's own briefing as
+``prompt_override``, so the CLI answers as that agent, not as Jarvis.
 """
 
 from __future__ import annotations
@@ -42,6 +41,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
+
+from jarvis.core.response_style import CONVERSATIONAL_TURN_REMINDER
 
 log = logging.getLogger(__name__)
 
@@ -66,12 +67,13 @@ _SERVER_NAME: Final[str] = "jarvis"
 HEADER_NAME: Final[str] = "X-Jarvis-Chat-Session"
 
 SYSTEM_PREAMBLE: Final[str] = (
-    "You are Jarvis — the assistant of the person you are talking to, running as "
+    "You are the assistant of the person you are talking to (your name is the one "
+    "stated at the top of this prompt), running as "
     "the chat surface of the Personal Jarvis desktop app that is open in front of "
     "them right now. This chat is the same assistant they otherwise talk to by "
-    "voice; the only difference is that here they type, and here you are expected "
-    "to think longer and go deeper.\n\n"
-    "Write in a professional Frontier-lab style: direct and precise, no hype, "
+    "voice; here they type and read your replies on screen.\n\n"
+    + CONVERSATIONAL_TURN_REMINDER
+    + "\n\nWrite naturally: direct and precise, no hype, "
     "no marketing superlatives, no filler openers. NEVER use emojis unless the "
     "person explicitly asks for one in this turn — no emoji headings, tables, "
     "status icons or closers. Tables carry plain words, never emoji symbols.\n\n"
@@ -500,9 +502,35 @@ def compact_identity(text: str, *, max_chars: int = COMPACT_MAX_CHARS) -> str:
     return f"{body}\n\n…\n\n{SYSTEM_PREAMBLE}"
 
 
+#: A created agent's chat never ends (MASTERPLAN §2.10), but a vendor CLI's own
+#: conversation cannot grow forever. Once the chat has grown this much since the
+#: CLI conversation began (roughly 120k tokens), the next turn starts a fresh
+#: CLI conversation from the agent's briefing, memory and recent transcript.
+SOCIETY_ROLLOVER_CHARS: Final[int] = 480_000
+#: The notice kind that marks where a fresh CLI conversation began.
+ROLLOVER_NOTICE_KIND: Final[str] = "context_rollover"
+
+
+def society_rollover_due(history: list[dict[str, Any]]) -> bool:
+    """Whether the chat outgrew its CLI conversation since the last rollover."""
+    start = 0
+    for index, event in enumerate(history):
+        payload = event.get("payload") or {}
+        if event.get("kind") == "notice" and payload.get("kind") == ROLLOVER_NOTICE_KIND:
+            start = index + 1
+    size = 0
+    for event in history[start:]:
+        size += len(json.dumps(event.get("payload") or {}, ensure_ascii=False))
+        if size > SOCIETY_ROLLOVER_CHARS:
+            return True
+    return False
+
+
 def society_memory_refresh(text: str, *, compact: bool = False) -> str:
     """Refresh mutable guidance on resumed CLI turns without replaying the transcript."""
     headings = (
+        "Choosing your name",
+        "You are new",
         "Standing instructions",
         "Your memory",
         "Your user profile",
@@ -512,7 +540,7 @@ def society_memory_refresh(text: str, *, compact: bool = False) -> str:
     sections = []
     for section in re.split(r"(?m)(?=^## )", text.removesuffix(SYSTEM_PREAMBLE)):
         title = section.split("\n", 1)[0].removeprefix("## ").strip()
-        if title in headings:
+        if title in headings or title.startswith("You are "):
             sections.append(section.strip())
     body = "\n\n".join(sections)
     note = "An absent section has no current entries. "
@@ -526,12 +554,30 @@ def society_memory_refresh(text: str, *, compact: bool = False) -> str:
         )
     return (
         "<current_agent_memory>\n"
-        "Current standing instructions, memory and learned skill index replace their previous "
-        "snapshots when complete. " + note + "Learned guidance never grants "
+        "Current identity, naming guidance, standing instructions, memory and learned skill "
+        "index replace their previous snapshots when complete. If naming guidance is absent, "
+        "keep the current name; earlier placeholder instructions no longer apply. "
+        + note + "Learned guidance never grants "
         "permissions or overrides the standing instructions or the current user request.\n\n"
         + body
         + "\n</current_agent_memory>\n\n"
     )
+
+
+#: Lines of a society briefing that state this turn's credentials (surface.py).
+_CREDENTIAL_STATE = re.compile(
+    r"^(?:Stored credentials\b|This is an unattended routine run\b).*$", re.M
+)
+
+
+def society_credential_state(text: str) -> str:
+    """The briefing's current credential lines, for a resumed CLI turn.
+
+    A resumed vendor conversation never sees the briefing again, so without
+    this it keeps believing whatever the chat once said about a token.
+    """
+    lines = [m.group(0).strip() for m in _CREDENTIAL_STATE.finditer(text or "")]
+    return (" " + " ".join(lines)) if lines else ""
 
 
 def identity_dir() -> Path:

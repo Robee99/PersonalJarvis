@@ -67,6 +67,7 @@ CATALOG_PROVIDERS: tuple[str, ...] = (
     "openrouter",
     "grok",
     "nvidia",
+    "nous",
     # Keyless local providers (2026-07-25): their "catalog" is the live list of
     # models the user's own server holds — ollama via the native /api/tags,
     # local-openai via the standard /v1/models.
@@ -100,6 +101,10 @@ class _CatalogEndpoint:
     path: str
     auth: str
     secret_slot: tuple[str, str] | None = None
+    #: The override is a bare server root (a pasted ``/v1`` is normalized
+    #: away) and ``path`` carries the full API path — the convention of a
+    #: card with a server-URL field.
+    server_root: bool = False
 
 
 # Every fetch resolves the provider's EFFECTIVE base URL through
@@ -127,6 +132,16 @@ _ENDPOINTS: dict[str, _CatalogEndpoint] = {
     # list), so ``bearer_opt`` like OpenRouter — the picker fills in before a key
     # is entered, and the key is attached when present.
     "nvidia": _CatalogEndpoint("https://integrate.api.nvidia.com/v1", "/models", "bearer_opt"),
+    # Nous Portal: OpenAI-compatible ``data[].id`` roster. ``bearer`` (key
+    # required) because an anonymous listing is not documented; without a key
+    # the picker shows the curated fallback below — except on a loopback
+    # gateway, which is fetched keyless (see ``_fetch_raw``). Server-root
+    # convention: the card's server-URL field stores a bare root, so the
+    # catalog appends ``/v1/models`` to it. ``:free`` ids get the free tag
+    # from ``is_free_model`` like OpenRouter's.
+    "nous": _CatalogEndpoint(
+        "https://inference-api.nousresearch.com", "/v1/models", "bearer", server_root=True
+    ),
     # Ollama: server-root convention (the plugin appends /v1 / /api itself);
     # vendor default resolves dynamically (OLLAMA_HOST → localhost:11434).
     "ollama": _CatalogEndpoint(None, "/api/tags", "none"),
@@ -172,12 +187,11 @@ class ModelInfo:
     # only source, and every new model generation shipped as "$0.00" until
     # someone noticed (2026-07-28 and 2026-08-18 audits).
     pricing: tuple[float, float] | None = None
-    # Local-server facts from Ollama's ``/api/show`` (``model_info.<arch>.
-    # context_length`` and ``details``). ``None`` for every gateway/cloud
-    # catalog — they carry no such manifest — so nothing downstream changes for
-    # them. Read by the Local models section and the per-model option sheet
-    # (native context caps the ``num_ctx`` chips).
+    # Declared token limits from provider catalogs or Ollama's /api/show.
+    # Unknown limits remain None; runtime adapters use conservative defaults.
+    # Native context also caps the local model option sheet's num_ctx chips.
     context_length: int | None = None
+    max_output_tokens: int | None = None
     quantization_level: str | None = None
     parameter_size: str | None = None
     # Release time (Unix seconds) where the catalog publishes one — OpenRouter
@@ -301,6 +315,19 @@ CURATED_MODELS: dict[str, list[ModelInfo]] = {
             ("qwen/qwen3.5-397b-a17b", "Qwen3.5 397B A17B"),
             ("meta/llama-4-maverick-17b-128e-instruct", "Llama 4 Maverick"),
             ("mistralai/mistral-large-3-675b-instruct-2512", "Mistral Large 3"),
+        ]
+    ),
+    # Nous Portal — the offline fallback when the live catalog is unreachable
+    # (no key yet). The free routes lead because they work on a free account;
+    # a valid key replaces this with the live /v1/models list.
+    "nous": _curated(
+        [
+            ("stepfun/step-3.7-flash:free", "Step 3.7 Flash (free)"),
+            ("poolside/laguna-s-2.1:free", "Laguna S 2.1 (free)"),
+            ("poolside/laguna-xs-2.1:free", "Laguna XS 2.1 (free)"),
+            ("inclusionai/ling-3.0-flash-sante:free", "Ling 3.0 Flash (free)"),
+            ("meituan/longcat-2.0:free", "LongCat 2.0 (free)"),
+            ("Hermes-4-70B", "Hermes 4 70B"),
         ]
     ),
 }
@@ -619,6 +646,9 @@ REALTIME_MODELS: dict[str, list[ModelInfo]] = {
 # capabilities guide, which now permits the complete 30-voice Gemini
 # prebuilt roster. Same names on both sockets (AI Studio vs Cloud project).
 REALTIME_VOICES: dict[str, list[ModelInfo]] = {
+    # GPT-Live chooses its voice at session startup. Keep the provider's
+    # documented default available even when the richer voice roster changes.
+    "openai-live": _ids(["marin"]),
     # A self-hosted server ships whatever voices its operator installed, and a
     # list of OpenAI voice names would be a guess the server then rejects. One
     # honest entry: the adapter sends no voice override and the server uses its
@@ -768,6 +798,34 @@ def _build_provider_catalog() -> dict[str, CatalogSpec]:
     # added below as curated-only — no /v1/models over their OAuth logins.
     for p in CATALOG_PROVIDERS:
         cat[p] = CatalogSpec("brain", "model", tuple(CURATED_MODELS.get(p, ())), live=True)
+    # Hermes remains the orchestrator for every choice. Qualify cloud/local
+    # models with their Hermes provider: a bare model id can be ignored by the
+    # gateway when direct-model requests are disabled. The free Nous roster was
+    # checked against its authenticated /v1/models catalog on 2026-10-05.
+    cat["hermes"] = CatalogSpec(
+        "brain",
+        "model",
+        tuple(
+            _curated(
+                [
+                    ("hermes-agent", "Hermes decides"),
+                    ("nous::stepfun/step-3.7-flash:free", "Step 3.7 Flash (Nous free)"),
+                    ("nous::poolside/laguna-s-2.1:free", "Laguna S 2.1 (Nous free)"),
+                    ("nous::poolside/laguna-xs-2.1:free", "Laguna XS 2.1 (Nous free)"),
+                    ("nous::meituan/longcat-2.0:free", "LongCat 2.0 (Nous free)"),
+                    ("nous::meituan/longcat-2.5-preview:free", "LongCat 2.5 Preview (Nous free)"),
+                    (
+                        "nous::inclusionai/ling-3.0-flash-sante:free",
+                        "Ling 3.0 Flash Sante (Nous free)",
+                    ),
+                    ("nous::inclusionai/ling-3.0-flash-fin:free", "Ling 3.0 Flash Fin (Nous free)"),
+                    ("local-qwen::qwen", "Qwen (local Hermes provider)"),
+                    ("local-gemma::gemma-4-12b-qat", "Gemma 12B QAT (local Hermes provider)"),
+                ]
+            )
+        ),
+        live=False,
+    )
     # Codex — Jarvis-Agent model catalog for the ChatGPT-login worker; no
     # /v1/models over OAuth, so curated only. The concrete GPT-5.6 choices are
     # the current Codex lineup; the still-supported GPT-5.5/5.4 choices remain
@@ -892,6 +950,8 @@ def parse_models_response(provider: str, payload: dict) -> list[ModelInfo]:
     """
     out: list[ModelInfo] = []
     if provider == "ollama":
+        from jarvis.brain.ollama_inventory import is_hidden_alias
+
         # Native /api/tags: {"models": [{"name": "qwen3.5:9b", ...}, ...]} —
         # the installed-model list of the user's own server. DOWNLOADED models
         # only: ``:cloud`` entries are ollama.com-proxied references, not
@@ -899,7 +959,7 @@ def parse_models_response(provider: str, payload: dict) -> list[ModelInfo]:
         # the machine (maintainer report 2026-07-25).
         for m in payload.get("models", []) or []:
             raw = (m.get("name") or "").strip()
-            if not raw or raw.endswith(":cloud") or m.get("remote"):
+            if not raw or raw.endswith(":cloud") or m.get("remote") or is_hidden_alias(raw):
                 continue
             out.append(ModelInfo(id=raw, label=raw))
         return out
@@ -917,7 +977,11 @@ def parse_models_response(provider: str, payload: dict) -> list[ModelInfo]:
             if not gemini_entry_serves_generate_content(m):
                 continue
             label = (m.get("displayName") or "").strip() or raw
-            out.append(ModelInfo(id=raw, label=label, output_modalities=_output_modalities(m)))
+            out.append(ModelInfo(
+                id=raw, label=label, output_modalities=_output_modalities(m),
+                context_length=_positive_limit(m.get("inputTokenLimit")),
+                max_output_tokens=_positive_limit(m.get("outputTokenLimit")),
+            ))
         return out
 
     # OpenAI-compatible shape (OpenAI / Anthropic / Grok / OpenRouter).
@@ -935,9 +999,19 @@ def parse_models_response(provider: str, payload: dict) -> list[ModelInfo]:
                 supported_parameters=_supported_parameters(m),
                 pricing=_pricing(m),
                 created=_created(m),
+                context_length=_positive_limit(m.get("context_length") or m.get("context_window")),
+                max_output_tokens=_positive_limit(
+                    m.get("max_output_tokens")
+                    or (m["top_provider"].get("max_completion_tokens")
+                        if isinstance(m.get("top_provider"), dict) else None)
+                ),
             )
         )
     return out
+
+
+def _positive_limit(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
 def _created(entry: dict) -> float | None:
@@ -1034,6 +1108,29 @@ def model_capabilities(provider: str, model_id: str) -> dict[str, bool | None]:
     except Exception:  # noqa: BLE001, S110 — missing/corrupt cache means unknown
         pass
     return {"vision": None, "tools": None}
+
+
+def model_thinking_switch(provider: str, model_id: str) -> bool:
+    """Whether the cached catalog says this model's server takes
+    ``chat_template_kwargs`` (so ``enable_thinking`` can be set per request).
+
+    Read synchronously from the same cache as :func:`model_capabilities`;
+    unknown is ``False``, so a server nobody vouched for is never sent a field
+    it may reject.
+    """
+    from jarvis.core import config as _cfg
+
+    cache_path = _cfg.DATA_DIR / "model_catalog_cache.json"
+    mid = (model_id or "").strip()
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # no cache yet means unknown, which means off
+        return False
+    for m in data.get(provider, {}).get("models", []):
+        if m.get("id") == mid:
+            params = m.get("supported_parameters")
+            return isinstance(params, list) and "chat_template_kwargs" in params
+    return False
 
 
 def pick_vision_model(provider: str) -> str | None:
@@ -1411,8 +1508,10 @@ STARRED_MODELS: frozenset[str] = frozenset(
 def is_free_model(model_id: str, label: str = "") -> bool:
     """True for a zero-cost model. OpenRouter marks these with a ``:free`` id
     suffix and a ``(free)`` label; both are checked so the flag survives whichever
-    signal a future catalog keeps."""
-    return ":free" in model_id.lower() or "(free)" in label.lower()
+    signal a future catalog keeps. A ``stealth/`` id is an unannounced preview
+    model (Nous Portal lists one among its free routes), served at no cost."""
+    low = model_id.lower()
+    return ":free" in low or low.startswith("stealth/") or "(free)" in label.lower()
 
 
 def is_starred_model(model_id: str) -> bool:
@@ -1741,6 +1840,8 @@ class ModelCatalog:
                             if isinstance(m.get("created"), int | float)
                             else None
                         ),
+                        context_length=_positive_limit(m.get("context_length")),
+                        max_output_tokens=_positive_limit(m.get("max_output_tokens")),
                     )
                     for m in entry.get("models", [])
                 ]
@@ -1775,6 +1876,10 @@ class ModelCatalog:
                         ),
                         **({"pricing": list(m.pricing)} if m.pricing is not None else {}),
                         **({"created": m.created} if m.created is not None else {}),
+                        **({"context_length": m.context_length}
+                           if m.context_length is not None else {}),
+                        **({"max_output_tokens": m.max_output_tokens}
+                           if m.max_output_tokens is not None else {}),
                     }
                     for m in models
                 ],
@@ -1799,6 +1904,21 @@ class ModelCatalog:
         return tuple(sort_models(provider, filter_brain_models(models)))
 
     # -- public API ----------------------------------------------------
+
+    def cached_model(self, provider: str, model: str) -> ModelInfo | None:
+        """Read existing model metadata without network or inference work."""
+        entry = self._cache.get(provider)
+        if entry is None:
+            return None
+        aliases = {model, f"{model}:latest"} if provider == "ollama" else {model}
+        return next((item for item in entry[1] if item.id in aliases), None)
+
+    async def invalidate(self, provider: str) -> None:
+        """Forget a previous endpoint's models and failed-fetch cooldown."""
+        async with self._lock:
+            self._cache.pop(provider, None)
+            self._fetch_failed_at.pop(provider, None)
+            await asyncio.to_thread(self._save_cache)
 
     async def list_models(self, provider: str, *, force_refresh: bool = False) -> CatalogResult:
         """Return the catalog for ``provider`` with an honest ``source`` flag.
@@ -1958,6 +2078,10 @@ class ModelCatalog:
 
         resolved = cfg.resolve_provider_endpoint(provider, vendor_default_base_url=ep.vendor_base)
         base = (resolved.base_url or "").rstrip("/")
+        if ep.server_root and base and not resolved.via_proxy:
+            from jarvis.plugins.brain.ollama import normalize_server_root
+
+            base = normalize_server_root(base)
         return base + ep.path
 
     async def _fetch_raw(self, provider: str) -> list[ModelInfo]:
@@ -1967,9 +2091,17 @@ class ModelCatalog:
         if provider not in _ENDPOINTS:
             raise ValueError(f"Unsupported provider: {provider}")
         ep = _ENDPOINTS[provider]
-        url = self._resolve_catalog_url(provider, ep)
-        key = cfg.get_provider_secret(provider)
-        if not key and ep.auth in ("x-api-key", "bearer", "query"):
+        url = await asyncio.to_thread(self._resolve_catalog_url, provider, ep)
+        # Windows Credential Manager is synchronous and can block when the
+        # desktop credential prompt/session is unavailable. This method is
+        # async, so never perform that read on the shared application loop.
+        key = await asyncio.to_thread(
+            lambda: cfg.resolve_provider_endpoint(provider).credential
+        )
+        # A server on this machine (a local gateway) is listed without a key;
+        # a remote catalog that requires one still refuses honestly.
+        needs_key = ep.auth in ("x-api-key", "bearer", "query")
+        if not key and needs_key and not cfg.is_loopback_url(url):
             raise RuntimeError(f"No API key configured for {provider}.")
         auth = ep.auth
 
@@ -1978,16 +2110,21 @@ class ModelCatalog:
         if auth == "x-api-key":
             headers = {"x-api-key": key or "", "anthropic-version": "2023-06-01"}
         elif auth == "bearer":
-            headers = {"Authorization": f"Bearer {key}"}
+            if key:
+                headers = {"Authorization": f"Bearer {key}"}
         elif auth == "bearer_opt":
             if key:
                 headers = {"Authorization": f"Bearer {key}"}
         elif auth == "query":
             params = {"key": key or ""}
-        elif auth == "none" and ep.secret_slot is not None:
+        elif auth == "none" and (key or ep.secret_slot is not None):
             # Keyless local server with an OPTIONAL stored key (e.g. vLLM
             # --api-key): attach it when present, stay anonymous otherwise.
-            optional = cfg.get_secret(*ep.secret_slot)
+            optional = key or (
+                await asyncio.to_thread(cfg.get_secret, *ep.secret_slot)
+                if ep.secret_slot
+                else None
+            )
             if optional:
                 headers = {"Authorization": f"Bearer {optional}"}
 
@@ -2009,12 +2146,19 @@ class ModelCatalog:
             resp.raise_for_status()
             models = parse_models_response(provider, resp.json())
             if provider == "ollama":
-                models = await self._enrich_ollama_capabilities(client, url, models)
+                models = await self._enrich_ollama_capabilities(
+                    client, url, models, headers=headers,
+                )
+            elif provider == "local-openai":
+                models = await self._enrich_llamacpp_capabilities(
+                    client, url, resp.json(), models, headers
+                )
             return models
 
     @staticmethod
     async def _enrich_ollama_capabilities(
-        client: httpx.AsyncClient, tags_url: str, models: list[ModelInfo]
+        client: httpx.AsyncClient, tags_url: str, models: list[ModelInfo],
+        *, headers: dict[str, str] | None = None,
     ) -> list[ModelInfo]:
         """Attach each download's DECLARED capabilities from ``/api/show``.
 
@@ -2041,7 +2185,9 @@ class ModelCatalog:
         async def probe(info: ModelInfo) -> ModelInfo | None:
             async with semaphore:
                 try:
-                    resp = await client.post(f"{root}/api/show", json={"model": info.id})
+                    resp = await client.post(
+                        f"{root}/api/show", json={"model": info.id}, headers=headers,
+                    )
                     resp.raise_for_status()
                     shown = resp.json()
                     caps = shown.get("capabilities")
@@ -2062,7 +2208,13 @@ class ModelCatalog:
                 return replace(
                     info,
                     input_modalities=("text", "image") if "vision" in declared else ("text",),
-                    supported_parameters=("tools",) if "tools" in declared else (),
+                    # Ollama names thinking models "thinking"; the gateway
+                    # catalogs call the same fact "reasoning".
+                    supported_parameters=tuple(
+                        param
+                        for param, capability in (("tools", "tools"), ("reasoning", "thinking"))
+                        if capability in declared
+                    ),
                     context_length=native_context_length(shown.get("model_info")),
                     quantization_level=str(details.get("quantization_level") or "") or None,
                     parameter_size=str(details.get("parameter_size") or "") or None,
@@ -2070,6 +2222,75 @@ class ModelCatalog:
 
         probed = await asyncio.gather(*(probe(m) for m in models))
         return [m for m in probed if m is not None]
+
+    @staticmethod
+    async def _enrich_llamacpp_capabilities(
+        client: httpx.AsyncClient,
+        models_url: str,
+        payload: dict,
+        models: list[ModelInfo],
+        headers: dict[str, str],
+    ) -> list[ModelInfo]:
+        """Attach a single-model llama.cpp server's modalities from ``/props``.
+
+        In router mode ``llama-server`` lists ``architecture.input_modalities``
+        per model, but in the far more common single-model mode its
+        ``/v1/models`` entry carries only ``owned_by: "llamacpp"`` and a
+        ``meta`` block. The model's image input is published on ``/props``
+        (``modalities.vision``) instead, so without this probe a vision model
+        served with its mmproj (Qwen3.6, Gemma 4) reached every consumer as
+        blind and Screen Context / Computer Use skipped the local brain.
+
+        Detection is on what the SERVER says it is (``owned_by``), never on a
+        model or provider name (AP-21). Only the one-model shape is probed:
+        ``/props`` describes the loaded model, so it cannot be attributed to an
+        entry of a multi-model list. Fail-open: a server that does not answer
+        keeps the entry unknown, exactly as before.
+        """
+        entries = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(entries, list) or len(entries) != 1 or len(models) != 1:
+            return models
+        entry = entries[0] if isinstance(entries[0], dict) else {}
+        if entry.get("owned_by") != "llamacpp" or models[0].input_modalities is not None:
+            return models
+        root = models_url[: -len("/v1/models")] if models_url.endswith("/v1/models") else models_url
+        try:
+            resp = await client.get(f"{root}/props", headers=headers, params={})
+            resp.raise_for_status()
+            props = resp.json()
+        except Exception as exc:  # noqa: BLE001 — unknown stays unknown (fail-open)
+            log.debug("llama.cpp: /props probe failed at %s: %s", root, exc)
+            return models
+        mods = props.get("modalities") if isinstance(props, dict) else None
+        if not isinstance(mods, dict):
+            return models
+        declared = ["text"]
+        if mods.get("vision") is True:
+            declared.append("image")
+        if mods.get("audio") is True:
+            declared.append("audio")
+        # llama-server passes ``chat_template_kwargs`` into the template on every
+        # request (documented in tools/server/README.md), which is how a
+        # thinking model's reasoning is switched off for a fast turn. The
+        # template's own caps say whether it calls tools; without caps the
+        # entry keeps claiming tools, as an unknown one did before.
+        caps = props.get("chat_template_caps")
+        params = ["chat_template_kwargs"]
+        if not isinstance(caps, dict) or caps.get("supports_tool_calls", True) is not False:
+            params.append("tools")
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        n_ctx = meta.get("n_ctx")
+        if not isinstance(n_ctx, int) or n_ctx <= 0:
+            settings = props.get("default_generation_settings")
+            n_ctx = settings.get("n_ctx") if isinstance(settings, dict) else None
+        return [
+            replace(
+                models[0],
+                input_modalities=tuple(declared),
+                context_length=n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None,
+                supported_parameters=models[0].supported_parameters or tuple(params),
+            )
+        ]
 
     # -- static fallback ----------------------------------------------
 

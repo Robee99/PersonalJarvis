@@ -80,6 +80,7 @@ from jarvis.cu.verify import (
     verify_click_focus_point,
     verify_typed_text,
 )
+from jarvis.harness.computer_use_context import CU_ORIGINAL_REQUEST_ENV_KEY
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +178,9 @@ _SYSTEM_BASE = (
     "unchanged.\n"
     "* Prefer click_element with an EXACT label from CLICKABLE ELEMENTS when "
     "one matches your target — it is more reliable than pixel coordinates.\n"
+    "* A missing accessibility label does not mean a visible control is absent. "
+    "If click_element cannot find it, inspect the fresh screenshot and use a "
+    "visually grounded click, or the exact available label. Never guess.\n"
     "* Never two pointer actions (click/drag) in one reply — after the first "
     "one the screen may change, so a second guess would be blind. A tight "
     "click -> type -> key sequence IS allowed.\n"
@@ -353,6 +357,61 @@ async def _publish_observation(bus: Any, frame: Frame, window_title: str) -> Non
         )
     except Exception:  # noqa: BLE001
         log.debug("ObservationCaptured publish failed", exc_info=True)
+
+
+#: Apps a goal can name. A mission typed into Jarvis's own window goes to the
+#: named app's open window first ("chrome is already opened, click on
+#: roberto"), and to the window under Jarvis when the goal names none.
+_NAMED_APPS: tuple[str, ...] = (
+    "chrome", "edge", "firefox", "brave", "opera", "notepad", "spotify",
+    "whatsapp", "telegram", "discord", "excel", "powerpoint", "outlook",
+    "teams", "vlc", "calculator", "obs",
+)
+
+
+def _named_app_window(goal: str, windows: list[Any], own_pid: int) -> Any | None:
+    """The open window of the first app the goal names, never Jarvis's own."""
+    from jarvis.platform import window_state  # noqa: PLC0415
+
+    words = set(re.findall(r"[a-z]+", goal.casefold()))
+    others = [w for w in windows if w.pid != own_pid and not w.minimized]
+    for app in _NAMED_APPS:
+        if app in words:
+            match = window_state._match_window(app, others)  # noqa: SLF001
+            if match is not None:
+                return match
+    return None
+
+
+def _step_off_jarvis(goal: str, platform: str = sys.platform, own_pid: int = 0) -> str:
+    """Bring the goal's app forward when Jarvis's own window has the focus.
+
+    Returns the raised window's title, or "" when Jarvis was not in front or
+    there was nothing to raise. Windows only: elsewhere Jarvis's window does
+    not take the focus from a typed chat the same way. Best-effort, never
+    raises.
+    """
+    import os  # noqa: PLC0415
+
+    if platform != "win32":
+        return ""
+    try:
+        from jarvis.platform import window_state  # noqa: PLC0415
+
+        own_pid = own_pid or os.getpid()
+        front = window_state.foreground_window()
+        if front is None or front.pid != own_pid:
+            return ""
+        target = _named_app_window(goal, window_state.list_windows(), own_pid)
+        if target is None:
+            target = window_state.window_behind_jarvis()
+        if target is None:
+            return ""
+        raised, _ = window_state.raise_window(target)
+        return str(target.title or "app window") if raised else ""
+    except Exception:  # noqa: BLE001 - the mission still starts on the current window
+        log.debug("[cu] stepping off Jarvis's window failed", exc_info=True)
+        return ""
 
 
 def _foreground_title() -> str:
@@ -742,6 +801,25 @@ def _summarize_action(action: dict[str, Any]) -> str:
     return str(kind)
 
 
+def _norm_words(text: str) -> str:
+    return " ".join(re.findall(r"\w+", (text or "").lower()))
+
+
+def _types_the_request(text: str, goal: str) -> bool:
+    """True when ``text`` is the user's request (or most of it), not content.
+
+    A goal may itself quote what to type ("type hello world"); the quoted part
+    is a strict, shorter piece of the goal and stays allowed. Typing the whole
+    request, or a long run of it, is the planner echoing the ask.
+    """
+    typed, wanted = _norm_words(text), _norm_words(goal)
+    if not typed or not wanted or len(typed.split()) < 3:
+        return False
+    if typed == wanted:
+        return True
+    return typed in wanted and len(typed) >= 0.8 * len(wanted)
+
+
 #: Zoom-refine crop half-side in input units. Near-square context crops
 #: preserve surroundings better than tight boxes (MEGA-GUI / UI-Zoomer).
 _REFINE_RADIUS = 220
@@ -943,6 +1021,15 @@ async def run_cu_loop(
     """CU v2 mission loop. Same contract as the legacy ``run_cu_loop``."""
     t_start = time.time_ns()
     goal = task.prompt
+    original_request = str((getattr(task, "env", None) or {}).get(
+        CU_ORIGINAL_REQUEST_ENV_KEY, "",
+    ) or "").strip()
+    request_context = ""
+    if original_request and original_request.casefold() != goal.strip().casefold():
+        request_context = (
+            "ORIGINAL USER REQUEST (context and constraints; do not repeat "
+            "steps already completed):\n" + original_request
+        )
     output_language = (getattr(task, "env", None) or {}).get(
         _OUTPUT_LANGUAGE_ENV_KEY,
     ) or None
@@ -1003,6 +1090,12 @@ async def run_cu_loop(
     except Exception:  # noqa: BLE001 — declaration is best-effort
         log.debug("[cu] DPI awareness declaration failed", exc_info=True)
 
+    stepped_to = await asyncio.to_thread(_step_off_jarvis, f"{goal}\n{original_request}")
+    if stepped_to:
+        log.info("[cu] Jarvis had the focus; brought %r forward", stepped_to[:60])
+        yield _progress(f"[cu] switched from Jarvis to {stepped_to[:60]}")
+        await asyncio.sleep(0.4)  # let the raised window paint before step 1
+
     max_steps = max(25, int(getattr(ctx, "step_budget", 100)))
     monitor_policy = str(getattr(ctx, "monitor", "primary") or "primary")
     main_monitor = str(getattr(ctx, "main_monitor", "primary") or "primary")
@@ -1030,6 +1123,10 @@ async def run_cu_loop(
     llm_failures = 0
     done_rejects = 0
     guard_hits = 0
+    # One "fail" right after the engine itself held an action back (stale
+    # frame, display change) is answered with a retry, not taken as final.
+    fail_after_refusal_retried = False
+    fail_after_label_miss_retried = False
     observe_failures = 0
     prev_thumb: bytes | None = None
     fruitless_steps = 0  # steps with zero successful actions on an unchanged screen
@@ -1289,6 +1386,8 @@ async def run_cu_loop(
                 + conv_mod.action_grammar_block()
             )
             lines = [f"GOAL: {goal}"]
+            if request_context:
+                lines.append(request_context)
             if prior_missions:
                 lines.append(
                     "EARLIER DESKTOP MISSIONS of this conversation (context "
@@ -1391,7 +1490,7 @@ async def run_cu_loop(
             if kind == "done":
                 done, proof = await _judge_done(
                     ctx,
-                    goal,
+                    f"{goal}\n\n{request_context}" if request_context else goal,
                     monitor,
                     image_cfg,
                     output_language,
@@ -1429,12 +1528,67 @@ async def run_cu_loop(
                 break  # re-perceive
 
             if kind == "fail":
+                last = history[-1] if history else ""
+                if (
+                    not fail_after_label_miss_retried
+                    and "click_element(" in last
+                    and " -> FAILED: No matching element" in last
+                ):
+                    fail_after_label_miss_retried = True
+                    msg = (
+                        f"step {step_idx}: fail NOT accepted yet — only the "
+                        "accessibility label lookup failed. Inspect this fresh "
+                        "screenshot for the target and try a visually grounded "
+                        "click or an exact available label. If the target is "
+                        "not visible or cannot be identified, fail honestly."
+                    )
+                    history.append(msg)
+                    log.info("[cu] %s", msg)
+                    yield _progress(f"[cu] {msg}")
+                    break  # re-perceive, preserving all pointer guards
+                if not fail_after_refusal_retried and (
+                    " REFUSED — the foreground window changed" in last
+                    or " REFUSED — the display layout changed" in last
+                    or " SKIPPED — only one pointer action" in last
+                ):
+                    # Live 2026-10-26: the engine held back click_element
+                    # ('roboto') for a stale frame, and Gemma read the
+                    # REFUSED line as its own failure and gave up. Nothing
+                    # had failed: say so once and let it act on the new frame.
+                    fail_after_refusal_retried = True
+                    msg = (
+                        f"step {step_idx}: fail NOT accepted — your previous "
+                        "action was only held back because the screen changed; "
+                        "it did not fail. Look at this fresh screenshot and "
+                        "do that action again if it still applies."
+                    )
+                    history.append(msg)
+                    log.info("[cu] %s", msg)
+                    yield _progress(f"[cu] {msg}")
+                    break  # re-perceive
                 reason = action.get("reason") or "the model gave up"
                 yield _final(
                     stderr=f"[cu] fail at step-{step_idx}: {reason}\n",
                     exit_code=_EXIT_FAIL,
                 )
                 return
+
+            if kind == "type" and any(
+                _types_the_request(str(action.get("text", "")), instruction)
+                for instruction in (goal, original_request) if instruction
+            ):
+                # Live 2026-10-26: "click on roboto" was TYPED into Chrome's
+                # profile picker verbatim. The request is what to do, never
+                # the text to enter.
+                msg = (
+                    f"step {step_idx}: {_summarize_action(action)} REFUSED — "
+                    "that is the user's request itself, not text to type. "
+                    "Carry the request out (click, open, select) instead."
+                )
+                history.append(msg)
+                log.info("[cu] %s", msg)
+                yield _progress(f"[cu] {msg}")
+                break  # re-perceive
 
             # -- pointer staleness rule -----------------------------------
             # Scrolling always targets the pointer's current surface. Treat it

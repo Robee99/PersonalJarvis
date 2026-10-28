@@ -85,6 +85,27 @@ def ensure_standard_streams() -> None:
                 pass
 
 
+# Set by an Electron host (the Claude desktop app, VS Code, Cursor) for the
+# Node.js helpers it spawns. When the app is started or restarted from inside
+# such a host, the variable reaches this process and every child it starts:
+# an Electron program launched with it set runs as bare Node.js and exits, so
+# "Open in VS Code" / "Open in Cursor" and opening Slack, Discord or any other
+# Electron app silently did nothing (found 2026-10-05: ``Code.exe --version``
+# printed a Node version). Nothing in this Python process needs it.
+_INHERITED_ELECTRON_VARS = ("ELECTRON_RUN_AS_NODE",)
+
+
+def drop_inherited_electron_node_mode() -> None:
+    """Remove the Electron "run as Node" switch this process may have inherited.
+
+    Call once at startup, before any child process is spawned, so programs the
+    app opens (directly, via ``os.startfile`` or via ``open``/``xdg-open``)
+    start as themselves. Harmless on every OS when the variable is absent.
+    """
+    for name in _INHERITED_ELECTRON_VARS:
+        os.environ.pop(name, None)
+
+
 def standard_error_is_visible() -> bool:
     """Can a human read what we write to ``sys.stderr``?
 
@@ -258,8 +279,21 @@ def ensure_normal_process_priority() -> str | None:
         return None
     try:
         import ctypes  # noqa: PLC0415 — Windows-only, keep it off the import floor
+        from ctypes import wintypes  # noqa: PLC0415 — Windows-only
 
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # ctypes defaults unannotated Win32 functions to c_int. On 64-bit
+        # Windows that truncates HANDLE values; GetCurrentProcess's pseudo-
+        # handle then reaches GetPriorityClass as 0x00000000FFFFFFFF instead
+        # of the pointer-sized -1 and terminates the process with
+        # STATUS_INVALID_HANDLE before the launcher can bind its API port.
+        kernel32.GetCurrentProcess.argtypes = []
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.GetPriorityClass.argtypes = [wintypes.HANDLE]
+        kernel32.GetPriorityClass.restype = wintypes.DWORD
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel32.SetPriorityClass.restype = wintypes.BOOL
+
         handle = kernel32.GetCurrentProcess()
         current = int(kernel32.GetPriorityClass(handle))
         if current not in (_BELOW_NORMAL_PRIORITY_CLASS, _IDLE_PRIORITY_CLASS):

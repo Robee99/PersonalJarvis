@@ -447,6 +447,10 @@ class SherpaBundle:
     #: that changes sex mid-conversation is BUG-086's shape).
     language: str = ""
     gender: str = ""
+    #: Which sherpa-onnx TTS model family loads it: "vits" (Piper) or "kokoro".
+    engine: str = "vits"
+    #: The speaker id inside a multi-speaker voice file (Kokoro ships eleven).
+    speaker: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +482,10 @@ class LocalProvider:
     #: usable voice for a multilingual assistant. Empty for Whisper, whose
     #: engine manages its own cache.
     bundles: tuple[str, ...] = ()
+    #: Bundles the installer also fetches, best effort, that readiness does not
+    #: wait for: the voice still speaks without them (the British "Jarvis"
+    #: voice, whose absence falls back to the English Piper voice).
+    extra_bundles: tuple[str, ...] = ()
 
 
 #: The Whisper checkpoint the local voice-input card offers. ONE checkpoint, not
@@ -499,7 +507,9 @@ FASTER_WHISPER_PACKAGE = "faster-whisper>=1.0"
 #: (PR #3671, released 2026-06-15). An older wheel loads the same files and
 #: then transcribes every language as English — a silent wrong answer, which is
 #: worse than a refusal, so the version is pinned rather than hoped for.
-SHERPA_ONNX_PACKAGE = "sherpa-onnx>=1.13.3"
+#: Capped below 2.0, whose wheel speaks no espeak voice (Kokoro and Piper
+#: synthesise silence), as found live on 2026-10-26.
+SHERPA_ONNX_PACKAGE = "sherpa-onnx>=1.13.3,<2"
 
 #: The multilingual Nemotron 3.5 streaming bundle, int8-quantised at a 560 ms
 #: chunk. Choices worth stating: MULTILINGUAL (the ``-en-`` sibling would
@@ -532,6 +542,10 @@ def _piper_bundle(name: str, *, label: str, language: str, gender: str) -> Sherp
     )
 
 
+#: The British English "Jarvis" voice: Kokoro 82M (sherpa-onnx's English
+#: export), speaker bm_george. One archive, about 330 MB.
+KOKORO_JARVIS_VOICE = "kokoro-en-v0_19"
+
 #: Every model bundle the local providers can use, keyed by id.
 #:
 #: The voices are picked for CONSISTENCY across languages rather than one at a
@@ -550,6 +564,24 @@ SHERPA_BUNDLES: dict[str, SherpaBundle] = {
             "tokens.txt",
         ),
         hf_repo=NEMOTRON_HF_REPO,
+    ),
+    # Listed before the Piper English voices on purpose: the voice pick takes
+    # the first INSTALLED voice of the turn's language and speaker profile, so
+    # once this is downloaded English answers use it, and until then Ryan
+    # speaks. Kokoro's George is a British male speaker (the "Jarvis" accent),
+    # and the most natural free voice that runs on a CPU: about 0.3x real time
+    # on a laptop, against Piper's 0.1x. Speaker 9 of kokoro-en-v0_19's eleven
+    # (af, af_bella, af_nicole, af_sarah, af_sky, am_adam, am_michael,
+    # bf_emma, bf_isabella, bm_george, bm_lewis). Apache-2.0 weights.
+    KOKORO_JARVIS_VOICE: SherpaBundle(
+        model_id=KOKORO_JARVIS_VOICE,
+        label="George (British English)",
+        required_files=("model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data"),
+        archive_url=f"{_PIPER_RELEASE}{KOKORO_JARVIS_VOICE}.tar.bz2",
+        language="en",
+        gender="masculine",
+        engine="kokoro",
+        speaker=9,
     ),
     "vits-piper-de_DE-thorsten-medium": _piper_bundle(
         "vits-piper-de_DE-thorsten-medium",
@@ -624,9 +656,10 @@ LOCAL_PROVIDERS: tuple[LocalProvider, ...] = (
         runtime="sherpa-onnx",
         model_id=PIPER_DEFAULT_VOICES[0],
         model_label="Piper voices",
-        download_size="about 200 MB",
+        download_size="about 200 MB, plus 330 MB for the British voice",
         pip_package=SHERPA_ONNX_PACKAGE,
         bundles=PIPER_DEFAULT_VOICES,
+        extra_bundles=(KOKORO_JARVIS_VOICE,),
     ),
 )
 

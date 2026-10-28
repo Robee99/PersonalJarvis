@@ -91,6 +91,75 @@ def request(command: str, arguments: str = "", rid: str = "r1") -> CommandReques
     return CommandRequest(command=command, arguments=arguments, request_id=rid)
 
 
+async def test_rejected_message_cannot_replace_a_newer_control_status() -> None:
+    svc = FakeService()
+    sid = seat(svc)
+    controls = ChatControls(svc, adapters=[])
+    first_revision = await controls.user_message(sid, "Same text")
+    second_revision = await controls.user_message(sid, "Same text")
+    assert first_revision is not None and second_revision is not None
+    assert second_revision > first_revision
+
+    await controls.message_rejected(sid, "Same text", first_revision)
+    state = controls.state(sid)
+    assert state.last_status == "running"
+    assert state.revision == second_revision
+
+    await controls.message_rejected(sid, "Same text", second_revision)
+    assert controls.state(sid).last_status == "failed"
+
+
+async def test_continue_preserves_a_rate_limited_question_and_its_approval_mode():
+    svc = FakeService()
+    sid = seat(svc)
+    question = "Was ist deine Aufgabe"
+    svc.store.append_event(sid, make_event("user_message", {"text": question}))
+    svc.store.append_event(
+        sid,
+        make_event(
+            "turn_finished",
+            {
+                "turn_id": "limited",
+                "status": "error",
+                "error": "HTTP 429; use /continue later",
+            },
+        ),
+    )
+    controls = ChatControls(svc, adapters=[])
+    result = await controls.execute(sid, request("continue"))
+    assert result.status == "started"
+    await svc.wait_turn(sid)
+    assert question in svc.sent[-1][0]
+    assert svc.store.list_events(sid)[0]["payload"]["text"] == question
+    session = svc.store.get_session(sid)
+    assert session.permission_mode == "ask" and session.provider == "openai"
+
+
+async def test_continue_names_why_a_delegated_failure_cannot_be_resumed():
+    svc = FakeService()
+    sid = seat(svc)
+    # A teammate's message: delivered without a user_message, then rate limited.
+    svc.store.append_event(sid, make_event("turn_started", {"turn_id": "incoming"}))
+    svc.store.append_event(
+        sid,
+        make_event("turn_finished", {"turn_id": "incoming", "status": "error", "error": "429"}),
+    )
+    controls = ChatControls(svc, adapters=[])
+    result = await controls.execute(sid, request("continue"))
+    assert result.status == "failed"
+    assert "not from you" in result.error
+    assert svc.sent == []
+
+
+async def test_continue_without_any_failure_says_there_is_nothing_to_continue():
+    svc = FakeService()
+    sid = seat(svc)
+    controls = ChatControls(svc, adapters=[])
+    result = await controls.execute(sid, request("continue"))
+    assert result.status == "failed"
+    assert result.error == "There is no interrupted task to continue"
+
+
 def test_plan_build_and_review_preserve_original_permissions_and_history() -> None:
     async def scenario() -> None:
         svc = FakeService()

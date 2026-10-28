@@ -18,6 +18,10 @@
    the agent card wants it for real. Two weights, same offline rule. */
 @import "@fontsource/pixelify-sans/400.css";
 @import "@fontsource/pixelify-sans/600.css";
+/* The Stark HUD's face (`font-hud`): squared, technical capitals. Offline too. */
+@import "@fontsource/rajdhani/500.css";
+@import "@fontsource/rajdhani/600.css";
+@import "@fontsource/rajdhani/700.css";
 
 @tailwind base;
 @tailwind components;
@@ -578,6 +582,10 @@ label,
        Memory = the wiki) carry their own gradient pair. */
     --chat-bubble-out: 212 92% 45%;
     --chat-bubble-out-foreground: 0 0% 100%;
+    /* An agent chat's incoming bubble: a neutral grey lift that sits
+       beside any agent colour the outgoing bubble wears. */
+    --chat-bubble-in: 0 0% 93%; /* #EDEDED */
+    --chat-bubble-in-foreground: 0 0% 9%;
     --soul-from: 347 83% 52%;
     --soul-to: 14 92% 56%;
     --memory-from: 224 86% 52%;
@@ -606,6 +614,9 @@ label,
        carried by weight and by --foreground-strong instead. 14.3:1 on paper. */
     --primary: 0 0% 9%;
     --primary-foreground: 0 0% 100%;
+    /* The chat Send control keeps its white fill in both appearances. */
+    --chat-send-background: 0 0% 100%;
+    --chat-send-foreground: 0 0% 9%;
     --accent: 212 92% 45%; /* #096CDC — the SIGNAL: links, focus, active, selected, info */
     --accent-foreground: 0 0% 100%;
     --ring: 212 92% 45%;
@@ -777,6 +788,8 @@ label,
     --user-bubble-foreground: 0 0% 98%;
     --chat-bubble-out: 212 100% 56%;
     --chat-bubble-out-foreground: 0 0% 100%;
+    --chat-bubble-in: 0 0% 15%; /* #262626 — see :root */
+    --chat-bubble-in-foreground: 0 0% 95%;
     --soul-from: 347 86% 56%;
     --soul-to: 14 94% 58%;
     --memory-from: 226 92% 60%;
@@ -867,6 +880,41 @@ label,
     --info-foreground: 0 0% 100%;
 
   }
+
+  /* --- The Jarvis look: the dark theme under an arc-reactor palette --------
+     Opt-in (Settings > Appearance > Jarvis). Same ladder and the same ink
+     contrast as dark; the neutral greys take a deep-navy cast and the one
+     signal hue becomes reactor cyan, so focus, links and selection glow. */
+  .dark.jarvis {
+    --background: 216 45% 5%; /* #070C13 */
+    --sidebar: 216 40% 7%;
+    --card: 214 34% 10%;
+    --secondary: 213 30% 14%;
+    --muted: 213 30% 14%;
+    --input: 213 30% 14%;
+    --popover: 214 34% 11%;
+    --user-bubble: 205 40% 18%;
+    --surface-raised: 212 28% 17%;
+    --border: 210 30% 17%;
+    --border-strong: 195 40% 28%;
+    --muted-foreground: 205 18% 66%;
+    --foreground-secondary: 205 20% 76%;
+    --accent: 188 92% 52%; /* #13D3EC — reactor cyan */
+    --accent-foreground: 216 45% 5%;
+    --ring: 188 92% 52%;
+    --chat-bubble-out: 188 85% 42%;
+    --accent-rgb: 19 211 236;
+    --shell-rgb: 7 12 19;
+    --stage-bg: 216 45% 5%;
+    --info: 188 92% 52%;
+  }
+
+  .dark.jarvis body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgb(19 211 236 / 0.10), transparent 60%),
+      radial-gradient(ellipse 60% 40% at 100% 110%, rgb(19 211 236 / 0.06), transparent 60%);
+    background-attachment: fixed;
+  }
 }
 
 @layer base {
@@ -949,6 +997,53 @@ body {
   --tw-prose-invert-links: hsl(var(--accent));
 }
 
+/* A docs guide reads from theme tokens only, so the same class list serves
+   light and dark; the plugin's inverted palette is pointed at the same
+   values. Body copy sits one step below heading ink. */
+.docs-prose {
+  --tw-prose-body: hsl(var(--foreground-secondary));
+  --tw-prose-headings: hsl(var(--foreground-strong));
+  --tw-prose-lead: hsl(var(--muted-foreground));
+  --tw-prose-bold: hsl(var(--foreground-strong));
+  --tw-prose-counters: hsl(var(--muted-foreground));
+  --tw-prose-bullets: hsl(var(--foreground-faint));
+  --tw-prose-hr: hsl(var(--border));
+  --tw-prose-quotes: hsl(var(--foreground-secondary));
+  --tw-prose-quote-borders: hsl(var(--border-strong));
+  --tw-prose-code: hsl(var(--foreground-strong));
+  --tw-prose-th-borders: hsl(var(--border));
+  --tw-prose-td-borders: hsl(var(--border));
+  --tw-prose-invert-body: hsl(var(--foreground-secondary));
+  --tw-prose-invert-headings: hsl(var(--foreground-strong));
+  --tw-prose-invert-bold: hsl(var(--foreground-strong));
+  --tw-prose-invert-bullets: hsl(var(--foreground-faint));
+  --tw-prose-invert-hr: hsl(var(--border));
+  --tw-prose-invert-code: hsl(var(--foreground-strong));
+  font-size: 16px;
+  line-height: 28px;
+  letter-spacing: 0;
+}
+
+/* Headings are wrapped in their own anchor (rehype-autolink-headings). The
+   anchor keeps heading ink and reveals a quiet "#" on hover, so a section
+   link can be copied without turning every heading into link colour. */
+.docs-prose :is(h2, h3, h4) > a {
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: none;
+}
+.docs-prose :is(h2, h3, h4) > a::after {
+  content: "#";
+  margin-left: 0.4em;
+  color: hsl(var(--foreground-faint));
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.docs-prose :is(h2, h3, h4):hover > a::after,
+.docs-prose :is(h2, h3, h4) > a:focus-visible::after {
+  opacity: 1;
+}
+
 /* Selecting text answers in the theme's own material, not the engine's
    default blue — the one saturated slab a black-and-white product used to
    show every time someone dragged across a sentence. */
@@ -1016,6 +1111,23 @@ body {
   }
   .jarvis-chat-out a {
     color: inherit;
+  }
+
+  /* An agent chat's bubbles: the agent's own reply in neutral grey; the
+     person's bubble is tinted inline with the agent's colour (bubbleTint). */
+  .jarvis-chat-in {
+    background: hsl(var(--chat-bubble-in));
+    color: hsl(var(--chat-bubble-in-foreground));
+  }
+  .jarvis-chat-tinted a {
+    color: inherit;
+  }
+  /* A capability chip in a tinted bubble takes the bubble's ink: a brand
+     hue on an arbitrary agent colour cannot promise contrast. */
+  .jarvis-chat-tinted .tool-identity,
+  .dark .jarvis-chat-tinted .tool-identity {
+    --tool-ink: currentColor;
+    --tool-wash: color-mix(in srgb, currentColor 16%, transparent);
   }
 
   /* The assistant card's vivid tiles: a gradient pair plus a soft light
@@ -1206,17 +1318,6 @@ body {
 }
 
 @layer utilities {
-  /* A transparent full-screen map must not reveal the app bar's labels under
-     its own toolbar. The shell controls stay hidden while the map is expanded
-     and return immediately when it restores. */
-  main:has(
-      > .jarvis-section-stage
-        #wiki-workspace[data-graph-expanded="true"]
-    )
-    > :not(.jarvis-section-stage) {
-    visibility: hidden;
-  }
-
   /* Staggered reveal on view mount — one orchestrated page-load moment.
      Pair with an inline `animationDelay` for the stagger cadence. */
   @keyframes profile-rise {
@@ -1284,6 +1385,31 @@ body {
     background-clip: text;
     color: transparent;
     animation: thinking-shimmer 2.4s linear infinite;
+  }
+  /* A live work-log line: a narrow band of full-contrast text slides across
+     the muted label in steps. Portions adapted from pingdotgg/t3code
+     @ e22c880 (apps/web/src/index.css), MIT License, Copyright (c) 2026
+     T3 Tools Inc. — third_party/t3code/LICENSE. */
+  @keyframes live-tool-shine {
+    from {
+      background-position: -4.5rem 0, 0 0;
+    }
+    to {
+      background-position: calc(100% + 4.5rem) 0, 0 0;
+    }
+  }
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    .live-tool-shine {
+      color: transparent;
+      background-image:
+        linear-gradient(to right, transparent, hsl(var(--foreground)), transparent),
+        linear-gradient(hsl(var(--muted-foreground)), hsl(var(--muted-foreground)));
+      background-size: 4.5rem 100%, 100% 100%;
+      background-repeat: no-repeat;
+      -webkit-background-clip: text;
+      background-clip: text;
+      animation: live-tool-shine 2.2s steps(30) infinite;
+    }
   }
   @keyframes thinking-ring {
     0% {
@@ -1989,6 +2115,17 @@ body {
     filter: drop-shadow(0 0 1.2px hsl(var(--background) / 0.85));
     animation: deck-orb-turn 10.8s linear infinite;
   }
+  /* The reactor avatar's coils (ReactorCore.tsx): they turn while a voice
+     state is live and stand still at rest, like the rest of the centre. */
+  .deck-reactor-coils {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    will-change: transform;
+    animation: deck-orb-turn 14s linear infinite;
+  }
+  .deck-reactor-coils[data-voice="idle"] {
+    animation: none;
+  }
   @keyframes deck-orb-turn {
     to {
       transform: rotate(360deg);
@@ -2000,6 +2137,7 @@ body {
     .deck-orb-corona,
     .deck-orb-ripple,
     .deck-orb-sweep,
+    .deck-reactor-coils,
     .deck-ring-orbit {
       animation: none !important;
     }
@@ -2873,4 +3011,378 @@ body {
     background-color: hsl(var(--diff-del-bg) / 0.2);
     color: hsl(var(--diff-del));
   }
+}
+
+/* --- The Stark HUD (HUD v4, 2026-10-18) -------------------------------------
+   The front page in the owner's concept-board look: deep navy glass, reactor
+   cyan, an orange hot colour for limits. The palette is scoped to the HUD, so
+   the chat and memory panels inside it take it on and the rest of the app
+   keeps its theme. */
+@layer components {
+  .stark-hud {
+    color-scheme: dark;
+    --background: 216 50% 4%;
+    --sidebar: 216 40% 7%;
+    --card: 214 40% 8%;
+    --card-foreground: 190 30% 94%;
+    --secondary: 210 40% 13%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 210 40% 13%;
+    --input: 210 40% 13%;
+    --popover: 214 40% 9%;
+    --popover-foreground: 0 0% 98%;
+    --surface-raised: 210 35% 15%;
+    --user-bubble: 200 50% 16%;
+    --user-bubble-foreground: 0 0% 98%;
+    --chat-bubble-in: 212 38% 12%;
+    --chat-bubble-in-foreground: 190 30% 94%;
+    --chat-bubble-out: 188 85% 38%;
+    --chat-bubble-out-foreground: 0 0% 100%;
+    --border: 194 55% 20%;
+    --border-strong: 190 65% 32%;
+    --foreground-strong: 0 0% 100%;
+    --foreground: 190 35% 94%;
+    --foreground-secondary: 196 25% 78%;
+    --muted-foreground: 196 22% 62%;
+    --faint-foreground: 200 15% 45%;
+    --foreground-faint: 200 15% 45%;
+    --primary: 199 100% 61%;
+    --primary-foreground: 216 50% 4%;
+    --accent: 199 100% 61%;
+    --accent-foreground: 216 50% 4%;
+    --ring: 199 100% 61%;
+    --accent-rgb: 56 189 255;
+    --stage-bg: 216 50% 4%;
+    --stark-hot: 26 100% 58%;
+    --stark-ok: 152 72% 48%;
+    position: relative;
+    isolation: isolate;
+    color: hsl(var(--foreground));
+    background:
+      radial-gradient(ellipse 55% 50% at 50% 44%, rgb(56 189 255 / 0.13), transparent 70%),
+      radial-gradient(ellipse 90% 60% at 50% 115%, rgb(20 110 240 / 0.12), transparent 65%),
+      hsl(216 55% 3.5%);
+  }
+  /* A faint blueprint grid and scan lines over the whole stage. */
+  .stark-hud::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgb(56 189 255 / 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(56 189 255 / 0.045) 1px, transparent 1px),
+      repeating-linear-gradient(0deg, rgb(0 0 0 / 0.18) 0 1px, transparent 1px 3px);
+    background-size: 44px 44px, 44px 44px, 100% 3px;
+    mask-image: radial-gradient(ellipse 85% 85% at 50% 45%, black 40%, transparent 100%);
+  }
+
+  .stark-panel {
+    position: relative;
+    background: linear-gradient(180deg, rgb(56 189 255 / 0.07), rgb(4 10 18 / 0.78) 38%);
+    border: 1px solid rgb(56 189 255 / 0.22);
+    box-shadow:
+      inset 0 1px 0 rgb(56 189 255 / 0.14),
+      inset 0 0 28px rgb(56 189 255 / 0.04),
+      0 12px 32px -14px rgb(0 0 0 / 0.75);
+    backdrop-filter: blur(6px);
+  }
+  .stark-panel::before,
+  .stark-panel::after {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    pointer-events: none;
+    border-color: hsl(var(--primary));
+    filter: drop-shadow(0 0 3px hsl(var(--primary)));
+  }
+  .stark-panel::before {
+    top: -1px;
+    left: -1px;
+    border-top: 2px solid;
+    border-left: 2px solid;
+  }
+  .stark-panel::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom: 2px solid;
+    border-right: 2px solid;
+  }
+  .stark-rule {
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.45), rgb(56 189 255 / 0.04));
+  }
+  .stark-tile {
+    border: 1px solid rgb(56 189 255 / 0.2);
+    background: linear-gradient(180deg, rgb(56 189 255 / 0.08), rgb(56 189 255 / 0.02));
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
+  }
+  .stark-tile:hover,
+  .stark-tile:focus-visible {
+    border-color: rgb(56 189 255 / 0.6);
+    background: rgb(56 189 255 / 0.14);
+    box-shadow: inset 0 0 18px rgb(56 189 255 / 0.18);
+  }
+  .stark-seg-beyond {
+    background: repeating-linear-gradient(135deg, rgb(56 189 255 / 0.12) 0 2px, transparent 2px 4px);
+  }
+  .stark-gauge-arc {
+    transition: stroke-dasharray 0.8s cubic-bezier(0.3, 0, 0.2, 1), stroke 0.3s;
+  }
+  .stark-title {
+    text-shadow:
+      0 0 10px rgb(56 189 255 / 0.7),
+      0 0 28px rgb(56 189 255 / 0.35);
+  }
+  .stark-listen-bar {
+    background: linear-gradient(90deg, transparent, rgb(56 189 255 / 0.1) 20%, rgb(56 189 255 / 0.1) 80%, transparent);
+    border-top: 1px solid rgb(56 189 255 / 0.3);
+    border-bottom: 1px solid rgb(56 189 255 / 0.3);
+  }
+
+  /* The halo's rings: each turns on its own clock around the centre. */
+  .stark-spin {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    animation: stark-spin 120s linear infinite;
+  }
+  .stark-spin-dial {
+    animation-duration: 140s;
+  }
+  .stark-spin-text {
+    animation-duration: 90s;
+    animation-direction: reverse;
+  }
+  .stark-spin-armour {
+    animation-duration: 46s;
+    animation-direction: reverse;
+  }
+  .stark-spin-race {
+    animation-duration: 30s;
+  }
+  .stark-halo[data-voice="listening"] .stark-spin-armour,
+  .stark-halo[data-voice="speaking"] .stark-spin-armour {
+    animation-duration: 12s;
+  }
+  .stark-halo[data-busy="true"] .stark-spin-armour,
+  .stark-halo[data-voice="thinking"] .stark-spin-armour {
+    animation-duration: 5s;
+  }
+  .stark-halo[data-voice="listening"] .stark-spin-race,
+  .stark-halo[data-busy="true"] .stark-spin-race {
+    animation-duration: 8s;
+  }
+  .stark-halo[data-voice="listening"] svg,
+  .stark-halo[data-voice="speaking"] svg,
+  .stark-halo[data-busy="true"] svg {
+    filter: drop-shadow(0 0 6px rgb(56 189 255 / 0.55));
+  }
+  .stark-ticker {
+    animation: stark-marquee 60s linear infinite;
+  }
+  .stark-ticker:hover {
+    animation-play-state: paused;
+  }
+
+  /* The rail: the Stark screens and the places people go from them. */
+  .stark-rail {
+    background: linear-gradient(90deg, rgb(4 12 22 / 0.95), rgb(6 16 28 / 0.8));
+    border-right: 1px solid rgb(56 189 255 / 0.14);
+    box-shadow: inset -1px 0 0 rgb(56 189 255 / 0.05);
+  }
+  @media (max-width: 1023px) {
+    .stark-rail {
+      border-right: 0;
+      border-bottom: 1px solid rgb(56 189 255 / 0.14);
+    }
+  }
+  .stark-rail-item {
+    color: hsl(var(--muted-foreground));
+    transition: color 0.2s;
+  }
+  .stark-rail-item:hover,
+  .stark-rail-item:focus-visible {
+    color: hsl(var(--foreground));
+    outline: none;
+  }
+  .stark-rail-item:focus-visible .stark-rail-ring {
+    box-shadow: 0 0 0 2px hsl(var(--primary));
+  }
+  .stark-rail-ring {
+    border: 1px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+  }
+  .stark-rail-item.is-current {
+    color: hsl(var(--foreground));
+  }
+  .stark-rail-item.is-current .stark-rail-ring {
+    color: hsl(var(--primary));
+    border-color: hsl(var(--primary) / 0.8);
+    background: radial-gradient(circle, rgb(56 189 255 / 0.25), rgb(56 189 255 / 0.04) 70%);
+    box-shadow: 0 0 14px rgb(56 189 255 / 0.55), inset 0 0 10px rgb(56 189 255 / 0.35);
+  }
+  @media (min-width: 1024px) {
+    .stark-rail-item.is-current::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 18%;
+      bottom: 18%;
+      width: 3px;
+      background: hsl(var(--primary));
+      box-shadow: 0 0 10px hsl(var(--primary));
+    }
+  }
+  .stark-rail-item.is-asleep .stark-rail-ring {
+    color: hsl(var(--stark-hot));
+    border-color: hsl(var(--stark-hot) / 0.7);
+  }
+
+  /* The header: the name's angular frame and the tool capsule. */
+  .stark-title-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0 4% 10px;
+    z-index: -1;
+    background: radial-gradient(ellipse 70% 90% at 50% 40%, rgb(56 189 255 / 0.1), transparent 70%);
+  }
+  .stark-toolbar {
+    border: 1px solid rgb(56 189 255 / 0.28);
+    background: rgb(6 16 28 / 0.7);
+  }
+  .stark-icon-ring {
+    border: 1px solid rgb(56 189 255 / 0.45);
+    background: rgb(56 189 255 / 0.08);
+  }
+
+  /* The command bar: a glass capsule with the microphone as its jewel. */
+  .stark-pill {
+    border: 1px solid rgb(56 189 255 / 0.35);
+    background: linear-gradient(180deg, rgb(10 26 44 / 0.85), rgb(4 12 22 / 0.92));
+    box-shadow:
+      0 0 0 1px rgb(56 189 255 / 0.06),
+      0 0 28px -6px rgb(56 189 255 / 0.35),
+      inset 0 1px 0 rgb(56 189 255 / 0.18);
+  }
+  .stark-pill::after {
+    content: "";
+    position: absolute;
+    left: 30%;
+    right: 30%;
+    bottom: -1px;
+    height: 2px;
+    background: hsl(var(--primary));
+    box-shadow: 0 0 12px hsl(var(--primary));
+  }
+  .stark-pill:focus-within {
+    border-color: rgb(56 189 255 / 0.65);
+  }
+  .stark-mic {
+    color: hsl(var(--primary));
+    border: 1.5px solid hsl(var(--primary) / 0.85);
+    background: radial-gradient(circle, rgb(56 189 255 / 0.22), rgb(4 12 22 / 0.9) 70%);
+    box-shadow:
+      0 0 0 6px rgb(56 189 255 / 0.07),
+      0 0 22px rgb(56 189 255 / 0.45),
+      inset 0 0 16px rgb(56 189 255 / 0.3);
+    transition: box-shadow 0.2s, color 0.2s, border-color 0.2s;
+  }
+  .stark-mic:hover:not(:disabled),
+  .stark-mic:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 6px rgb(56 189 255 / 0.14),
+      0 0 30px rgb(56 189 255 / 0.7),
+      inset 0 0 18px rgb(56 189 255 / 0.4);
+  }
+  .stark-mic.is-live {
+    color: hsl(var(--stark-hot));
+    border-color: hsl(var(--stark-hot));
+    box-shadow:
+      0 0 0 6px hsl(var(--stark-hot) / 0.12),
+      0 0 26px hsl(var(--stark-hot) / 0.6);
+  }
+  .stark-caption {
+    border-left: 2px solid hsl(var(--primary) / 0.7);
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.1), transparent 85%);
+  }
+  .stark-caption:hover,
+  .stark-caption:focus-visible {
+    outline: none;
+    background: linear-gradient(90deg, rgb(56 189 255 / 0.18), transparent 90%);
+  }
+
+  @keyframes stark-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes stark-marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  /* Reduced motion: the app-wide floor at the end of the reduce rules stops
+     these rings and the ticker with everything else. */
+}
+
+/* The rail's CUBE figure (components/rail/JarvisRail.tsx): a wireframe cube
+   turning inside the ring, in the theme's primary hue so it reads in light
+   and dark mode alike. Under reduced motion it stands still at an angle. */
+.rail-cube {
+  position: relative;
+  display: block;
+  width: 2.5rem;
+  height: 2.5rem;
+  transform-style: preserve-3d;
+  /* Where it rests when the app-wide reduced-motion floor stops the turn. */
+  transform: rotateX(-22deg) rotateY(35deg);
+  animation: rail-cube-turn 9s linear infinite;
+}
+.rail-cube-face {
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid hsl(var(--primary) / 0.8);
+  background: hsl(var(--primary) / 0.06);
+  box-shadow: 0 0 10px hsl(var(--primary) / 0.35) inset;
+}
+.rail-cube-front { transform: translateZ(1.25rem); }
+.rail-cube-back { transform: rotateY(180deg) translateZ(1.25rem); }
+.rail-cube-right { transform: rotateY(90deg) translateZ(1.25rem); }
+.rail-cube-left { transform: rotateY(-90deg) translateZ(1.25rem); }
+.rail-cube-top { transform: rotateX(90deg) translateZ(1.25rem); }
+.rail-cube-bottom { transform: rotateX(-90deg) translateZ(1.25rem); }
+@keyframes rail-cube-turn {
+  from { transform: rotateX(-22deg) rotateY(0deg); }
+  to { transform: rotateX(-22deg) rotateY(360deg); }
+}
+
+/* The rail's reactor cyan: the HUD's hue, deep enough to read on the light
+   theme and the HUD's own bright cyan on the dark one. */
+.rail-tone {
+  --primary: 199 90% 34%;
+  --ring: 199 90% 34%;
+}
+.dark .rail-tone {
+  --primary: 199 100% 61%;
+  --ring: 199 100% 61%;
+}
+/* Over a Stark screen the rail takes the HUD's own palette (the HUD is dark
+   in both themes), so it never floats light pills over the navy stage. */
+.rail-tone.rail-hud {
+  color-scheme: dark;
+  --background: 216 50% 4%;
+  --foreground: 190 35% 94%;
+  --secondary: 210 40% 13%;
+  --border: 194 55% 20%;
+  --border-strong: 190 65% 32%;
+  --muted-foreground: 196 22% 62%;
+  --primary: 199 100% 61%;
+  --ring: 199 100% 61%;
+  color: hsl(var(--foreground));
 }

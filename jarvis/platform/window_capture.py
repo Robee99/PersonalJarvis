@@ -208,6 +208,14 @@ def _grab_window_windows(
     try:
         rgb = image.convert("RGB")
         try:
+            # PrintWindow can succeed for GPU-rendered Chromium/WebView windows
+            # while returning only black pixels. Treat that backend as unavailable
+            # so the caller captures the visible foreground rectangle instead.
+            # Check all channels: dark interfaces with visible content survive.
+            if all(high <= 8 for _low, high in rgb.getextrema()):
+                _failure.reason = "blank_frame"
+                log.debug("HWND capture returned near-black pixels; using rectangle fallback")
+                return None
             return (expected, rgb.tobytes())
         finally:
             if rgb is not image:

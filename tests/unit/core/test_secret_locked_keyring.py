@@ -63,6 +63,7 @@ def locked_os_keyring(monkeypatch, tmp_path):
     monkeypatch.setattr(c, "_KEYRING_BACKEND_READY", False)
     if hasattr(c, "_FILE_BACKEND_ACTIVE"):
         monkeypatch.setattr(c, "_FILE_BACKEND_ACTIVE", False)
+    monkeypatch.setattr(c, "_PLATFORM_KEYRING_READ_UNAVAILABLE", False)
     try:
         yield tmp_path
     finally:

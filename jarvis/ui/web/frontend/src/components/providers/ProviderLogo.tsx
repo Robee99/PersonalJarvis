@@ -34,6 +34,8 @@ const PROVIDER_FAMILY_LOGOS: Record<string, FamilyLogo> = {
   claude: { file: "claude.svg", render: "colour" },
   contabo: { file: "contabo.svg", render: "mono" },
   elevenlabs: { file: "elevenlabs.svg", render: "mono" },
+  hermes: { file: "hermes.svg", render: "mono" },
+  openclaw: { file: "openclaw.svg", render: "colour" },
   gemini: { file: "gemini.svg", render: "colour" },
   "google-cloud": { file: "google-cloud.svg", render: "colour" },
   groq: { file: "groq.svg", render: "mono" },
@@ -42,6 +44,7 @@ const PROVIDER_FAMILY_LOGOS: Record<string, FamilyLogo> = {
   inworld: { file: "inworld.png", render: "own" },
   ionos: { file: "ionos.svg", render: "mono" },
   linode: { file: "linode.svg", render: "mono" },
+  nous: { file: "nous.svg", render: "mono" },
   nvidia: { file: "nvidia.svg", render: "colour" },
   ollama: { file: "ollama.svg", render: "mono" },
   openai: { file: "openai.svg", render: "mono" },
@@ -90,6 +93,11 @@ export function providerFamily(providerId: string): string | null {
   if (id.includes("cartesia")) return "cartesia";
   if (id.includes("inworld")) return "inworld";
   if (id.includes("nvidia") || id.includes("nemotron")) return "nvidia";
+  // Exact id: a substring test would claim unrelated ids such as "autonomous".
+  if (id === "nous") return "nous";
+  // Society agent runtimes (docs/agent-runtimes.md).
+  if (id === "hermes" || id === "hermes-cli") return "hermes";
+  if (id === "openclaw" || id === "openclaw-cli") return "openclaw";
   // Hosting providers (Settings -> Computers cloud import).
   if (id.includes("hostinger")) return "hostinger";
   if (id.includes("hetzner")) return "hetzner";

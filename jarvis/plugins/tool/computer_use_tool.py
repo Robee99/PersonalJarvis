@@ -30,7 +30,10 @@ from jarvis.brain.local_action_gate import HARNESS_NAME
 from jarvis.core.bus import EventBus
 from jarvis.core.events import AnnouncementRequested
 from jarvis.core.protocols import ExecutionContext, ToolResult
-from jarvis.harness.computer_use_context import peek_computer_use_context
+from jarvis.harness.computer_use_context import (
+    CU_ORIGINAL_REQUEST_ENV_KEY,
+    peek_computer_use_context,
+)
 from jarvis.harness.manager import HarnessManager
 from jarvis.plugins.tool.dispatch_to_harness import DispatchToHarnessTool
 from jarvis.voice.action_phrases import (
@@ -60,6 +63,14 @@ def _ctx_output_language(ctx: ExecutionContext) -> str:
     if stamped:
         return str(stamped)
     return resolve_phrase_language(None, ctx.user_utterance)
+
+
+def _mission_env(ctx: ExecutionContext) -> dict[str, str]:
+    """Preserve the request separately from the goal and its echo safeguards."""
+    return {
+        OUTPUT_LANGUAGE_ENV_KEY: _ctx_output_language(ctx),
+        CU_ORIGINAL_REQUEST_ENV_KEY: (ctx.user_utterance or "").strip(),
+    }
 
 
 #: Fallback ceiling for a single computer-use run, in seconds, used only when
@@ -179,7 +190,15 @@ class ComputerUseTool:
         # a goal is still running, a second dispatch of the SAME goal is
         # absorbed into the running one (the user still gets ONE ack and ONE
         # completion announcement). A DIFFERENT goal still runs concurrently.
-        self._active_goals: dict[str, asyncio.Task[None]] = {}
+        self._active_goals: dict[tuple[str, str], asyncio.Task[None]] = {}
+
+    @property
+    def execution_timeout_s(self) -> float:
+        """The ToolExecutor's deadline. With a bus the mission runs in the
+        background and this call returns at once; without one it runs inline
+        under the harness dispatch's own queue-plus-work allowance
+        (``3 * timeout_s``), which this backstop must never cut short."""
+        return 3 * self._timeout_s + 30.0
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         goal = (args.get("goal") or "").strip()
@@ -224,11 +243,14 @@ class ComputerUseTool:
                     "prompt": goal,
                     "timeout_s": self._timeout_s,
                     # Thread the turn's language to the verifier (proof readback).
-                    "env": {OUTPUT_LANGUAGE_ENV_KEY: _ctx_output_language(ctx)},
+                    "env": _mission_env(ctx),
                 },
                 ctx,
             )
-        goal_key = " ".join(goal.split()).casefold()
+        goal_key = (
+            " ".join(goal.split()).casefold(),
+            " ".join((ctx.user_utterance or "").split()).casefold(),
+        )
         running = self._active_goals.get(goal_key)
         if running is not None and not running.done():
             log.info(
@@ -282,7 +304,7 @@ class ComputerUseTool:
                     # Thread the turn's resolved language to the in-harness
                     # verifier so its `proof` is spoken back in the user's
                     # language, matching the frame (live bug 2026-06-27).
-                    "env": {OUTPUT_LANGUAGE_ENV_KEY: lang},
+                    "env": _mission_env(ctx),
                 },
                 ctx,
             )

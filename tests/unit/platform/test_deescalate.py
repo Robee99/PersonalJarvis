@@ -239,6 +239,24 @@ class TestBootTimeDeescalation:
         )
         assert calls == []
 
+    def test_uac_switched_off_boots_on_without_a_handover(self, monkeypatch):
+        """With UAC off the shell itself is elevated, so the copy would come
+        back just as elevated; on a frozen build it never showed a window."""
+        monkeypatch.setattr("sys.platform", "win32")
+        calls: list = []
+
+        assert (
+            maybe_relaunch_unelevated(
+                ["py"],
+                cwd=".",
+                _elevated=lambda: True,
+                _uac_disabled=lambda: True,
+                _spawn=_spawner(calls),
+            )
+            is None
+        )
+        assert calls == []
+
     def test_a_refused_handover_is_reported_not_swallowed(self, monkeypatch):
         """The caller must be able to tell "exit now" from "boot elevated and
         warn", so a failure has to come back as a result, never as ``None``."""

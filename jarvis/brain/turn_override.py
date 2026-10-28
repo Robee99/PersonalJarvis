@@ -137,6 +137,9 @@ class TurnOverride:
     allow_force_spawn: bool = False
     system_extra: str = ""
     loop_control: LoopControl | None = None
+    # A selected MCP operation that the user's message explicitly asked to
+    # use. The manager feeds this into its normal evidence gate for this turn.
+    required_tool_name: str = ""
     receipt: TurnReceipt = field(default_factory=TurnReceipt)
 
 

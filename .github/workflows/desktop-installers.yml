@@ -2,7 +2,7 @@
 #
 # What this produces, and why those exact names: the website's download button
 # and the in-app updater both resolve
-# https://github.com/PersonalJarvis/PersonalJarvis/releases/latest/download/<name>,
+# https://github.com/Dodaios/Dodaios/releases/latest/download/<name>,
 # so the asset names below are a contract, not a convention.
 #
 #   PersonalJarvis-Setup-x64.exe          Windows 10/11 x64, per-user Inno wizard
@@ -18,7 +18,8 @@
 # Signing is optional and secret-gated. GitHub forbids secrets in a job-level
 # `if:`, so the credentials are exported as job-level `env` and the steps test
 # the environment variable instead. Without the secrets the build still
-# produces a working, unsigned installer and says so.
+# produces a working, unsigned installer and says so. Windows can sign through
+# SignPath Foundation (docs/code-signing-policy.md) or Azure Trusted Signing.
 #
 # Action SHAs are pinned to 40-char commits (CVE-2025-30066 hardening), matching
 # the rest of this repo's workflows.
@@ -27,6 +28,8 @@ name: Desktop installers
 
 on:
   push:
+    branches:
+      - "jarvis/local-qwen-build"
     tags:
       - "v*.*.*"
   workflow_dispatch: {}
@@ -52,25 +55,49 @@ jobs:
     if: github.ref_type == 'tag'
     permissions:
       contents: read
-      checks: read
+      actions: read
     uses: ./.github/workflows/release-gate.yml
+
+  prepare:
+    name: prepare immutable release
+    needs: admit
+    if: github.ref_type == 'tag' && needs.admit.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Require an unpublished draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/ci/release_assets.py prepare --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+
 
   # ------------------------------------------------------------------ Windows
   windows:
-    needs: admit
+    needs: [admit, prepare]
     if: ${{ !failure() && !cancelled() }}
     name: Windows installer (x64)
     runs-on: windows-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # SignPath reads this job's metadata and downloads the unsigned artifact
+      # with the job token.
+      actions: read
     env:
       # Exported here (not per step) so the `if:` guards below can read them.
       # An empty value means "this fork has no signing secrets" - not an error.
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.AZURE_CODE_SIGNING_ACCOUNT }}
-      AZURE_CERTIFICATE_PROFILE: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+      HAS_AZURE_SIGNING: ${{ github.ref_type == 'tag' && secrets.AZURE_CLIENT_ID != '' }}
+      # SignPath Foundation (free OSS certificate). Needs the API token secret
+      # plus three repository variables; any one missing leaves the path dormant.
+      HAS_SIGNPATH_SIGNING: ${{ github.ref_type == 'tag' && secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != '' && vars.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -86,12 +113,18 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # A release build never restores a cache another run could have written.
+          package-manager-cache: false
 
       - name: Install Personal Jarvis (desktop + dev)
         shell: bash
         run: |
           python -m pip install --upgrade pip
           python scripts/pip_install.py -e ".[desktop,dev]"
+          # Echo cancellation for voice barge-in (jarvis/audio/echo_canceller.py):
+          # livekit's WebRTC audio processing module, Apache-2.0. Installed here
+          # rather than in [desktop] until uv.lock can be regenerated with it.
+          python -m pip install "livekit>=1.0,<2"
 
       - name: Install Inno Setup
         shell: pwsh
@@ -131,8 +164,75 @@ jobs:
       # Signs the SETUP executable. Windows attaches Mark-of-the-Web to the
       # downloaded installer, so this signature is the one SmartScreen weighs;
       # files the installer then writes inherit no MOTW.
+      #
+      # Two interchangeable paths; SignPath wins when both are configured so a
+      # file never carries two publishers' signatures.
+      #
+      # SignPath (docs/code-signing-policy.md): the unsigned setup is uploaded as
+      # a workflow artifact, SignPath fetches it from GitHub, checks it came from
+      # this workflow on a GitHub-hosted runner, waits for a human approval in
+      # SignPath, and hands back the signed file. The signature is verified
+      # before the signed file replaces the unsigned one.
+      - name: Stage the unsigned installer for SignPath
+        id: signpath-unsigned
+        if: env.HAS_SIGNPATH_SIGNING == 'true'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          # Deliberately outside the `installer-*` pattern the release job
+          # downloads: only the verified, signed file may ship.
+          name: signpath-unsigned-windows-x64
+          path: dist/installers/PersonalJarvis-Setup-x64.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the installer (SignPath Foundation)
+        if: env.HAS_SIGNPATH_SIGNING == 'true'
+        # pin: signpath/github-action-submit-signing-request@v3.0 - pinned by commit SHA.
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          # Empty means the project's default artifact configuration.
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.signpath-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # Every SignPath Foundation release needs a manual approval; give the
+          # approver an hour before the job gives up.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signpath-signed
+
+      - name: Verify the SignPath signature before it replaces the unsigned file
+        if: env.HAS_SIGNPATH_SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $signed = Join-Path $env:RUNNER_TEMP 'signpath-signed/PersonalJarvis-Setup-x64.exe'
+          if (-not (Test-Path -LiteralPath $signed)) {
+            Write-Host "::error::SignPath returned no PersonalJarvis-Setup-x64.exe"
+            Get-ChildItem -Recurse (Split-Path $signed) | ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $signed
+          Write-Host "status=$($signature.Status) signer=$($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid') {
+            Write-Host "::error::Authenticode signature is not valid: $($signature.StatusMessage)"
+            exit 1
+          }
+          if ($signature.SignerCertificate.Subject -notmatch 'SignPath Foundation') {
+            Write-Host "::error::Unexpected signer: $($signature.SignerCertificate.Subject)"
+            exit 1
+          }
+          if ($null -eq $signature.TimeStamperCertificate) {
+            Write-Host "::error::The signature carries no timestamp and would expire with the certificate"
+            exit 1
+          }
+          Copy-Item -LiteralPath $signed -Destination dist/installers/PersonalJarvis-Setup-x64.exe -Force
+          Write-Host "::notice::Installer signed by SignPath Foundation and verified."
+
       - name: Sign the installer (Azure Trusted Signing)
-        if: env.AZURE_CLIENT_ID != ''
+        if: env.HAS_AZURE_SIGNING == 'true' && env.HAS_SIGNPATH_SIGNING != 'true'
         # pin: azure/trusted-signing-action@v2.0.0 - pinned by commit SHA.
         uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82
         with:
@@ -149,10 +249,10 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Report the signing state honestly
-        if: env.AZURE_CLIENT_ID == ''
+        if: env.HAS_AZURE_SIGNING != 'true' && env.HAS_SIGNPATH_SIGNING != 'true'
         shell: bash
         run: |
-          echo "::notice::AZURE_* signing secrets are not configured - the installer is UNSIGNED."
+          echo "::notice::Neither SignPath (SIGNPATH_API_TOKEN + SIGNPATH_ORGANIZATION_ID/PROJECT_SLUG/SIGNING_POLICY_SLUG) nor AZURE_* signing is configured - the installer is UNSIGNED."
 
       - name: Upload the installer
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
@@ -164,11 +264,13 @@ jobs:
 
   # -------------------------------------------------------------------- macOS
   macos:
-    needs: admit
+    needs: [admit, prepare]
     if: ${{ !failure() && !cancelled() }}
     name: macOS installer (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      HAS_APPLE_SIGNING: ${{ github.ref_type == 'tag' && secrets.APPLE_SIGNING_IDENTITY != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -192,6 +294,8 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # A release build never restores a cache another run could have written.
+          package-manager-cache: false
 
       # desktop-macos carries the pyobjc frameworks the permission port loads by
       # name (AVFoundation, ScreenCaptureKit, ...); without them the frozen app
@@ -202,18 +306,43 @@ jobs:
           python -m pip install --upgrade pip
           python scripts/pip_install.py -e ".[desktop,desktop-macos,dev]"
 
+      - name: Import the Developer ID certificate into a temporary keychain
+        if: env.HAS_APPLE_SIGNING == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${APPLE_CERTIFICATE_P12_BASE64:?Signing requires the publisher certificate}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Signing requires the certificate password}"
+          keychain="$RUNNER_TEMP/jarvis-signing.keychain-db"
+          certificate="$RUNNER_TEMP/jarvis-signing.p12"
+          trap 'rm -f "$certificate"' EXIT
+          security list-keychains -d user | sed -e 's/^ *"//' -e 's/" *$//' > "$RUNNER_TEMP/jarvis-original-keychains.txt"
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | /usr/bin/base64 -D > "$certificate"
+          password="$(openssl rand -hex 32)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          keychains=("$keychain")
+          while IFS= read -r original; do keychains+=("$original"); done < "$RUNNER_TEMP/jarvis-original-keychains.txt"
+          security list-keychains -d user -s "${keychains[@]}"
+
       # The script decides what to do with these: with them it codesigns with
       # the Developer ID identity and notarizes; without them it ad-hoc signs,
       # skips notarization and prints a one-line notice.
       - name: Build the DMG
         shell: bash
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ github.ref_type == 'tag' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_ID || '' }}
+          APPLE_TEAM_ID: ${{ github.ref_type == 'tag' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ github.ref_type == 'tag' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
         run: |
           chmod +x packaging/macos/build.sh
           ./packaging/macos/build.sh
@@ -224,6 +353,23 @@ jobs:
       - name: Verify the app bundle can use macOS permissions
         shell: bash
         run: python scripts/ci/check_frozen_macos_app.py --app "dist/Personal Jarvis.app"
+
+      - name: Remove signing credentials even after a failed build
+        if: always() && env.HAS_APPLE_SIGNING == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          if [ -f "$RUNNER_TEMP/jarvis-original-keychains.txt" ]; then
+            keychains=()
+            while IFS= read -r original; do keychains+=("$original"); done < "$RUNNER_TEMP/jarvis-original-keychains.txt"
+            security list-keychains -d user -s "${keychains[@]}" || status=1
+          fi
+          if [ -f "$RUNNER_TEMP/jarvis-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/jarvis-signing.keychain-db" || status=1
+          fi
+          rm -f "$RUNNER_TEMP/jarvis-signing.p12" "$RUNNER_TEMP/jarvis-original-keychains.txt" || status=1
+          exit "$status"
 
       - name: Preserve native wheel diagnostics on build failure
         if: failure() && hashFiles('jarvis/assets/browser/wheels/*.whl') != ''
@@ -240,7 +386,9 @@ jobs:
           mount_point="${RUNNER_TEMP}/jarvis-browser-dmg"
           mkdir -p "$mount_point"
           hdiutil attach "dist/installers/PersonalJarvis-macOS-${{ matrix.arch }}.dmg" -readonly -nobrowse -mountpoint "$mount_point"
-          trap 'hdiutil detach "$mount_point"' EXIT
+          # The app's helpers can still hold the image for a moment after the
+          # check exits ("Resource busy"), so retry and then force the detach.
+          trap 'hdiutil detach "$mount_point" || { sleep 5; hdiutil detach -force "$mount_point"; }' EXIT
           python scripts/ci/check_frozen_browser.py --executable "$mount_point/Personal Jarvis.app/Contents/MacOS/PersonalJarvis" --output frozen-browser-proof
 
       - name: Preserve frozen browser evidence
@@ -264,7 +412,7 @@ jobs:
 
   # -------------------------------------------------------------------- Linux
   linux:
-    needs: admit
+    needs: [admit, prepare]
     if: ${{ !failure() && !cancelled() }}
     name: Linux installer (x86_64)
     # 22.04, not latest: an AppImage inherits the glibc of the machine that
@@ -298,6 +446,8 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          # A release build never restores a cache another run could have written.
+          package-manager-cache: false
 
       - name: Install Personal Jarvis (desktop + dev)
         shell: bash
@@ -354,6 +504,11 @@ jobs:
       # The ONLY job that may write to the repository, and only to attach the
       # assets it just verified.
       contents: write
+      # Build provenance for the native installers (tag runs only, see the
+      # attestation step): an OIDC identity for Sigstore plus the attestation
+      # store. Users check it with `gh attestation verify`.
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -427,20 +582,23 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Attach the installers to the GitHub Release
+      # SLSA build provenance for every native installer the manifest lists
+      # (.exe, both .dmg, .AppImage, .deb), signed with this workflow's OIDC
+      # identity and stored in GitHub's attestation store. It runs before the
+      # upload so a release can never carry installers without provenance, and
+      # it attests the final (signed) bytes that the OS jobs uploaded.
+      # Verify a download: gh attestation verify <file> -R Dodaios/Dodaios
+      - name: Attest build provenance for the native installers
         if: github.ref_type == 'tag'
-        # pin: softprops/action-gh-release@v3.0.2 - same pin as sign-installer.yml.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          # The release may already exist (sign-installer.yml runs on the same
-          # tag); this adds assets to it instead of replacing it.
-          fail_on_unmatched_files: true
-          files: |
-            installers/PersonalJarvis-Setup-x64.exe
-            installers/PersonalJarvis-macOS-arm64.dmg
-            installers/PersonalJarvis-macOS-x64.dmg
-            installers/PersonalJarvis-Linux-x86_64.AppImage
-            installers/personal-jarvis_*_amd64.deb
-            installers/installers-SHA256SUMS.txt
+          subject-checksums: installers/installers-SHA256SUMS.txt
+
+      - name: Upload verified installer assets without replacing published files
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/ci/release_assets.py upload
+          --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME"
+          --directory installers --profile desktop

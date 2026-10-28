@@ -14,12 +14,61 @@ from typing import Any
 
 import pytest
 
-from jarvis.agent_chat import runner_brain
+from jarvis.agent_chat import runner_api, runner_brain
 from jarvis.agent_chat.events import make_event
 from jarvis.agent_chat.service import AgentChatService
 from jarvis.agent_chat.store import AgentChatStore
+from jarvis.agent_chat.tool_catalog import ToolChoice
 from jarvis.core.bus import EventBus
+from jarvis.core.protocols import BrainDelta
 from tests.fakes.fake_brain_manager import FakeBrainManager
+
+
+async def test_live_webcam_reaches_selected_turn_without_persisting_pixels(tmp_path, monkeypatch, no_cli):
+    import base64
+    import io
+    import time
+    from PIL import Image
+    from jarvis.brain.manager import BrainManager
+    from jarvis.vision.live_inputs import LiveVisionFrame
+
+    class SeeingBrain(FakeBrainManager):
+        inject_images_for_turn = BrainManager.inject_images_for_turn
+        discard_images_for_turn = BrainManager.discard_images_for_turn
+        async def generate(self, text, **kwargs):
+            self.received = self._pending_turn_images[kwargs["trace_id"]]
+            return await super().generate(text, **kwargs)
+
+    data = io.BytesIO(); Image.new("RGB", (80, 60), "green").save(data, "JPEG")
+    encoded = base64.b64encode(data.getvalue()).decode()
+    bus = EventBus(); fake = SeeingBrain(bus=bus)
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(bus)
+    session = _jarvis_session(svc, tmp_path, provider="local-openai", model="local-vision")
+    queue = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "look at me", vision_frames=[LiveVisionFrame(
+        source="webcam", data_b64=encoded, captured_at_ms=time.time()*1000)], vision_nudge=True,
+        vision_silent=True)
+    events = await _drain(queue, "turn_finished")
+    assert events[-1]["payload"]["status"] == "done"
+    assert fake.received[0].data_b64 == encoded
+    override = fake.calls[0][1]["turn_override"]
+    assert "webcam" in override.system_extra
+    assert override.tool_filter({"dangerous": object()}) == {}
+    assert override.max_turns == 1
+    assert fake._pending_turn_images == {}
+    import json
+    assert encoded not in json.dumps(events)
+    assert encoded not in json.dumps(svc.store.list_events(session.session_id))
+
+
+async def test_live_frames_refuse_a_metered_provider_before_starting_a_turn(tmp_path, no_cli):
+    from jarvis.vision.live_inputs import LiveVisionFrame
+    svc = _service(None); session = _jarvis_session(svc, tmp_path)
+    with pytest.raises(ValueError, match="local model"):
+        await svc.send(session.session_id, "look at me", vision_frames=[LiveVisionFrame(
+            source="webcam", data_b64="x", captured_at_ms=1)])
+    assert not svc.is_running(session.session_id)
 
 
 async def _drain(q: asyncio.Queue, until_kind: str, wait_s: float = 5.0) -> list[dict[str, Any]]:
@@ -49,6 +98,30 @@ def _jarvis_session(svc: AgentChatService, tmp_path: Path, **over: Any):
     }
     kwargs.update(over)
     return svc.create_session(**kwargs)
+
+
+def test_explicit_mcp_request_selects_the_matching_operation() -> None:
+    class _Tool:
+        def __init__(self, description: str) -> None:
+            self.description = description
+
+    choices = [ToolChoice(
+        id="mcp:time", label="Time", description="Time utilities", category="mcp",
+        group="time", tool_names=("time/get_current_time", "time/convert_time"),
+    )]
+    tools = {
+        "time/get_current_time": _Tool("Get the current time in a timezone"),
+        "time/convert_time": _Tool("Convert a time between timezones"),
+    }
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time in Asia/Kolkata", choices, tools
+    ) == "time/get_current_time"
+    assert runner_brain._explicit_selected_mcp_tool(
+        "What is the current time?", choices, tools
+    ) == ""
+    assert runner_brain._explicit_selected_mcp_tool(
+        "Use the Time MCP to get the current time", choices * 2, tools
+    ) == ""
 
 
 @pytest.fixture
@@ -162,6 +235,70 @@ async def test_a_jarvis_turn_runs_on_the_brain_with_the_sessions_pick(
     assert override.tool_context["delivery"] == "written"
     assert fake.seen_key == "k-agent", "the Agents-tab key was the turn's credential"
     assert not svc.is_running(session.session_id)
+
+
+async def test_hermes_is_selectable_and_receives_the_main_chat_model_pick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.agent_chat.catalog import HERMES_FREE_MODELS, offers
+    from jarvis.agent_chat.service import resolve_runner
+
+    assert offers("jarvis", "hermes")
+    assert resolve_runner("hermes", surface="jarvis") == "brain"
+    assert resolve_runner("hermes", surface="agent") == "hermes-cli"
+    assert len(HERMES_FREE_MODELS) == 7
+    assert all(m.id.endswith(":free") for m in HERMES_FREE_MODELS)
+    selected = "nous::poolside/laguna-xs-2.1:free"
+    fake = FakeBrainManager()
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model=selected, effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "done"
+    override = fake.calls[0][1]["turn_override"]
+    assert (override.provider, override.model) == ("hermes", selected)
+
+
+async def test_a_provider_down_explanation_is_visible_but_finishes_as_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    fake = FakeBrainManager(reply="The agent could not finish this task.")
+    original = fake.generate
+
+    async def failed(text, **kwargs):
+        reply = await original(text, **kwargs)
+        kwargs["turn_override"].receipt.finish_reason = "error"
+        return reply
+
+    fake.generate = failed
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
+    svc = _service(None)
+    session = _jarvis_session(svc, tmp_path, provider="hermes", model="", effort="")
+    q = svc.subscribe(session.session_id)
+    await svc.send(session.session_id, "hello")
+    events = await _drain(q, "turn_finished")
+    assert events[-1]["payload"]["status"] == "error"
+    assert any(e["kind"] == "assistant_text" for e in events)
+
+
+async def test_main_chat_fetches_the_brain_catalog_for_the_agent_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from jarvis.ui.web import agent_chat_routes
+
+    async def no_cli_models():
+        return {}
+
+    monkeypatch.setattr(agent_chat_routes, "_live_cli_models", no_cli_models)
+    monkeypatch.setattr(agent_chat_routes, "_cli_installed", lambda _runner: False)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(agent_chat=_service(None))))
+    result = await agent_chat_routes.get_catalog(request, surface="jarvis")
+    row = next(p for p in result["providers"] if p["id"] == "hermes")
+    assert row["runner"] == "brain"
+    assert row["models_source"] == "live"
+    assert row["cli_installed"] is None
 
 
 async def test_history_is_the_sessions_own_log_in_prose(
@@ -292,6 +429,8 @@ async def test_no_brain_yet_is_a_clear_error_not_a_hang(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: None)
+    # The wait for a booting brain is bounded; it still ends in a clear error.
+    monkeypatch.setattr(runner_brain, "BRAIN_READY_WAIT_S", 0.0)
     svc = _service(None)
     session = _jarvis_session(svc, tmp_path)
     q = svc.subscribe(session.session_id)
@@ -305,6 +444,12 @@ async def test_the_agent_surface_still_runs_the_api_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_cli
 ):
     """A coding-agent session never reaches the brain runner."""
+    async def complete(request):
+        yield BrainDelta(content="API runner reply")
+
+    monkeypatch.setattr(
+        runner_api, "build_brain", lambda *args: SimpleNamespace(complete=complete),
+    )
     fake = FakeBrainManager()
     monkeypatch.setattr(runner_brain, "brain_manager", lambda: fake)
     svc = _service(None)
@@ -344,3 +489,21 @@ def test_step_mirror_ignores_another_turns_events():
         assert rows[0][1]["name"] == "Read"
 
     asyncio.run(scenario())
+
+
+async def test_a_message_sent_while_jarvis_boots_waits_for_the_brain(monkeypatch):
+    """Live 2026-10-27: nine sends right after a restart each failed at once."""
+    ready = SimpleNamespace(generate=lambda *a, **k: None)
+    answers = iter([None, None, ready])
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: next(answers))
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    assert await runner_brain._brain_when_ready(wait_s=60) is ready
+
+
+async def test_a_brain_that_never_comes_up_still_ends_the_wait(monkeypatch):
+    monkeypatch.setattr(runner_brain, "brain_manager", lambda: None)
+    assert await runner_brain._brain_when_ready(wait_s=0) is None
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None

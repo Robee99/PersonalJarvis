@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Jarvis AI Council",
+  "version": "1.0.3.1",
+  "description": "ChatGPT and Gemini debate in your signed-in tabs, Claude judges. No API keys. Based on Local AI Council (MIT).",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "side_panel/side_panel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "sidePanel",
+    "tabs",
+    "scripting",
+    "storage",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*",
+    "https://claude.ai/*",
+    "https://grok.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://gemini.google.com/*",
+        "https://claude.ai/*",
+        "https://grok.com/*"
+      ],
+      "js": [
+        "content_scripts/ai_injector.js"
+      ],
+      "run_at": "document_end"
+    }
+  ]
+}

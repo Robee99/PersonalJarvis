@@ -437,8 +437,8 @@ _ES_ACTION = (
     r"mueve|cambia|navega|amplia|reduce)\w*"
 )
 
-# German separable verbs park the particle at the END of the clause: "mach das
-# Fenster ZU", "mach den Browser AUF", "fahr den Rechner RUNTER". A matcher
+# German separable verbs park the particle at the END of the clause: "mach das (i18n-allow: German speech examples)
+# Fenster ZU", "mach den Browser AUF", "fahr den Rechner RUNTER". A matcher (i18n-allow: German speech examples)
 # anchored on the clause-INITIAL token therefore sees a bare stem, and "mach"
 # on its own is the most generic verb the language has — the particle is what
 # makes the clause a command. Missing that shape read "Schau mal hier. Mach das
@@ -457,12 +457,12 @@ _DE_SEPARABLE_STEM = (  # i18n-allow: German speech-input matching data
 # "los" are deliberately absent: they open ordinary phrases far more often than
 # they close a command.
 _DE_SEPARABLE_PARTICLE = (  # i18n-allow: German speech-input matching data
-    r"(?:auf|zu|an|aus|ein|um|runter|hoch|weg|rein|raus|zurueck)"
+    r"(?:auf|zu|an|aus|ein|um|runter|hoch|weg|rein|raus|zurueck)"  # i18n-allow: German particle vocabulary
 )
 
 # The particle must CLOSE its clause, spoken fillers and a trailing comma
 # aside. Mid-clause the very same token is a preposition, and that is the
-# reading this boundary must never swallow: "Was ist da AUF dem Bildschirm?"
+# reading this boundary must never swallow: "Was ist da AUF dem Bildschirm?" (i18n-allow: German speech example)
 # is a question about the screen, not an order to operate it.
 _DE_PARTICLE_CLAUSE_END = (  # i18n-allow: German speech-input matching data
     r"(?:\s+(?:bitte|mal|kurz|jetzt|nochmal|danke))*\s*(?:$|[,.;:!?])"
@@ -495,9 +495,9 @@ _OPERATION_EXPLANATION_CLAUSE_RE: re.Pattern[str] = re.compile(
 _SCREEN_OPERATION_CLAUSE_RE: re.Pattern[str] = re.compile(
     # English imperatives and request forms, including "would you mind clicking".
     rf"^(?:please\s+)?{_EN_ACTION}\b"
-    rf"|^(?:can|could|will)\s+you\s+(?:please\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
+    rf"|^(?:can|could|will)\s+(?:you|u)\s+(?:please\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
     rf"|^would\s+you\s+(?:please\s+)?(?:mind\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
-    rf"|^i\s+(?:want|need)\s+you\s+to\s+[^.?!]{{0,72}}?{_EN_ACTION}\b"
+    rf"|\bi\s+(?:want|need)\s+(?:you|u)\s+(?:to\s+)?[^.?!]{{0,72}}?{_EN_ACTION}\b"
     # German: allow the object before the final infinitive ("Bitte den Knopf anklicken").
     rf"|^(?:bitte\s+)?{_DE_ACTION}\b"  # i18n-allow
     rf"|^bitte\s+[^.?!]{{0,96}}?{_DE_ACTION}\b"  # i18n-allow
@@ -594,6 +594,37 @@ _AMBIGUOUS_RE: re.Pattern[str] = re.compile(
 )
 
 
+# ReALM-style references (Apple, 2024): "call this number", "email that
+# address", "open the second link". The thing named is on the screen, so the
+# turn looks at it and the laid-out screen text numbers it
+# (jarvis/screen_context/screen_parse.py). Live 2026-10-25 none of these
+# reached the screen at all. Code and errors stay out: "fix this error" is
+# usually about text already in the conversation.
+_ENTITY_NOUN = (
+    r"(?:phone\s+)?(?:number|phone)|e-?mail(?:\s+address)?|address|link|url"
+    r"|web\s*site|web\s*page|page|article|message|post|tweet|event|meeting"
+    r"|appointment|invite|invitation|contact|price|item|order|video|song"
+    r"|button|option|field|result"
+)
+_ENTITY_REFERENCE_RE: re.Pattern[str] = re.compile(
+    rf"\b(?:this|that|these|those)\s+(?:{_ENTITY_NOUN})s?\b"
+    rf"|\bthe\s+(?:first|second|third|fourth|fifth|last|top|bottom|\d+(?:st|nd|rd|th))"
+    rf"\s+(?:{_ENTITY_NOUN}|one)s?\b",
+    re.IGNORECASE,
+)
+#: The thing is in the request or the conversation, not on the screen:
+#: "save this number 98765 43210", "that meeting we discussed", or a question
+#: about how to do something rather than a request to do it now.
+_ENTITY_ELSEWHERE_RE: re.Pattern[str] = re.compile(
+    r"\d[\d\s().-]{6,}\d|[\w.+-]+@[\w-]+\.|https?://|www\."
+    r"|\b(?:we|you|i)\s+(?:discussed|talked\s+about|mentioned|said|told\s+you|sent\s+you)\b"
+    r"|\b(?:earlier|before|last\s+time|yesterday)\b"
+    r"|\bdid\s+you\s+(?:get|receive)\b"
+    r"|\bhow\s+(?:do|can|could|would|should)\s+(?:i|you|we)\b|\bhow\s+to\b",
+    re.IGNORECASE,
+)
+
+
 def _evidence(pattern: re.Pattern[str], text: str) -> tuple[str, ...]:
     """Up to ``_MAX_EVIDENCE`` matched fragments, whitespace-collapsed."""
     found: list[str] = []
@@ -651,6 +682,12 @@ def classify(text: str, *, locale: str = "") -> IntentVerdict:
     if screen_hits:
         return IntentVerdict(
             intent=VisualIntent.SCREEN, evidence=screen_hits, locale=locale
+        )
+
+    entity_hits = _evidence(_ENTITY_REFERENCE_RE, normalized)
+    if entity_hits and not _ENTITY_ELSEWHERE_RE.search(normalized):
+        return IntentVerdict(
+            intent=VisualIntent.SCREEN, evidence=entity_hits, locale=locale
         )
 
     ambiguous_hits = _evidence(_AMBIGUOUS_RE, normalized)
@@ -727,9 +764,9 @@ _CAPTURE_UNAVAILABLE_REPLY: dict[str, dict[str, str]] = {
             "action was started."
         ),
         "wayland_portal": (
-            "Screen capture is unavailable in this Wayland session. Install and "
-            "enable an XDG desktop portal for your compositor, or sign in with "
-            "an X11 session, then ask again. No desktop action was started."
+            "Screen capture does not work in a Wayland session yet. Sign in "
+            "with an X11 session, for example GNOME on Xorg, then ask again. "
+            "No desktop action was started."
         ),
         "no_display": (
             "I cannot access an interactive display on this device. Sign in to "
@@ -749,10 +786,10 @@ _CAPTURE_UNAVAILABLE_REPLY: dict[str, dict[str, str]] = {
             "Desktop-Aktion gestartet."  # i18n-allow
         ),
         "wayland_portal": (
-            "Die Bildschirmaufnahme ist in dieser Wayland-Sitzung nicht "  # i18n-allow
-            "verfügbar. Installiere und aktiviere ein XDG-Desktop-Portal für "  # i18n-allow
-            "deinen Compositor oder melde dich über X11 an und frag noch "  # i18n-allow
-            "einmal. Es wurde keine Desktop-Aktion gestartet."  # i18n-allow
+            "Die Bildschirmaufnahme funktioniert in einer Wayland-Sitzung "  # i18n-allow
+            "noch nicht. Melde dich mit einer X11-Sitzung an, zum Beispiel "  # i18n-allow
+            "GNOME on Xorg, und frag noch einmal. Es wurde keine "  # i18n-allow
+            "Desktop-Aktion gestartet."  # i18n-allow
         ),
         "no_display": (
             "Ich kann auf diesem Gerät gerade keine interaktive Anzeige "  # i18n-allow
@@ -773,10 +810,9 @@ _CAPTURE_UNAVAILABLE_REPLY: dict[str, dict[str, str]] = {
             "pedirlo. No se inició ninguna acción de escritorio."
         ),
         "wayland_portal": (
-            "La captura de pantalla no está disponible en esta sesión de "
-            "Wayland. Instala y activa un portal de escritorio XDG para tu "
-            "compositor, o inicia una sesión X11, y vuelve a pedirlo. No se "
-            "inició ninguna acción de escritorio."
+            "La captura de pantalla todavía no funciona en una sesión de "
+            "Wayland. Inicia una sesión X11, por ejemplo GNOME on Xorg, y "
+            "vuelve a pedirlo. No se inició ninguna acción de escritorio."
         ),
         "no_display": (
             "No puedo acceder a una pantalla interactiva en este dispositivo. "

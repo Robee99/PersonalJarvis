@@ -286,6 +286,11 @@ class RegistryCommandTool:
         self._runtime = runtime
         self.name: str = command.id
         self.risk_tier: str = "ask" if command.dangerous else "monitor"
+        from jarvis.app_actions.catalog import is_provider_switch
+
+        self.requires_explicit_confirmation = bool(
+            command.dangerous and is_provider_switch(command.method, command.path)
+        )
         narrowed = _ONLY_ASKS_FOR.get(command.id)
         note = (
             f" Requires the user's spoken confirmation when {narrowed[0]} is "
@@ -325,7 +330,7 @@ class RegistryCommandTool:
                 if tier == "block":
                     from jarvis.app_actions import history
 
-                    history.record(entry.id, "blocked", "Blocked in Jarvis actions", via=self.name)
+                    history.record(entry.id, "blocked", "Blocked by the action policy", via=self.name)
                 return tier
         return base
 

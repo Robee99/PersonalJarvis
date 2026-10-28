@@ -7,10 +7,8 @@ vi.mock("@/i18n", () => ({
     `${template}${Object.values(vars).join("|")}`,
 }));
 
-const { switchBrainProvider } = vi.hoisted(() => ({
-  switchBrainProvider: vi.fn(async (_id: string) => undefined),
-}));
-vi.mock("@/hooks/useProviders", () => ({ switchBrainProvider }));
+import { useEventStore } from "@/store/events";
+import { useSettingsPage } from "@/store/settingsPage";
 
 import { BrainSwitchCard, SetupProposalCard } from "./SetupProposalCard";
 import { proposalHash, type Proposal } from "./assistantProposal";
@@ -79,12 +77,21 @@ describe("SetupProposalCard", () => {
 });
 
 describe("BrainSwitchCard", () => {
-  it("switches the brain only on the user's click", async () => {
-    render(<BrainSwitchCard provider="ollama" why="Runs locally." serverLabel="Ollama" />);
-    expect(switchBrainProvider).not.toHaveBeenCalled();
+  it("links to Settings › Model instead of switching the brain", () => {
+    const sent: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      sent.push(`${init?.method ?? "GET"} ${url}`);
+      return new Response("{}", { status: 200 });
+    });
+    useSettingsPage.setState({ page: null });
+    render(<BrainSwitchCard why="Runs locally." serverLabel="Ollama" />);
+    expect(screen.getByText(/brain_suggest/)).toBeDefined();
+
     fireEvent.click(screen.getByTestId("brain-switch-run"));
-    await waitFor(() => expect(switchBrainProvider).toHaveBeenCalledWith("ollama"));
-    await waitFor(() => expect(screen.queryByTestId("brain-switch-run")).toBeNull());
-    expect(screen.getByText(/brain_switch_done/)).toBeDefined();
+
+    expect(useEventStore.getState().activeSection).toBe("apikeys");
+    expect(useSettingsPage.getState().page).toBe("model");
+    expect(sent).toEqual([]);
+    vi.unstubAllGlobals();
   });
 });

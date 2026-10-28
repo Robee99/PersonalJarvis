@@ -9,6 +9,7 @@ import { Sparkles, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
 import { useT } from "@/i18n";
+import { useHermesBrain } from "@/hooks/useHermesBrain";
 
 interface FrontierSwitch {
   provider: string;
@@ -20,7 +21,17 @@ interface FrontierSwitch {
 
 const POLL_INTERVAL_MS = 30_000;
 
+/**
+ * Not shown while Hermes Agent is the brain (ADR-0042): Hermes picks the
+ * model itself, so a Jarvis-side "your model was switched" confirmation would
+ * describe a choice that does not apply — and its poll would run for nothing.
+ */
 export function FrontierSwitchModal() {
+  const hermesBrain = useHermesBrain();
+  return hermesBrain ? null : <FrontierSwitchModalInner />;
+}
+
+function FrontierSwitchModalInner() {
   const t = useT();
   const assistantName = useEventStore((s) => s.assistantName);
   const [pending, setPending] = useState<FrontierSwitch[]>([]);

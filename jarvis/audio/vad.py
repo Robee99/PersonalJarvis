@@ -739,6 +739,50 @@ def _amplify_quiet_utterance(arr: np.ndarray, min_peak: float) -> np.ndarray:
     return arr * gain
 
 
+#: Quiet tail every finalized utterance should end on before STT. Decoders emit
+#: their last word only once some silence follows it: a streaming transducer
+#: needs trailing context to flush, and Whisper truncates or drops a final word
+#: that ends exactly on the buffer edge.
+STT_TAIL_SILENCE_S = 0.6
+#: Float RMS (1.0 = full scale) at or below which a 10 ms window counts as
+#: silence for the tail measurement. Just above the VAD's ``min_speech_rms``
+#: (0.002), so room tone counts as silence and any spoken syllable does not.
+_TAIL_QUIET_RMS = 0.003
+
+
+def pad_trailing_silence(
+    pcm: bytes,
+    *,
+    sample_rate: int = VAD_SAMPLE_RATE,
+    min_tail_s: float = STT_TAIL_SILENCE_S,
+) -> bytes:
+    """Return ``pcm`` (int16 mono) ending on at least ``min_tail_s`` of silence.
+
+    A VAD endpoint already ends on its whole silence window, so it passes
+    through unchanged. A capture cut by a key release (push-to-talk) ends on
+    the last spoken word; this appends only the missing amount of digital
+    silence so the recognizer still flushes that word. Nothing is ever
+    removed or rescaled.
+    """
+    if not pcm or min_tail_s <= 0.0 or sample_rate <= 0:
+        return pcm
+    usable = len(pcm) - (len(pcm) % 2)
+    samples = np.frombuffer(pcm[:usable], dtype=np.dtype("<i2"))
+    window = max(1, sample_rate // 100)
+    quiet_samples = 0
+    end = samples.size
+    while end >= window:
+        piece = samples[end - window : end].astype(np.float32) / 32768.0
+        if float(np.sqrt(np.mean(np.square(piece)))) > _TAIL_QUIET_RMS:
+            break
+        quiet_samples += window
+        end -= window
+    missing = int(round(min_tail_s * sample_rate)) - quiet_samples
+    if missing <= 0:
+        return pcm
+    return pcm + b"\x00\x00" * missing
+
+
 def _float32_to_int16_bytes(arr: np.ndarray) -> bytes:
     """Convert float32 [-1, 1] to int16 PCM bytes (Whisper input format)."""
     clipped = np.clip(arr, -1.0, 1.0)

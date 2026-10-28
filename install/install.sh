@@ -2,7 +2,7 @@
 # Personal Jarvis — macOS / Linux quick-install bootstrap (Stage 1)
 #
 # Usage (from any POSIX shell):
-#   curl -fsSL https://raw.githubusercontent.com/PersonalJarvis/PersonalJarvis/main/install/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Robee99/PersonalJarvis/main/install/install.sh | bash
 #
 # This bootstrap is intentionally small. It:
 #   1. Verifies Python 3.11+ and git are available.
@@ -19,7 +19,7 @@ set -euo pipefail
 
 # Standalone bootstrap projections of jarvis/core/branding.py. The branding
 # contract test rejects drift because this script runs before Python is installed.
-OFFICIAL_REPO_SLUG="${JARVIS_OFFICIAL_REPO_SLUG:-PersonalJarvis/PersonalJarvis}"
+OFFICIAL_REPO_SLUG="${JARVIS_OFFICIAL_REPO_SLUG:-Robee99/PersonalJarvis}"
 if [[ ! "$OFFICIAL_REPO_SLUG" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
     printf 'JARVIS_OFFICIAL_REPO_SLUG must be an exact owner/repository slug\n' >&2
     exit 2
@@ -96,7 +96,7 @@ err()  { printf '%s  %s✗ %s%s\n' "$GUT" "$RED" "$1" "$RST"; }
 run_spin() {
     _spin_label="$1"; shift
     if [ ! -t 1 ]; then
-        note "$_spin_label…"
+        note "${_spin_label}…"
         "$@" </dev/null
         return $?
     fi

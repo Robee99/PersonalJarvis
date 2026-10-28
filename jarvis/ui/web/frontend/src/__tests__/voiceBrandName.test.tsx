@@ -16,7 +16,7 @@
  * rule, so this file also covers the section's "API Keys" tab and the locale
  * values it renders.
  */
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -185,6 +185,8 @@ describe("voice section sidebar brand", () => {
 
   it("names the row after the configured assistant", () => {
     renderSidebar();
+    // The voice section sits in the folded Advanced index of the sidebar.
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
 
     const label = screen.getByTestId("nav-row-dictation").textContent?.trim() ?? "";
     expect(label).toBe(`${PINNED_BRAND} Voice`);
@@ -194,6 +196,8 @@ describe("voice section sidebar brand", () => {
   it("falls back to the neutral default when no name is configured", () => {
     useEventStore.setState({ assistantName: "Assistant" });
     renderSidebar();
+    // The voice section sits in the folded Advanced index of the sidebar.
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
 
     const label = screen.getByTestId("nav-row-dictation").textContent?.trim() ?? "";
     expect(label).toBe("Assistant Voice");
@@ -202,6 +206,8 @@ describe("voice section sidebar brand", () => {
 
   it("collapses the former Dictation and Dictionary rows into one", () => {
     renderSidebar();
+    // The voice section sits in the folded Advanced index of the sidebar.
+    fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
 
     expect(screen.queryByTestId("nav-row-dictionary")).toBeNull();
     expect(screen.getByTestId("nav-row-dictation")).toBeTruthy();

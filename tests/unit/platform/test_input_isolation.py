@@ -25,10 +25,11 @@ from jarvis.platform.input_isolation import (
 )
 
 
-def _report(platform: str, elevated: bool | None):
+def _report(platform: str, elevated: bool | None, *, uac_off: bool | None = False):
     return describe_input_isolation(
         _platform=lambda: platform,
         _elevated=lambda: elevated,
+        _uac_disabled=lambda: uac_off,
         _euid=lambda: 1000,
     )
 
@@ -39,6 +40,16 @@ class TestWindows:
         assert report.blocked is True
         assert report.reason is InputIsolationReason.ELEVATED
         assert report.can_restart_unelevated is True
+
+    def test_uac_switched_off_offers_no_restart_and_says_why(self):
+        """With UAC off a restart comes back just as elevated; the button
+        would do nothing, so the report names UAC instead."""
+        report = _report("win32", True, uac_off=True)
+        assert report.blocked is True
+        assert report.can_restart_unelevated is False
+        assert report.uac_disabled is True
+        assert "UAC" in report.remedy
+        assert report.to_dict()["uac_disabled"] is True
 
     def test_normal_window_is_reachable(self):
         report = _report("win32", False)

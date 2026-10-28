@@ -101,6 +101,34 @@ def test_build_override_uses_the_kit_tools_and_briefing(monkeypatch: pytest.Monk
     assert plain.tool_context["tool_origin"] == "agent-chat"
 
 
+def test_jarvis_add_tools_keep_the_pc_pilot_hand_policy() -> None:
+    class _Hand:
+        def __init__(self, *, is_mcp_tool: bool = False) -> None:
+            self.is_mcp_tool = is_mcp_tool
+
+    selected = _Hand(is_mcp_tool=True)
+    tools = {
+        "pc_pilot": _Hand(),
+        "my_chrome": _Hand(),
+        "playwright/browser_navigate": selected,
+    }
+    override = build_override(
+        _session("jarvis"),
+        brain=None,
+        stance="ask",
+        cwd=Path("."),
+        ref="r",
+        kit_tools={"playwright/browser_navigate": selected},  # type: ignore[dict-item]
+        user_text="open Chrome and go to YouTube",
+        selected_tool_names=("playwright/browser_navigate",),
+    )
+
+    filtered = override.tool_filter(tools) if override.tool_filter else tools
+
+    assert {"pc_pilot", "playwright/browser_navigate"} <= set(filtered)
+    assert "my_chrome" not in filtered
+
+
 async def test_kit_payload_builds_the_kit_tools_and_the_briefing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

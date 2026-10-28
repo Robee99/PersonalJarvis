@@ -11,7 +11,7 @@ Streaming is first-class: every Brain/STT/TTS/Harness response is an
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
@@ -158,6 +158,11 @@ class BrainRequest:
     # person picks the level by hand; a provider that does not know a level
     # treats it like the nearest one it does (see jarvis.agent_chat.effort).
     reasoning_effort: ReasoningEffort | None = None
+    # "required" makes an OpenAI-compatible server answer with a tool call
+    # (llama.cpp enforces it with a grammar). The tool loop asks for it once
+    # when a model announced an action in words and called nothing. ``None``
+    # leaves the choice to the model; providers without the knob ignore it.
+    tool_choice: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +173,9 @@ class BrainDelta:
     tool_call: dict[str, Any] | None = None
     finish_reason: str | None = None
     usage: dict[str, int] | None = None  # input_tokens, output_tokens, cache_hit_tokens
+    # Tools an agent brain ran on its own side (Hermes Agent), as evidence for
+    # the honesty guards. Jarvis never executes these; it only records them.
+    agent_tools: tuple[str, ...] | None = None
 
 
 # ----------------------------------------------------------------------
@@ -277,6 +285,11 @@ class ContinuousVoiceStart:
 
     session: dict[str, Any]
     offer_sdp: str = ""
+    # Signalling may finish before the trusted control connection. Callers keep
+    # microphone output gated until open_session AND media readiness complete.
+    on_transport_ready: Callable[[str], Awaitable[None]] | None = None
+    # Local preparation milestones; no provider body, credential or SDP values.
+    on_startup_phase: Callable[[str], None] | None = None
 
 
 class ContinuousVoiceConnection(Protocol):

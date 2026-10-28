@@ -1,12 +1,16 @@
-import { Fragment, memo } from "react";
+import { Fragment, memo, useMemo, type ReactNode } from "react";
 import { ChatMarkdown, MediaPreview, mediaKind } from "@/components/agentchat/ChatMarkdown";
 import { CircleAlert, FileText, ImageIcon } from "lucide-react";
 import { InternalMessageBubble, type InternalParticipant } from "./InternalMessageBubble";
+import { CodingThreadActivity } from "@/components/agentic/threads/CodingThreadLink";
+import { codingThreadOf, foldRepeatedThreadStatus } from "@/components/agentic/threads/openCodingThread";
 import { MessageWithChips } from "./ToolChoiceChips";
 import { ProviderLogo } from "@/components/providers/ProviderLogo";
 import { effortLabel } from "./AgentComposer";
 import { TurnTrace, type Decide, type TraceLook } from "./WorkTrace";
 import type { TimelineItem, TurnItem, TextBlock } from "./reduce";
+import { TraceMessageLine } from "./TraceTimeline";
+import { attachTurnMessages, type TraceMessage } from "./turnMessages";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +24,8 @@ export function AgentTimeline({
   agentsById,
   bubbles = false,
   traceLook = "rail",
+  traceCompanion = false,
+  traceFace,
 }: {
   items: TimelineItem[];
   assistantName: string;
@@ -30,7 +36,7 @@ export function AgentTimeline({
   /** Sender faces by agent id, where the caller has a roster. */
   agentsById?: Record<string, InternalParticipant>;
   /**
-   * The front page's conversation look (2026-10-01, after the Claude app):
+   * The front page's conversation look (2026-10-01):
    * your words in a soft rounded bubble on the right, the assistant's answer
    * as plain text with no name-and-model header above it, and a quiet
    * centred time stamp wherever the conversation paused. The Agentic IDE
@@ -39,12 +45,23 @@ export function AgentTimeline({
   bubbles?: boolean;
   /** How turns draw their work; the Agentic IDE keeps the classic rows. */
   traceLook?: TraceLook;
+  /** Jarvis's own chat: live traces show the user's pet at work. */
+  traceCompanion?: boolean;
+  /** An agent's own chat: live traces show that agent's face (or the pet it wears) at work. */
+  traceFace?: ReactNode;
 }) {
   const t = useT();
-  const stamps = bubbles ? timeStamps(items) : null;
+  // On the rail look an agent's answer to a working turn is a quiet line in
+  // that turn's trace, so the reply stays the last thing in the chat.
+  const { items: shown, messagesByTurn } = useMemo(() => {
+    // A coding thread's unchanged status is one row, however often it arrived.
+    const folded = foldRepeatedThreadStatus(items);
+    return traceLook === "rail" ? attachTurnMessages(folded) : { items: folded, messagesByTurn: NO_MESSAGES };
+  }, [items, traceLook]);
+  const stamps = bubbles ? timeStamps(shown) : null;
   return (
     <>
-      {items.map((item) => {
+      {shown.map((item) => {
         const stamp = stamps?.get(item.id);
         const node = renderItem(item);
         return stamp ? (
@@ -60,6 +77,10 @@ export function AgentTimeline({
   );
 
   function renderItem(item: TimelineItem) {
+    if (item.type === "internal" && codingThreadOf(item.message.sender_id)) {
+      return <CodingThreadActivity key={item.id} label={item.message.text}
+        threadId={codingThreadOf(item.message.sender_id)} failed={item.message.status === "failed"} />;
+    }
     if (item.type === "internal") {
       return (
         <InternalMessageBubble
@@ -166,6 +187,11 @@ export function AgentTimeline({
     }
     if (item.type === "notice") {
       if (item.kind === "native_goal_verdict") return <p key={item.id} className="text-xs text-muted-foreground">{t("slash.verifying")}</p>;
+      if (item.kind === "coding_thread") {
+        const started = t("society.chat.coding_thread_started").replace("{0}", String(item.data.agent ?? ""));
+        return <CodingThreadActivity key={item.id} label={`${started} · ${String(item.data.title ?? "")}`}
+          threadId={String(item.data.thread_id ?? "")} />;
+      }
       // The society reporting back on a task Jarvis handed out: the
       // agent's name as the headline, its summary underneath. Muted and
       // centred like a stamp — it is not Jarvis speaking.
@@ -196,6 +222,9 @@ export function AgentTimeline({
         onDecide={onDecide}
         bubbles={bubbles}
         traceLook={traceLook}
+        traceCompanion={traceCompanion}
+        traceFace={traceFace}
+        messages={messagesByTurn.get(item.id)}
       />
     );
   }
@@ -236,10 +265,18 @@ function stampLabel(at: Date, now: Date): string {
   return `${date}, ${time}`;
 }
 
-const Turn = memo(function Turn({ turn, assistantName, providerLabel, onDecide, bubbles = false, traceLook }: {
-  turn: TurnItem; assistantName: string; providerLabel: string; onDecide: Decide; bubbles?: boolean; traceLook: TraceLook;
+const NO_MESSAGES = new Map<string, TraceMessage[]>();
+
+const Turn = memo(function Turn({ turn, assistantName, providerLabel, onDecide, bubbles = false, traceLook, traceCompanion = false, traceFace, messages }: {
+  turn: TurnItem; assistantName: string; providerLabel: string; onDecide: Decide; bubbles?: boolean; traceLook: TraceLook; traceCompanion?: boolean; traceFace?: ReactNode;
+  /** Agent messages that arrived while this turn worked. */
+  messages?: TraceMessage[];
 }) {
   const t = useT();
+  const extras = useMemo(
+    () => messages?.map((message) => ({ key: message.id, node: <TraceMessageLine message={message} /> })),
+    [messages],
+  );
   return <div className="flex min-w-0 flex-col gap-3" data-testid="agent-turn" data-message-id={turn.id} data-status={turn.status}>
     {!bubbles && (
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -249,7 +286,7 @@ const Turn = memo(function Turn({ turn, assistantName, providerLabel, onDecide, 
         {turn.effort ? <span>{effortLabel(turn.effort, t)}</span> : null}
       </div>
     )}
-    <TurnTrace turn={turn} look={traceLook} onDecide={onDecide} renderText={(text, id) => <Prose block={{ kind: "text", text, id }} />} />
+    <TurnTrace turn={turn} look={traceLook} companion={traceCompanion} face={traceFace} extras={extras} onDecide={onDecide} renderText={(text, id) => <Prose block={{ kind: "text", text, id }} />} />
   </div>;
 });
 
@@ -259,7 +296,7 @@ function Prose({ block }: { block: TextBlock }) {
     <div
       data-testid="agent-text"
       className={cn(
-        // Compact reading size, like the Claude app: headings stay close to body
+        // Compact reading size: headings stay close to body
         // size and set apart by weight and spacing, not by scale.
         "prose prose-neutral max-w-none text-[15px] leading-[25px] text-foreground dark:prose-invert dark:text-foreground [overflow-wrap:anywhere]",
         "[&>div>:first-child]:mt-0 [&>div>:last-child]:mb-0",

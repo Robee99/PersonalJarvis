@@ -208,3 +208,14 @@ async def test_cli_mic_step_still_measures_a_granted_microphone(monkeypatch, cap
 
     assert level is not None and level > -20.0
     assert "Samples received: 160" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("dbfs", "verdict"),
+    [(-120.0, "no_device"), (-96.0, "silent"), (-90.3, "silent"),
+     (-62.0, "quiet"), (-40.0, "ok"), (-12.0, "ok")],
+)
+def test_classify_mic_level(dbfs: float, verdict: str) -> None:
+    from jarvis.speech.diagnose import classify_mic_level
+
+    assert classify_mic_level(dbfs) == verdict

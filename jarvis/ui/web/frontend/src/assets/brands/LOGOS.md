@@ -85,6 +85,7 @@ we could not obtain. Record it below with `own work` as the legal basis.
 | home_assistant | svgl `home-assistant.svg` | MIT | 2026-07-25 |
 | linear | svgl `linear.svg` (brand purple, legible on dark) | MIT | 2026-07-25 |
 | notion | svgl `notion.svg` (the light variant, for dark backgrounds) | MIT | 2026-07-25 |
+| paperclip | Paperclip's official icon, `https://paperclip.app/brand/paperclip-icon-black.svg` | vendor artwork; nominative identification only | 2026-10-28 |
 | slack | gilbarbara/logos `slack-icon.svg` | CC0 | 2026-07-25 |
 | spotify | gilbarbara/logos `spotify-icon.svg` | CC0 | 2026-08-17 |
 | supabase | gilbarbara/logos `supabase-icon.svg` | CC0 | 2026-07-25 |
@@ -142,3 +143,35 @@ Google Cloud, Cloudflare and AgentMail PNG files are lossless extractions of the
 | Plugin | Source | Drawing license | Date |
 |---|---|---|---|
 | chrome | https://cdn.simpleicons.org/googlechrome | CC0-1.0; Chrome trace identification | 2026-09-10 |
+
+## Quick-win connectors (2026-10-06)
+
+Marks for Atlassian and the one-click connector drafts in
+`docs/marketplace/quick-win-connectors.md`; drafts pick them up when promoted.
+
+| Plugin | Source | Drawing license | Date |
+|---|---|---|---|
+| amplitude | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/amplitude-icon.svg) | CC0-1.0; nominative use | 2026-10-06 |
+| atlassian | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/atlassian.svg) | MIT; nominative use | 2026-10-06 |
+| attio | [Vendor original](https://attio.com/favicon.ico) (32 px favicon, converted to PNG) | Vendor artwork; nominative identification only | 2026-10-06 |
+| buildkite | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/buildkite-icon.svg) | CC0-1.0; unchanged artwork inside square viewport | 2026-10-06 |
+| datadog | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/datadog.svg) | MIT; nominative use | 2026-10-06 |
+| fireflies | [Vendor original](https://fireflies.ai/icon.png) (downscaled to 128 px) | Vendor artwork; nominative identification only | 2026-10-06 |
+| grafana | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/grafana.svg) | MIT; nominative use | 2026-10-06 |
+| intercom | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/intercom-icon.svg) | CC0-1.0; nominative use | 2026-10-06 |
+| jam | [Vendor original](https://framerusercontent.com/images/3zAY5a6TukbdTWkNAkTDO1Yqpc.svg) (jam.dev light-scheme favicon; viewBox added) | Vendor artwork; nominative identification only | 2026-10-06 |
+| klaviyo | [Vendor original](https://www.klaviyo.com/icons/icon-512x512.png) (downscaled to 128 px) | Vendor artwork; nominative identification only | 2026-10-06 |
+| miro | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/miro-icon.svg) | CC0-1.0; nominative use | 2026-10-06 |
+| mixpanel | [Vendor original](https://framerusercontent.com/images/j6EPdIw4BKPE9dPx3zrTjkkAM14.png) (mixpanel.com touch icon, 128 px) | Vendor artwork; nominative identification only | 2026-10-06 |
+| neon | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/neon.svg) | MIT; nominative use | 2026-10-06 |
+| netlify | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/netlify.svg) | MIT; nominative use | 2026-10-06 |
+| paypal | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/paypal.svg) | MIT; nominative use | 2026-10-06 |
+| pipedream | [Vendor original](https://pipedream.com/assets/favicon.svg) (its embedded PNG, 128 px) | Vendor artwork; nominative identification only | 2026-10-06 |
+| prisma | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/prisma.svg) | MIT; nominative use | 2026-10-06 |
+| railway | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/railway.svg) | MIT; nominative use | 2026-10-06 |
+| sentry | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/sentry.svg) | MIT; nominative use | 2026-10-06 |
+| square | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/square.svg) | CC0-1.0; nominative use | 2026-10-06 |
+| vimeo | [Original mark](https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/vimeo-icon.svg) | CC0-1.0; nominative use | 2026-10-06 |
+| webflow | [Original mark](https://cdn.jsdelivr.net/gh/pheralb/svgl@main/static/library/webflow.svg) | MIT; unchanged artwork inside square viewport | 2026-10-06 |
+| wix | [Vendor original](https://www.wix.com/favicon.ico) (128 px) | Vendor artwork; nominative identification only | 2026-10-06 |
+| zapier | [Vendor original](https://zapier.com/favicon.ico) (128 px) | Vendor artwork; nominative identification only | 2026-10-06 |

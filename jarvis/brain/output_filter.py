@@ -565,7 +565,17 @@ _A_BEFORE_AGENT_RE = re.compile(rf"\ba(?=\s+{_JARGON_COMPOUND_BRAND}\b)")
 # "OpenClaw-" compound prefix ("OpenClaw-Mission" -> "Mission"; "OpenClaw-
 # Subagent" -> "Subagent", which JARGON_COMPOUND_RE then drops) and any
 # standalone "OpenClaw"/"OpenClore" (common STT mis-spelling of the brand).
-LEGACY_BRAND_RE = re.compile(r"\bOpenCl(?:aw|ore)-?", re.IGNORECASE)
+#
+# 2026-10-06: OpenClaw is also a society agent runtime now (docs/agent-runtimes.md).
+# The runtime is real, so its name survives where it means the runtime: before
+# "agent" ("your OpenClaw agent") and after "on/as/with/to" or their German
+# forms ("moved to OpenClaw"). The retired worker compounds stay scrubbed.
+LEGACY_BRAND_RE = re.compile(
+    r"(?<!\bon\s)(?<!\bto\s)(?<!\bas\s)(?<!\bwith\s)"
+    r"(?<!\bauf\s)(?<!\bals\s)(?<!\bmit\s)(?<!\bzu\s)"  # i18n-allow: German prepositions
+    r"\bOpenCl(?:aw|ore)-?(?![-\s]?agent(?:en|s)?\b)",
+    re.IGNORECASE,
+)
 
 # A1 drift (Mandate A1): remove the "Sir" honorific from the output.
 # The pattern matches ``Sir`` as an honorific in three forms:
@@ -578,6 +588,17 @@ LEGACY_BRAND_RE = re.compile(r"\bOpenCl(?:aw|ore)-?", re.IGNORECASE)
 SIR_OPENER_RE = re.compile(r"^\s*Sir\s*,\s*", re.IGNORECASE)
 SIR_TAIL_RE = re.compile(r",\s*Sir\b", re.IGNORECASE)
 QUOTE_PROTECT_RE = re.compile(r'"[^"]*\bSir\b[^"]*"', re.IGNORECASE)
+
+#: The honorific the owner chose for the butler persona (``[persona]
+#: honorific``). While it is "Sir", a "Sir" in the reply is the persona
+#: speaking, not drift, and stays. Set by the brain on every prompt build.
+_allowed_honorific = ""
+
+
+def allow_honorific(word: str) -> None:
+    """Keep ``word`` as an address in spoken replies; ``""`` scrubs "Sir" again."""
+    global _allowed_honorific
+    _allowed_honorific = (word or "").strip().lower()
 
 # Tool-args YAML block — probe-drift 03 from 2026-04-28. Detects YAML-like
 # blocks with tool-arg keys such as ``context_hints:``, ``action:``,
@@ -856,15 +877,16 @@ def scrub_for_voice(
         return not any(qs <= ms and me <= qe for qs, qe in quote_spans)
 
     sir_changed = False
+    keep_sir = _allowed_honorific == "sir"
     # Opener: "Sir, ..." -> "..."
-    m = SIR_OPENER_RE.match(out)
+    m = None if keep_sir else SIR_OPENER_RE.match(out)
     if m and _outside_quotes(m):
         out = out[m.end():]
         sir_changed = True
     # Tail/Mid: ", Sir" -> ""
     def _sub_sir_tail(m: re.Match[str]) -> str:
         return "" if _outside_quotes(m) else m.group(0)
-    new = SIR_TAIL_RE.sub(_sub_sir_tail, out)
+    new = out if keep_sir else SIR_TAIL_RE.sub(_sub_sir_tail, out)
     if new != out:
         sir_changed = True
         out = new

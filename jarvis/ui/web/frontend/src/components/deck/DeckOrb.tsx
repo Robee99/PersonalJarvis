@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef } from "react";
 import { useEventStore, type VoiceState } from "@/store/events";
 import { JarvisOrb } from "@/components/deck/JarvisOrb";
+import { ReactorCore } from "@/components/deck/ReactorCore";
+import { useDeckAvatar } from "@/lib/deckAvatar";
 import type { ThinkingStep } from "@/lib/thinkingSteps";
 import { HudHaloDefs } from "@/components/deck/HudFrame";
 import { readVoiceInputLevel } from "@/lib/voiceInputLevel";
@@ -281,9 +283,11 @@ export function DeckOrb({
  * The orb — the part of the centre a press lands on.
  *
  * Back to front: a soft accent glow wider than the sphere (`.deck-orb-glow`,
- * keyed on the voice state), then the mascot itself (`JarvisOrb`).
+ * keyed on the voice state), then the mascot itself (`JarvisOrb`), or the
+ * reactor ring when that is the chosen avatar (lib/deckAvatar.ts).
  */
 function OrbFace({ voiceState, orbSize }: { voiceState: VoiceState; orbSize: number }) {
+  const avatar = useDeckAvatar();
   // The light behind the figure, a little wider than it so the silhouette
   // stands IN it rather than on it. It followed a smaller orb at 1.35; with
   // the figure nearly filling the bezel that would spill across the cards.
@@ -296,7 +300,11 @@ function OrbFace({ voiceState, orbSize }: { voiceState: VoiceState; orbSize: num
         data-voice={voiceState}
         style={{ width: glow, height: glow }}
       />
-      <JarvisOrb size={orbSize} voiceState={voiceState} className="absolute inset-0" />
+      {avatar === "reactor" ? (
+        <ReactorCore size={orbSize} voiceState={voiceState} className="absolute inset-0" />
+      ) : (
+        <JarvisOrb size={orbSize} voiceState={voiceState} className="absolute inset-0" />
+      )}
     </>
   );
 }

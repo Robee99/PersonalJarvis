@@ -21,16 +21,35 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from jarvis.ui.web.agent_mcp_routes import router
-from jarvis.ui.web.mcp_server_routes import build_mcp_asgi_app
+from jarvis.ui.web.mcp_server_routes import (
+    MCPMount,
+    _surface_for,
+    build_mcp_asgi_app,
+    surface_suffix,
+)
 
 #: A stateless Streamable HTTP request needs both content types offered.
 _MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
 
 
+def test_surface_suffix_requires_a_path_segment_boundary() -> None:
+    root = "/api/control/mcp"
+    assert surface_suffix({"path": f"{root}/agents", "root_path": root}) == "agents"
+    assert _surface_for({"path": f"{root}agents", "root_path": root}) is None
+
+
 def _mounted_app() -> FastAPI:
     """The surfaces mounted exactly as ``server.py`` mounts them."""
     app = FastAPI()
-    app.mount("/api/control/mcp", build_mcp_asgi_app())
+    app.router.routes.append(MCPMount("/api/control/mcp", app=build_mcp_asgi_app()))
+
+    # The real application serves its SPA with a final GET catch-all. Without
+    # that route, TestClient silently followed a redirect and hid a broken
+    # canonical MCP URL that real Streamable HTTP clients could not initialize.
+    @app.get("/{path:path}")
+    def spa(path: str) -> dict[str, bool]:
+        return {"spa": True}
+
     return app
 
 
@@ -240,8 +259,8 @@ def test_a_revoked_token_is_dead_at_once(token_store, keyed: str) -> None:
     assert answer.status_code == 401
 
 
-def test_a_token_does_not_open_the_tools_surface(token_store, keyed: str) -> None:
-    """A scoped token is for the ecosystem; Jarvis' own hands need the key."""
+def test_an_agent_token_does_not_open_the_tools_surface(token_store, keyed: str) -> None:
+    """Agent tokens cannot be replayed as credentials for Jarvis' hands."""
     _token, secret = token_store.issue(name="Anything", scope="full")
 
     with TestClient(_mounted_app()) as client:
@@ -252,6 +271,97 @@ def test_a_token_does_not_open_the_tools_surface(token_store, keyed: str) -> Non
         )
 
     assert answer.status_code == 401
+
+
+def test_a_tools_token_lists_only_its_allowlisted_safe_and_monitor_tools(
+    token_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.mcp import jarvis_tools_server
+
+    token, secret = token_store.issue(
+        name="Hermes local Gemma",
+        scope="tools",
+        allowed_tools=["inspect_pointer", "click", "ask_tool"],
+    )
+
+    class Gateway:
+        def catalog(self):
+            return [
+                type("Entry", (), {
+                    "name": name,
+                    "description": name,
+                    "input_schema": {"type": "object", "properties": {}},
+                    "risk_tier": tier,
+                    "is_action_tool": tier == "monitor",
+                })()
+                for name, tier in (
+                    ("inspect_pointer", "safe"),
+                    ("click", "monitor"),
+                    ("hidden_tool", "monitor"),
+                    ("ask_tool", "ask"),
+                    ("block_tool", "block"),
+                )
+            ]
+
+    catalog = jarvis_tools_server._tools_token_filter(Gateway().catalog(), token)
+    names = {entry.name for entry in catalog}
+
+    assert names == {"inspect_pointer", "click"}
+    assert token.allowed_tools == ["ask_tool", "click", "inspect_pointer"]
+    assert token_store.verify(secret) is not None
+
+
+def test_tools_token_restricts_builtin_tools_over_mcp(
+    token_store, keyed: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.intel import mcp_tools as intel
+    from jarvis.memory.brain_map import mcp_tools as brain_map
+
+    calls = []
+
+    async def fake_call(name, _arguments):
+        calls.append(name)
+        return "fixture result", False
+
+    monkeypatch.setattr(intel, "call", fake_call)
+    monkeypatch.setattr(brain_map, "call", fake_call)
+    _token, secret = token_store.issue(
+        name="Restricted local client", scope="tools", allowed_tools=["world_globe"]
+    )
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {secret}"}
+    with TestClient(_mounted_app()) as client:
+        names = _tool_names(client, "/api/control/mcp", secret)
+        assert "world_globe" in names
+        assert "project_summary" not in names
+        denied = client.post(
+            "/api/control/mcp", headers=headers,
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "project_summary", "arguments": {},
+            }},
+        )
+        assert denied.status_code == 200
+        assert denied.json()["result"]["isError"] is True
+        assert calls == []
+        allowed = client.post(
+            "/api/control/mcp", headers=headers,
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                "name": "world_globe", "arguments": {"action": "reset"},
+            }},
+        )
+        assert allowed.status_code == 200
+        assert not allowed.json()["result"].get("isError", False)
+        assert calls == ["world_globe"]
+
+
+def test_a_tools_token_cannot_open_the_agent_surface(token_store, keyed: str) -> None:
+    from jarvis.ui.web.mcp_server_routes import _AGENTS_SURFACE, _TOOLS_SURFACE, _authorized
+
+    _token, secret = token_store.issue(
+        name="Hermes local Gemma", scope="tools", allowed_tools=["click"]
+    )
+    scope = {"headers": [(b"authorization", f"Bearer {secret}".encode())]}
+    assert _authorized(scope, _TOOLS_SURFACE)
+    assert not _authorized(scope, _AGENTS_SURFACE)
 
 
 # --------------------------------------------------------- the pairing flow
@@ -297,6 +407,48 @@ def test_pair_for_another_machine_uses_that_address(connect_app: FastAPI, token_
     assert entry["headers"]["Authorization"] == f"Bearer {body['secret']}"
 
 
+def test_pair_can_create_a_loopback_only_tools_token_for_hermes(
+    token_store
+) -> None:
+    from jarvis.ui.web.agent_mcp_routes import PairBody, agent_mcp_pair
+
+    body = agent_mcp_pair(
+        PairBody(
+            name="Hermes local Gemma",
+            client="hermes",
+            scope="tools",
+            surface="tools",
+            transport="http",
+            allowed_tools=["click", "inspect_pointer"],
+        )
+    )
+
+    entry = body["config"]["mcpServers"]["jarvis"]
+    assert body["surface"] == "tools"
+    assert entry["url"].endswith("/api/control/mcp")
+    assert entry["headers"]["Authorization"] == f"Bearer {body['secret']}"
+    assert token_store.verify(body["secret"]).allowed_tools == ["click", "inspect_pointer"]
+
+
+def test_pair_rejects_a_remote_tools_surface(token_store) -> None:
+    from fastapi import HTTPException
+
+    from jarvis.ui.web.agent_mcp_routes import PairBody, agent_mcp_pair
+
+    with pytest.raises(HTTPException) as exc:
+        agent_mcp_pair(
+            PairBody(
+                name="Remote Hermes",
+                scope="tools",
+                surface="tools",
+                transport="http",
+                base_url="http://192.168.1.50:47821",
+                allowed_tools=["click"],
+            )
+        )
+    assert exc.value.status_code == 422
+
+
 def test_paired_clients_are_listed_and_revocable(connect_app: FastAPI, token_store) -> None:
     with TestClient(connect_app) as client:
         first = client.post("/api/agent-mcp/pair", json={"name": "One"}).json()
@@ -305,7 +457,7 @@ def test_paired_clients_are_listed_and_revocable(connect_app: FastAPI, token_sto
         listed = client.get("/api/agent-mcp/tokens").json()
         assert {t["name"] for t in listed["tokens"]} == {"One", "Two"}
         assert all("secret" not in t for t in listed["tokens"])
-        assert listed["scopes"] == ["read", "work", "full"]
+        assert listed["scopes"] == ["read", "work", "full", "tools"]
 
         token_id = first["token"]["token_id"]
         gone = client.request("DELETE", f"/api/agent-mcp/tokens/{token_id}").json()
@@ -319,3 +471,27 @@ def test_pair_refuses_a_nameless_client(connect_app: FastAPI, token_store) -> No
     with TestClient(connect_app) as client:
         answer = client.post("/api/agent-mcp/pair", json={"name": "   "})
     assert answer.status_code == 422
+
+
+@pytest.mark.parametrize("surface", ["", "/agents"])
+@pytest.mark.parametrize("method", ["GET", "POST", "DELETE"])
+@pytest.mark.parametrize("prefix", ["", "/nested"])
+def test_canonical_mcp_urls_reach_auth_without_redirect_or_spa(
+    keyed: str, surface: str, method: str, prefix: str
+) -> None:
+    app = _mounted_app()
+    if prefix:
+        outer = FastAPI()
+        outer.mount(prefix, app)
+        app = outer
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.request(method, f"{prefix}/api/control/mcp{surface}")
+    assert response.status_code == 401, response.text
+    assert "Invalid or missing Jarvis Control API key" in response.text
+
+
+def test_mcp_mount_does_not_capture_neighboring_spa_paths(keyed: str) -> None:
+    with TestClient(_mounted_app(), follow_redirects=False) as client:
+        response = client.get("/api/control/mcp-adjacent")
+    assert response.status_code == 200
+    assert response.json() == {"spa": True}

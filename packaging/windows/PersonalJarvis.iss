@@ -44,7 +44,7 @@
 
 #define AppName "Personal Jarvis"
 #define AppPublisher "Personal Jarvis"
-#define AppUrl "https://github.com/PersonalJarvis/PersonalJarvis"
+#define AppUrl "https://github.com/Dodaios/Dodaios"
 #define GuiExeName "PersonalJarvis.exe"
 #define CliExeName "jarvis.exe"
 #define UserDataDirDisplay "%LOCALAPPDATA%\Jarvis"
@@ -99,6 +99,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "addtopath"; Description: "Add the ""jarvis"" command to PATH (lets you run ""jarvis serve"" in any terminal)"; GroupDescription: "Command line"
+
+[InstallDelete]
+; An upgrade copies over the old _internal and never removes a file the new
+; build no longer has. Live 2026-10-25 a 2.7.1 dist-info left by an older
+; install sat beside the new build's metadata; importlib.metadata read the old
+; entry points, and system_volume, window_control and the other tools added
+; since were never registered. The new build's own metadata is copied after this.
+Type: filesandordirs; Name: "{app}\_internal\personal_jarvis-*.dist-info"
+Type: filesandordirs; Name: "{app}\_internal\personal_jarvis.egg-info"
+Type: filesandordirs; Name: "{app}\_internal\personal_jarvis-*.egg-info"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

@@ -605,3 +605,18 @@ class TestCuSuccessReadback:
         ):
             stdout = f"[cu] done at step 3 (verified: {proof})\n"
             assert cu_success_readback("en", stdout=stdout) == done_en, proof
+
+
+def test_cu_failure_speaks_the_fail_reason_above_the_profile_line():
+    # Live 2026-10-26: the reason sat above the engine's "[cu] mission
+    # profile" line, the whole detail read as telemetry, and the user heard
+    # only "couldn't get it done".
+    from jarvis.voice.action_phrases import cu_failure_readback
+
+    detail = (
+        "[cu] fail at step-1: The screenshot is too dark to find Roberto.\n"
+        "[cu] mission profile: steps=1 total=2.2s observe=0.1s think=2.1s"
+    )
+    text = cu_failure_readback("en", error="exit 5", exit_code=5, detail=detail)
+    assert "too dark to find Roberto" in text
+    assert "mission profile" not in text and "[cu]" not in text

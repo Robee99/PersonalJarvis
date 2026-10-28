@@ -399,3 +399,35 @@ def test_open_url_never_raises_on_error():
          patch.object(op.subprocess, "run", side_effect=OSError("boom")), \
          patch.object(op.shutil, "which", return_value=None):
         assert op.open_url("https://example.com") is False
+
+
+class _FakeProc:
+    def __init__(self, name: str, exe: str) -> None:
+        self.info = {"name": name, "exe": exe}
+
+
+class _FakePsutil:
+    def __init__(self, procs: list[_FakeProc]) -> None:
+        self._procs = procs
+
+    def process_iter(self, _attrs):
+        return iter(self._procs)
+
+
+def test_the_running_chrome_wins_over_an_edge_kept_alive_in_the_background(monkeypatch):
+    """Live 2026-10-27: Edge was the default, the owner worked in Chrome."""
+    import sys
+
+    fake = _FakePsutil([
+        _FakeProc("msedge.exe", r"C:\Edge\msedge.exe"),
+        _FakeProc("chrome.exe", r"C:\Chrome\chrome.exe"),
+    ])
+    monkeypatch.setitem(sys.modules, "psutil", fake)
+    assert op._windows_running_browser_exe() == r"C:\Chrome\chrome.exe"
+
+
+def test_no_browser_running_leaves_the_default(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "psutil", _FakePsutil([_FakeProc("notepad.exe", "n")]))
+    assert op._windows_running_browser_exe() is None

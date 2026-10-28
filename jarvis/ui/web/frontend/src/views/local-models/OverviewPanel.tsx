@@ -25,8 +25,8 @@
  * "Details" fold on each card. Advanced never removed a control (BUG-188);
  * now nothing hides one either.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Info, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Info } from "lucide-react";
 
 import { SoftButton, StatusDot } from "@/components/extensions/primitives";
 import {
@@ -35,13 +35,13 @@ import {
   type LocalModelRow,
   type RoleRow,
 } from "@/hooks/useLocalModels";
-import { switchBrainProvider, useProviders } from "@/hooks/useProviders";
+import { useProviders } from "@/hooks/useProviders";
 import { fill, useT } from "@/i18n";
+import { openSettingsDestination } from "@/lib/openSettings";
 import {
   LOCAL_MODELS_MARK_FIRST_DATA,
   markLocalModels,
 } from "@/lib/localModelsPerf";
-import { cn } from "@/lib/utils";
 
 import { InstalledPanel } from "./InstalledPanel";
 import { canonical } from "./localSetup";
@@ -60,8 +60,8 @@ export interface OverviewPanelProps {
   providerId: string;
   /** Opens the Tune sheet for one installed model; the button hides without it. */
   onTune?: (model: string) => void;
-  /** Navigates to the API Keys section; shown when another brain is active. */
-  onOpenApiKeys?: () => void;
+  /** Opens Settings › Model (the brain picker); defaults to navigating there. */
+  onOpenBrainSettings?: () => void;
   /** Opens the catalogue ("Browse models"); the link hides without it. */
   onBrowse?: () => void;
   /** Opens the full installed ledger (Models tab). */
@@ -87,13 +87,13 @@ export function formatGigabytes(bytes: number): string {
 export function OverviewPanel({
   providerId,
   onTune,
-  onOpenApiKeys,
+  onOpenBrainSettings,
   onBrowse,
   onManage,
 }: OverviewPanelProps) {
   const t = useT();
   const overview = useOverview(providerId);
-  const { providers, refetch: refetchProviders } = useProviders();
+  const { providers } = useProviders();
   const setup = useLocalSetup(providerId);
 
   const s = overview.data?.server;
@@ -132,6 +132,9 @@ export function OverviewPanel({
     providers.find((p) => p.tier === "brain" && p.active) ?? null;
   const otherBrainActive =
     activeBrain !== null && activeBrain.id !== providerId;
+  // The brain is chosen only in Settings › Model; this page links there.
+  const openBrainSettings =
+    onOpenBrainSettings ?? (() => openSettingsDestination("model", "brain"));
 
   const roleLabel = useCallback(
     (role: LocalModelRole) =>
@@ -195,15 +198,13 @@ export function OverviewPanel({
                   brain: activeBrain?.label ?? "",
                 })}
               </span>
-              {onOpenApiKeys && (
-                <button
+              <button
                   type="button"
-                  onClick={onOpenApiKeys}
+                  onClick={openBrainSettings}
                   className="shrink-0 rounded-sm font-medium text-accent underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {t("local_models.roles.other_brain_link")}
                 </button>
-              )}
             </div>
           )}
         </div>
@@ -275,10 +276,7 @@ export function OverviewPanel({
           serverLabel={serverLabel}
           roleLabel={roleLabel}
           otherBrain={otherBrainActive ? (activeBrain?.label ?? "") : ""}
-          onSwitchBrain={async () => {
-            await switchBrainProvider(providerId);
-            await refetchProviders();
-          }}
+          onOpenBrainSettings={openBrainSettings}
           t={t}
         />
       </ServerLaunch>
@@ -425,7 +423,7 @@ function SetupProgress({
   serverLabel,
   roleLabel,
   otherBrain,
-  onSwitchBrain,
+  onOpenBrainSettings,
   t,
 }: {
   step: SetupStep | null;
@@ -433,15 +431,10 @@ function SetupProgress({
   roleLabel: (role: LocalModelRole) => string;
   /** The label of the brain that answers instead of this server; "" = none. */
   otherBrain: string;
-  onSwitchBrain: () => Promise<void>;
+  /** Opens Settings › Model, where the brain is picked. */
+  onOpenBrainSettings: () => void;
   t: (key: string) => string;
 }) {
-  const [brain, setBrain] = useState<
-    { state: "idle" } | { state: "switching" } | { state: "done" } | { state: "error"; message: string }
-  >({ state: "idle" });
-  useEffect(() => {
-    if (step && step.phase !== "done") setBrain({ state: "idle" });
-  }, [step]);
   if (!step) return null;
   const k = (key: string) => t(`local_models.overview.${key}`);
 
@@ -554,7 +547,7 @@ function SetupProgress({
           {line}
         </p>
       ))}
-      {step.phase === "done" && otherBrain && brain.state !== "done" && (
+      {step.phase === "done" && otherBrain && (
         <div
           className="ml-4 flex flex-wrap items-center gap-2 text-foreground"
           data-testid="setup-brain"
@@ -565,40 +558,10 @@ function SetupProgress({
               brain: otherBrain,
             })}
           </span>
-          <SoftButton
-            primary
-            disabled={brain.state === "switching"}
-            onClick={() => {
-              setBrain({ state: "switching" });
-              onSwitchBrain().then(
-                () => setBrain({ state: "done" }),
-                (err: unknown) =>
-                  setBrain({
-                    state: "error",
-                    message: err instanceof Error ? err.message : String(err),
-                  }),
-              );
-            }}
-          >
-            {brain.state === "switching" ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : null}
-            {fill(k("setup_brain_button"), { server: serverLabel })}
+          <SoftButton primary onClick={onOpenBrainSettings}>
+            {k("setup_brain_open")}
           </SoftButton>
-          {brain.state === "error" && (
-            <span className={cn("text-destructive")}>
-              {fill(k("setup_brain_failed"), { message: brain.message })}
-            </span>
-          )}
         </div>
-      )}
-      {step.phase === "done" && brain.state === "done" && (
-        <p
-          className="ml-4 text-muted-foreground"
-          data-testid="setup-brain-done"
-        >
-          {fill(k("setup_brain_switched"), { server: serverLabel })}
-        </p>
       )}
     </div>
   );

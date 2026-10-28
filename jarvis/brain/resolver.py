@@ -472,10 +472,14 @@ def _subscription_candidates(config: JarvisConfig) -> list[str]:
 
     Membership comes from the provider cards' billing mode — never a name list,
     so a fourth coding CLI joins the chain by shipping a card (AP-21/AP-22).
-    ``config`` is accepted for signature symmetry with the other helpers here.
+    Providers an enabled route policy denies are left out.
     """
+    from jarvis.brain.route_policy import is_denied
     from jarvis.ui.web.provider_spec import PROVIDERS, provider_billing
 
+    # A provider the route policy denies is never woken for a side job either
+    # (chat titles, pane titles): local-only means nothing leaves the machine.
+    policy = getattr(getattr(config, "brain", None), "route_policy", None)
     available = set(_get_registry().available())
     return [
         spec.id
@@ -483,6 +487,11 @@ def _subscription_candidates(config: JarvisConfig) -> list[str]:
         if spec.tier == "brain"
         and spec.id in available
         and provider_billing(spec).startswith("subscription")
+        and not (
+            policy is not None
+            and getattr(policy, "enabled", False)
+            and is_denied(policy, spec.id, None)
+        )
     ]
 
 

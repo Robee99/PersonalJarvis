@@ -1,3 +1,6 @@
+import asyncio
+import threading
+
 import pytest
 
 from jarvis.marketplace.catalog import PluginCatalog, PluginSpec
@@ -75,6 +78,43 @@ async def test_bootstrap_exposes_connected_plugin_tools():
     names = [t.name for t in reg.active_tools()]
     assert "google-calendar/list_events" in names
     assert any(type(e).__name__ == "BrainToolsChanged" for e in bus.events)
+
+
+@pytest.mark.asyncio
+async def test_blocking_keyring_read_does_not_block_event_loop():
+    """A slow OS credential store must not stall HTTP or MCP while booting."""
+
+    class _BlockingBackend(InMemoryBackend):
+        def __init__(self):
+            super().__init__()
+            self.read_started = threading.Event()
+            self.release_read = threading.Event()
+
+        def get(self, key: str) -> str | None:
+            self.read_started.set()
+            self.release_read.wait(timeout=3)
+            return super().get(key)
+
+    backend = _BlockingBackend()
+    store = TokenStore(backend)
+    store.save("google-calendar", Tokens(access="TOK"))
+    catalog = PluginCatalog(version=1, schema_version="1", plugins=[_calendar_plugin()])
+    reg = PluginToolRegistry(
+        catalog=catalog,
+        token_store=store,
+        client_factory=_FakeClient,
+        bus=_RecordingBus(),
+    )
+    bootstrap = asyncio.create_task(reg.bootstrap())
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(backend.read_started.wait, 1), timeout=2)
+        # This yield can only complete while the backing keyring read is still
+        # blocked if the read truly ran outside the event-loop thread.
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.5)
+    finally:
+        backend.release_read.set()
+    await asyncio.wait_for(bootstrap, timeout=2)
+    assert "google-calendar/list_events" in [tool.name for tool in reg.active_tools()]
 
 
 @pytest.mark.asyncio

@@ -26,16 +26,21 @@ import {
 } from "@/store/commandActivity";
 import { isDictationStartFailure } from "@/lib/dictationRefusal";
 import { usePermissionToast } from "@/hooks/usePermissionToast";
+import { handleAppshotEditRequest } from "@/store/appshotEditor";
 import { useDeckStore } from "@/store/deck";
+import { MEMORY_WRITE_EVENT, useMemoryWrites } from "@/store/memoryWrites";
 import { useHomeStore } from "@/store/home";
+import { useTurnStateStore } from "@/store/turnState";
 import { PANE_ACTIVITY_EVENT } from "@/store/workspacePanes";
 import { WSAudioLevel, WSEventEnvelope, WSWelcome } from "@/schema/ws";
-import { useI18nStore, hydrateUiLanguage, hydrateReplyLanguage, translate } from "@/i18n";
+import { useI18nStore, hydrateUiLanguage, hydrateReplyLanguage, isUiLanguage, translate } from "@/i18n";
 import { hydrateUiTheme } from "@/hooks/useTheme";
 import { announceDictationSettings } from "@/hooks/usePromptMode";
 import { petKeys } from "@/hooks/usePets";
 import { focusChatComposer, startNewTextChat } from "@/lib/newChat";
 import { SPEAKER_MUTE_EVENT } from "@/lib/speakerMute";
+import { useIntelStore } from "@/store/intel";
+import { handleAppUiRequest, type AppUiRequestPayload } from "@/lib/appUi";
 
 let singleton: WSClient | null = null;
 
@@ -96,6 +101,9 @@ export function useWebSocket(): void {
           // this — not the raw open — is the authoritative "connected" signal.
           setConnected(true);
           setWarming(false);
+          // A turn state from before the gap is unknown now; the next
+          // ConversationStateChanged sets it again.
+          useTurnStateStore.getState().clearTurn();
           // Re-seed voiceReady on EVERY (re)connect. VoiceBootStatus is a
           // one-shot bus event, so a socket that (re)connects after readiness
           // already flipped — e.g. the fast-boot 1013 reconnect — or whose
@@ -105,7 +113,7 @@ export function useWebSocket(): void {
           void fetch("/api/voice/status")
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
-              if (data && typeof data.ready === "boolean") setVoiceReady(data.ready);
+              if (data && typeof data.ready === "boolean") setVoiceReady(data.ready, data.detail);
             })
             .catch(() => {
               // Offline / headless: keep the current value; the live
@@ -139,6 +147,11 @@ export function useWebSocket(): void {
         const parsed = WSEventEnvelope.safeParse(raw);
         if (!parsed.success) return;
         const env = parsed.data;
+        if (env.event_name === "LiveVisionFrameRequested") {
+          window.dispatchEvent(new CustomEvent("jarvis-vision-frame-request", { detail: env.payload }));
+        } else if (env.event_name === "LiveVisionQuietRequested") {
+          window.dispatchEvent(new CustomEvent("jarvis-vision-quiet-request", { detail: env.payload }));
+        }
 
         pushEvent({
           id: `${env.timestamp_ns}-${env.trace_id.slice(0, 8)}`,
@@ -161,6 +174,13 @@ export function useWebSocket(): void {
           } else {
             pushToast("success", translate("appshots.try_done"));
           }
+        }
+
+        // A click on the appshot card in the screen corner: the editor opens
+        // over whatever is on screen (AppshotEditorHost) — no navigation.
+        if (env.event_name === "AppshotEditRequested") {
+          const outcome = handleAppshotEditRequest(env.payload, { solo: useEventStore.getState().solo });
+          if (outcome === "gone") pushToast("warning", translate("appshots.editor.gone"));
         }
 
         // Live reasoning trace: while the text chat is waiting on a reply,
@@ -255,12 +275,23 @@ export function useWebSocket(): void {
           }
         }
 
+        // The brain's side of the live turn (ADR-0042): ACTING with a tool,
+        // INTERRUPTED, CANCELLED by "stop", RESUMED by "continue", COMPLETED.
+        // Folded into the one status source (hooks/useAssistantStatus) next
+        // to the microphone side SystemStateChanged carries above.
+        // payload: { state, detail, session_id }.
+        // Stamped with the ARRIVAL time, not the event's: freshness is judged
+        // against this window's clock (lib/assistantStatus::turnIsFresh).
+        if (env.event_name === "ConversationStateChanged") {
+          useTurnStateStore.getState().ingest(env.payload);
+        }
+
         // The voice feature warms up ~20s after the window connects; the
         // backend announces readiness over this envelope. Drives the sidebar
         // "Voice starting…" indicator. payload: { ready: boolean, detail: string }.
         if (env.event_name === "VoiceBootStatus") {
-          const ready = (env.payload as { ready?: unknown }).ready;
-          if (typeof ready === "boolean") setVoiceReady(ready);
+          const { ready, detail } = env.payload as { ready?: unknown; detail?: unknown };
+          if (typeof ready === "boolean") setVoiceReady(ready, detail);
         }
 
         if (env.event_name === "MessageSent") {
@@ -332,6 +363,12 @@ export function useWebSocket(): void {
             // The live provider/model may have changed with it.
             void queryClient.invalidateQueries({ queryKey: ["voice-mode"] });
           }
+          // The answer was ready but the voice provider produced no audio for
+          // any of it. Without a toast the user only sees Jarvis go quiet.
+          if (layer === "speech.tts") {
+            const detail = typeof p.message === "string" ? p.message.trim() : "";
+            pushToast("warning", detail || translate("use_web_socket.tts_no_audio"));
+          }
         }
 
         // A society agent's derived place changed (trusted rules in the
@@ -352,10 +389,12 @@ export function useWebSocket(): void {
         // The assistant's voice was muted or unmuted somewhere else (the
         // pet's speaker disc, another window); in-app speaker toggles follow.
         if (env.event_name === "VoiceSpeakerMuteChanged") {
-          const p = env.payload as { muted?: unknown };
+          const p = env.payload as { muted?: unknown; revision?: number };
           if (typeof p.muted === "boolean") {
             window.dispatchEvent(
-              new CustomEvent(SPEAKER_MUTE_EVENT, { detail: { muted: p.muted } }),
+              new CustomEvent(SPEAKER_MUTE_EVENT, { detail: {
+                muted: p.muted, ...(typeof p.revision === "number" ? { revision: p.revision } : {}),
+              } }),
             );
           }
         }
@@ -364,6 +403,12 @@ export function useWebSocket(): void {
         // another one, the shortcut): the My Pets page re-reads the list.
         if (env.event_name === "PetChanged") {
           void queryClient.invalidateQueries({ queryKey: petKeys.all });
+        }
+
+        // An agent's memory file is being written, or the write settled: the
+        // lead pet's thought bubble names the file (store/memoryWrites).
+        if (env.event_name === MEMORY_WRITE_EVENT) {
+          useMemoryWrites.getState().receive(env.payload);
         }
 
         if (env.event_name === "TranscriptionUpdate") {
@@ -445,6 +490,20 @@ export function useWebSocket(): void {
               }
             }
           }
+        }
+
+        if (env.event_name === "WorldIntelCommand") {
+          // The assistant pointed the World screen at an incident, a filter
+          // or the whole globe (world_globe tool); the NavigateSidebar that
+          // precedes it has already opened the screen.
+          useIntelStore.getState().applyCommand(env.payload);
+        }
+
+        if (env.event_name === "AppUiRequest") {
+          // The assistant reads or uses this window's own controls (app_ui_*
+          // tools, navigate's "then"). Answered by the main window only, after
+          // a NavigateSidebar that came first has already switched sections.
+          void handleAppUiRequest(env.payload as AppUiRequestPayload);
         }
 
         if (env.event_name === "NavigateSidebar") {
@@ -640,7 +699,7 @@ export function useWebSocket(): void {
         // so receiving the broadcast does not echo a PUT back.
         if (env.event_name === "UiLanguageChanged") {
           const p = env.payload as { language?: string };
-          if (p.language === "en" || p.language === "de" || p.language === "es") {
+          if (isUiLanguage(p.language)) {
             useI18nStore.getState().setUi(p.language, { push: false });
           }
         }
@@ -707,6 +766,8 @@ export function useWebSocket(): void {
             void queryClient.invalidateQueries({ queryKey: ["skills"] });
           } else if (p.kind === "plugin") {
             void queryClient.invalidateQueries({ queryKey: ["marketplace-plugins"] });
+          } else if (p.kind === "agent") {
+            void queryClient.invalidateQueries({ queryKey: ["society", "roster"] });
           }
         }
 

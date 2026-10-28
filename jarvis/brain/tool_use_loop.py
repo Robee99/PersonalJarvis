@@ -21,11 +21,19 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
 
+from jarvis.brain.action_honesty import (
+    action_not_started_phrase,
+    has_unbacked_action_claim,
+)
 from jarvis.brain.cu_gate import (
     CU_BLOCKED_MODEL_FEEDBACK,
     CU_VEHICLE_TOOL_NAMES,
+    is_explicit_computer_use_turn,
+    is_observation_only,
+    is_retry_request,
     llm_computer_use_allowed,
 )
+from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
 from jarvis.brain.spawn_gate import (
     SPAWN_VEHICLE_TOOL_NAMES,
     llm_spawn_allowed,
@@ -41,7 +49,11 @@ from jarvis.core.protocols import (
     Tool,
 )
 from jarvis.core.turn_language import resolve_output_language, resolve_turn_language
-from jarvis.safety.tool_executor import VOICE_CONFIRM_SENTINEL, ToolExecutor
+from jarvis.safety.tool_executor import (
+    INVALID_ARGUMENTS_PREFIX,
+    VOICE_CONFIRM_SENTINEL,
+    ToolExecutor,
+)
 
 from .iteration_budget import IterationBudget
 from .loop_control import (
@@ -55,6 +67,7 @@ from .loop_control import (
 )
 from .streaming import StreamingAggregate, aggregate, aggregate_with_consumer
 from .tool_call_recovery import extract_leaked_tool_calls
+from .tool_switch import ToolSwitch, wants_own_browser
 
 # Central backstop for tool-output bloat: no tool result may exceed this many
 # chars in the tool-role message fed back to the brain. Individual tools should
@@ -105,6 +118,134 @@ _VERIFY_DIRECTIVE = (
     "Fix this, then answer the person again in full:\n"
 )
 
+# A small local model (Gemma 4 E4B, live 2026-10-25) answers a refused call
+# with "I will try again" and no call, which ended the turn on a promise.
+# One nudge per turn sends it back to the tool.
+_RETRY_DIRECTIVE = (
+    "[retry] Your last tool call was refused before it ran. Do not describe "
+    "what you will do: call the tool again now with corrected arguments. "
+    "The refusal was: "
+)
+# Live 2026-10-25 Gemma typed into a "Search bar" the page did not have, got an
+# error, and ended the turn on "I will try the next site". A failed call
+# answered with a promise gets the same one nudge.
+_FAILED_DIRECTIVE = (
+    "[retry] Your last tool call failed. Do not describe what you will do: "
+    "take the next step now with a tool call (read the page or screen again "
+    "if you need the right element). The error was: "
+)
+_PROMISE = re.compile(
+    r"\b(i will|i'll|i am going to|i'm going to|let me|i shall|next,? i)\b", re.IGNORECASE
+)
+# Live 2026-10-25 "Set my computer's volume to 35 percent" was answered
+# "Setting the volume to 35 percent now" with system_volume offered and no call
+# made. A first answer that announces an action while no tool ran gets one
+# nudge; a turn that needs no action answers again without the promise.
+_UNDONE_DIRECTIVE = (
+    "[retry] You announced an action but no tool ran, so nothing happened. If "
+    "the request needs an action, call the tool now. If it needs none, answer "
+    "again without saying you are doing something."
+)
+# The directives above end with the person's request. Live 2026-10-25 Gemma
+# answered the bare "[retry]" line after "Open Notepad and type hello from
+# jarvis, then tell me what Notepad shows" with "I see you've provided some
+# context, but I do not have a specific question": the newest user message was
+# the directive, and it named no task.
+_REQUEST_REMINDER = "\nThe request was: "
+# Live 2026-10-25 "Find public CCTV cameras in Mumbai" was answered "I need to
+# know the area more specifically, such as a particular neighborhood or a
+# bounding box" with find_cctv_cameras offered, whose place field takes a city.
+# A reply that only asks to narrow down what the person already named gets one
+# nudge to call with what was given; a missing value is still asked for.
+_NARROW_ASK = re.compile(
+    r"\b(?:more specific(?:ally)?|narrow (?:it |that |this )?down|"
+    r"(?:a |any )?(?:particular|specific|exact) (?:neighbou?rhood|area|district|"
+    r"part|region|locality|location|spot))\b",
+    re.IGNORECASE,
+)
+_NARROW_DIRECTIVE = (
+    "[retry] Do not ask the person to be more specific. What they said is enough "
+    "for the tool: call it now with the values they gave (a place name goes in "
+    "as it is). Ask only for a value the tool requires that they did not give."
+)
+# Live 2026-10-25 on the installed build, Gemma answered "Opening youtube.com
+# now." and "Opening the specified page in the browser and filling the form
+# fields ..." with no call. A dot inside a word (a web address) does not end
+# the sentence, and a sentence that opens with an action verb's -ing form is
+# an announcement with or without "now".
+_ACTION_GERUNDS = (
+    "opening|launching|starting|playing|pausing|setting|turning|muting|unmuting|"
+    "filling|typing|clicking|pressing|navigating|closing|minimi[sz]ing|maximi[sz]ing|"
+    "creating|writing|saving|sending|deleting|moving|searching|downloading|"
+    "selecting|zooming|flying|scrolling|switching"
+)
+_ANNOUNCED = re.compile(
+    r"(?:^|[.!?]\s+)(?:(?:ok(?:ay)?|sure|certainly|right away|of course|on it),?\s+(?:sir,?\s+)?)?"
+    r"(?:"
+    r"(?:(?:i will|i'll|i am going to|i'm going to|let me)\s+(?!know\b)[a-z]+|[a-z]+ing)\b"
+    r"(?:[^.!?\n]|\.(?=\w)){0,60}\b(?:now|for you|right away)\b"
+    rf"|(?:{_ACTION_GERUNDS})\s+(?:the|a|an|your|my|it|this|that|\w+\.\w+)\b"
+    # Live 2026-10-26 "Opening Windows PC settings, navigating to Display, and
+    # then selecting Advanced Display." with no call: a chain of steps.
+    rf"|(?:{_ACTION_GERUNDS})\b[^.!?\n]{{0,80}},\s+(?:and\s+)?(?:then\s+)?"
+    rf"(?:{_ACTION_GERUNDS})\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Live 2026-10-26 "On it, I will check the current weather for Bengaluru." and
+# "Noted, I will remind you to drink water in ten minutes." ended turns with no
+# call. An acknowledgement followed by a first-person promise is an
+# announcement with or without "now"; "I'll remember" stays an answer.
+_ACK_PROMISE = re.compile(
+    r"(?:^|[.!?]\s+)(?:on it|noted|certainly|sure|of course|right away|very well),?\s+"
+    r"(?:sir,?\s+)?(?:i will|i'll|i am going to|i'm going to|let me)\s+"
+    r"(?!know\b|remember\b|keep\b|note\b|bear\b)[a-z]+",
+    re.IGNORECASE,
+)
+
+# Live 2026-10-26 on Gemma 4 E4B, every one with no call behind it: "I have
+# opened two tabs", "I have zoomed in on the God's Eye View as requested" and
+# "I am navigating to the God's Eye View centered on New York". A first-person
+# report of a finished or running action needs a call that made it; the
+# delivered-sounding sentence after it ("The screen now offers ...") is part
+# of the same invention, so the whole reply goes back.
+_DONE_VERBS = (
+    "opened|closed|launched|started|clicked|typed|pressed|entered|filled|"
+    "zoomed|navigated|scrolled|selected|switched|turned|set|muted|unmuted|"
+    "paused|played|resumed|stopped|moved|maximi[sz]ed|minimi[sz]ed|resized|"
+    "created|saved|sent|added|removed|deleted|renamed|copied|enabled|disabled|"
+    "changed|adjusted|installed|downloaded|uploaded|submitted|flown|flew|"
+    "taken|took|captured|centered|centred|focused|brought|put|placed|booked|ordered"
+)
+_CLAIMED_DONE = re.compile(
+    r"\bi(?:['\u2019]ve|\s+have)\s+(?:just\s+|now\s+|already\s+|successfully\s+|also\s+)?"
+    rf"(?:{_DONE_VERBS})\b"
+    r"|\bi(?:['\u2019]m|\s+am)\s+(?:now\s+|currently\s+|also\s+)?"
+    rf"(?:{_ACTION_GERUNDS})\b",
+    re.IGNORECASE,
+)
+
+
+# Live 2026-10-27 "Opened Swiggy Instamart in Chrome." with no call: a report
+# that opens with the finished verb, the way the reflexes speak.
+# "Set" and "put" read the same as an instruction, so they never count bare.
+_REPORTED_DONE = re.compile(
+    r"^\s*(?:(?:ok(?:ay)?|done|sure|sir),?\s+)?(?!set\b|put\b)(?:" + _DONE_VERBS + r")\s+\S",
+    re.IGNORECASE,
+)
+
+
+def _claims_done(text: str) -> bool:
+    """A first-person or bare report of an action, outside a question."""
+    for sentence in re.split(r"(?<=[.!?])\s+", text or ""):
+        if sentence.rstrip().endswith("?"):
+            continue
+        if _CLAIMED_DONE.search(sentence) or _REPORTED_DONE.search(sentence):
+            return True
+    return False
+
+
 # A provider can repeat the exact same text-serialized call after receiving its
 # result. The action must remain exactly-once, but the turn must not end on an
 # empty ``tool_use`` round. Force one tool-less synthesis pass instead.
@@ -112,6 +253,17 @@ _DUPLICATE_CALL_FINAL_DIRECTIVE = (
     "[duplicate tool call suppressed] The exact requested tool call already "
     "ran and its result is available above. Answer the user NOW from that "
     "evidence. Do not call any more tools."
+)
+
+# BrowserSkill's live trace repeated the same invalid ``my_chrome`` call ten
+# times with fresh call ids. Call-id deduplication alone cannot stop that
+# model loop. Once an identical name+arguments call has failed, allow a retry
+# only if its arguments change; suppress a repeated failure and force an
+# honest final answer instead of burning a minute on the same error.
+_REPEATED_FAILED_CALL_FINAL_DIRECTIVE = (
+    "[repeated tool failure] The identical tool call has already failed. "
+    "Do not call it again. Answer from the evidence above and state clearly "
+    "what could not be completed."
 )
 
 
@@ -125,6 +277,21 @@ def _cap_tool_result_json(serialized: str) -> str:
         f"{kept}… [truncated: tool output was {len(serialized)} chars, "
         f"capped at {_MAX_TOOL_RESULT_CHARS}]"
     )
+
+
+def _previous_user_text(messages: list[BrainMessage]) -> str:
+    """The person's request before the newest one, for a bare "try again"."""
+    seen = 0
+    for message in reversed(messages):
+        if message.role != "user" or not isinstance(message.content, str):
+            continue
+        text = message.content
+        if text.startswith(_STEER_PREFIX) or text.startswith("["):
+            continue
+        seen += 1
+        if seen == 2:
+            return text
+    return ""
 
 
 def _last_user_text(messages: list[BrainMessage]) -> str:
@@ -150,6 +317,12 @@ def _tool_call_signature(call: dict[str, Any]) -> tuple[str, str]:
         str(call.get("name") or ""),
         json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str),
     )
+
+
+def _missing_browser_ref_error(error: str) -> bool:
+    """Whether the same browser call cannot work until it has a fresh ref."""
+    low = str(error or "").casefold()
+    return "need a ref from the page" in low or "requires a ref from the page" in low
 
 
 def _images_from_artifacts(artifacts: object) -> list[ImageBlock]:
@@ -243,7 +416,18 @@ _INSTRUCTIONAL_QUESTION_RE = re.compile(
     r"|how\s+(?:do|can|could|should|would)\s+"
     r"|what\s+(?:is|does|are)\s+"
     r"|why\s+"
+    r"|(?:please\s+)?(?:explain|describe)\s+"
     r")",
+    re.IGNORECASE,
+)
+
+# "What is the largest file in my Downloads folder?" asks for a fact about this
+# machine, not for an explanation. Live 2026-10-26 the how-to guard blocked
+# run_shell on it, and Gemma then made up "VacationHighlights.mp4, 3 GB".
+_OWN_MACHINE_LOOKUP_RE = re.compile(
+    r"^\s*what(?:'s|\s+is|\s+are)\s+"
+    r"(?=.*(?:\bmy\b|\bthis\s+(?:computer|pc|laptop|machine)\b|\b[a-z]:\\|"
+    r"\b(?:downloads|documents|desktop)\s+folder\b))",
     re.IGNORECASE,
 )
 
@@ -407,6 +591,16 @@ _ANTI_SILENCE_PHRASES: dict[str, str] = {
     "es": "Ahora mismo no puedo hacerlo — me falta la herramienta adecuada.",
 }
 
+# Keep this local rather than importing jarvis.voice.action_phrases: importing
+# a voice submodule runs jarvis.voice.__init__, which pulls the full voice and
+# self-modification graph into this low-level loop (and creates a cycle in
+# lightweight runtimes). These match the shared action_failed_generic phrase.
+_ACTION_FAILED_PHRASES: dict[str, str] = {
+    "de": "Das hat gerade nicht geklappt.",  # i18n-allow: localized failure reply
+    "en": "That didn't work just now.",
+    "es": "Eso no funcionó ahora mismo.",
+}
+
 # Meta-/debug feedback acknowledgement. Must NOT narrate background bookkeeping
 # (the maintainer finds "ich notiere das Feedback" / "I'm noting that" / "tomo
 # nota" annoying — that work happens silently, BACKGROUND_ACTION_RE strips it
@@ -481,6 +675,8 @@ def _is_instructional_question(utterance: str) -> bool:
     text = utterance or ""
     if not _INSTRUCTIONAL_QUESTION_RE.search(text):
         return False
+    if _OWN_MACHINE_LOOKUP_RE.search(text):
+        return False
     return not _has_trailing_imperative(text)
 
 
@@ -541,6 +737,25 @@ def _should_block_action_as_research(
     if tool_name and tool_name == evidence_required_tool:
         return False
     if _is_own_data_request(user_utterance):
+        return False
+    # The subject of text to enter is not the intent of the tool action. In
+    # particular, typing a research prompt into an open app must not be replaced
+    # by search_web. Limit this exception to desktop/browser tools so unrelated
+    # CLI actions still need their existing evidence or ownership justification.
+    desktop_tool = tool_name.startswith(("windows-desktop/", "windows_desktop/", "browser_"))
+    desktop_tool = desktop_tool or "/browser_" in tool_name
+    explicit_input = re.search(
+        r"\bby\s+(?:typing|pasting)\b"
+        r"|\b(?:type|paste)\s+(?:a|the|this|that)\s+(?:prompt|text|message)\b",
+        user_utterance,
+        re.IGNORECASE,
+    )
+    if (
+        desktop_tool
+        and not _is_instructional_question(user_utterance)
+        and not is_observation_only(user_utterance)
+        and (is_explicit_computer_use_turn(user_utterance) or explicit_input)
+    ):
         return False
     return _is_research_intent(user_utterance, intent_level)
 
@@ -639,10 +854,19 @@ class ToolUseLoop:
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
         loop_control: LoopControl | None = None,
+        tool_images: bool = True,
+        tool_switch: ToolSwitch | None = None,
     ) -> None:
         self._brain = brain
         self._tools = tools
+        # Which registered tools go on the wire (jarvis/brain/tool_switch.py).
+        # ``None`` sends every one of them, as before.
+        self._switch = tool_switch
         self._executor = executor
+        # False when this turn's model may not receive images (route policy:
+        # a cloud target without cloud-vision consent). A tool screenshot then
+        # stays on the device and the model is told so.
+        self._tool_images = tool_images
         # Caller-supplied keys for every tool's ``ExecutionContext.config``
         # (see BrainDispatcher.tool_context). Per-turn keys set below win.
         self._tool_context = dict(tool_context or {})
@@ -799,15 +1023,50 @@ class ToolUseLoop:
         except Exception:  # noqa: BLE001 — observability must never break the loop
             log.debug("guard-denied publish failed", exc_info=True)
 
+    def _with_screen_control(
+        self, payload: list[dict[str, Any]], request: str = ""
+    ) -> list[dict[str, Any]]:
+        """``payload`` plus the screen-control tool, for the retry of an unmade action.
+
+        Live 2026-10-26 "open windows pc settings go to display then advanced
+        display" and "click on roberto" were answered in words, and the tool
+        switch had not offered computer_use for either. An action that no
+        offered tool fits can still be done with the mouse and keyboard.
+
+        A web job that already has the browser tools keeps to them: the switch
+        left screen control off on purpose, because with both offered Gemma
+        clicks pixels on a page the browser could have read. The exception is
+        a request about the person's own open browser (a profile, a signed-in
+        tab), which the browser tools cannot reach.
+        """
+        # The PC pilot, when here, is the only hands (tool_switch.one_set_of_hands).
+        tool = self._tools.get("pc_pilot") or self._tools.get("computer_use")
+        if tool is None or any(t.get("name") == tool.name for t in payload):
+            return payload
+        has_browser = any(
+            str(t.get("name", "")).rsplit("/", 1)[-1] == "browser_navigate" for t in payload
+        )
+        if has_browser and not wants_own_browser(request):
+            return payload
+        return [
+            *payload,
+            {
+                "name": tool.name,
+                "description": getattr(tool, "description", ""),
+                "input_schema": tool.schema,
+            },
+        ]
+
     def _tool_schemas(self) -> list[dict[str, Any]]:
         """Schemas in Anthropic-compatible format (providers normalise)."""
+        shown = self._switch.visible() if self._switch is not None else self._tools
         return [
             {
                 "name": tool.name,
                 "description": getattr(tool, "description", ""),
                 "input_schema": tool.schema,
             }
-            for tool in self._tools.values()
+            for tool in shown.values()
         ]
 
     async def _phase(self, phase: str, detail: str = "") -> None:
@@ -945,12 +1204,21 @@ class ToolUseLoop:
         tid = trace_id or uuid4()
         current_messages = list(messages)
         tools_payload = self._tool_schemas()
+        switch_version = self._switch.version if self._switch is not None else 0
         final_agg = StreamingAggregate()
         ack_attempted = False
         loop_started = time.monotonic()
         deadline_forced = False
         seen_call_ids: set[str] = set()
+        failed_call_attempts: dict[tuple[str, str], int] = {}
+        failed_call_errors: dict[tuple[str, str], str] = {}
         tool_log: list[ToolRecord] = []
+        #: The last call's schema refusal, while no later call has run.
+        refused_call = ""
+        failed_call = ""
+        retry_nudged = False
+        #: The next round must call a tool (llama.cpp's tool_choice "required").
+        force_tool = False
         verify_rounds = 0
         round_no = 0
 
@@ -976,6 +1244,15 @@ class ToolUseLoop:
                 log.info("tool_use_loop: %d steer message(s) folded in", len(pending))
             round_no += 1
             await self._phase(PHASE_GATHER, f"round {round_no}")
+            if (
+                self._switch is not None
+                and self._switch.version != switch_version
+                and tools_payload
+                and not deadline_forced
+            ):
+                # Tools switched on last round are callable from this one.
+                switch_version = self._switch.version
+                tools_payload = self._tool_schemas()
 
             req = BrainRequest(
                 messages=tuple(current_messages),
@@ -984,7 +1261,9 @@ class ToolUseLoop:
                 max_tokens=self._max_tokens,
                 stream=True,
                 reasoning_effort=self._reasoning_effort,
+                tool_choice="required" if force_tool and tools_payload else None,
             )
+            force_tool = False
             stream = self._brain.complete(req)
             if text_consumer is not None:
                 agg = await aggregate_with_consumer(
@@ -1025,6 +1304,10 @@ class ToolUseLoop:
                     if agg.tool_calls:
                         agg.finish_reason = "tool_use"
 
+            # A "[used tool X]" line the model wrote itself is a claimed call
+            # that never ran (jarvis/brain/fake_tool_mark.py): never shown,
+            # and a reply without a real call goes back as an unmade action.
+            agg.text, faked_call = strip_fake_tool_marks(agg.text)
             duplicate_only_round = False
             if agg.tool_calls:
                 had_tool_calls = True
@@ -1049,6 +1332,8 @@ class ToolUseLoop:
             final_agg.finish_reason = agg.finish_reason
             for k, v in agg.usage.items():
                 final_agg.usage[k] = final_agg.usage.get(k, 0) + int(v)
+            # Tools an agent brain ran on its own side (BrainDelta.agent_tools).
+            final_agg.executed_tool_names.update(agg.executed_tool_names)
 
             # Budget tracking
             self._budget.record_turn(
@@ -1080,6 +1365,104 @@ class ToolUseLoop:
                 if late:
                     self._append_steer(current_messages, late)
                     continue
+                promised = bool(failed_call and _PROMISE.search(agg.text or ""))
+                undone = bool(
+                    not tool_log
+                    and tools_payload
+                    and (
+                        _ANNOUNCED.search(agg.text or "")
+                        or _ACK_PROMISE.search(agg.text or "")
+                        or _claims_done(agg.text or "")
+                    )
+                )
+                narrowed = bool(
+                    not tool_log and tools_payload and _NARROW_ASK.search(agg.text or "")
+                )
+                # Live 2026-10-26 "Create a folder named jarvis-b5 inside ..."
+                # carried the run_shell mandate, and Gemma answered in words the
+                # announcement check did not recognise, so the turn ended on
+                # "the command never ran". A mandated tool that was offered and
+                # not called is an unmade action whatever the wording.
+                undone = undone or bool(
+                    evidence_required_tool
+                    and not tool_log
+                    and any(t.get("name") == evidence_required_tool for t in tools_payload)
+                )
+                undone = undone or bool(faked_call and tools_payload)
+                if (
+                    (refused_call or promised or undone or narrowed)
+                    and not retry_nudged
+                    and not deadline_forced
+                ):
+                    retry_nudged = True
+                    reason = (
+                        "refused" if refused_call
+                        else "failed" if promised
+                        else "unmade" if undone
+                        else "narrowed"
+                    )
+                    log.info(
+                        "tool_use_loop: a %s call was answered in words; sent back once", reason
+                    )
+                    directive = (
+                        _RETRY_DIRECTIVE + refused_call
+                        if refused_call
+                        else _FAILED_DIRECTIVE + failed_call
+                        if promised
+                        else _UNDONE_DIRECTIVE
+                        if undone
+                        else _NARROW_DIRECTIVE
+                    )
+                    request = user_utterance or _last_user_text(current_messages)
+                    if request:
+                        directive += _REQUEST_REMINDER + request
+                    current_messages.append(BrainMessage(role="assistant", content=agg.text))
+                    current_messages.append(BrainMessage(role="user", content=directive))
+                    # An action announced and never made: the retry must be a
+                    # call. Live 2026-10-25 Nemotron 3.5 Bolt E4B answered
+                    # "On it, I am setting the volume" six times with no call,
+                    # and a words-only nudge leaves it free to do so again.
+                    # A narrowing question is sent back free: the honest answer
+                    # may still be a question.
+                    force_tool = reason == "unmade"
+                    if force_tool:
+                        tools_payload = self._with_screen_control(
+                            tools_payload,
+                            user_utterance or _last_user_text(current_messages),
+                        )
+                    final_agg.text = ""
+                    continue
+                if retry_nudged and not tool_log and tools_payload and _claims_done(agg.text or ""):
+                    # Sent back once and still reporting an action no tool
+                    # made: the person hears that nothing ran, not the claim.
+                    log.info("tool_use_loop: an action claim with no call replaced")
+                    final_agg.text = _localized_phrase(
+                        {lang: action_not_started_phrase(lang) for lang in ("de", "en", "es")},
+                        user_utterance or _last_user_text(current_messages),
+                        reply_language,
+                    )
+                    break
+                if (
+                    retry_nudged
+                    and any(not record.ok for record in tool_log)
+                    and (
+                        promised
+                        or has_unbacked_action_claim(agg.text or "")
+                    )
+                ):
+                    # One retry was already granted after a real tool failure.
+                    # If the model closes with another promise/false completion
+                    # instead of a call or a report, do not let the turn sound
+                    # as if the task is continuing in the background.
+                    log.info(
+                        "tool_use_loop: post-failure action promise replaced"
+                    )
+                    final_agg.text = _localized_phrase(
+                        _ACTION_FAILED_PHRASES,
+                        user_utterance or _last_user_text(current_messages),
+                        reply_language,
+                    )
+                    break
                 outcome = await self._run_verify(
                     user_utterance or _last_user_text(current_messages),
                     final_agg.text,
@@ -1197,6 +1580,7 @@ class ToolUseLoop:
             # end the turn when nothing else in it produced a result.
             meta_debug_ack: str | None = None
             unknown_tool_requested = False
+            repeated_failed_call = False
             for tc in agg.tool_calls:
                 tool_name = tc.get("name", "")
                 tool_args = tc.get("input", {})
@@ -1212,14 +1596,46 @@ class ToolUseLoop:
                 # and the tool-result message all key on it); the raw model
                 # spelling stays in ``final_agg.tool_calls`` above.
                 tool, tool_name = self._resolve_tool(tool_name)
+                if (
+                    tool is not None
+                    and self._switch is not None
+                    and self._switch.switch_on([tool_name])
+                ):
+                    # The model named a registered tool it could not see: it
+                    # knew what it needed, so switch it on and let it run.
+                    log.info("tool switch: %s called by name, switched on", tool_name)
                 tool, tool_name, tool_args = self._reroute_music_tool(
                     tool, tool_name, tool_args, user_utterance
                 )
+                call_signature = _tool_call_signature({
+                    "name": tool_name,
+                    "input": tool_args,
+                })
                 stt_blocked, stt_reason = (
                     _is_stt_hallucinated(tool_name, tool_args)
                     if tool is not None else (False, "")
                 )
+                prior_failures = failed_call_attempts.get(call_signature, 0)
+                prior_error = failed_call_errors.get(call_signature, "")
                 if (
+                    prior_failures >= 2
+                    or (prior_failures and _missing_browser_ref_error(prior_error))
+                ):
+                    repeated_failed_call = True
+                    log.warning(
+                        "tool_use_loop: suppressed repeated failed call %s (same arguments)",
+                        tool_name,
+                    )
+                    tool_result_payload = {
+                        "success": False,
+                        "output": None,
+                        "error": (
+                            "This exact tool call already failed earlier in this turn. "
+                            "It was not repeated. Inspect the earlier error and report "
+                            "what remains incomplete."
+                        ),
+                    }
+                elif (
                     tool is not None
                     and _is_instructional_question(user_utterance)
                     and _is_side_effect_tool(tool)
@@ -1394,6 +1810,10 @@ class ToolUseLoop:
                 elif (
                     tool_name in CU_VEHICLE_TOOL_NAMES
                     and not llm_computer_use_allowed(user_utterance)
+                    and not (
+                        is_retry_request(user_utterance)
+                        and llm_computer_use_allowed(_previous_user_text(current_messages))
+                    )
                 ):
                     # Explicit-desktop gate (live incident 2026-07-21 11:36):
                     # a pure knowledge question delegated by realtime was
@@ -1547,6 +1967,12 @@ class ToolUseLoop:
                         "output": result.output,
                         "error": result.error,
                     }
+                    # Appshots use the same in-memory image envelope as Live.
+                    # Never serialize pixels as tool-result text (or log them).
+                    if isinstance(result.output, dict) and "_image" in result.output:
+                        tool_result_payload["output"] = {
+                            k: v for k, v in result.output.items() if k != "_image"
+                        }
                     # Record a tool that ACTUALLY ran (success only) so consumers
                     # can tell a real side effect from a merely-requested or
                     # guard-blocked call. The guard branches above never reach
@@ -1604,17 +2030,32 @@ class ToolUseLoop:
                     tool_call_id=call_id,
                     name=tool_name,
                 ))
-                if self._control is not None:
-                    # The verifier's only evidence that something happened.
-                    body = tool_result_payload.get("output")
-                    if body in (None, ""):
-                        body = tool_result_payload.get("error") or ""
-                    tool_log.append(ToolRecord(
-                        name=tool_name,
-                        ok=bool(tool_result_payload.get("success")),
-                        blocked=bool(tool_result_payload.get("blocked")),
-                        preview=str(body)[:200],
-                    ))
+                refusal = str(tool_result_payload.get("error") or "")
+                if not tool_result_payload.get("success"):
+                    failed_call_attempts[call_signature] = (
+                        failed_call_attempts.get(call_signature, 0) + 1
+                    )
+                    failed_call_errors[call_signature] = (
+                        refusal or str(tool_result_payload.get("output") or "")
+                    )[:400]
+                refused_call = refusal if refusal.startswith(INVALID_ARGUMENTS_PREFIX) else ""
+                failed_call = (
+                    ""
+                    if tool_result_payload.get("success")
+                    else (refusal or str(tool_result_payload.get("output") or ""))[:400]
+                )
+                # The action ledger also feeds retry/honesty checks without an
+                # optional verifier. Otherwise a real click/scroll is reported
+                # as "I did not start an action" after successful execution.
+                body = tool_result_payload.get("output")
+                if body in (None, ""):
+                    body = tool_result_payload.get("error") or ""
+                tool_log.append(ToolRecord(
+                    name=tool_name,
+                    ok=bool(tool_result_payload.get("success")),
+                    blocked=bool(tool_result_payload.get("blocked")),
+                    preview=str(body)[:200],
+                ))
                 # A tool just finished — another active-work boundary. Reset the
                 # no-progress deadline so a slow tool (a vision capture, an MCP
                 # round-trip) does not count as a stall.
@@ -1631,7 +2072,22 @@ class ToolUseLoop:
                     _img_blocks = _images_from_artifacts(
                         getattr(result, "artifacts", ()) or ()
                     )
-                    if _img_blocks:
+                    if isinstance(result.output, dict) and isinstance(
+                        result.output.get("_image"), dict,
+                    ):
+                        picture = result.output["_image"]
+                        _img_blocks.append(ImageBlock(
+                            mime=picture["mime"], data_b64=picture["data"],
+                        ))
+                    if _img_blocks and not self._tool_images:
+                        current_messages.append(BrainMessage(
+                            role="user",
+                            content=(
+                                "(The tool captured an image. It stays on this "
+                                "device and is not shown to you; do not describe it.)"
+                            ),
+                        ))
+                    elif _img_blocks:
                         current_messages.append(BrainMessage(
                             role="user",
                             content="(Tool screenshot — describe or use it as needed.)",
@@ -1669,6 +2125,20 @@ class ToolUseLoop:
                 suppress_output = _anti_silence_phrase(
                     user_utterance, reply_language
                 )
+
+            # A model may retry a malformed action with a fresh call id
+            # indefinitely. The second identical failure is a hard stop: give
+            # it one tool-less synthesis round over the error evidence, never
+            # another chance to issue the same action again.
+            if repeated_failed_call and not deadline_forced:
+                log.warning(
+                    "tool_use_loop: repeated failed call; forcing an honest final answer"
+                )
+                deadline_forced = True
+                tools_payload = []
+                current_messages.append(BrainMessage(
+                    role="user", content=_REPEATED_FAILED_CALL_FINAL_DIRECTIVE,
+                ))
 
             # Budget check after execution: the results of this round are
             # already in the history — force ONE final tool-less answer round

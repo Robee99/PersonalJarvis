@@ -2,11 +2,15 @@
 
 Endpoints (mounted by the WebServer in ``_build_app()``):
 
-    GET  /api/voice/state   → is a speech pipeline running, and what it is doing.
+    GET  /api/voice/state   → is a speech pipeline running, what it is doing,
+                              and whether the browser should hold the call.
     POST /api/voice/call    → arm a wake-style voice session (the click-shaped
                               wake word — same path as the call hotkey).
     POST /api/voice/hangup  → hard-stop the voice channel (same contract as the
                               hangup hotkey).
+    GET  /api/voice/mute    → whether the microphone is muted FOR the assistant.
+    POST /api/voice/mute    → toggle that mute (the mascot double-click's
+                              contract, ``VoiceMuteToggleRequested``).
 
 The click path is deliberately the SAME one the call hotkey and the chats
 "Speak in this conversation" button take — ``SpeechPipeline.request_voice_session``
@@ -23,11 +27,30 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
+
+
+class BrowserStartupFailure(BaseModel):
+    """A bounded correlation token; no microphone data or failure text."""
+
+    model_config = ConfigDict(extra="forbid")
+    request_id: str = Field(
+        min_length=36, max_length=36,
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    )
+
+
+@router.post("/startup-failed")
+def voice_startup_failed(body: BrowserStartupFailure) -> dict[str, bool]:
+    """Release a pending wake request when browser audio could not start."""
+    from jarvis.live.runtime import browser_startup_failed
+
+    return {"acknowledged": browser_startup_failed(body.request_id)}
 
 
 def _pipeline() -> Any:
@@ -40,8 +63,31 @@ def _pipeline() -> Any:
         return None
 
 
+def _browser_call(request: Request, pipeline: Any) -> bool:
+    """Whether the browser that presses Start should hold the call itself.
+
+    True only on a host that will never run a speech pipeline of its own — no
+    pipeline AND no desktop shell (a desktop app that is still booting has no
+    pipeline yet, and a browser-held call there would be a second microphone
+    owner) — and whose ``/ws/audio`` would accept the call. Without a config
+    attached to the app the answer is False: it cannot be read, so it is not
+    offered.
+    """
+    if pipeline is not None:
+        return False
+    state = request.app.state
+    if bool(getattr(state, "native_file_actions", False)):
+        return False
+    cfg = getattr(state, "config", None) or getattr(state, "cfg", None)
+    if cfg is None:
+        return False
+    from jarvis.browser_voice.route import browser_voice_enabled
+
+    return browser_voice_enabled(cfg)
+
+
 @router.get("/state")
-async def voice_state() -> dict[str, Any]:
+async def voice_state(request: Request) -> dict[str, Any]:
     """Whether voice is available here, and what the pipeline is doing now.
 
     ``voice_state`` is the fine-grained state every voice surface renders
@@ -58,9 +104,15 @@ async def voice_state() -> dict[str, Any]:
     state without a running session is unearned detail, never the truth. A
     running session whose supervisor cannot be read answers ``unknown`` rather
     than a guess — the caller leaves a live call alone on anything but ``idle``.
+
+    ``browser_call`` tells a browser on a host without a speech pipeline (a
+    VPS, ``jarvis serve``) to hold the call itself over ``/ws/audio`` instead
+    of asking this host to arm a microphone it does not have (issue #399).
     """
     from jarvis.live.runtime import active
 
+    pipeline = _pipeline()
+    browser_call = _browser_call(request, pipeline)
     sessions = active()
     if sessions:
         phase = getattr(sessions[0], "phase", "listening")
@@ -70,10 +122,15 @@ async def voice_state() -> dict[str, Any]:
             "available": True,
             "state": "active",
             "voice_state": phase,
+            "browser_call": browser_call,
         }
-    pipeline = _pipeline()
     if pipeline is None:
-        return {"available": False, "state": "unavailable", "voice_state": "idle"}
+        return {
+            "available": False,
+            "state": "unavailable",
+            "voice_state": "idle",
+            "browser_call": browser_call,
+        }
     state = str(getattr(getattr(pipeline, "_state", None), "name", "unknown")).lower()
     supervisor = getattr(pipeline, "_supervisor", None)
     supervisor_state = str(getattr(supervisor, "state", "") or "").lower() or "unknown"
@@ -81,11 +138,12 @@ async def voice_state() -> dict[str, Any]:
         "available": True,
         "state": state,
         "voice_state": supervisor_state if state == "active" else "idle",
+        "browser_call": browser_call,
     }
 
 
 @router.post("/call")
-async def voice_call() -> dict[str, Any]:
+def voice_call() -> dict[str, Any]:
     """Start a voice conversation — functionally the wake word, by click.
 
     ``armed`` is ``False`` when the pipeline refused (a session already runs,
@@ -109,3 +167,37 @@ async def voice_hangup() -> dict[str, Any]:
     if pipeline is None or not hasattr(pipeline, "request_voice_hangup"):
         raise HTTPException(status_code=503, detail="voice-pipeline-unavailable")
     return {"stopped": bool(pipeline.request_voice_hangup())}
+
+
+@router.get("/mute")
+def voice_mute_state() -> dict[str, Any]:
+    """Whether the user's microphone is muted for the assistant right now.
+
+    The flag lives on the pipeline (``SpeechPipeline._muted``) and nowhere
+    else; every surface mirrors it from ``VoiceMuteChanged``. This is the REST
+    seed for a surface that mounts after the last flip and so never saw it.
+    """
+    pipeline = _pipeline()
+    if pipeline is None:
+        return {"available": False, "muted": False}
+    return {"available": True, "muted": bool(getattr(pipeline, "_muted", False))}
+
+
+@router.post("/mute")
+async def voice_mute_toggle() -> dict[str, Any]:
+    """Toggle the microphone mute — the same request the mascot double-click sends.
+
+    Mute is input-only: the assistant finishes what it is saying, and the
+    user's frames are dropped at the pipeline's boundary until unmuted. The
+    pipeline owns the flip (``_on_mute_toggle_requested``) and answers with
+    ``VoiceMuteChanged``, so the caller learns the new state from the bus,
+    never from here — one writer, one broadcast.
+    """
+    pipeline = _pipeline()
+    bus = getattr(pipeline, "_bus", None) if pipeline is not None else None
+    if bus is None:
+        raise HTTPException(status_code=503, detail="voice-pipeline-unavailable")
+    from jarvis.core.events import VoiceMuteToggleRequested
+
+    await bus.publish(VoiceMuteToggleRequested(source="web.hud", source_layer="ui.web.voice"))
+    return {"requested": True}

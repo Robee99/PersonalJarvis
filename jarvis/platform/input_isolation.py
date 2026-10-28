@@ -69,6 +69,11 @@ _ELEVATED_REMEDY = (
     "Restart the app without administrator rights. Nothing in normal operation "
     "needs them — privileged actions ask for elevation individually."
 )
+_UAC_OFF_REMEDY = (
+    "User Account Control (UAC) is switched off on this PC, so every app runs "
+    "with administrator rights and a restart cannot drop them. Turning UAC back "
+    "on in Windows settings lifts the block."
+)
 _ROOT_SUMMARY = (
     "This app is running as root, so dictation apps, text expanders, and other "
     "assistive input tools running in your normal user session cannot type into "
@@ -89,6 +94,9 @@ class InputIsolationReport:
     summary: str
     remedy: str
     can_restart_unelevated: bool
+    #: Windows UAC is switched off, so an administrator has no unelevated
+    #: token to restart with; only turning UAC back on lifts the block.
+    uac_disabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +106,7 @@ class InputIsolationReport:
             "summary": self.summary,
             "remedy": self.remedy,
             "can_restart_unelevated": self.can_restart_unelevated,
+            "uac_disabled": self.uac_disabled,
         }
 
 
@@ -321,6 +330,7 @@ def describe_input_isolation(
     *,
     _platform=detect_platform,
     _elevated=windows_process_is_elevated,
+    _uac_disabled=None,
     _euid=_euid,
 ) -> InputIsolationReport:
     """Report whether outside input software can reach this app's window.
@@ -344,13 +354,18 @@ def describe_input_isolation(
                 can_restart_unelevated=False,
             )
         if elevated:
+            if _uac_disabled is None:
+                from .deescalate import uac_disabled as _uac_disabled  # noqa: PLC0415
+            uac_off = _uac_disabled() is True
             return InputIsolationReport(
                 blocked=True,
                 reason=InputIsolationReason.ELEVATED,
                 platform=platform,
                 summary=_ELEVATED_SUMMARY,
-                remedy=_ELEVATED_REMEDY,
-                can_restart_unelevated=True,
+                remedy=_UAC_OFF_REMEDY if uac_off else _ELEVATED_REMEDY,
+                # With UAC off a restart comes back just as elevated.
+                can_restart_unelevated=not uac_off,
+                uac_disabled=uac_off,
             )
         return InputIsolationReport(
             blocked=False,

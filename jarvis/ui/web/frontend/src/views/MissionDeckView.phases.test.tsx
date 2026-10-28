@@ -19,10 +19,41 @@ vi.mock("@/components/deck/DeckActivityCards", () => ({
   RunsCard: () => <section>runs</section>,
   TerminalsCard: () => <section>terminals</section>,
 }));
+// The Stark instruments poll their own endpoints; each has its own tests.
+vi.mock("@/components/stark/StarkInstruments", () => ({
+  SystemStatusPanel: () => <section>status</section>,
+  ResourcesPanel: () => <section>vitals</section>,
+  QuickAccess: () => <nav>quick</nav>,
+  StarkClock: () => <span>clock</span>,
+}));
+vi.mock("@/components/stark/ContextMeter", () => ({
+  ContextMeter: () => <section>context</section>,
+  useDeckContext: () => ({ data: undefined }),
+  fmtK: (n: number) => String(n),
+}));
+vi.mock("@/components/stark/WeatherGlobe", () => ({
+  WeatherGlobe: () => <section>weather</section>,
+  WeatherMini: () => <section>weather</section>,
+  readCity: () => null,
+}));
+vi.mock("@/components/stark/TasksPanel", () => ({ TasksPanel: () => <section>tasks</section> }));
 vi.mock("@/components/deck/DeckSignalCards", () => ({
   ApiStatsCard: () => <section>api</section>,
   CaptureCard: () => <section>capture</section>,
   LiveCounter: () => <div>counter</div>,
+  VitalsCard: () => <section>vitals</section>,
+}));
+vi.mock("@/components/deck/HudMemoryPanel", () => ({
+  HudMemoryPanel: ({ className }: { className?: string }) => (
+    <section className={className} data-testid="hud-memory">
+      memory
+    </section>
+  ),
+}));
+// The chat panel mounts the real agent chat (its own QueryClient-backed
+// stages, lazily); it has its own tests (HudLayout, ChatsSurface).
+vi.mock("@/components/deck/HudChatPanel", () => ({
+  HudChatPanel: () => <section data-testid="hud-chat">chat</section>,
 }));
 vi.mock("@/components/deck/DeckTurnCard", () => ({ TurnCard: () => <section>turn</section> }));
 vi.mock("@/components/deck/DeckLogCard", async () => {
@@ -56,6 +87,8 @@ const requestVoiceCall = vi.fn(async () => ({ armed: true }));
 vi.mock("@/lib/voiceApi", () => ({
   requestVoiceCall: () => requestVoiceCall(),
   requestVoiceHangup: async () => {},
+  fetchTtsVolume: async () => ({ volume: 1 }),
+  setTtsVolume: async () => {},
 }));
 vi.mock("@/components/MascotGigi", () => ({
   MascotGigi: () => <div data-testid="mascot-gigi" />,
@@ -85,7 +118,18 @@ vi.mock("@/hooks/useVoiceEngineDisplay", () => ({
   }),
 }));
 
-import { MissionDeckView } from "@/views/MissionDeckView";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MissionDeckView as Deck } from "@/views/MissionDeckView";
+
+/** The board inside a fresh query client (the command bar and badges read through it). */
+function MissionDeckView() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={client}>
+      <Deck />
+    </QueryClientProvider>
+  );
+}
 import { useDeckStore } from "@/store/deck";
 import { useEventStore } from "@/store/events";
 
@@ -165,7 +209,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     // The cards themselves mount one beat each, not in the click's own task
     // (the launch must not freeze on the board's mount): the slot is there,
     // its card is not yet, and the slot is not powered until its frame fades.
-    expect(screen.queryByText("log")).toBeNull();
+    expect(screen.queryByText("status")).toBeNull();
     expect(left.getAttribute("data-powered")).toBe("false");
     // The orb lands with a ring; the board ends with one scan.
     expect(screen.getByTestId("deck-orb-landing")).toBeTruthy();
@@ -175,7 +219,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     const standby = screen.getByTestId("deck-standby");
     await waitFor(() => expect(standby.getAttribute("data-leaving")).toBe("true"));
     expect(standby.querySelector('[data-testid="deck-handoff-wave"]')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("log")).toBeTruthy(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText("status")).toBeTruthy(), { timeout: 3000 });
     await waitFor(() => expect(screen.queryByTestId("deck-standby")).toBeNull(), { timeout: 4000 });
     await waitFor(() => expect(left.getAttribute("data-powered")).toBe("true"), { timeout: 4000 });
   });
@@ -191,16 +235,18 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     await waitFor(() => expect(screen.queryByTestId("deck-standby")).toBeNull(), { timeout: 4000 });
   }, 10_000);
 
-  test("pressing the orb reaches for the voice AND opens the board at once", () => {
+  test("pressing the orb reaches for the voice AND opens the board at once", async () => {
     render(<MissionDeckView />);
     fireEvent.click(screen.getByRole("button", { name: /saying “Hey Nova”/ }));
     expect(screen.getByTestId("deck-board")).toBeTruthy();
-    expect(requestVoiceCall).toHaveBeenCalledTimes(1);
+    // The call starts once the chat on screen is bound to it (the binding
+    // may fail; the call still starts).
+    await waitFor(() => expect(requestVoiceCall).toHaveBeenCalledTimes(1));
   });
 
-  test("the header carries Gigi and leaves restart to the window caption", () => {
+  test("the header carries the wordmark and leaves restart to the window caption", () => {
     render(<MissionDeckView />);
-    expect(screen.getByTestId("deck-header-gigi")).toBeTruthy();
+    expect(screen.getByTestId("stark-wordmark").textContent).toBe("NOVA");
     expect(screen.queryByRole("button", { name: /^restart$/i })).toBeNull();
     expect(screen.queryByTestId("detach-view-button")).toBeNull();
   });
@@ -215,7 +261,7 @@ describe("MissionDeckView — the three acts", { timeout: 15_000 }, () => {
     const left = screen.getByTestId("deck-slot-left-top");
     expect(left.getAttribute("data-reveal")).toBe("false");
     // … cards and all, powered from the first render.
-    expect(screen.getByText("log")).toBeTruthy();
+    expect(screen.getByText("status")).toBeTruthy();
     expect(left.getAttribute("data-powered")).toBe("true");
   });
 });

@@ -23,9 +23,24 @@ from __future__ import annotations
 import pytest
 
 from jarvis.agentic_ide import intent
-from jarvis.agentic_ide.session import MAX_TERMINALS
+from jarvis.agentic_ide.session import MAX_PANES_PER_REQUEST
 
 NAMES = ["Alex", "Blake", "Casey", "Dana"]
+
+
+@pytest.mark.parametrize("utterance", [
+    "NOW IN THE SAME WINDOW CLICK ON NEW TAB AND GO TO LICIOUS",
+    "click on the new tab and open Licious",
+    "open a new tab and go to https://gemini.google.com",
+])
+def test_browser_tab_navigation_never_requests_a_coding_pane(utterance):
+    assert intent.detect_spawn(utterance) is None
+
+
+def test_a_repository_url_does_not_steal_an_explicit_coding_tab():
+    found = intent.detect_spawn("open a new Codex tab to work on https://github.com/example/project")
+    assert found is not None
+    assert found.count == 1 and found.agent == "codex"
 
 
 @pytest.mark.parametrize(
@@ -81,14 +96,14 @@ def test_a_number_above_the_cap_is_clamped_not_refused() -> None:
     # number is therefore no count at all, rather than a huge one.
     found = intent.detect_spawn("Spawne 999 Terminals")  # i18n-allow: spoken input under test
     assert found is not None
-    assert found.count == MAX_TERMINALS
+    assert found.count == MAX_PANES_PER_REQUEST
 
 
-def test_a_large_requested_count_obeys_the_workspace_capacity() -> None:
-    """Spoken counts share the same eight-session ceiling as the launch picker."""
+def test_a_count_past_sixteen_is_taken_as_said() -> None:
+    """A workspace has no pane limit, so twenty means twenty."""
     found = intent.detect_spawn("Spawne 20 Terminals")  # i18n-allow: spoken input under test
     assert found is not None
-    assert found.count == MAX_TERMINALS
+    assert found.count == 20
 
 
 @pytest.mark.parametrize(
@@ -299,13 +314,13 @@ def test_the_same_agent_named_twice_is_merged() -> None:
     assert found.count == 4
 
 
-def test_the_total_is_capped_at_the_workspace_maximum() -> None:
+def test_the_total_is_capped_at_the_per_request_guard() -> None:
     found = intent.detect_spawn(
-        f"Open {MAX_TERMINALS} Codex terminals and 5 Claude Code terminals",
+        f"Open {MAX_PANES_PER_REQUEST} Codex terminals and 5 Claude Code terminals",
         names=NAMES,
     )
     assert found is not None
-    assert found.count <= MAX_TERMINALS
+    assert found.count <= MAX_PANES_PER_REQUEST
     assert sum(g.count for g in found.groups) == found.count
 
 
@@ -1033,3 +1048,14 @@ def test_spoken_filler_in_front_of_the_enumeration_is_not_the_task() -> None:
         instruction = intent.spawn_instruction(utterance)
         assert not instruction.casefold().startswith(("like", "so"))
         assert intent.distributes_tasks(instruction) is True
+
+
+def test_a_pasted_document_never_opens_panes() -> None:
+    # Live 2026-10-26: "BEGIN" plus a pasted test sheet whose table said
+    # "opens a new window" was answered with "Pick a folder in the Agentic IDE".
+    from jarvis.agentic_ide.intent import detect_spawn
+
+    row = "| A2 | `what tabs are open` | Reads your tabs. | It opens a new window. |"
+    sheet = "BEGIN\n\n# Jarvis live tests\n\n| # | Type | Should | Fail |\n|---|---|---|\n" + row
+    assert detect_spawn(sheet) is None
+    assert detect_spawn("open a new terminal") is not None

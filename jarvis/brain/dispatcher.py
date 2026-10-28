@@ -12,6 +12,7 @@ that is the responsibility of `BrainManager` (so we can switch between providers
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
@@ -29,6 +30,7 @@ from jarvis.safety.tool_executor import ToolExecutor
 from .iteration_budget import IterationBudget
 from .loop_control import LoopControl
 from .streaming import StreamingAggregate, aggregate_with_consumer, tee_text
+from .tool_switch import ToolSwitch
 from .tool_use_loop import ToolUseLoop
 
 
@@ -49,9 +51,13 @@ class BrainDispatcher:
         reasoning_effort: ReasoningEffort | None = None,
         tool_context: dict[str, Any] | None = None,
         loop_control: LoopControl | None = None,
+        tool_images: bool = True,
+        tool_switch: ToolSwitch | None = None,
     ) -> None:
         self._brain = brain
         self._tools = tools or {}
+        # Which of ``tools`` the model sees; ``None`` shows all of them.
+        self._tool_switch = tool_switch
         self._executor = executor
         # Extra keys merged into every tool's ``ExecutionContext.config`` for
         # this dispatcher's turns (e.g. ``{"delivery": "written"}`` for a
@@ -75,6 +81,8 @@ class BrainDispatcher:
         self._reasoning_effort = reasoning_effort
         # Steering / phases / verification for this turn's loop, or None.
         self._loop_control = loop_control
+        # Whether tool screenshots may be shown to this dispatcher's model.
+        self._tool_images = tool_images
 
     @property
     def brain(self) -> Brain:
@@ -94,10 +102,12 @@ class BrainDispatcher:
             reasoning_effort=self._reasoning_effort,
             tool_context=self._tool_context,
             loop_control=self._loop_control,
+            tool_switch=self._tool_switch,
         )
 
     def set_tools(self, tools: dict[str, Tool]) -> None:
         self._tools = dict(tools)
+        self._tool_switch = None
 
     def set_system_prompt(self, prompt: str | None) -> None:
         self._system_prompt = prompt
@@ -146,6 +156,22 @@ class BrainDispatcher:
         # provider prompt cache stays warm. It is never stored in history
         # (the manager appends the clean user_text there).
         user_content = f"{turn_context}\n\n{user_text}" if turn_context else user_text
+        if images:
+            from jarvis.core.image_references import (
+                ImageReferenceError,
+                get_store,
+                instruction,
+                scope_for,
+            )
+
+            try:
+                refs = get_store().add_blocks(
+                    scope_for(self._tool_context, tid), images, source="turn",
+                )
+                user_content += "\n\n" + instruction(refs)
+            except ImageReferenceError as exc:
+                logging.getLogger(__name__).info("Visual handoff unavailable: %s", exc)
+                user_content += "\n\nVisual handoff unavailable: " + str(exc)
         messages.append(BrainMessage(role="user", content=user_content, images=images))
 
         if self._tools and self._executor is not None:
@@ -163,6 +189,8 @@ class BrainDispatcher:
                 reasoning_effort=self._reasoning_effort,
                 tool_context=self._tool_context,
                 loop_control=self._loop_control,
+                tool_images=self._tool_images,
+                tool_switch=self._tool_switch,
             )
             return await loop.run(
                 messages,
@@ -227,5 +255,7 @@ class BrainDispatcher:
                 "description": getattr(t, "description", ""),
                 "input_schema": t.schema,
             }
-            for t in self._tools.values()
+            for t in (
+                self._tool_switch.visible() if self._tool_switch else self._tools
+            ).values()
         ]

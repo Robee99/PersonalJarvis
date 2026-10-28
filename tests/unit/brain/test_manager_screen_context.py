@@ -320,12 +320,69 @@ async def test_blind_provider_is_skipped_for_a_screen_turn(
         return _FakeBrain(vision=name == "seeing")
 
     manager._get_brain = _brain  # type: ignore[method-assign]
+    dispatched_vision: list[bool] = []
+
+    def _dispatcher(brain, *, tools_override=None, **_kwargs):
+        dispatched_vision.append(brain.supports_vision)
+        recorder.tool_overrides.append(tools_override)
+        return recorder
+
+    manager._build_dispatcher = _dispatcher  # type: ignore[method-assign]
 
     result = await manager.generate("take a screenshot", use_history=False)
 
     assert result == "grounded answer"
-    assert created == ["blind", "seeing"]
+    # The router probes the chain's vision capabilities before dispatch. The
+    # selected seeing provider can therefore be constructed twice, but the
+    # blind provider must never own the dispatcher for a screen turn.
+    attempted_chain = [name for name in created if name in {"blind", "seeing"}]
+    assert attempted_chain[0] == "blind" and set(attempted_chain[1:]) == {"seeing"}
+    assert dispatched_vision == [True]
     assert len(recorder.calls) == 1
+    assert recorder.calls[0]["images"]
+
+
+@pytest.mark.asyncio
+async def test_live_webcam_does_not_trigger_an_unrelated_desktop_capture(monkeypatch):
+    _patch_screen(monkeypatch, TurnScreenContext(status="clarify", question="Which desktop?"))
+    manager, recorder = _manager()
+    trace = uuid4()
+    manager.inject_images_for_turn(trace, (ImageBlock(
+        mime="image/jpeg", data_b64="ZmFrZQ==", source_hash="webcam:test"),))
+    answer = await manager.generate("look at me", trace_id=trace, use_history=False)
+    assert answer == "grounded answer"
+    assert len(recorder.calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing_override", [False, True])
+async def test_voice_uses_fresh_frames_from_the_bound_chat_and_releases_them(monkeypatch, existing_override):
+    from jarvis.vision import live_bridge
+    from jarvis.brain.turn_override import TurnOverride
+    from tests.unit.vision.test_live_inputs import frame
+
+    bridge = live_bridge.LiveVisionBridge()
+    bridge.voice_session = lambda: "voice-chat"
+    bridge.register("voice-chat", "window-a", ("webcam",), "local-openai", "vision-model")
+    monkeypatch.setattr(live_bridge, "bridge", bridge)
+    manager, recorder = _manager()
+    manager._build_fallback_chain = BrainManager._build_fallback_chain.__get__(manager)
+    picked = []
+    def seeing(provider, model, **_kwargs):
+        picked.append((provider, model))
+        return _FakeBrain(vision=True)
+    manager._get_brain = seeing
+    async def answer(event):
+        bridge.deliver(event.request_id, "voice-chat", "window-a", [frame("webcam")])
+    manager._bus.subscribe(live_bridge.LiveVisionFrameRequested, answer)
+    _patch_screen(monkeypatch, TurnScreenContext(status="clarify", question="Wrong desktop?"))
+    result = await manager.generate("look at me", allow_voice_confirm=True, use_history=False,
+        turn_override=TurnOverride(provider="openai", model="metered") if existing_override else None)
+    assert result == "grounded answer"
+    assert recorder.calls[0]["images"][0].source_hash.startswith("webcam:")
+    assert manager._pending_turn_images == {}
+    assert bridge.pending_count == 0
+    assert ("local-openai", "vision-model") in picked
 
 
 @pytest.mark.asyncio
@@ -459,3 +516,46 @@ async def test_dropped_image_never_uses_the_screen_capture_failure_phrase(
 
     assert "captured the screen" not in reply.lower()
     assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_text_only_brain_answers_a_screen_turn_from_the_screen_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Nemotron 3.5 Bolt E4B cannot see images (live 2026-10-25): it gets the
+    # capture's laid-out text instead of "connect a vision provider".
+    _patch_screen(
+        monkeypatch,
+        TurnScreenContext(
+            status="captured",
+            image=b"jpeg",
+            mime="image/jpeg",
+            note="<SCREEN_EVIDENCE>Dr. Rao {{1. (206) 198 1999}}</SCREEN_EVIDENCE>",
+            text="Dr. Rao {{1. (206) 198 1999}}",
+        ),
+    )
+    manager, recorder = _manager(chain=[("blind", "a")])
+    manager._get_brain = lambda _name, _model: _FakeBrain(vision=False)  # type: ignore[method-assign]
+
+    result = await manager.generate("what number is on my screen?", use_history=False)
+
+    assert result == "grounded answer"
+    assert recorder.calls[0]["images"] == ()
+    assert "{{1. (206) 198 1999}}" in recorder.calls[0]["turn_context"]
+    assert "SCREEN AS TEXT" in recorder.calls[0]["turn_context"]
+
+
+@pytest.mark.asyncio
+async def test_text_only_brain_still_declines_a_capture_with_no_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_screen(
+        monkeypatch, TurnScreenContext(status="captured", image=b"jpeg", mime="image/jpeg")
+    )
+    manager, recorder = _manager(chain=[("blind", "a")])
+    manager._get_brain = lambda _name, _model: _FakeBrain(vision=False)  # type: ignore[method-assign]
+
+    result = await manager.generate("what is on my screen?", use_history=False)
+
+    assert recorder.calls == []
+    assert "inspect images" in result

@@ -9,6 +9,7 @@ that location.
 
 List of bundled skills:
   - deep-work-mode    DND + focus timer via hotkey/voice
+  - fable-method      Optional evidence-first workflow for complex tasks
   - memory-save       "remember that ..." saved to memory-MCP
   - skill-creator     meta-skill for building further skills
   - plugin-<id>       Paired skills for marketplace plugins (2026-06-07): each
@@ -46,9 +47,33 @@ _PLUGIN_PAIRED_SKILLS: tuple[str, ...] = (
     "plugin-airtable",
     "plugin-cal_com",
     "plugin-home_assistant",
+    "plugin-paperclip",
     "plugin-spotify",
     "plugin-youtube_music",
     "plugin-higgsfield",
+    "plugin-agentmail",
+    "plugin-amd_gpu",
+    "plugin-apollo",
+    "plugin-aws",
+    "plugin-azure",
+    "plugin-figma",
+    "plugin-gitlab",
+    "plugin-google_cloud",
+    "plugin-granola",
+    "plugin-hubspot",
+    "plugin-linkedin",
+    "plugin-meta",
+    "plugin-microsoft_todo",
+    "plugin-onedrive",
+    "plugin-onenote",
+    "plugin-outlook",
+    "plugin-salesforce",
+    "plugin-sharepoint",
+    "plugin-teams",
+    "plugin-x",
+    "plugin-youtube_studio",
+    "plugin-zoom",
+    "plugin-atlassian",
 )
 
 BUILTIN_SKILL_NAMES: tuple[str, ...] = (
@@ -59,6 +84,9 @@ BUILTIN_SKILL_NAMES: tuple[str, ...] = (
     "deep-work-mode",
     "memory-save",
     "skill-creator",
+    # Optional, disabled by default. Adapted from Sahir619/fable-method; the
+    # Skills view's existing switch controls whether Jarvis can use it.
+    "fable-method",
     # control-api (2026-06-08): documentation skill that teaches a local coding
     # agent (Codex CLI, Claude Code) how to drive the Jarvis Control API to
     # change settings/providers/language. category=meta, no voice triggers.

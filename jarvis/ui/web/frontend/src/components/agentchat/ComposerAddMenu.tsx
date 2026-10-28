@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { createPortal } from "react-dom";
 import { Check, FolderOpen, Loader2, Paperclip, Plus, Search, X } from "lucide-react";
 import { useT } from "@/i18n";
+import { requestPluginFocus } from "@/lib/customConnector";
 import { cn } from "@/lib/utils";
 import { BrandedSelect } from "@/components/ui/select";
 import { ToolChoiceIcon } from "./ToolChoiceChips";
@@ -11,6 +12,7 @@ import {
   searchTools,
   TOOL_CATEGORIES,
   type ToolChoice,
+  type ToolBrowseScope,
   type ToolSearchResult,
 } from "./toolChoices";
 
@@ -47,6 +49,7 @@ export function ComposerAddMenu({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<ToolBrowseScope>("computer");
   const [category, setCategory] = useState("");
   const [result, setResult] = useState<ToolSearchResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -113,7 +116,9 @@ export function ComposerAddMenu({
     setResult(null);
     const timer = setTimeout(
       () => {
-        void searchTools({ provider, model, cwd, stance, q: query, category }, controller.signal)
+        const params: Record<string, string> = { provider, model, cwd, stance, q: query };
+        if (scope === "all" && category) params.category = category;
+        void searchTools(params, controller.signal)
           .then((data) => {
             if (!controller.signal.aborted) setResult(data);
           })
@@ -130,9 +135,9 @@ export function ComposerAddMenu({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, provider, model, cwd, stance, query, category, retry]);
+  }, [open, provider, model, cwd, stance, query, scope, category, retry]);
 
-  const visible = browseToolRows(result?.items ?? [], query);
+  const visible = browseToolRows(result?.items ?? [], query, scope);
   const groups = new Map<string, ToolChoice[]>();
   const operationGroups = new Set(
     visible
@@ -243,25 +248,49 @@ export function ComposerAddMenu({
               </button>
             </div>
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-              <BrandedSelect
-                ariaLabel={t("chat_tools.filter")}
-                value={category}
-                onValueChange={setCategory}
-                options={[
-                  { value: "", label: t("chat_tools.all") },
-                  ...TOOL_CATEGORIES.map((c) => {
-                    const Icon = CATEGORY_ICONS[c];
-                    return {
-                      value: c,
-                      label: t(`chat_tools.${c}`),
-                      icon: <Icon className="h-3.5 w-3.5" aria-hidden />,
-                    };
-                  }),
-                ]}
-                className="w-auto min-w-0 max-w-[60%] shrink-0 rounded-lg border border-border-strong bg-popover px-2 py-1 text-xs"
-              />
+              <div
+                role="group"
+                aria-label={t("chat_tools.filter")}
+                className="flex items-center gap-1"
+              >
+                {(["computer", "all"] as const).map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    aria-pressed={scope === view}
+                    onClick={() => setScope(view)}
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs transition-colors",
+                      scope === view
+                        ? "border-border-strong bg-secondary text-foreground"
+                        : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
+                    )}
+                  >
+                    {t(view === "computer" ? "chat_tools.computer_control" : "chat_tools.all")}
+                  </button>
+                ))}
+              </div>
+              {scope === "all" && (
+                <BrandedSelect
+                  ariaLabel={t("chat_tools.filter")}
+                  value={category}
+                  onValueChange={setCategory}
+                  options={[
+                    { value: "", label: t("chat_tools.all") },
+                    ...TOOL_CATEGORIES.map((item) => {
+                      const Icon = CATEGORY_ICONS[item];
+                      return {
+                        value: item,
+                        label: t(`chat_tools.${item}`),
+                        icon: <Icon className="h-3.5 w-3.5" aria-hidden />,
+                      };
+                    }),
+                  ]}
+                  className="ml-1 w-auto min-w-0 max-w-[38%] shrink-0 rounded-lg border border-border-strong bg-popover px-2 py-1 text-xs"
+                />
+              )}
               <span
-                className="min-w-0 flex-1 truncate text-right text-xs text-muted-foreground"
+                className="ml-auto min-w-0 truncate text-right text-xs text-muted-foreground"
                 role="status"
                 title={result ? t(`chat_tools.${result.mode}`) : undefined}
               >
@@ -278,7 +307,7 @@ export function ComposerAddMenu({
               </span>
             </div>
             <div className="min-h-0 overflow-y-auto p-1.5 scrollbar-jarvis">
-              {!query && !category && (
+              {!query && (
                 <div className="mb-2 border-b border-border pb-2">
                   <button
                     type="button"
@@ -334,6 +363,8 @@ export function ComposerAddMenu({
                         onClick={() => {
                           if (!row.available) {
                             close();
+                            // Land on this plugin's own page, not the top of the list.
+                            if (row.category === "plugins" && row.brand) requestPluginFocus(row.brand);
                             onConnect(row);
                             return;
                           }

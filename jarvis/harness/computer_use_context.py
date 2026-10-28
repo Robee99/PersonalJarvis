@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+CU_ORIGINAL_REQUEST_ENV_KEY = "JARVIS_CU_ORIGINAL_REQUEST"
+
 if TYPE_CHECKING:
     from jarvis.control import CostMeter, KillSwitch
     from jarvis.core.bus import EventBus

@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 // framer-motion is real here; only the reduced-motion hook is pinned, so the
 // voice loops do not run during the assertions.
@@ -26,7 +26,12 @@ import type { ThinkingStep } from "@/lib/thinkingSteps";
  * the live voice state so it can breathe with it.
  */
 describe("DeckOrb", () => {
-  afterEach(() => cleanup());
+  // These tests are about Gigi in the centre; the reactor is the default now.
+  beforeEach(() => window.localStorage.setItem("deck.avatar.v1", "gigi"));
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem("deck.avatar.v1");
+  });
 
   test("is display only without a press handler", () => {
     render(<DeckOrb steps={[]} busy={false} />);
@@ -79,14 +84,13 @@ describe("DeckOrb", () => {
     }
   });
 
-  test("the centre is the mascot itself, drawn as vectors — no bitmap left", () => {
+  test("the centre is the user's pet — no bitmap image left", () => {
     render(<DeckOrb steps={[]} busy={false} />);
     const orb = screen.getByTestId("jarvis-orb");
     expect(orb.getAttribute("data-voice")).toBe("idle");
     // The PNG is gone from the tree, so it cannot come back in through here.
     expect(orb.querySelectorAll("img")).toHaveLength(0);
-    expect(orb.querySelector(".gigi-root")).toBeTruthy();
-    expect(orb.querySelector("svg")).toBeTruthy();
+    expect(orb.querySelector('[data-testid="pet-mark"]')).toBeTruthy();
   });
 
   test("a press on the orb fires the handler and carries its label", () => {
