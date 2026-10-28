@@ -4,15 +4,12 @@ import { Check, FolderOpen, Loader2, Paperclip, Plus, Search, X } from "lucide-r
 import { useT } from "@/i18n";
 import { requestPluginFocus } from "@/lib/customConnector";
 import { cn } from "@/lib/utils";
-import { BrandedSelect } from "@/components/ui/select";
 import { ToolChoiceIcon } from "./ToolChoiceChips";
-import { CATEGORY_ICONS, toolIdentityStyle } from "./toolIdentity";
+import { toolIdentityStyle } from "./toolIdentity";
 import {
   browseToolRows,
   searchTools,
-  TOOL_CATEGORIES,
   type ToolChoice,
-  type ToolBrowseScope,
   type ToolSearchResult,
 } from "./toolChoices";
 
@@ -49,8 +46,6 @@ export function ComposerAddMenu({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<ToolBrowseScope>("computer");
-  const [category, setCategory] = useState("");
   const [result, setResult] = useState<ToolSearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -117,7 +112,6 @@ export function ComposerAddMenu({
     const timer = setTimeout(
       () => {
         const params: Record<string, string> = { provider, model, cwd, stance, q: query };
-        if (scope === "all" && category) params.category = category;
         void searchTools(params, controller.signal)
           .then((data) => {
             if (!controller.signal.aborted) setResult(data);
@@ -135,9 +129,9 @@ export function ComposerAddMenu({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, provider, model, cwd, stance, query, scope, category, retry]);
+  }, [open, provider, model, cwd, stance, query, retry]);
 
-  const visible = browseToolRows(result?.items ?? [], query, scope);
+  const visible = browseToolRows(result?.items ?? [], query, "computer");
   const groups = new Map<string, ToolChoice[]>();
   const operationGroups = new Set(
     visible
@@ -248,47 +242,9 @@ export function ComposerAddMenu({
               </button>
             </div>
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-              <div
-                role="group"
-                aria-label={t("chat_tools.filter")}
-                className="flex items-center gap-1"
-              >
-                {(["computer", "all"] as const).map((view) => (
-                  <button
-                    key={view}
-                    type="button"
-                    aria-pressed={scope === view}
-                    onClick={() => setScope(view)}
-                    className={cn(
-                      "rounded-full border px-3 py-1 text-xs transition-colors",
-                      scope === view
-                        ? "border-border-strong bg-secondary text-foreground"
-                        : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground",
-                    )}
-                  >
-                    {t(view === "computer" ? "chat_tools.computer_control" : "chat_tools.all")}
-                  </button>
-                ))}
-              </div>
-              {scope === "all" && (
-                <BrandedSelect
-                  ariaLabel={t("chat_tools.filter")}
-                  value={category}
-                  onValueChange={setCategory}
-                  options={[
-                    { value: "", label: t("chat_tools.all") },
-                    ...TOOL_CATEGORIES.map((item) => {
-                      const Icon = CATEGORY_ICONS[item];
-                      return {
-                        value: item,
-                        label: t(`chat_tools.${item}`),
-                        icon: <Icon className="h-3.5 w-3.5" aria-hidden />,
-                      };
-                    }),
-                  ]}
-                  className="ml-1 w-auto min-w-0 max-w-[38%] shrink-0 rounded-lg border border-border-strong bg-popover px-2 py-1 text-xs"
-                />
-              )}
+              <span className="rounded-full border border-border-strong bg-secondary px-3 py-1 text-xs">
+                {t("chat_tools.computer_control")}
+              </span>
               <span
                 className="ml-auto min-w-0 truncate text-right text-xs text-muted-foreground"
                 role="status"

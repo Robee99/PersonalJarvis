@@ -10,9 +10,8 @@
  *
  * The sidebar's own definitions (`NAV_GROUPS`, `NAV_FOOTER_ITEMS`,
  * `SETTINGS_HUB_ONLY_ITEMS`) — never a second hand-written section list (AP-4).
- * Rows that merge several sections (Plugins/MCPs/Skills, CLIs/Test Hub, the
- * voice tabs) are split back into their tabs here, because "skills" should land
- * on Skills, not on whatever tab the merged row opens first.
+ * Rows that merge several sections (CLIs/Test Hub and the voice tabs) are
+ * split back into their tabs here.
  *
  * ## Why every locale is searched
  *
@@ -25,14 +24,11 @@
 import { Gauge, KeyRound, Orbit, type LucideIcon } from "lucide-react";
 import {
   ChatIcon,
-  ConnectorIcon,
   DictionaryIcon,
   LanguageIcon,
   PaneGridIcon,
   PhoneIcon,
-  PluginIcon,
   ShortcutsIcon,
-  SkillIcon,
   TestFlaskIcon,
   VoiceIcon,
 } from "@/components/icons/sectionIcons";
@@ -83,7 +79,6 @@ const ALIASES: Partial<Record<string, readonly string[]>> = {
   sessions: ["transcripts", "recordings", "history"],
   computers: ["servers", "ssh", "vps", "remote", "machines"],
   "agent-instructions": ["assistant", "soul", "soul md", "character", "persona", "instructions", "memory md"],
-  marketplace: ["store", "shop", "install"],
   board: ["stats", "dashboard", "activity"],
   docs: ["documentation", "help", "manual"],
   feedback: ["bug", "report", "issue"],
@@ -167,12 +162,6 @@ function expand(item: NavItem): QuickSwitchEntry[] {
           aliases: ALIASES.chat,
         }),
         tab("orb", "nav.orb", Orbit, "nav.hud"),
-      ];
-    case "plugins":
-      return [
-        tab("plugins", "nav.plugins", PluginIcon, "nav.extensions"),
-        tab("skills", "nav.skills", SkillIcon, "nav.extensions"),
-        tab("mcps", "nav.mcps", ConnectorIcon, "nav.extensions"),
       ];
     case "clis":
       return [

@@ -21,7 +21,6 @@ import { formatAssistantStatus, STATUS_DOT_CLASS } from "@/lib/assistantStatus";
 import { useTurnStateStore } from "@/store/turnState";
 import { openSettingsDestination } from "@/lib/openSettings";
 import { useSectionHealth } from "@/hooks/useProviders";
-import { usePluginAttention } from "@/hooks/usePluginAttention";
 import { clsx } from "clsx";
 import { cn } from "@/lib/utils";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -239,23 +238,12 @@ export function Sidebar({
   // page's verdict rather than a decorative grey mark. Three honest states:
   // something is failing, something has answered, or nothing has reported yet
   // — a fresh install must not claim green before a single provider replied.
-  // A connected marketplace plugin whose token was revoked/expired (needs_reauth)
-  // — surfaced as an amber dot on the row that fronts Plugins ("Skills & Tools"),
-  // so a dead connection is visible app-wide, not only on the Plugins page. The
-  // names let the tooltip say WHICH plugin, not just "something is off".
-  const pluginAttention = usePluginAttention();
-  const pluginsNeedReconnect = pluginAttention.count > 0;
   // The Local models health monitor (D7) writes a `local_models` record; a
   // failing or half-configured local setup marks the profile button, the
   // hub's entry point — badge only, never a toast.
   const localModelsHealth = sectionHealth.local_models;
   const localModelsNeedAttention =
     localModelsHealth?.status === "error" || localModelsHealth?.status === "needs_setup";
-  // Name the culprit(s) in the hover text so the dot stops being cryptic; the
-  // full plain-language banner + jump button live in the Plugins view itself.
-  const pluginWarnTitle = pluginAttention.names.length
-    ? `${t("sidebar.plugins_reconnect_alert")}: ${pluginAttention.names.join(", ")}`
-    : t("sidebar.plugins_reconnect_alert");
   const agentsCount = useEventStore((s) =>
     s.events.filter((e) => e.name === "AgentStateChange").length > 0 ? undefined : 0,
   );
@@ -304,8 +292,6 @@ export function Sidebar({
       badge={item.id === "agents" ? agentsCount : undefined}
       betaLabel={item.beta ? t("nav.agentic_ide_beta") : undefined}
       alert={item.id === "apikeys" && apikeysHasError} alertTitle={t("sidebar.apikeys_alert")}
-      warn={item.id === "plugins" && pluginsNeedReconnect}
-      warnTitle={pluginWarnTitle}
       onClick={() => { setActive(item.id); }} />;
   };
   // One door: a fresh typed chat. Voice is a mode INSIDE the chat (its top
@@ -336,8 +322,8 @@ export function Sidebar({
       tour={dest.tourAnchor ?? `nav-${dest.key}`}
       active={dest.sections.includes(active)}
       alert={dest.key === "settings" && apikeysHasError} alertTitle={t("sidebar.apikeys_alert")}
-      warn={dest.key === "agents" ? pluginsNeedReconnect : dest.key === "settings" && localModelsNeedAttention}
-      warnTitle={dest.key === "settings" ? localModelsHealth?.detail || localModelsHealth?.reason || undefined : pluginWarnTitle}
+      warn={dest.key === "settings" && localModelsNeedAttention}
+      warnTitle={dest.key === "settings" ? localModelsHealth?.detail || localModelsHealth?.reason || undefined : undefined}
       trailing={dest.key === "chat" && !railed ? newChatButton : undefined}
       onClick={() => {
         if (dest.key === "settings") openSettingsDestination("model");

@@ -313,7 +313,7 @@ def one_set_of_hands(surface: dict[str, Tool], query: str) -> dict[str, Tool]:
             name: tool
             for name, tool in surface.items()
             if name not in {
-                PILOT, SCREEN_HANDS, APP_HANDS, "screen_snapshot", "window_control",
+                SCREEN_HANDS, APP_HANDS, "screen_snapshot", "window_control",
             }
             and not name.replace("-", "_").startswith("app_ui_")
             and not _is_browser_tool(name)
@@ -438,6 +438,22 @@ class ToolSwitch:
         if gone:
             self.version += 1
 
+    def handoff_to_pc_pilot(self) -> bool:
+        """Replace a disconnected owner-browser tool with the desktop pilot.
+
+        Keep the pilot registered but hidden on the first browser round. This
+        is the deliberate one-driver fallback when BrowserSkill has no active
+        Chrome profile; expose only the pilot for the recovery round so a
+        small model cannot choose another browser stack.
+        """
+        if PILOT not in self._tools:
+            return False
+        replacement = {PILOT: None}
+        if self._on != replacement:
+            self._on = replacement
+            self.version += 1
+        return True
+
     def open_turn(
         self, query: str, *, core: Iterable[str] = DEFAULT_CORE, keep: Iterable[str] = ()
     ) -> list[str]:
@@ -533,7 +549,9 @@ class ToolSwitch:
         """
         browser = bool(_SAYS_BROWSER_SERVER.search(query or ""))
         own_browser = bool(
-            _SAYS_MY_CHROME.search(query or "") or wants_own_browser(query or "")
+            _SAYS_MY_CHROME.search(query or "")
+            or wants_own_browser(query or "")
+            or _SAYS_CHROME.search(query or "")
         )
         screen_requested = bool(_SAYS_SCREEN_HANDS.search(query or ""))
         app_requested = bool(_SAYS_APP_HANDS.search(query or ""))
@@ -548,6 +566,17 @@ class ToolSwitch:
             and not _JARVIS_NAMED.search(query or "")
         )
         named_server = bool(re.search(r"\b(?:mcp|server)\b", query or "", re.I))
+        profile_selection = bool(
+            _CHROME_LAUNCH_CLICK_BEFORE_NAVIGATION.search(query or "")
+        )
+        if profile_selection and PILOT in self._tools:
+            # The owner profile chooser is a desktop UI, not a browser tab.
+            # Use only the pilot until the target profile is selected; exposing
+            # browser navigation here can make the model claim it navigated
+            # while Chrome is still waiting at its chooser.
+            self.switch_on((ENABLE_TOOLS, PILOT))
+            return [PILOT]
+
         focus_desktop = (
             not browser
             and not own_browser
@@ -564,12 +593,31 @@ class ToolSwitch:
             )
         )
 
+        if (
+            own_browser
+            and OWN_BROWSER_HANDS in self._tools
+            and not screen_requested
+            and not app_requested
+            and not browser
+            and not named_server
+            and not wants_browser_window_control(query or "")
+            and not profile_selection
+        ):
+            # Keep the focused first pass: the BrowserSkill handles the owner's
+            # profile and tabs better than exposing overlapping drivers. The
+            # PC pilot remains registered but hidden for a disconnected-browser
+            # handoff in ToolUseLoop.
+            self.switch_on((ENABLE_TOOLS, OWN_BROWSER_HANDS))
+            return [OWN_BROWSER_HANDS]
+
         def other_hands(name: str) -> bool:
             tool = self._tools.get(name)
             if tool is None:
                 return False
             if name == PILOT:
-                return screen_requested
+                return screen_requested or (
+                    own_browser and OWN_BROWSER_HANDS in self._tools
+                )
             if name == SCREEN_HANDS:
                 return not screen_requested
             if name == APP_HANDS:
@@ -613,8 +661,14 @@ class ToolSwitch:
         hands = self._browser_hands(query, relevant) if browser else []
         camera = [CAMERA] if wants_camera(query or "") else []
         siblings = [n for n in self._siblings(query, relevant) if not other_hands(n)]
+        primary_hands = (
+            [OWN_BROWSER_HANDS]
+            if own_browser and OWN_BROWSER_HANDS in self._tools
+            else [PILOT]
+        )
         self.switch_on(
-            [ENABLE_TOOLS, PILOT, *core, *[n for n in keep if not other_hands(n)], *camera,
+            [ENABLE_TOOLS, *primary_hands, *core,
+             *[n for n in keep if not other_hands(n)], *camera,
              *named_hands,
              *hands, *relevant, *named, *siblings]
         )

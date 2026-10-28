@@ -1,11 +1,10 @@
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ComposerAddMenu } from "./ComposerAddMenu";
 import { ToolChoiceChips } from "./ToolChoiceChips";
 import { readToolChoices, type ToolChoice } from "./toolChoices";
 import { sendAgentChatMessage } from "@/lib/agentChatApi";
-import gmailLogo from "@/assets/brands/gmail.svg?url";
 
 vi.mock("@/i18n", () => ({ useT: () => (key: string) => key }));
 
@@ -93,15 +92,9 @@ const unrelatedMcp: ToolChoice = {
   tool_names: ["github/get_me"],
 };
 
-function setup(
-  items = [gmail, disconnected],
-  onInsert?: (row: ToolChoice) => void,
-  initialScope: "computer" | "all" = "computer",
-) {
-  const connect = vi.fn(),
-    attach = vi.fn(),
-    folder = vi.fn(),
-    insert = vi.fn(onInsert);
+function setup(items = [gmail, disconnected]) {
+  const attach = vi.fn(),
+    folder = vi.fn();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(JSON.stringify({ items, mode: "browse", total: items.length }))),
@@ -123,10 +116,10 @@ function setup(
           stance="ask"
           selected={selected}
           onChange={setSelected}
-          onInsert={onInsert ? insert : undefined}
+          onInsert={undefined}
           onAttach={attach}
           onFolder={folder}
-          onConnect={connect}
+          onConnect={vi.fn()}
           disabled={false}
         />
       </div>
@@ -134,10 +127,7 @@ function setup(
   }
   render(<Harness />);
   fireEvent.click(screen.getByTestId("composer-add"));
-  if (initialScope === "all") {
-    fireEvent.click(screen.getByRole("button", { name: "chat_tools.all" }));
-  }
-  return { connect, attach, folder, insert };
+  return { attach, folder };
 }
 
 afterEach(() => {
@@ -168,104 +158,39 @@ describe("Add menu", () => {
     expect(await screen.findByRole("button", { name: /Tencent BrowserSkill Read your inbox/ })).toBeTruthy();
   });
 
-  it("hides unrelated connected plugins from the default view", async () => {
+  it("keeps only curated PC controls with no route to the full catalog", async () => {
     setup([pcPilot, gmail, unrelatedMcp]);
 
     expect(await screen.findByRole("button", { name: /PC Pilot Operate the desktop/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "chat_tools.all" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "chat_tools.filter" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Gmail Read your inbox/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /GitHub Read and manage local files/ })).toBeNull();
   });
 
-  it("switches to all tools without clearing selections", async () => {
-    setup([pcPilot, gmail]);
+  it("keeps the picker limited to PC controls with no route to the full catalog", async () => {
+    setup([pcPilot, gmail, unrelatedMcp]);
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: /PC Pilot Operate the desktop/ }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "chat_tools.all" }));
-    fireEvent.click(await screen.findByRole("button", { name: /Gmail Read your inbox/ }));
-    fireEvent.click(screen.getByRole("button", { name: "chat_tools.computer_control" }));
-
+    expect(await screen.findByRole("button", { name: /PC Pilot Operate the desktop/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "chat_tools.all" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "chat_tools.filter" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Gmail Read your inbox/ })).toBeNull();
-    expect(screen.getByTestId("tool-choice-chips").textContent).toContain("PC Pilot");
-    expect(screen.getByTestId("tool-choice-chips").textContent).toContain("Gmail");
+    expect(screen.queryByRole("button", { name: /GitHub Read and manage local files/ })).toBeNull();
   });
 
-  it("shows the original Gmail mark and toggles removable selections", async () => {
-    setup([gmail, disconnected], undefined, "all");
+  it("toggles removable PC control selections", async () => {
+    setup([pcPilot]);
     const row = await screen.findByRole("button", {
-      name: /Gmail Read your inbox/,
+      name: /PC Pilot Operate the desktop/,
     });
-    expect(row.querySelector("img")?.getAttribute("src")).toBe(gmailLogo);
     fireEvent.click(row);
     expect(row.getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("tool-choice-chips").textContent).toContain("Gmail");
-    fireEvent.click(screen.getByRole("button", { name: "chat_tools.remove Gmail" }));
+    expect(screen.getByTestId("tool-choice-chips").textContent).toContain("PC Pilot");
+    fireEvent.click(screen.getByRole("button", { name: "chat_tools.remove PC Pilot" }));
     expect(row.getAttribute("aria-pressed")).toBe("false");
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(screen.getByTestId("composer-add"));
-  });
-
-  it("opens setup for unavailable plugins once they are searched for", async () => {
-    const { connect } = setup([gmail, disconnected], undefined, "all");
-    await screen.findByRole("button", { name: /Gmail Read your inbox/ });
-    expect(screen.queryByRole("button", { name: /Offline Read your inbox/ })).toBeNull();
-    fireEvent.change(screen.getByLabelText("chat_tools.search"), {
-      target: { value: "Offline" },
-    });
-    fireEvent.click(
-      await screen.findByRole("button", { name: /Offline Read your inbox/ }, { timeout: 2000 }),
-    );
-    expect(connect).toHaveBeenCalledOnce();
-    expect(screen.queryByTestId("tool-choice-chips")).toBeNull();
-  });
-
-  it("lists the connected plugin, not its commands or bundled skill", async () => {
-    setup([
-      gmail,
-      { ...gmail, id: "tool:gmail/send", label: "send", description: "Send a message" },
-      {
-        ...gmail,
-        id: "skill:plugin-gmail",
-        label: "plugin-gmail",
-        category: "skills",
-        group: "skills",
-        skill: "plugin-gmail",
-        description: "Use Gmail",
-      },
-    ], undefined, "all");
-    expect(await screen.findByRole("button", { name: /Gmail Read your inbox/ })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /send Send a message/ })).toBeNull();
-    expect(screen.queryByText("plugin-gmail")).toBeNull();
-  });
-
-  it("keeps the category filter available in All tools and forwards it with the query", async () => {
-    setup([gmail, disconnected], undefined, "all");
-    await screen.findByRole("button", { name: /Gmail Read your inbox/ });
-    fireEvent.click(screen.getByRole("combobox", { name: "chat_tools.filter" }));
-    const memoryOption = await screen.findByRole("option", { name: "chat_tools.memory" });
-    fireEvent.pointerDown(memoryOption);
-    fireEvent.click(memoryOption);
-    fireEvent.change(screen.getByLabelText("chat_tools.search"), {
-      target: { value: "g" },
-    });
-    await waitFor(
-      () => {
-        const calls = vi.mocked(fetch).mock.calls;
-        const url = new URL(String(calls[calls.length - 1][0]), "http://localhost");
-        expect(url.searchParams.get("q")).toBe("g");
-        expect(url.searchParams.get("category")).toBe("memory");
-      },
-      { timeout: 500 },
-    );
-  });
-
-  it("closes after inserting a plugin so typing continues in the sentence", async () => {
-    const { insert } = setup([gmail, disconnected], () => {}, "all");
-    fireEvent.click(await screen.findByRole("button", { name: /Gmail Read your inbox/ }));
-    expect(insert).toHaveBeenCalledOnce();
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps file and folder actions functional", async () => {

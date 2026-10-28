@@ -18,7 +18,6 @@ import {
 } from "@/components/layout/navGroups";
 import { useHomeStore } from "@/store/home";
 import { useSectionHealth } from "@/hooks/useProviders";
-import { usePluginAttention } from "@/hooks/usePluginAttention";
 import { apiKeysHealthError } from "@/lib/apiKeysTab";
 import { dockSlotAt, layoutDock } from "@/lib/dockMagnify";
 import { cn } from "@/lib/utils";
@@ -32,10 +31,7 @@ import { useT } from "@/i18n";
  * user is — the maintainer found it jarring that leaving the deck dropped the
  * icons back to a plain list. The list is the sidebar's own `NAV_GROUPS` — one
  * source, so a section added there appears here without anyone remembering to
- * add it twice (AP-4). The attention signals are shared too: a provider error
- * lights API Keys red, a plugin that needs a reconnect lights Plugins amber, and
- * clicking Skills while a plugin needs attention lands on the Plugins tab, the
- * same shortcut the expanded sidebar takes.
+ * add it twice (AP-4). A provider error lights API Keys red.
  *
  * There is NO magnification. The dock went through the desktop-dock hill (icons
  * growing under the pointer, neighbours pushed apart, then a rigid version
@@ -73,7 +69,6 @@ export function DockRail({ className }: { className?: string }) {
   const setActiveSection = useEventStore((s) => s.setActiveSection);
   const conversations = useEventStore((s) => s.conversations);
   const { health } = useSectionHealth();
-  const pluginAttention = usePluginAttention();
   const reduced = useReducedMotion() ?? false;
 
   // The front page's icon follows the Voice | Chat switch like the sidebar
@@ -103,11 +98,6 @@ export function DockRail({ className }: { className?: string }) {
   // API Keys. The amber "needs setup" state is deliberately NOT shown: on a
   // fresh install every unconfigured section would light up.
   const apikeysError = useMemo(() => apiKeysHealthError(health), [health]);
-  const pluginsNeedReconnect = pluginAttention.count > 0;
-  const pluginWarnHint = pluginAttention.names.length
-    ? `${t("sidebar.plugins_reconnect_alert")}: ${pluginAttention.names.join(", ")}`
-    : t("sidebar.plugins_reconnect_alert");
-
   // Rest geometry — positions never move, so this is a plain number.
   const rest = useMemo(() => layoutDock(items.length, BASE, GAP, null), [items.length]);
   const blockHeight = PAD_TOP + rest.extent + PAD_BOTTOM;
@@ -220,9 +210,7 @@ export function DockRail({ className }: { className?: string }) {
   const hoveredHint =
     hoveredItem?.id === "apikeys" && apikeysError
       ? t("sidebar.apikeys_alert")
-      : hoveredItem?.id === "plugins" && pluginsNeedReconnect
-        ? pluginWarnHint
-        : null;
+      : null;
 
   return (
     <nav
@@ -250,8 +238,6 @@ export function DockRail({ className }: { className?: string }) {
               live={item.id === "chats" && conversations.length > 0}
               alert={item.id === "apikeys" && apikeysError}
               alertTitle={t("sidebar.apikeys_alert")}
-              warn={item.id === "plugins" && pluginsNeedReconnect}
-              warnTitle={pluginWarnHint}
               groupBreak={groupBreaks.has(i)}
               onSelect={() =>
                 setActiveSection(
@@ -323,8 +309,6 @@ function DockIcon({
   live,
   alert,
   alertTitle,
-  warn,
-  warnTitle,
   groupBreak,
   onSelect,
   onFocus,
@@ -341,9 +325,6 @@ function DockIcon({
   /** A section this icon fronts has a provider that is set up but failing. */
   alert: boolean;
   alertTitle: string;
-  /** Softer "needs attention" — e.g. a plugin whose token needs a reconnect. */
-  warn: boolean;
-  warnTitle: string;
   groupBreak: boolean;
   onSelect: () => void;
   onFocus: () => void;
@@ -402,13 +383,6 @@ function DockIcon({
             role="status"
             aria-label={alertTitle}
             className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive ring-2 ring-sidebar"
-          />
-        ) : warn ? (
-          <span
-            data-testid={`nav-warn-${item.id}`}
-            role="status"
-            aria-label={warnTitle}
-            className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning ring-2 ring-sidebar"
           />
         ) : live ? (
           <span

@@ -13,7 +13,11 @@ import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { ViewErrorBoundary } from "@/components/ViewErrorBoundary";
 import { DetachedViewPlaceholder } from "@/components/layout/DetachedViewPlaceholder";
-import { SETTINGS_HUB_IDS, isHudSection } from "@/components/layout/navGroups";
+import {
+  RETIRED_TOOL_CATALOG_SECTIONS,
+  SETTINGS_HUB_IDS,
+  isHudSection,
+} from "@/components/layout/navGroups";
 import { detachedWindowFor } from "@/lib/sectionWindows";
 // Type-only, so the section's chunk stays split out of the entry bundle.
 import type { AgenticIdeViewProps } from "@/views/AgenticIdeView";
@@ -80,18 +84,11 @@ const SocietyView = lazyView(["agents"], () =>
 const WikiView = lazyView(["memory"], () =>
   import("@/views/WikiView").then((m) => ({ default: m.WikiView })),
 );
-type PluginArea = "plugins" | "mcps" | "skills";
-const isPluginArea = (section: string): section is PluginArea =>
-  section === "plugins" || section === "mcps" || section === "skills";
 const isSettingsHub = (section: string) =>
   (SETTINGS_HUB_IDS as readonly string[]).includes(section);
 // Sections that float as a dialog over the last regular section instead of
 // replacing it.
-const isOverlaySection = (section: string) => isPluginArea(section) || isSettingsHub(section);
-
-const PluginsDialog = lazyPropView<{ onClose: () => void; area: PluginArea; standalone?: boolean; onAreaChange: (area: PluginArea) => void }>(["plugins", "mcps", "skills"], () =>
-  import("@/views/PluginsDialog").then((m) => ({ default: m.PluginsDialog })),
-);
+const isOverlaySection = (section: string) => isSettingsHub(section);
 // The prop type is named rather than inferred: inferring it from the loader's
 // return value is circular (the loader's contextual type is what depends on it),
 // and TypeScript resolves that by falling back to `never`.
@@ -107,9 +104,6 @@ const ClisHubView = lazyView(["clis", "cli-test-hub"], () =>
 const DocsView = lazyView(["docs"], () =>
   import("@/views/DocsView").then((m) => ({ default: m.DocsView })),
 );
-const ArmoryView = lazyPropView<{ armory?: boolean }>(["armory"], () =>
-  import("@/views/PluginsView").then((m) => ({ default: m.PluginsView })),
-);
 const BoardView = lazyView(["board"], () =>
   import("@/views/BoardView").then((m) => ({ default: m.BoardView })),
 );
@@ -123,11 +117,6 @@ const VoiceHubView = lazyView(["dictation", "dictionary", "voice-shortcuts", "vo
 const VisualizationView = lazyView(["visualization"], () =>
   import("@/views/VisualizationView").then((m) => ({
     default: m.VisualizationView,
-  })),
-);
-const MarketplaceView = lazyView(["marketplace"], () =>
-  import("@/views/MarketplaceView").then((m) => ({
-    default: m.MarketplaceView,
   })),
 );
 const WorldIntelligenceView = lazyView(["world-intelligence"], () =>
@@ -270,13 +259,21 @@ const STICKY_SECTION = "agentic-ide";
  * than always-mounted so a user who never opens the section never pays for it.
  */
 export function MainView() {
-  const active = useEventStore((s) => s.activeSection);
+  const storedActive = useEventStore((s) => s.activeSection);
   const setActive = useEventStore((s) => s.setActiveSection);
+  const active = (RETIRED_TOOL_CATALOG_SECTIONS as readonly string[]).includes(storedActive)
+    ? "chats"
+    : storedActive;
   const solo = useEventStore((s) => s.solo);
   const detachedViews = useEventStore((s) => s.detachedViews);
   const [backgroundSection, setBackgroundSection] = useState(
     isOverlaySection(active) ? "chats" : active,
   );
+  useEffect(() => {
+    if (active !== storedActive) {
+      setActive("chats");
+    }
+  }, [active, storedActive, setActive]);
   if (!isOverlaySection(active) && backgroundSection !== active) setBackgroundSection(active);
   const activeDetached = !solo ? detachedWindowFor(active, detachedViews) : undefined;
   const displayed = isOverlaySection(active) && !activeDetached ? backgroundSection : active;
@@ -355,13 +352,6 @@ export function MainView() {
           </Suspense>
         </ViewErrorBoundary>
       )}
-      {isPluginArea(active) && !activeDetached && (
-        <ViewErrorBoundary viewName="plugins" resetKey="plugins" onRecover={() => setActive(backgroundSection)}>
-          <Suspense fallback={null}>
-            <PluginsDialog standalone={solo} area={active} onAreaChange={setActive} onClose={() => setActive(backgroundSection)} />
-          </Suspense>
-        </ViewErrorBoundary>
-      )}
       {isSettingsHub(active) && !activeDetached && (
         <ViewErrorBoundary viewName="settings" resetKey="settings" onRecover={() => setActive(backgroundSection)}>
           <Suspense fallback={null}>
@@ -381,6 +371,13 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     case "chats":
     case "deck":
     case "orb":
+    // Retired catalog screens keep their old IDs for stored links and voice
+    // commands, but now return to chat instead of reopening the broad catalogs.
+    case "armory":
+    case "plugins":
+    case "mcps":
+    case "skills":
+    case "marketplace":
       return <ChatsSurface />;
     case "agents":
       return <SocietyView />;
@@ -395,8 +392,6 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     case "board":
       return <BoardView />;
     // The same plugin catalog and connect flows as Plugins, laid out as cards.
-    case "armory":
-      return <ArmoryView armory />;
     case "memory":
       return <WikiView />;
     // The merged voice section: Dictation (default landing) + Dictionary +
@@ -414,10 +409,6 @@ function SwitchOnActiveSection({ active }: { active: string }) {
     // AROUND it looks like (see App.tsx).
     case "visualization":
       return <VisualizationView />;
-    // The marketplace storefront: everything the community published, in one
-    // place, installable without leaving the app.
-    case "marketplace":
-      return <MarketplaceView />;
     case "world-intelligence":
       return <WorldIntelligenceView />;
     // The HUD's public-data screens, reached from the Stark rail.

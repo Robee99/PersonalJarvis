@@ -41,6 +41,11 @@ describe("destinations", () => {
     for (const e of QUICK_SWITCH_ENTRIES) expect(SECTION_IDS).toContain(e.section);
   });
 
+  it("does not list the retired app, skill, MCP, or marketplace catalog screens", () => {
+    const retired = new Set(["armory", "plugins", "mcps", "skills", "marketplace"]);
+    expect(QUICK_SWITCH_ENTRIES.some((entry) => retired.has(entry.section))).toBe(false);
+  });
+
   it("offers the HUD by name, then both faces of its chat", () => {
     const front = QUICK_SWITCH_ENTRIES.filter((e) => e.section === "chats");
     expect(front.map((e) => e.key)).toEqual(["hud", "voice", "chat"]);
@@ -92,9 +97,7 @@ describe("ranking", () => {
     ["Einstellungen", "settings"], // i18n-allow: German query proves cross-locale search
     ["einst", "settings"], // i18n-allow: German query prefix
     ["ajustes", "settings"],
-    ["skills", "skills"],
     ["api", "apikeys"],
-    ["market", "marketplace"],
     ["wiki", "memory"],
   ])("puts the meant destination first for %j", (query, expected) => {
     expect(top(query)).toBe(expected);

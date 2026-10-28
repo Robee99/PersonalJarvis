@@ -90,11 +90,12 @@ def test_a_lost_session_is_restarted_once(monkeypatch):
     assert result.success and fake.sessions == 2
 
 
-def test_a_missing_extension_says_what_the_owner_must_do(monkeypatch):
+def test_a_missing_extension_reports_a_disconnected_chrome_profile(monkeypatch):
     fake = _FakeBsk(fail={"session": ["no browser connected to the daemon"]})
     result = _run(_tool(monkeypatch, fake), action="open", url="https://youtube.com")
     assert not result.success
-    assert "extension is not connected" in result.error
+    assert "[browser_skill_disconnected]" in result.error
+    assert "no connected Chrome profile" in result.error
 
 
 def test_tabs_lists_the_owners_open_tabs(monkeypatch):

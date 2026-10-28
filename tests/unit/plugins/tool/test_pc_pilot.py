@@ -24,8 +24,8 @@ from jarvis.platform.win_pilot import Control, Window, key_codes
 from jarvis.plugins.tool.pc_pilot import (
     PcPilot,
     PilotPolicy,
-    best_control,
     _match_window,
+    best_control,
     open_target,
     settings_uri,
 )
@@ -159,7 +159,8 @@ async def test_calculator_buttons_are_pressed_by_their_spoken_names(tmp_path: Pa
     assert all(result.success for result in results), [result.error for result in results]
     assert [v for k, v in desk.log if k == "invoke"] == ["Seven", "Plus", "Eight", "Equals"]
     assert "Display is 15" in str(results[-1].output)
-    assert pilot.pictures == []  # type: ignore[attr-defined]
+    assert pilot.pictures == [1, 1, 1, 1, 1]  # type: ignore[attr-defined]
+    assert all("_image" in result.output for result in results)
 
 
 async def test_desktop_audit_steps_carry_the_turn_trace_id(tmp_path: Path) -> None:

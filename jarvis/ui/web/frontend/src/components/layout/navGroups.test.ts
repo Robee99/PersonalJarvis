@@ -59,3 +59,19 @@ describe("the HUD is one section (chat + HUD + memory orb)", () => {
     expect(ADVANCED_NAV_ITEMS.some((item) => isHudSection(item.id))).toBe(false);
   });
 });
+
+describe("the tool catalogs stay out of the main navigation", () => {
+  it("does not expose the broad app, skill, MCP, or marketplace catalogs", () => {
+    const ids = NAV_GROUPS.flat().map((item) => item.id);
+    expect(ids).not.toContain("armory");
+    expect(ids).not.toContain("plugins");
+    expect(ids).not.toContain("marketplace");
+  });
+
+  it("does not put tool catalogs in the Agents destination tabs", () => {
+    const agentsDestination = PRIMARY_DESTINATIONS.find((item) => item.key === "agents");
+    expect(agentsDestination?.tabs?.map((tab) => tab.id)).toEqual(["agents", "clis"]);
+    expect(agentsDestination?.sections).not.toContain("armory");
+    expect(agentsDestination?.sections).not.toContain("marketplace");
+  });
+});

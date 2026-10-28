@@ -9,7 +9,7 @@
  * A second hand-written list anywhere would be the classic drift trap (AP-4):
  * a section added here would silently never appear on the deck.
  */
-import { Briefcase, Gauge, Globe2, KeyRound, Swords, type LucideIcon } from "lucide-react";
+import { Briefcase, Gauge, Globe2, KeyRound, type LucideIcon } from "lucide-react";
 import {
   AgentsIcon,
   ArtifactsIcon,
@@ -18,10 +18,8 @@ import {
   CodeIcon,
   ComputersIcon,
   DocsIcon,
-  ExtensionsIcon,
   FeedbackIcon,
   AssistantIcon,
-  MarketplaceIcon,
   MicrophoneIcon,
   PetsIcon,
   ProfileIcon,
@@ -57,6 +55,15 @@ export function resolveNavLabel(t: (key: string) => string, item: NavItem): stri
  */
 export const HUD_SECTION_IDS: readonly SectionId[] = ["chats", "deck", "orb"];
 
+/** Old catalog links remain parseable but always return to chat. */
+export const RETIRED_TOOL_CATALOG_SECTIONS: readonly SectionId[] = [
+  "armory",
+  "plugins",
+  "mcps",
+  "skills",
+  "marketplace",
+];
+
 /** Is `section` one of the ids that open the HUD? */
 export function isHudSection(section: string): boolean {
   return (HUD_SECTION_IDS as readonly string[]).includes(section);
@@ -79,8 +86,7 @@ export interface NavItem {
   labelKey: string;
   icon: LucideIcon;
   // When set, the row is highlighted while the active section is any of these
-  // ids — used by the merged section entries ("Skills & Tools" fronting
-  // skills/plugins/mcps, "CLIs" fronting clis/cli-test-hub); the active id
+  // ids — used by merged entries ("CLIs" fronting clis/cli-test-hub); the active id
   // doubles as the tab state.
   matchIds?: SectionId[];
   // English fallback shown when `labelKey` has no translation yet in the active
@@ -143,28 +149,10 @@ export const NAV_GROUPS: NavItem[][] = [
       fallbackLabel: "HUD",
       matchIds: [...HUD_SECTION_IDS],
     },
-    // Every app the assistant can reach, as a wall of cards.
-    { id: "armory", labelKey: "nav.armory", icon: Swords, fallbackLabel: "Tool armory" },
   ],
   // 1) Workspace — what the user builds with and reads back.
   [
     { id: "agents", labelKey: "nav.agents", icon: AgentsIcon },
-    // The compact catalog opens on Plugins; direct section navigation selects
-    // its corresponding tab and keeps this shared row highlighted.
-    {
-      id: "plugins",
-      labelKey: "nav.extensions",
-      icon: ExtensionsIcon,
-      matchIds: ["skills", "plugins", "mcps"],
-    },
-    // The marketplace fills those lists: a plugin or a skill published there
-    // ends up in one of them once installed.
-    {
-      id: "marketplace",
-      labelKey: "nav.marketplace",
-      icon: MarketplaceIcon,
-      fallbackLabel: "Marketplace",
-    },
     // Artifacts — everything a run produced. The id stays "visualization"
     // because it crosses the navigate parity test, the detachable-view
     // registry and deep links.
@@ -386,8 +374,6 @@ export const WORK_TABS: readonly DestinationTab[] = [
 /** AGENTS: the agents, the tools they can reach, where more come from, the CLI seats. */
 export const AGENTS_TABS: readonly DestinationTab[] = [
   { id: "agents", labelKey: "nav5.agents_agents", fallbackLabel: "Agents" },
-  { id: "armory", labelKey: "nav5.agents_tools", fallbackLabel: "Tools" },
-  { id: "marketplace", labelKey: "nav5.agents_browse", fallbackLabel: "Browse more" },
   { id: "clis", labelKey: "nav5.agents_clis", fallbackLabel: "CLIs", matchIds: ["clis", "cli-test-hub"] },
 ];
 
@@ -411,7 +397,7 @@ export const PRIMARY_DESTINATIONS: readonly PrimaryDestination[] = [
     fallbackLabel: "Agents",
     icon: AgentsIcon,
     target: "agents",
-    sections: ["agents", "armory", "marketplace", "clis", "cli-test-hub"],
+    sections: ["agents", "clis", "cli-test-hub"],
     tabs: AGENTS_TABS,
   },
   {
@@ -453,13 +439,12 @@ export function tabFor(tabs: readonly DestinationTab[], section: SectionId): Des
 const PRIMARY_FRONT_DOORS: readonly SectionId[] = ["chats", "agents"];
 
 /**
- * The sidebar's collapsed "Advanced" group: every sidebar section that is not
+ * The sidebar's collapsed "Advanced" group: every listed section that is not
  * the front door of a primary destination and not a Settings-hub page.
  *
- * Sections that are ALSO a destination tab (the HUD, Artifacts, Tool armory…)
- * are listed here as well, on purpose: Advanced is the complete index, so a
- * person who learned the old names still finds every one of them by name, and
- * nothing that existed before became unreachable from the sidebar.
+ * Sections that are ALSO a destination tab (the HUD, Artifacts…)
+ * are listed here as well, on purpose. Retired app, skill and tool catalog
+ * screens are excluded; their old ids remain valid and return to the HUD.
  */
 export const ADVANCED_NAV_ITEMS: readonly NavItem[] = NAV_GROUPS.flat().filter(
   (item) =>

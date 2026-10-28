@@ -6,13 +6,18 @@ import { DOCK_RAIL_GEOMETRY, DockRail } from "@/components/layout/DockRail";
 import { NAV_FOOTER_ITEMS, NAV_GROUPS } from "@/components/layout/navGroups";
 import { useEventStore } from "@/store/events";
 
-// usePluginAttention polls /api/marketplace/plugins; the test drives it.
-const pluginAttentionMock = vi.hoisted(() => ({ needsReconnect: false }));
+// The retired catalog hook must not be polled by the navigation rail.
+const pluginAttentionMock = vi.hoisted(() => ({
+  calls: 0,
+  needsReconnect: false,
+}));
 vi.mock("@/hooks/usePluginAttention", () => ({
-  usePluginAttention: () =>
-    pluginAttentionMock.needsReconnect
+  usePluginAttention: () => {
+    pluginAttentionMock.calls += 1;
+    return pluginAttentionMock.needsReconnect
       ? { count: 1, names: ["Cloudflare"] }
-      : { count: 0, names: [] },
+      : { count: 0, names: [] };
+  },
 }));
 
 // The rail lists the footer's Feedback row too, behind one more hairline.
@@ -53,6 +58,7 @@ function renderRail() {
 
 describe("DockRail", () => {
   beforeEach(() => {
+    pluginAttentionMock.calls = 0;
     pluginAttentionMock.needsReconnect = false;
     useEventStore.setState({ activeSection: "chats", conversations: [] });
   });
@@ -165,36 +171,11 @@ describe("DockRail", () => {
     );
   });
 
-  test("a plugin that needs a reconnect marks the catalog amber and opens Plugins", () => {
-    pluginAttentionMock.needsReconnect = true;
+  test("does not poll or expose the retired plugin catalog in navigation", () => {
     renderRail();
-    const pip = screen.getByTestId("nav-warn-plugins");
-    expect(pip.getAttribute("aria-label")).toContain("Cloudflare");
-    act(() => {
-      fireEvent.click(screen.getByTestId("nav-row-plugins"));
-    });
-    expect(useEventStore.getState().activeSection).toBe("plugins");
-  });
-
-  test.each(["hover", "focus"] as const)("shows the plugin reconnect hint on %s", (interaction) => {
-    pluginAttentionMock.needsReconnect = true;
-    renderRail();
-    if (interaction === "hover") {
-      moveTo(screen.getByTestId("dock-rail"), centreOf(ITEMS.findIndex((item) => item.id === "plugins")));
-    } else {
-      fireEvent.focus(screen.getByTestId("nav-row-plugins"));
-    }
-    const label = screen.getByTestId("dock-label");
-    expect(label.textContent).toContain("Cloudflare");
-    expect(label.textContent).toContain("reconnect");
-  });
-
-  test("healthy catalog has no amber pip and defaults to Plugins", () => {
-    renderRail();
-    expect(screen.queryByTestId("nav-warn-plugins")).toBeNull();
-    act(() => {
-      fireEvent.click(screen.getByTestId("nav-row-plugins"));
-    });
-    expect(useEventStore.getState().activeSection).toBe("plugins");
+    expect(pluginAttentionMock.calls).toBe(0);
+    expect(screen.queryByTestId("nav-row-plugins")).toBeNull();
+    expect(screen.queryByTestId("nav-row-skills")).toBeNull();
+    expect(screen.queryByTestId("nav-row-mcps")).toBeNull();
   });
 });

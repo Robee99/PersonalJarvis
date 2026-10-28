@@ -20,9 +20,10 @@ The pilot does the bookkeeping a small model gets wrong:
   control that is not there yet is looked for again once after the window
   settles; typed text is compared with what the field then holds. The model
   gets the window's controls back, so its next step starts from the truth.
-* **Eyes when needed.** When the window has too few named controls to act
-  on (a game, a canvas, a video), or the model asks with ``see``, the
-  screen goes back as an image through the privacy-filtered capture.
+* **Eyes on every step.** Each completed or failed desktop step returns a
+  fresh screenshot through the privacy-filtered capture, alongside UIA
+  readback. A vision-capable brain can ground the next action in the actual
+  screen instead of guessing from labels alone.
 * **A policy, checked before every step.** In the spirit of NVIDIA
   OpenShell's declared policies: ask first before a click or key that
   deletes, sends, pays, installs, signs out or shuts down, and before any
@@ -732,7 +733,10 @@ class PcPilot:
         if desk is None:
             return ToolResult(False, None, "The PC pilot needs Windows.")
         policy = self._policy_now()
-        run = _Run(want_picture=bool(args.get("see")))
+        # Desktop actions must always be grounded in a fresh screen image.
+        # UIA readback remains useful, but it misses custom-drawn controls and
+        # can disagree with what is actually visible (e.g. Settings menus).
+        run = _Run(want_picture=True)
         error = ""
         trace_id = getattr(ctx, "trace_id", None)
         for number, step in enumerate(steps, 1):

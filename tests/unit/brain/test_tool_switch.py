@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from jarvis.brain.manager import BrainManager, _relevant_tool_names
+from jarvis.brain.my_chrome import BROWSER_SKILL_DISCONNECTED_MARKER
 from jarvis.brain.tool_switch import (
     ENABLE_TOOLS,
     EnableToolsTool,
@@ -385,6 +386,7 @@ async def test_enable_tools_for_chrome_never_hands_over_the_desktop_drivers_brow
 def test_chrome_tasks_open_only_the_owners_browser_tool() -> None:
     tools = _registry()
     tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome")
+    tools["pc_pilot"] = _Tool("pc_pilot", "Drive the desktop if Chrome is unavailable")
     tools["computer_use"] = _Tool("computer_use", "Click and type on screen")
     switch = _switch(tools)
 
@@ -393,6 +395,132 @@ def test_chrome_tasks_open_only_the_owners_browser_tool() -> None:
     )
 
     assert set(switch.visible()) == {ENABLE_TOOLS, "my_chrome"}
+
+
+@pytest.mark.asyncio
+async def test_disconnected_browser_hands_turn_to_pc_pilot_and_requires_a_tool_call() -> None:
+    class _DisconnectedChrome(_Tool):
+        async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+            del args, ctx
+            self.calls += 1
+            return ToolResult(
+                success=False,
+                output=None,
+                    error=(
+                        f"{BROWSER_SKILL_DISCONNECTED_MARKER} "
+                        "BrowserSkill has no connected Chrome profile."
+                    ),
+            )
+
+    class _BrowserFallbackBrain:
+        def __init__(self) -> None:
+            self.requests: list[BrainRequest] = []
+
+        async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+            self.requests.append(req)
+            if len(self.requests) == 1:
+                yield BrainDelta(tool_call={
+                    "id": "c1", "name": "my_chrome",
+                    "input": {"action": "open", "url": "https://www.swiggy.com/instamart"},
+                })
+                yield BrainDelta(finish_reason="tool_use")
+            elif len(self.requests) == 2:
+                yield BrainDelta(tool_call={
+                    "id": "c2", "name": "pc_pilot",
+                    "input": {"steps": [{"open": "Google Chrome"}]},
+                })
+                yield BrainDelta(finish_reason="tool_use")
+            else:
+                yield BrainDelta(content="I opened Chrome and continued with the desktop control.")
+                yield BrainDelta(finish_reason="stop")
+
+    utterance = "go to Swiggy Instamart in Chrome and add chicken to my cart"
+    tools = _registry()
+    tools["my_chrome"] = _DisconnectedChrome(
+        "my_chrome", "Drive the owner's own Chrome"
+    )
+    tools["pc_pilot"] = _Tool("pc_pilot", "Drive the desktop")
+    surface = one_set_of_hands(tools, utterance)
+    assert "pc_pilot" in surface
+    switch = _switch(surface)
+    switch.open_turn(utterance, core=())
+    assert not switch.is_on("pc_pilot")
+    brain = _BrowserFallbackBrain()
+    loop = ToolUseLoop(brain, surface, _RunsTools(), tool_switch=switch)  # type: ignore[arg-type]
+
+    await loop.run([], user_utterance=utterance)
+
+    assert {t["name"] for t in brain.requests[0].tools} == {ENABLE_TOOLS, "my_chrome"}
+    assert [t["name"] for t in brain.requests[1].tools] == ["pc_pilot"]
+    assert brain.requests[1].tool_choice == "required"
+    assert tools["my_chrome"].calls == 1
+    assert tools["pc_pilot"].calls == 1
+
+
+@pytest.mark.parametrize("retry_succeeds", [True, False])
+@pytest.mark.asyncio
+async def test_failed_pc_pilot_action_forces_a_visual_retry_before_any_completion_claim(
+    retry_succeeds: bool,
+) -> None:
+    class _FailThenVerifyPilot(_Tool):
+        async def execute(self, args: dict[str, Any], ctx: Any) -> ToolResult:
+            del args, ctx
+            self.calls += 1
+            if self.calls == 1 or not retry_succeeds:
+                return ToolResult(
+                    success=False,
+                    output={
+                        "description": "screen image attached",
+                        "_image": {"mime": "image/png", "data": "AAAA"},
+                    },
+                    error="No unique control named like 'Night sky' in 'Settings'.",
+                )
+            return ToolResult(
+                success=True,
+                output="Settings readback confirms Contrast themes: Night sky.",
+            )
+
+    class _DesktopRetryBrain:
+        def __init__(self) -> None:
+            self.requests: list[BrainRequest] = []
+
+        async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+            self.requests.append(req)
+            if len(self.requests) == 1:
+                yield BrainDelta(tool_call={
+                    "id": "click-1", "name": "pc_pilot",
+                    "input": {"steps": [{"click": "Night sky"}]},
+                })
+                yield BrainDelta(finish_reason="tool_use")
+            elif len(self.requests) == 2:
+                yield BrainDelta(tool_call={
+                    "id": "look-2", "name": "pc_pilot",
+                    "input": {"steps": [{"look": True, "see": True}]},
+                })
+                yield BrainDelta(finish_reason="tool_use")
+            else:
+                yield BrainDelta(content="Night sky is applied and verified.")
+                yield BrainDelta(finish_reason="stop")
+
+    utterance = "click Night sky and apply it in Windows Settings"
+    tools = _registry()
+    pilot = _FailThenVerifyPilot("pc_pilot", "Operate the Windows desktop")
+    tools["pc_pilot"] = pilot
+    switch = _switch(one_set_of_hands(tools, utterance))
+    switch.open_turn(utterance, core=())
+    brain = _DesktopRetryBrain()
+    loop = ToolUseLoop(brain, tools, _RunsTools(), tool_switch=switch)  # type: ignore[arg-type]
+
+    result = await loop.run([], user_utterance=utterance)
+
+    assert brain.requests[1].tool_choice == "required"
+    assert pilot.calls == 2
+    assert any(message.images for message in brain.requests[1].messages)
+    if retry_succeeds:
+        assert "verified" in result.text.lower()
+    else:
+        assert "didn't work" in result.text.lower()
+        assert "applied" not in result.text.lower()
 
 
 @pytest.mark.parametrize("utterance", [
@@ -518,7 +646,9 @@ def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None
         "use the browser skill to open YouTube",
     ],
 )
-def test_explicit_owner_chrome_survives_the_full_pilot_turn(utterance: str) -> None:
+def test_explicit_owner_chrome_starts_with_one_driver_and_keeps_fallback_hidden(
+    utterance: str,
+) -> None:
     tools = _desktop_registry()
     for name in (
         "playwright/browser_navigate",
@@ -531,7 +661,8 @@ def test_explicit_owner_chrome_survives_the_full_pilot_turn(utterance: str) -> N
     switch.open_turn(utterance, core=("navigate", "pc_pilot"))
 
     visible = set(switch.visible())
-    assert {"my_chrome", "pc_pilot"} <= visible
+    assert visible == {ENABLE_TOOLS, "my_chrome"}
+    assert not switch.is_on("pc_pilot")
     assert not any(name.startswith("playwright/") for name in visible)
 
 

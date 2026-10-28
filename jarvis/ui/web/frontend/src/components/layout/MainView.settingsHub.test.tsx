@@ -77,3 +77,17 @@ describe("MainView — every settings-hub id mounts the hub", () => {
     expect(screen.queryByTestId("settings-hub")).toBeNull();
   });
 });
+
+describe("MainView — retired tool catalogs return to chat", () => {
+  it.each(["armory", "plugins", "mcps", "skills", "marketplace"] as SectionId[])(
+    "does not reopen the %s catalog screen",
+    async (activeSection) => {
+      useEventStore.setState({ activeSection });
+      render(<MainView />);
+
+      expect(await screen.findByTestId("chats-surface")).toBeTruthy();
+      expect(useEventStore.getState().activeSection).toBe("chats");
+      expect(screen.queryByTestId("settings-hub")).toBeNull();
+    },
+  );
+});

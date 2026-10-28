@@ -34,6 +34,7 @@ from jarvis.brain.cu_gate import (
     llm_computer_use_allowed,
 )
 from jarvis.brain.fake_tool_mark import strip_fake_tool_marks
+from jarvis.brain.my_chrome import BROWSER_SKILL_DISCONNECTED_MARKER
 from jarvis.brain.spawn_gate import (
     SPAWN_VEHICLE_TOOL_NAMES,
     llm_spawn_allowed,
@@ -89,6 +90,14 @@ _DEADLINE_FINAL_DIRECTIVE = (
     "not call any more tools."
 )
 
+_BROWSER_SKILL_RECOVERY_DIRECTIVE = (
+    "BrowserSkill could not see an active Chrome profile. Continue the user's original "
+    "browser task with pc_pilot now; do not stop to tell the user to install an extension. "
+    "Open Google Chrome if needed, handle a profile chooser only when the intended profile "
+    "is clear, then inspect the screen and take one step at a time. Verify the requested "
+    "result before saying it is done."
+)
+
 # Directive appended for the budget-forced final round (see IterationBudget).
 # Exhausting the round budget used to hard-break the loop and DISCARD every
 # executed tool result: live 2026-07-17, a delegated voice turn had two fully
@@ -133,6 +142,16 @@ _FAILED_DIRECTIVE = (
     "[retry] Your last tool call failed. Do not describe what you will do: "
     "take the next step now with a tool call (read the page or screen again "
     "if you need the right element). The error was: "
+)
+# A desktop failure must be retried from the screenshot PC Pilot just returned,
+# and the retry must be an actual PC Pilot call. UIA labels can miss custom UI
+# and a words-only response after a failed click falsely sounds like success.
+_DESKTOP_RETRY_DIRECTIVE = (
+    "[desktop retry] The PC action failed. Inspect the screenshot attached to "
+    "the previous tool result, then make one PC Pilot tool call now. If UIA "
+    "could not find the control, use its visible screen coordinates from that "
+    "screenshot and set see=true to capture the result. Do not claim success "
+    "unless the returned readback or screenshot confirms it. Failure: "
 )
 _PROMISE = re.compile(
     r"\b(i will|i'll|i am going to|i'm going to|let me|i shall|next,? i)\b", re.IGNORECASE
@@ -1389,8 +1408,14 @@ class ToolUseLoop:
                     and any(t.get("name") == evidence_required_tool for t in tools_payload)
                 )
                 undone = undone or bool(faked_call and tools_payload)
+                desktop_failed = bool(
+                    tool_log
+                    and tool_log[-1].name == "pc_pilot"
+                    and not tool_log[-1].ok
+                    and not tool_log[-1].blocked
+                )
                 if (
-                    (refused_call or promised or undone or narrowed)
+                    (refused_call or promised or undone or narrowed or desktop_failed)
                     and not retry_nudged
                     and not deadline_forced
                 ):
@@ -1399,12 +1424,16 @@ class ToolUseLoop:
                         "refused" if refused_call
                         else "failed" if promised
                         else "unmade" if undone
+                        else "desktop_failed" if desktop_failed
                         else "narrowed"
                     )
                     log.info(
                         "tool_use_loop: a %s call was answered in words; sent back once", reason
                     )
                     directive = (
+                        _DESKTOP_RETRY_DIRECTIVE + failed_call
+                        if desktop_failed
+                        else
                         _RETRY_DIRECTIVE + refused_call
                         if refused_call
                         else _FAILED_DIRECTIVE + failed_call
@@ -1424,7 +1453,7 @@ class ToolUseLoop:
                     # and a words-only nudge leaves it free to do so again.
                     # A narrowing question is sent back free: the honest answer
                     # may still be a question.
-                    force_tool = reason == "unmade"
+                    force_tool = reason in {"unmade", "desktop_failed"}
                     if force_tool:
                         tools_payload = self._with_screen_control(
                             tools_payload,
@@ -1438,6 +1467,22 @@ class ToolUseLoop:
                     log.info("tool_use_loop: an action claim with no call replaced")
                     final_agg.text = _localized_phrase(
                         {lang: action_not_started_phrase(lang) for lang in ("de", "en", "es")},
+                        user_utterance or _last_user_text(current_messages),
+                        reply_language,
+                    )
+                    break
+                if (
+                    retry_nudged
+                    and tool_log
+                    and tool_log[-1].name == "pc_pilot"
+                    and not tool_log[-1].ok
+                ):
+                    # A required screenshot-guided retry was made and PC Pilot
+                    # still reports failure. Do not let a confident model
+                    # sentence turn that failed action into a claimed success.
+                    log.info("tool_use_loop: failed PC Pilot retry reported honestly")
+                    final_agg.text = _localized_phrase(
+                        _ACTION_FAILED_PHRASES,
                         user_utterance or _last_user_text(current_messages),
                         reply_language,
                     )
@@ -1923,6 +1968,28 @@ class ToolUseLoop:
                         # for free (no extra call); the executor redacts + caps it.
                         rationale=agg.text or "",
                     )
+                    if (
+                        result is not None
+                        and not result.success
+                        and tool_name == "my_chrome"
+                        and str(result.error or "").startswith(
+                            BROWSER_SKILL_DISCONNECTED_MARKER
+                        )
+                        and self._switch is not None
+                        and self._switch.handoff_to_pc_pilot()
+                    ):
+                        # my_chrome is deliberately the sole browser hand on
+                        # the opening round. If its extension has no connected
+                        # Chrome profile, expose only the PC pilot and require
+                        # the model to continue the original task through it.
+                        self._system_prompt = "\n\n".join(filter(None, (
+                            self._system_prompt,
+                            _BROWSER_SKILL_RECOVERY_DIRECTIVE,
+                        )))
+                        force_tool = True
+                        log.warning(
+                            "tool_use_loop: BrowserSkill disconnected; handed turn to pc_pilot"
+                        )
                     # Two-turn voice/chat confirmation: the executor deferred this
                     # consequential tool instead of blocking. Speak a short
                     # confirmation question and END the turn (no second brain
@@ -2093,6 +2160,33 @@ class ToolUseLoop:
                             content="(Tool screenshot — describe or use it as needed.)",
                             images=tuple(_img_blocks),
                         ))
+
+                # A failed PC Pilot step already has its fresh screenshot and
+                # UIA error in the conversation. Force exactly one follow-up
+                # PC Pilot call now so the model must use that visual evidence
+                # instead of ending with a generic explanation or false claim.
+                if (
+                    tool_name == "pc_pilot"
+                    and not tool_result_payload.get("success")
+                    and not tool_result_payload.get("blocked")
+                    and not retry_nudged
+                    and not deadline_forced
+                ):
+                    retry_nudged = True
+                    request = user_utterance or _last_user_text(current_messages)
+                    directive = _DESKTOP_RETRY_DIRECTIVE + failed_call
+                    if request:
+                        directive += _REQUEST_REMINDER + request
+                    current_messages.append(BrainMessage(role="user", content=directive))
+                    pilot = self._tools.get("pc_pilot")
+                    if pilot is not None:
+                        tools_payload = [{
+                            "name": pilot.name,
+                            "description": getattr(pilot, "description", ""),
+                            "input_schema": pilot.schema,
+                        }]
+                    force_tool = True
+                    log.info("tool_use_loop: PC Pilot failure forces one screenshot-guided retry")
 
             # The meta/debug acknowledgement ends the turn on a canned line, so
             # it may only speak when this turn produced nothing else. A round

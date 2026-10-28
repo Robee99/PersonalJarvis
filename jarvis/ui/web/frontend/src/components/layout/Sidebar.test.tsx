@@ -95,16 +95,6 @@ vi.mock("@/hooks/useOverlayStyle", () => ({
   }),
 }));
 
-// usePluginAttention polls /api/marketplace/plugins; mock it so the sidebar's
-// plugin reconnect dot is driven by the test, not a fetch.
-const pluginAttentionMock = vi.hoisted(() => ({ needsReconnect: false }));
-vi.mock("@/hooks/usePluginAttention", () => ({
-  usePluginAttention: () =>
-    pluginAttentionMock.needsReconnect
-      ? { count: 1, names: ["Cloudflare"] }
-      : { count: 0, names: [] },
-}));
-
 // useVoiceMode fetches /api/settings/voice-mode; mock it so the footer card's
 // pipeline-vs-realtime split is driven by the test, not a fetch. The default
 // mirrors a fresh pipeline install (the pre-existing footer tests rely on it).
@@ -402,37 +392,17 @@ describe("Sidebar assistant name header", () => {
   });
 });
 
-describe("Sidebar plugin reconnect indicator", () => {
-  beforeEach(() => {
-    useEventStore.setState({ connected: true, voiceReady: true });
-  });
-
-  afterEach(() => {
-    cleanup();
-    pluginAttentionMock.needsReconnect = false;
-  });
-
-  test("shows an amber dot on AGENTS (and on Plugins under Advanced) when a plugin needs reconnect", () => {
-    // A revoked / expired plugin must be visible app-wide, not only on the
-    // Plugins page — the AGENTS destination (whose Tools tab is the same
-    // catalog) carries the amber dot, and so does the Plugins row in the
-    // Advanced index once it is open.
-    pluginAttentionMock.needsReconnect = true;
-
+describe("Sidebar tool catalog navigation", () => {
+  test("does not show broad tool catalog screens in the sidebar or quick index", () => {
     renderSidebar();
 
-    expect(screen.getByTestId("nav-warn-agents")).toBeTruthy();
+    for (const id of ["armory", "plugins", "mcps", "skills", "marketplace"]) {
+      expect(screen.queryByTestId(`nav-row-${id}`)).toBeNull();
+    }
     fireEvent.click(screen.getByTestId("sidebar-advanced-toggle"));
-    expect(screen.getByTestId("nav-warn-plugins")).toBeTruthy();
-  });
-
-  test("no amber dot when every plugin is healthy", () => {
-    pluginAttentionMock.needsReconnect = false;
-
-    renderSidebar();
-
-    expect(screen.queryByTestId("nav-warn-plugins")).toBeNull();
-    expect(screen.queryByTestId("nav-warn-agents")).toBeNull();
+    for (const id of ["armory", "plugins", "mcps", "skills", "marketplace"]) {
+      expect(screen.queryByTestId(`nav-row-${id}`)).toBeNull();
+    }
   });
 });
 

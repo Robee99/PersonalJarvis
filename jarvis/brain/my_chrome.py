@@ -36,6 +36,7 @@ from .tool_switch import wants_browser_window_control
 log = logging.getLogger(__name__)
 
 MY_CHROME = "my_chrome"
+BROWSER_SKILL_DISCONNECTED_MARKER = "[browser_skill_disconnected]"
 
 #: Seconds one bsk command may take; a navigation has its own 30 s inside.
 _CALL_TIMEOUT_S = 45.0
@@ -47,9 +48,8 @@ _DAEMON_POLL_S = 0.25
 _MAX_PAGE = browser_page.MAX_CHARS
 _ACTIONS = ("open", "read", "click", "type", "press", "tabs", "use_tab", "back", "done")
 _NOT_CONNECTED = (
-    "The BrowserSkill extension is not connected in Chrome. The owner adds it from "
-    "the Chrome Web Store and switches on its local connection; until then use "
-    "the browser_* tools or computer_use."
+    "BrowserSkill has no connected Chrome profile. Chrome may be closed, waiting at "
+    "its profile chooser, or the extension's local connection may be off."
 )
 
 
@@ -348,7 +348,7 @@ class MyChromeTool:
                 action, trace_id, int((time.monotonic() - started) * 1000), message,
             )
             if _not_connected(message):
-                message = _NOT_CONNECTED
+                message = f"{BROWSER_SKILL_DISCONNECTED_MARKER} {_NOT_CONNECTED}"
             return ToolResult(success=False, output=None, error=message)
 
     async def _start(self, exe: str) -> str:
