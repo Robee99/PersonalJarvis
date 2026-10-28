@@ -34,20 +34,15 @@ vi.mock("@/views/local-models/OverviewPanel", () => ({
   OverviewPanel: ({
     providerId,
     onTune,
-    onOpenApiKeys,
     onBrowse,
   }: {
     providerId: string;
     onTune?: (model: string) => void;
-    onOpenApiKeys?: () => void;
     onBrowse?: () => void;
   }) => (
     <div data-testid="overview-panel" data-provider={providerId}>
       <button type="button" onClick={() => onTune?.("qwen3.5:4b")}>
         tune
-      </button>
-      <button type="button" onClick={() => onOpenApiKeys?.()}>
-        keys
       </button>
       <button type="button" onClick={() => onBrowse?.()}>
         browse
@@ -167,9 +162,6 @@ describe("LocalModelsView", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "close" }));
     expect(screen.queryByTestId("local-models-tune-drawer")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "keys" }));
-    expect(mockState.setActiveSection).toHaveBeenCalledWith("apikeys");
   });
 
   it("mounts the Models ledger and Hugging Face from their tabs", () => {

@@ -6,7 +6,7 @@ afterEach(() => vi.unstubAllGlobals());
 test("concurrent catalog readers share a request, but surfaces and later refreshes remain separate", async () => {
   let release!: (response: Response) => void;
   const pending = new Promise<Response>((resolve) => { release = resolve; });
-  const request = vi.fn(() => pending);
+  const request = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => pending);
   vi.stubGlobal("fetch", request);
   const first = fetchAgentChatCatalog("society");
   const second = fetchAgentChatCatalog("society");
@@ -17,7 +17,14 @@ test("concurrent catalog readers share a request, but surfaces and later refresh
   release({ ok: true, json: async () => ({ providers: [] }) } as Response);
   await Promise.all([first, second, other]);
   await fetchAgentChatCatalog("society");
-  expect(request).toHaveBeenCalledTimes(3);
+  const catalogCalls = request.mock.calls.filter(([url]) =>
+    String(url).startsWith("/api/agent-chat/catalog"),
+  );
+  const routePolicyCalls = request.mock.calls.filter(([url]) =>
+    String(url) === "/api/brain/route-policy",
+  );
+  expect(catalogCalls).toHaveLength(3);
+  expect(routePolicyCalls).toHaveLength(1);
 });
 
 test("concurrent credential-status readers share the in-flight request", async () => {

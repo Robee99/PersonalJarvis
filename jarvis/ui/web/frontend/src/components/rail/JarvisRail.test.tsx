@@ -90,11 +90,12 @@ describe("JarvisRail", () => {
     expect(screen.getByRole("radio", { name: "Cube" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("HOLO opens the brain map from the HUD", () => {
+  it("HOLO opens the brain map without changing the current section", () => {
     show(vision());
     fireEvent.click(screen.getByTestId("rail-holo"));
     expect(useRailStore.getState().holo).toBe(true);
-    expect(useEventStore.getState().activeSection).toBe("chats");
+    expect(screen.getByTestId("rail-holo-map")).toBeTruthy();
+    expect(useEventStore.getState().activeSection).toBe("agents");
   });
 
   it("FOCUS starts a thirty-minute session and shows the deferred lock", async () => {

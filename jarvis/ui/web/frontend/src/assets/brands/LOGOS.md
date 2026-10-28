@@ -85,6 +85,7 @@ we could not obtain. Record it below with `own work` as the legal basis.
 | home_assistant | svgl `home-assistant.svg` | MIT | 2026-07-25 |
 | linear | svgl `linear.svg` (brand purple, legible on dark) | MIT | 2026-07-25 |
 | notion | svgl `notion.svg` (the light variant, for dark backgrounds) | MIT | 2026-07-25 |
+| paperclip | Paperclip's official icon, `https://paperclip.app/brand/paperclip-icon-black.svg` | vendor artwork; nominative identification only | 2026-10-28 |
 | slack | gilbarbara/logos `slack-icon.svg` | CC0 | 2026-07-25 |
 | spotify | gilbarbara/logos `spotify-icon.svg` | CC0 | 2026-08-17 |
 | supabase | gilbarbara/logos `supabase-icon.svg` | CC0 | 2026-07-25 |
