@@ -430,24 +430,58 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
     if raw is not None:
         if not isinstance(raw, list):
             raise ValueError("steps must be a list of action objects.")
-        if len(raw) > _MAX_STEPS:
-            raise ValueError(
-                "Use one UI action per call. Review the returned window and controls "
-                "before sending the next action."
-            )
         if not all(isinstance(s, dict) for s in raw):
             raise ValueError("Every item in steps must be an action object.")
         steps = [dict(s) for s in raw]
     else:
-        single = {k: args[k] for k in ("app", "into", "enter", "clear", "button", "double", "see",
+        single = {k: args[k] for k in ("app", "into", "enter", "submit", "clear", "button", "double", "see",
                                        "secret", "on", "to", "value") if k in args}
+        fold_enter_key = (
+            args.get("type") is not None
+            and isinstance(args.get("keys"), str)
+            and _norm(args["keys"]).replace(" ", "") in {"enter", "return"}
+        )
+        if fold_enter_key:
+            single["enter"] = True
         for action in ("open", "navigate", "click", "set", "drag", "hover", "type", "keys",
                        "scroll", "window", "wait", "look"):
+            if action == "keys" and fold_enter_key:
+                continue
             if args.get(action) not in (None, "", False):
-                steps.append({**single, action: args[action]})
+                action_value = args[action]
+                step_options = single
+                if (
+                    action == "type"
+                    and _norm(str(action_value)) in {"type", "text"}
+                    and isinstance(args.get("value"), str)
+                ):
+                    action_value = args["value"]
+                    step_options = {key: value for key, value in single.items() if key != "value"}
+                steps.append({**step_options, action: action_value})
         if not steps and (args.get("app") or args.get("see")):
             steps.append({**single, "look": True})
     for step in steps:
+        if (
+            _norm(str(step.get("type", ""))) in {"type", "text"}
+            and isinstance(step.get("value"), str)
+        ):
+            step["type"] = step.pop("value")
+        if (
+            "type" in step
+            and isinstance(step.get("keys"), str)
+            and _norm(step["keys"]).replace(" ", "") in {"enter", "return"}
+        ):
+            if step.get("enter") is False:
+                raise ValueError("Use either enter=false or keys=enter, not both.")
+            step.pop("keys")
+            step["enter"] = True
+        if "submit" in step:
+            submit = step.pop("submit")
+            if not isinstance(submit, bool):
+                raise ValueError("submit must be true or false.")
+            if "enter" in step and step["enter"] != submit:
+                raise ValueError("Use either enter or submit, not conflicting values.")
+            step["enter"] = submit
         if "navigate" in step:
             if "open" in step:
                 raise ValueError("Use either open or navigate for a step, not both.")
@@ -456,19 +490,35 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
             # Models commonly use the natural action name "navigate" even
             # though the underlying operation is opening a URL in the browser.
             step["open"] = step.pop("navigate")
-    if len(steps) > _MAX_STEPS:
-        raise ValueError(
-            "Use one UI action per call. Review the returned window and controls "
-            "before sending the next action."
-        )
+    allowed = {*_ACTIONS, "into", "enter", "clear", "button", "double", "see",
+               "secret", "on", "to", "value"}
     for number, step in enumerate(steps, 1):
+        unknown = set(step) - allowed
         actions = [key for key in _ACTIONS if key != "app" and key in step]
+        if unknown or not actions:
+            raise ValueError(
+                f"Invalid step {number}: "
+                + (f"unknown keys {', '.join(sorted(unknown))}. " if unknown else "no action. ")
+                + "Use open, click, type, keys or scroll; type contains the text itself."
+            )
         if len(actions) > 1:
             raise ValueError(
                 f"Step {number} contains multiple UI actions ({', '.join(actions)}). "
                 "Use exactly one UI action per call and inspect the returned state before continuing."
             )
-    return steps
+    # A small model may ignore maxItems=1 and send a whole plan. Run only its
+    # first action so the desktop is inspected between actions.
+    return steps[:_MAX_STEPS]
+
+
+def _requested_step_count(args: dict[str, Any]) -> int:
+    raw = args.get("steps")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return 0  # _steps() reports the actionable parse error.
+    return len(raw) if isinstance(raw, list) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -567,8 +617,9 @@ class PcPilot:
     description: str = (
         "Drive any app or window on this PC like a person: open apps, Settings pages, "
         "folders and websites; click buttons by the name you see; type; press keys; "
-        "scroll; minimize, maximize, focus or close windows. Make one UI action per call "
-        "and inspect the returned controls and window state before choosing the next action. "
+        "scroll; minimize, maximize, focus or close windows. Make one UI action per call. "
+        "If a call contains multiple steps, only the first is run; inspect the returned "
+        "controls and screen before choosing the next action. "
         "Use 'steps' with one action, for example [{\"open\":\"calculator\"}], then "
         "[{\"click\":\"7\"}]. For an app-and-action, open it first, inspect its window, "
         "then continue in a fresh call. "
@@ -580,7 +631,8 @@ class PcPilot:
         "Step keys: open or navigate (app, page, folder or URL; navigate reuses the current browser "
         "window), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
-        "enter=true, secret=true for a password), keys ('ctrl+s', 'enter', 'win+d'), "
+        "enter=true or submit=true to press Enter, secret=true for a password), "
+        "keys ('ctrl+s', 'enter', 'win+d'), "
         "scroll ('down'/'up'/'down 10'; on=a control to scroll inside), drag (a control "
         "or 'x,y', with to=where to drop), set (a slider or field by name, with "
         "value=, e.g. set=Brightness value=60; use it for every slider), "
@@ -595,7 +647,10 @@ class PcPilot:
             "steps": {
                 "type": "array",
                 "maxItems": _MAX_STEPS,
-                "description": "Use exactly one UI action per call. Inspect the returned state before the next call.",
+                "description": (
+                    "Use one UI action per call. If multiple steps are sent, only the first "
+                    "runs; inspect its returned state before the next call."
+                ),
                 "items": {
                     "type": "object",
                     "properties": {
@@ -615,6 +670,10 @@ class PcPilot:
                         "secret": {"type": "boolean"},
                         "on": {"type": "string"},
                         "enter": {"type": "boolean"},
+                        "submit": {
+                            "type": "boolean",
+                            "description": "Alias for enter when used with type",
+                        },
                         "clear": {"type": "boolean"},
                         "keys": {"type": "string"},
                         "scroll": {"type": "string"},
@@ -646,6 +705,10 @@ class PcPilot:
             "button": {"type": "string", "enum": ["left", "right", "middle"]},
             "double": {"type": "boolean"},
             "enter": {"type": "boolean"},
+            "submit": {
+                "type": "boolean",
+                "description": "Alias for enter when used with type",
+            },
             "keys": {"type": "string"},
             "on": {"type": "string"},
             "scroll": {"type": "string"},
@@ -702,6 +765,7 @@ class PcPilot:
 
     # -- run ------------------------------------------------------------------
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+        requested_step_count = _requested_step_count(args or {})
         try:
             steps = _steps(args or {})
         except ValueError as exc:  # Return invalid step descriptions as a user-visible tool error.
@@ -780,6 +844,11 @@ class PcPilot:
         report = await asyncio.to_thread(self._readback, desk, run)
         text = "\n".join(filter(None, [
             "Actions sent: " + "; ".join(run.done) + "." if run.done else "",
+            (
+                f"Only the first of {requested_step_count} requested actions was sent; "
+                "the remaining actions were not run. Inspect this screen before choosing the next action."
+                if requested_step_count > 1 else ""
+            ),
             error,
             report,
         ]))

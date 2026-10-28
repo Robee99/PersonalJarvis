@@ -188,6 +188,52 @@ async def test_input_goes_to_the_target_window_not_jarvis(tmp_path: Path) -> Non
     assert "the field now holds 'hello'" in str(result.output)
 
 
+async def test_submit_alias_submits_typed_text(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CHROME], panes={CHROME.handle: [[]]}, front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"app": "chrome", "type": "ice cream", "submit": True}]}, Ctx()
+    )
+
+    assert result.success, result.error
+    assert ("type", "ice cream") in desk.log
+    assert ("press", "enter") in desk.log
+
+
+async def test_model_style_type_value_submit_step_is_normalized(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CHROME], panes={CHROME.handle: [[]]}, front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"type": "type", "value": "ice cream", "submit": True}]}, Ctx()
+    )
+
+    assert result.success, result.error
+    assert ("type", "ice cream") in desk.log
+    assert ("press", "enter") in desk.log
+
+
+async def test_enter_key_alias_is_folded_into_top_level_typing(tmp_path: Path) -> None:
+    desk = FakeDesk(
+        wins=[CHROME], panes={CHROME.handle: [[Control("Search", "Edit", (0, 0, 100, 20))]]},
+        front=CHROME.handle,
+    )
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {
+            "app": "Chrome", "into": "Search", "keys": "enter",
+            "type": "text", "value": "ice cream",
+        },
+        Ctx(),
+    )
+
+    assert result.success, result.error
+    assert ("type", "ice cream") in desk.log
+    assert ("press", "enter") in desk.log
+
+
 async def test_a_drag_goes_from_one_control_to_another(tmp_path: Path) -> None:
     desk = FakeDesk(wins=[CALC], panes={CALC.handle: [[_button("Card", x=0), _button("Done", x=300),
                                                        _button("A"), _button("B")]]})
@@ -408,6 +454,20 @@ async def test_multiple_ui_actions_in_one_step_are_rejected(tmp_path: Path) -> N
     assert desk.log == []
 
 
+async def test_multiple_steps_send_only_first_and_return_observation(tmp_path: Path) -> None:
+    desk = FakeDesk([CALC], panes={CALC.handle: [_calc_controls()]}, front=CALC.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"click": "Seven"}, {"click": "Eight"}]}, Ctx()
+    )
+
+    assert result.success, result.error
+    assert [value for kind, value in desk.log if kind == "invoke"] == ["Seven"]
+    assert "Only the first of 2 requested actions was sent" in str(result.output)
+    assert "Controls (click them by name)" in str(result.output)
+
+
 def test_no_browser_window_never_falls_back_to_another_program(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -429,7 +489,7 @@ async def test_malformed_steps_are_rejected_before_any_input(tmp_path, step):
     pilot = _pilot(desk, tmp_path)
     result = await pilot.execute({"steps": [{"click": "Search"}, step]}, Ctx())
     assert not result.success
-    assert "one ui action per call" in result.error.lower()
+    assert result.error
     assert desk.log == []
 
 
