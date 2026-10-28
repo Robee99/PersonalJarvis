@@ -146,4 +146,55 @@ describe("Add menu rows for plugins the owner added", () => {
       "plugin:notion",
     ]);
   });
+
+  it("keeps the PC, browser, and required MCP controls while hiding unrelated tools", () => {
+    const tool = (name: string, category: ToolChoice["category"] = "system") =>
+      row({ id: `tool:${name}`, label: name, category, tool_names: [name] });
+    const mcp = (server: string) =>
+      row({
+        id: `mcp:${server}`,
+        label: server,
+        group: server,
+        category: "mcp",
+        tool_names: [`${server}/action`],
+      });
+    const skill = (slug: string) =>
+      row({
+        id: `skill:${slug}`,
+        label: slug,
+        skill: slug,
+        category: "skills",
+        tool_names: ["run-skill"],
+      });
+    const rows = [
+      tool("pc_pilot"),
+      tool("computer_use"),
+      tool("app_control"),
+      tool("my_chrome", "web"),
+      tool("society_browser", "web"),
+      tool("browser_navigate", "web"),
+      mcp("filesystem-mcp"),
+      mcp("windows-mcp"),
+      mcp("browser-harness"),
+      mcp("github-mcp"),
+      skill("tencent-browserskill"),
+      skill("unrelated-skill"),
+      row({ id: "plugin:google-drive", available: true }),
+    ];
+
+    const visible = browseToolRows(rows, "", "computer");
+    expect(visible.map((item) => item.id)).toEqual([
+      "tool:pc_pilot",
+      "tool:computer_use",
+      "tool:app_control",
+      "tool:my_chrome",
+      "tool:society_browser",
+      "tool:browser_navigate",
+      "mcp:filesystem-mcp",
+      "mcp:windows-mcp",
+      "mcp:browser-harness",
+      "skill:tencent-browserskill",
+    ]);
+    expect(browseToolRows(rows, "github", "computer").some((item) => item.id === "mcp:github-mcp")).toBe(false);
+  });
 });
