@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from types import SimpleNamespace
 from typing import Any
 
@@ -184,3 +185,19 @@ def test_a_stopped_service_is_started_once(monkeypatch):
     monkeypatch.setattr(my_chrome, "_DAEMON_SETTLE_S", 0)
     result = _run(_tool(monkeypatch, fake), action="read")
     assert result.success and started == ["bsk.exe"]
+
+
+def test_a_denied_daemon_launch_is_reported_as_a_tool_failure(monkeypatch):
+    fake = _FakeBsk(fail={"session": ["daemon is not running (connect failed)"]})
+    monkeypatch.setattr(my_chrome, "run_bsk", fake)
+
+    def deny_launch(*_args, **_kwargs):
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(subprocess, "Popen", deny_launch)
+    tool = MyChromeTool(exe="bsk.exe")
+    result = _run(tool, action="read")
+
+    assert not result.success
+    assert "Could not start the BrowserSkill daemon" in result.error
+    assert "Access is denied" in result.error

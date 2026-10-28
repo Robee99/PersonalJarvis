@@ -63,7 +63,7 @@ log = logging.getLogger(__name__)
 
 PILOT = "pc_pilot"
 
-_MAX_STEPS = 15
+_MAX_STEPS = 1
 _MAX_LISTED = 70
 #: Controls that appeared after the last click or key, listed first.
 _MAX_FRESH = 30
@@ -371,7 +371,7 @@ def best_control(controls: list[Control], target: str) -> Control | None:
     if want in _SPOKEN:
         wants.add(_SPOKEN[want])
     words = want.split()
-    best: tuple[float, int, Control] | None = None
+    ranked: list[tuple[float, int, Control]] = []
     for index, control in enumerate(controls):
         name = _norm(control.name)
         if not name:
@@ -395,9 +395,17 @@ def best_control(controls: list[Control], target: str) -> Control | None:
             score -= 30
         # Shorter names that still match are the more exact match.
         score -= min(len(name) - len(want), 60) / 20 if len(name) > len(want) else 0
-        if best is None or score > best[0]:
-            best = (score, index, control)
-    return best[2] if best and best[0] > 20 else None
+        ranked.append((score, index, control))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    top_score = ranked[0][0]
+    if top_score <= 20:
+        return None
+    # Repeated labels (for example, one Add button per product card) are not
+    # enough to identify which control the person meant. Never guess by order.
+    tied = [item for item in ranked if abs(item[0] - top_score) < 1e-9]
+    return tied[0][2] if len(tied) == 1 else None
 
 
 def _coords(text: str) -> tuple[int, int] | None:
@@ -421,7 +429,10 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw, list):
             raise ValueError("steps must be a list of action objects.")
         if len(raw) > _MAX_STEPS:
-            raise ValueError(f"steps may contain at most {_MAX_STEPS} actions.")
+            raise ValueError(
+                "Use one UI action per call. Review the returned window and controls "
+                "before sending the next action."
+            )
         if not all(isinstance(s, dict) for s in raw):
             raise ValueError("Every item in steps must be an action object.")
         steps = [dict(s) for s in raw]
@@ -443,6 +454,11 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
             # Models commonly use the natural action name "navigate" even
             # though the underlying operation is opening a URL in the browser.
             step["open"] = step.pop("navigate")
+    if len(steps) > _MAX_STEPS:
+        raise ValueError(
+            "Use one UI action per call. Review the returned window and controls "
+            "before sending the next action."
+        )
     return steps
 
 
@@ -542,15 +558,16 @@ class PcPilot:
     description: str = (
         "Drive any app or window on this PC like a person: open apps, Settings pages, "
         "folders and websites; click buttons by the name you see; type; press keys; "
-        "scroll; minimize, maximize, focus or close windows. Give steps in order in "
-        "'steps', e.g. [{\"open\":\"calculator\"},{\"click\":\"7\"},{\"click\":\"plus\"},"
-        "{\"click\":\"8\"},{\"click\":\"equals\"}] or [{\"open\":\"settings windows update\"},"
-        "{\"click\":\"Check for updates\"}] or [{\"open\":\"notepad\"},{\"type\":\"hello\"}]. "
+        "scroll; minimize, maximize, focus or close windows. Make one UI action per call "
+        "and inspect the returned controls and window state before choosing the next action. "
+        "Use 'steps' with one action, for example [{\"open\":\"calculator\"}], then "
+        "[{\"click\":\"7\"}]. For an app-and-action, open it first, inspect its window, "
+        "then continue in a fresh call. "
         "Websites work the same way in the owner's own Chrome: shopping sites such as "
-        "Swiggy Instamart, Amazon or Blinkit, e.g. [{\"open\":\"swiggy instamart\"},"
-        "{\"type\":\"diet coke\",\"into\":\"Search\",\"enter\":true},{\"click\":\"Add\"}]; "
-        "adding to a cart is fine, paying is asked first. A name not on screen is "
-        "scrolled to. "
+        "Swiggy Instamart, Amazon or Blinkit; search, inspect the result, and click a "
+        "uniquely identified product control in separate calls. If repeated controls "
+        "share a name, specify a unique target or use see=true with visible x,y coordinates. "
+        "Adding to a cart is fine, paying is asked first. A name not on screen is scrolled to. "
         "Step keys: open or navigate (app, page, folder or URL; navigate reuses the current browser "
         "window), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
@@ -569,7 +586,7 @@ class PcPilot:
             "steps": {
                 "type": "array",
                 "maxItems": _MAX_STEPS,
-                "description": "Steps in order; each has one action key.",
+                "description": "Use exactly one UI action per call. Inspect the returned state before the next call.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -691,27 +708,44 @@ class PcPilot:
         run = _Run(want_picture=bool(args.get("see")))
         error = ""
         for number, step in enumerate(steps, 1):
+            step_started = time.monotonic()
+            failure_type = ""
+            failure_reason = ""
             try:
                 run.want_picture = run.want_picture or bool(step.get("see"))
                 await self._step(desk, policy, run, step, ctx)
             except StepFailed as exc:
+                failure_type = type(exc).__name__
+                failure_reason = (
+                    "[redacted secret action]" if step.get("secret") else str(exc)[:300]
+                )
                 error = f"Step {number} ({_describe(step)}) failed: {exc}"
                 run.want_picture = True
                 break
             except Exception as exc:  # noqa: BLE001 - a Win32 or UIA failure goes back to the model
                 log.info("pc_pilot: step %d failed", number, exc_info=True)
+                failure_type = type(exc).__name__
+                failure_reason = (
+                    "[redacted secret action]" if step.get("secret") else str(exc)[:300]
+                )
                 error = f"Step {number} ({_describe(step)}) failed: {exc}"
                 break
             finally:
-                _audit(self._audit_path_now(), {
+                audit_entry = {
                     "ts": _dt.datetime.now().isoformat(timespec="seconds"),
+                    "step_number": number,
                     "step": _audit_view(step),
                     "window": run.window.title if run.window else "",
-                    "ok": not error,
-                })
+                    "ok": not failure_type,
+                    "elapsed_ms": max(0, int((time.monotonic() - step_started) * 1000)),
+                }
+                if failure_type:
+                    audit_entry["failure_type"] = failure_type
+                    audit_entry["failure_reason"] = failure_reason
+                _audit(self._audit_path_now(), audit_entry)
         report = await asyncio.to_thread(self._readback, desk, run)
         text = "\n".join(filter(None, [
-            "Done: " + "; ".join(run.done) + "." if run.done else "",
+            "Actions sent: " + "; ".join(run.done) + "." if run.done else "",
             error,
             report,
         ]))
@@ -993,8 +1027,9 @@ class PcPilot:
             run.done.append(f"scrolled down to {control.name}")
         if control is None:
             raise StepFailed(
-                f"No control named like {target!r} in '{run.window.title}'. "  # type: ignore[union-attr]
-                "Pick one of the names listed below."
+                f"No unique control named like {target!r} in '{run.window.title}'. "  # type: ignore[union-attr]
+                "If multiple controls share that label, specify more context or use "
+                "see=true and a visible x,y coordinate."
             )
         return control
 

@@ -382,7 +382,7 @@ async def test_enable_tools_for_chrome_never_hands_over_the_desktop_drivers_brow
     assert "already on" in result.output
 
 
-def test_saying_chrome_brings_the_owners_own_chrome_but_not_screen_clicking() -> None:
+def test_chrome_tasks_open_only_the_owners_browser_tool() -> None:
     tools = _registry()
     tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome")
     tools["computer_use"] = _Tool("computer_use", "Click and type on screen")
@@ -392,9 +392,7 @@ def test_saying_chrome_brings_the_owners_own_chrome_but_not_screen_clicking() ->
         "go to chrome open youtube and play i mean it by g eazy", core=(), keep=("computer_use",)
     )
 
-    assert switch.is_on("my_chrome")
-    assert switch.is_on("playwright/browser_navigate")
-    assert not switch.is_on("computer_use")
+    assert set(switch.visible()) == {ENABLE_TOOLS, "my_chrome"}
 
 
 @pytest.mark.parametrize("utterance", [
@@ -430,12 +428,11 @@ def _desktop_registry() -> dict[str, Any]:
     [
         "open windows settings and click on windows update",
         "open calculator and press 7 plus 8",
-        "go to chrome open youtube and search lofi",
         "open a new tab in the same chrome window",
     ],
 )
 def test_the_pc_pilot_is_the_only_desktop_hands(utterance: str) -> None:
-    # Live 2026-10-26: five sets of desktop hands, each failing differently.
+    # Native app and explicit same-window tasks stay on the desktop pilot.
     tools = _desktop_registry()
     switch = _switch(tools)
 
@@ -445,6 +442,31 @@ def test_the_pc_pilot_is_the_only_desktop_hands(utterance: str) -> None:
     assert "pc_pilot" in on
     assert not {"computer_use", "app_control", "my_chrome"} & on
     assert not any(n.startswith(("windows-desktop/", "playwright/")) for n in on)
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "open chrome go to Swiggy Instamart",
+        "navigate browser tabs and open my logged-in Swiggy tab",
+    ],
+)
+def test_owner_browser_tasks_use_browserskill_without_overlapping_hands(utterance: str) -> None:
+    tools = _desktop_registry()
+    tools["playwright/browser_navigate"] = _Tool(
+        "playwright/browser_navigate", "Open a fresh browser", is_mcp_tool=True
+    )
+    # Production filters the full registry before constructing the switch.
+    # Exercise that exact order: otherwise the pilot path hides my_chrome here.
+    surface = one_set_of_hands(tools, utterance)
+    switch = _switch(surface)
+
+    switch.open_turn(utterance, core=("navigate", "pc_pilot"), keep=("computer_use",))
+
+    on = set(switch.visible())
+    assert on == {ENABLE_TOOLS, "my_chrome"}
+    assert "playwright/browser_navigate" not in on
+    assert not any(name.startswith("windows-desktop/") for name in on)
 
 
 def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None:

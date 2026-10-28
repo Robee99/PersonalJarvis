@@ -96,24 +96,30 @@ async def run_bsk(exe: str, *args: str) -> str:
     return text
 
 
-#: CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS: the daemon must outlive the
-#: command that started it. bsk's own detached start fails inside a host that
-#: holds its children in a job ("Access is denied", seen 2026-10-26).
-_DAEMON_FLAGS = 0x01000000 | 0x00000008
+#: The daemon is a child of the long-lived Jarvis app. Keeping it in Jarvis's
+#: job avoids a breakaway request that Windows may deny; it only needs to live
+#: while Jarvis is open. Retain the handle so repeated turns do not start copies.
+_DAEMON_PROCESS: Any | None = None
 
 
 def start_daemon(exe: str) -> None:
-    """Start bsk's background service, the way ``bsk daemon start --foreground`` runs."""
+    """Start BrowserSkill's daemon as a hidden child of the Jarvis app."""
     import subprocess  # noqa: PLC0415
 
-    subprocess.Popen(  # noqa: S603 - bsk_path() is the installed bsk executable
-        [exe, "daemon", "start", "--foreground"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=NO_WINDOW_CREATIONFLAGS | (_DAEMON_FLAGS if sys.platform == "win32" else 0),
-        close_fds=True,
-    )
+    global _DAEMON_PROCESS
+    if _DAEMON_PROCESS is not None and _DAEMON_PROCESS.poll() is None:
+        return
+    try:
+        _DAEMON_PROCESS = subprocess.Popen(  # noqa: S603 - bsk_path() is the installed executable
+            [exe, "daemon", "start", "--foreground"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+            close_fds=True,
+        )
+    except OSError as exc:
+        raise BskError(f"Could not start the BrowserSkill daemon: {exc}") from exc
 
 
 def _session_id(answer: str) -> str:
@@ -201,11 +207,12 @@ class MyChromeTool:
     name: str = MY_CHROME
     risk_tier: RiskTier = "monitor"
     description: str = (
-        "Use the owner's OWN Chrome, signed in with his profiles, accounts and open "
-        "tabs (his YouTube, Gmail, shops). action=open with a url, then click or "
-        "type using the [eN] refs from the page it returns; every step returns the "
-        "page. tabs lists his open tabs, use_tab takes one over by its id. Call "
-        "done when finished. A fresh browser without his accounts is browser_navigate."
+        "Use the owner's Chrome for browser and tab tasks. For a signed-in or already "
+        "open site, call action=tabs first and use_tab with that tab's id; otherwise "
+        "open the site's URL. After every step, inspect the returned page and continue "
+        "with refs from that page until the requested outcome is visible. Do not claim "
+        "success from a click alone. Call done when finished. A fresh browser without "
+        "the owner's accounts is browser_navigate."
     )
     schema: dict[str, Any] | None = None
     exe: str | None = None
