@@ -15,7 +15,7 @@ from typing import Any
 import mcp.types as types
 import pytest
 
-from jarvis.multimodal import decode, tools, transcribe
+from jarvis.multimodal import decode, files, tools, transcribe
 from jarvis.multimodal.config import from_mapping
 
 from .conftest import StandIn, install, make_png, make_video, make_wav, only_port
@@ -226,6 +226,8 @@ async def test_a_path_outside_the_allowed_folders_never_reaches_a_model(
 ) -> None:
     standin = StandIn()
     install(monkeypatch, only_port(11439, standin))
+    # The system temp directory may itself be inside an allowed user folder.
+    monkeypatch.setattr(files, "default_roots", lambda: [])
     outside = make_png(tmp_path / "private.png")
 
     text, is_error = await tools.call(tools.DESCRIBE_IMAGE, {"path": str(outside)}, _cfg(media_dir))
