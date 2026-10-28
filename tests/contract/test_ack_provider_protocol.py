@@ -21,7 +21,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -30,6 +30,7 @@ from jarvis.brain.ack_brain.config import (
     SUPPORTED_PROVIDERS,
     GeminiAckProviderConfig,
     GrokAckProviderConfig,
+    LocalOpenAIAckProviderConfig,
     OllamaAckProviderConfig,
     OpenAIAckProviderConfig,
 )
@@ -38,6 +39,7 @@ from jarvis.brain.ack_brain.providers import (
     AbstractAckProvider,
     GeminiFlashAck,
     GrokFlashAck,
+    LocalOpenAIFlashAck,
     OllamaFlashAck,
     OpenAIMiniAck,
 )
@@ -66,6 +68,11 @@ def _config_for(provider_name: str) -> Any:
     if provider_name == "ollama":
         return OllamaAckProviderConfig(
             model="llama3.1:8b", max_output_tokens=_MAX_TOKENS_FIXTURE
+        )
+    if provider_name == "local-openai":
+        return LocalOpenAIAckProviderConfig(
+            model="local-model", endpoint="http://127.0.0.1:11434",
+            max_output_tokens=_MAX_TOKENS_FIXTURE,
         )
     raise AssertionError(
         f"Add a config factory for new REGISTRY entry: {provider_name!r}"
@@ -169,7 +176,9 @@ class _FakeAsyncHTTPClient:
     async def __aexit__(self, *_: object) -> None:
         return None
 
-    async def post(self, url: str, *, json: dict[str, Any]) -> _FakeHTTPResponse:
+    async def post(
+        self, url: str, *, json: dict[str, Any], **_kwargs: Any
+    ) -> _FakeHTTPResponse:
         self.post_calls.append((url, json))
         return self.response
 
@@ -307,6 +316,27 @@ def _wire_adapter(
                 else None
             ),
         )
+    if provider_name == "local-openai":
+        from jarvis.core import config as cfg_module
+
+        fake = _install_httpx_fake(monkeypatch)
+        fake.response.payload = {"choices": [{"message": {"content": "Checking."}}]}
+        monkeypatch.setattr(
+            cfg_module, "load_config",
+            lambda: SimpleNamespace(brain=SimpleNamespace(providers={})),
+        )
+        monkeypatch.setattr(
+            cfg_module, "resolve_provider_endpoint",
+            lambda *_args, **_kwargs: SimpleNamespace(credential=None),
+        )
+        _install_secret_fake(monkeypatch, None)
+        adapter = cls(config)
+        return _AdapterFixture(
+            adapter=adapter,
+            capture_max_tokens=lambda: (
+                fake.post_calls[-1][1].get("max_tokens") if fake.post_calls else None
+            ),
+        )
     raise AssertionError(f"No wiring for provider {provider_name!r}")
 
 
@@ -345,7 +375,7 @@ def test_every_adapter_satisfies_abstract_protocol(
 def test_registry_contains_all_known_adapter_classes() -> None:
     """Adapter classes are also directly importable — sanity guard against
     accidental removal from the package ``__all__``."""
-    expected = {GeminiFlashAck, GrokFlashAck, OpenAIMiniAck, OllamaFlashAck}
+    expected = {GeminiFlashAck, GrokFlashAck, OpenAIMiniAck, OllamaFlashAck, LocalOpenAIFlashAck}
     assert set(REGISTRY.values()) == expected
 
 
