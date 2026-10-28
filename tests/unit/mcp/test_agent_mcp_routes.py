@@ -311,6 +311,48 @@ def test_a_tools_token_lists_only_its_allowlisted_safe_and_monitor_tools(
     assert token_store.verify(secret) is not None
 
 
+def test_tools_token_restricts_builtin_tools_over_mcp(
+    token_store, keyed: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.intel import mcp_tools as intel
+    from jarvis.memory.brain_map import mcp_tools as brain_map
+
+    calls = []
+
+    async def fake_call(name, _arguments):
+        calls.append(name)
+        return "fixture result", False
+
+    monkeypatch.setattr(intel, "call", fake_call)
+    monkeypatch.setattr(brain_map, "call", fake_call)
+    _token, secret = token_store.issue(
+        name="Restricted local client", scope="tools", allowed_tools=["world_globe"]
+    )
+    headers = {**_MCP_HEADERS, "Authorization": f"Bearer {secret}"}
+    with TestClient(_mounted_app()) as client:
+        names = _tool_names(client, "/api/control/mcp", secret)
+        assert "world_globe" in names
+        assert "project_summary" not in names
+        denied = client.post(
+            "/api/control/mcp", headers=headers,
+            json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "project_summary", "arguments": {},
+            }},
+        )
+        assert denied.status_code == 200
+        assert denied.json()["result"]["isError"] is True
+        assert calls == []
+        allowed = client.post(
+            "/api/control/mcp", headers=headers,
+            json={"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
+                "name": "world_globe", "arguments": {"action": "reset"},
+            }},
+        )
+        assert allowed.status_code == 200
+        assert not allowed.json()["result"].get("isError", False)
+        assert calls == ["world_globe"]
+
+
 def test_a_tools_token_cannot_open_the_agent_surface(token_store, keyed: str) -> None:
     from jarvis.ui.web.mcp_server_routes import _AGENTS_SURFACE, _TOOLS_SURFACE, _authorized
 

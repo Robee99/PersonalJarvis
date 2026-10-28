@@ -426,6 +426,17 @@ async def _outside_call(gateway: Any, name: str, arguments: dict[str, Any]) -> A
     )
 
 
+def _builtin_token_allows(name: str) -> bool:
+    """Apply the tools credential to built-ins as well as gateway entries."""
+    token = TOOLS_TOKEN.get()
+    if token is None:
+        return True
+    from jarvis.mcp.agents.tokens import allows_jarvis_tool
+
+    tier = "monitor" if name == "world_globe" else "safe"
+    return allows_jarvis_tool(token, name, tier)
+
+
 def _brain_map_offered(taken: set[str]) -> list[Any]:
     """The read-only brain map tools (``jarvis/memory/brain_map/mcp_tools.py``).
 
@@ -445,7 +456,7 @@ def _brain_map_offered(taken: set[str]) -> list[Any]:
         return []
     from jarvis.memory.brain_map.mcp_tools import TOOLS
 
-    return [spec for spec in TOOLS if spec.name not in taken]
+    return [spec for spec in TOOLS if spec.name not in taken and _builtin_token_allows(spec.name)]
 
 
 def _media_offered(taken: set[str]) -> list[Any]:
@@ -468,7 +479,7 @@ def _media_offered(taken: set[str]) -> list[Any]:
         return []
     from jarvis.multimodal.tools import TOOLS
 
-    return [spec for spec in TOOLS if spec.name not in taken]
+    return [spec for spec in TOOLS if spec.name not in taken and _builtin_token_allows(spec.name)]
 
 
 def _intel_offered(taken: set[str]) -> list[Any]:
@@ -489,7 +500,7 @@ def _intel_offered(taken: set[str]) -> list[Any]:
         return []
     from jarvis.intel.mcp_tools import TOOLS
 
-    return [spec for spec in TOOLS if spec.name not in taken]
+    return [spec for spec in TOOLS if spec.name not in taken and _builtin_token_allows(spec.name)]
 
 
 def build_server() -> Any:
