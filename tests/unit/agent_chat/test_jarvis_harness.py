@@ -95,9 +95,11 @@ async def test_plugin_wire_listing_and_execution_preserve_canonical_gateway_name
     instance = server.build_server()
     listed = await instance.request_handlers[types.ListToolsRequest](types.ListToolsRequest())
     tools = listed.root.tools
-    assert len(tools) == 1
-    wire = tools[0].name
-    assert "github/get_me" in tools[0].description
+    wire = server._wire_name("github/get_me")
+    matches = [tool for tool in tools if tool.name == wire]
+    assert len(matches) == 1
+    assert "github/get_me" in matches[0].description
+    assert not any(tool.name == "spawn-worker" for tool in tools)
     request = types.CallToolRequest(params=types.CallToolRequestParams(name=wire, arguments={}))
     await instance.request_handlers[types.CallToolRequest](request)
     assert gateway.calls[-1][0] == "github/get_me"
