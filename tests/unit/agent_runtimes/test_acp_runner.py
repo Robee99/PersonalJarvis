@@ -24,6 +24,13 @@ from jarvis.agent_runtimes.acp import AcpTurn
 _AGENT = Path(__file__).resolve().parents[2] / "fakes" / "fake_acp_agent.py"
 
 
+@pytest.fixture(autouse=True)
+def _use_acp_route_instead_of_installed_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    # This module exercises the ACP pump with a fake agent. The production
+    # one-shot planner for this runner must never launch a user's installed CLI.
+    monkeypatch.delitem(rc._PLANNERS, "hermes-cli", raising=False)
+
+
 def _session(tmp_path: Path, *, vendor: str | None, mode: str) -> AgentChatSession:
     return AgentChatSession(
         session_id="society:hermit",
