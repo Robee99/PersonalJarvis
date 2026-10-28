@@ -66,7 +66,7 @@ export interface WallFilter {
 /** Where each YouTube city camera stands (the live catalog names only the city). */
 const YT_PLACES: Record<string, { country: string; code: string; lat: number; lon: number }> = {
   "jerusalem-western-wall": { country: "Israel", code: "IL", lat: 31.7767, lon: 35.2345 },
-  "istanbul-galata": { country: "Türkiye", code: "TR", lat: 41.0256, lon: 28.9741 },
+  "istanbul-galata": { country: "Türkiye", code: "TR", lat: 41.0256, lon: 28.9741 }, // i18n-allow: official country name
   "london-notting-hill": { country: "United Kingdom", code: "GB", lat: 51.5094, lon: -0.1967 },
   "london-heathrow": { country: "United Kingdom", code: "GB", lat: 51.47, lon: -0.4543 },
   "amsterdam-ijmuiden": { country: "Netherlands", code: "NL", lat: 52.4628, lon: 4.6 },

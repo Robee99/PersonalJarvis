@@ -62,7 +62,7 @@ def _manager(reply_language: str = "auto") -> BrainManager:
     m = BrainManager(config=cfg, bus=EventBus(), tools={})
     m._build_fallback_chain = lambda _l: [("fake", "fake-model")]  # type: ignore[method-assign]
     m._get_brain = lambda _n, _mo: _FakeBrain()  # type: ignore[method-assign]
-    m._build_dispatcher = lambda _b, *, tools_override=None: _RecordingDispatcher()  # type: ignore[method-assign]
+    m._build_dispatcher = lambda _b, **_kwargs: _RecordingDispatcher()  # type: ignore[method-assign]
     return m
 
 

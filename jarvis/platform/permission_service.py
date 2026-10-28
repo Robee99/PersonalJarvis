@@ -682,8 +682,16 @@ class _AutomationGuard:
                     name="permission-automation-probe",
                     daemon=True,
                 ).start()
+        waited_to_deadline = False
         if wait_s > 0:
-            call.done.wait(min(wait_s, max(0.0, call.deadline - time.monotonic())))
+            remaining_s = max(0.0, call.deadline - time.monotonic())
+            wait_for_s = min(wait_s, remaining_s)
+            # Event.wait(timeout) can return a fraction early under scheduler
+            # pressure. If this caller waited for the entire remaining budget
+            # and the probe is still unfinished, the hard timeout has elapsed
+            # from the caller's perspective and must not leak out as PENDING.
+            waited_to_deadline = wait_s >= remaining_s
+            call.done.wait(wait_for_s)
         with self._lock:
             if call.done.is_set():
                 if self._inflight.get(target) is call:
@@ -691,7 +699,7 @@ class _AutomationGuard:
                 if target in self._failed:
                     return _GuardRead("failed")
                 return _GuardRead("value", self._last.get(target))
-            if time.monotonic() >= call.deadline:
+            if waited_to_deadline or time.monotonic() >= call.deadline:
                 self._quarantine_locked(target, self._clock())
                 return _GuardRead("quarantined")
             return _GuardRead("pending", self._last.get(target))

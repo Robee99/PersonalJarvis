@@ -403,7 +403,7 @@ def _local_ip() -> str | None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         try:
             sock.connect(("192.0.2.1", 9))
-        except OSError:
+        except OSError:  # No route to the probe destination means there is no usable LAN address.
             return None
         address = sock.getsockname()[0]
     return None if address.startswith(("0.", "127.")) else address

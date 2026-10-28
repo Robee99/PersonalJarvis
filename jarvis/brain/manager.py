@@ -4817,13 +4817,15 @@ class BrainManager:
             prefs_block = _agent_instructions.render_for_prompt(getattr(self, "_config", None))
             if prefs_block:
                 parts.append(prefs_block)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning("brain prompt: agent instructions omitted (%s)", type(exc).__name__)
             pass
 
         if self._user_profile is not None:
             try:
                 parts.append(self._user_profile.render_for_prompt())
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.warning("brain prompt: user profile omitted (%s)", type(exc).__name__)
                 pass
 
         # What Jarvis learned across earlier calls and chats (the background
@@ -4917,7 +4919,8 @@ class BrainManager:
             # writes from this process are in the file but not in the cache.
             try:
                 self._core_memory.reload()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                log.warning("brain prompt: core memory reload skipped (%s)", type(exc).__name__)
                 pass
             cm = self._core_memory.render_system_prompt_block()
             # A safety cap only (the 2500-character cost cap was retired): cut,

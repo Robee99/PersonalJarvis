@@ -60,6 +60,17 @@ async def test_scan_finds_a_running_llama_server_and_names_its_hermes_provider()
 
 
 @pytest.mark.asyncio
+async def test_scan_finds_the_apps_default_local_model_port() -> None:
+    client = _client({"127.0.0.1:11443": httpx.Response(200, json=QWEN)})
+
+    servers = await local_servers.scan(hermes_config={}, client=client)
+
+    assert [(s.port, s.kind, s.models) for s in servers] == [
+        (11443, "llama.cpp", ["qwen"]),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_configured_server_that_is_down_is_listed_as_off_and_a_loading_one_as_loading() -> (
     None
 ):

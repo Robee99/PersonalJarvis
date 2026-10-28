@@ -465,6 +465,35 @@ def test_generated_and_append_only_conflicts_resolve_themselves(repo, mode):
     assert _git(repo, "status", "--porcelain").strip() == ""
 
 
+def test_rebase_continue_failure_does_not_skip_the_feature_commit(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _diverge(
+        repo,
+        {"CHANGELOG.md": "# Changelog\n\n- main entry\n- base\n"},
+        {"CHANGELOG.md": "# Changelog\n\n- branch entry\n- base\n"},
+    )
+    real_run = subprocess.run
+
+    def fail_editor(args, *positional, **kwargs):  # noqa: ANN001, ANN202
+        if args[-2:] == ["rebase", "--continue"]:
+            return subprocess.CompletedProcess(
+                args,
+                1,
+                stdout="",
+                stderr="error: there was a problem with the editor 'true'",
+            )
+        return real_run(args, *positional, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_editor)
+    report = agent_integrate.update("main", "rebase", "", repo)
+
+    assert report == {"status": "conflict", "unresolved": ["<rebase --continue>"]}
+    assert "branch entry" in (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert _git(repo, "status", "--porcelain").strip() == ""
+
+
 @pytest.mark.parametrize("mode", ["merge", "rebase"])
 def test_semantic_conflict_aborts_cleanly_without_a_resolver(repo, mode):
     _diverge(repo, {"app.py": "VALUE = 2\n"}, {"app.py": "VALUE = 3\n"})

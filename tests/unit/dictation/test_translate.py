@@ -118,6 +118,9 @@ def model(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         polish_module, "resolve_polish_chain", resolve_polish_chain
     )
+    # Translation tests exercise cloud-family routing and response handling;
+    # local-only privacy behavior has its own policy tests.
+    monkeypatch.setattr("jarvis.dictation.polish_client.stt_runs_on_device", lambda: False)
     # The slot name is DERIVED from the family rather than typed out: which
     # credential the first family reads is ``test_polish_chain``'s subject, not
     # this file's, and hard-coding it here would make these tests fail for a

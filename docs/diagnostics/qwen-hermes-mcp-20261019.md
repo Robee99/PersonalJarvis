@@ -100,7 +100,7 @@ acceptance remain unverified.
 ## Artifacts and remaining limits
 
 Local evidence directory:
-`C:\Users\rober\AppData\Local\Temp\jqe-1019\`
+`%TEMP%\jqe-1019\`
 
 - `hermes-before-mount-fix.log`: actual failed discovery before correction.
 - `backend-fixed.log`: corrected source process, tool traffic and shutdown.

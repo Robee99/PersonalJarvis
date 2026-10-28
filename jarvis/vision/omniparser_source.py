@@ -46,7 +46,7 @@ def validate_local_endpoint(endpoint: str) -> str:
     try:
         loopback = ipaddress.ip_address(parsed.hostname).is_loopback
         port = parsed.port
-    except ValueError:
+    except ValueError:  # Malformed loopback URLs are rejected by the source validator.
         loopback = False
         port = None
     if not loopback or (port is not None and not 1 <= port <= 65535):
@@ -91,7 +91,7 @@ def nodes_from_response(
             continue
         try:
             x1, y1, x2, y2 = (float(value) for value in box)
-        except (TypeError, ValueError, OverflowError):
+        except (TypeError, ValueError, OverflowError):  # Malformed boxes are skipped rather than sent to vision tools.
             continue
         if not all(0.0 <= value <= 1.0 for value in (x1, y1, x2, y2)):
             continue

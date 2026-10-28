@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderDescriptor } from "@/hooks/useProviders";
 import type { StarterPlan } from "@/hooks/useStarterPlans";
-import { planKeysComplete, startableProviders } from "./brainPlans";
+import { hasActiveLocalBrain, planKeysComplete, startableProviders } from "./brainPlans";
 
 function provider(over: Partial<ProviderDescriptor> & { id: string }): ProviderDescriptor {
   return {
@@ -65,5 +65,23 @@ describe("plans", () => {
 
   it("is never complete for a plan without key slots", () => {
     expect(planKeysComplete({ ...plan, key_slots: [] }, cards)).toBe(false);
+  });
+});
+
+describe("active local brain", () => {
+  it("counts a selected local provider as connected even with an optional key slot", () => {
+    expect(hasActiveLocalBrain([
+      provider({
+        id: "local-openai",
+        auth_mode: "none",
+        billing: "local",
+        active: true,
+        secret_keys: ["local_openai_api_key"],
+      }),
+    ])).toBe(true);
+  });
+
+  it("does not treat a cloud provider as a keyless local brain", () => {
+    expect(hasActiveLocalBrain([provider({ id: "openai", active: true })])).toBe(false);
   });
 });

@@ -68,7 +68,7 @@ final acceptance used a fresh isolated registry with copied model caches.
 
 Final runtime artifacts:
 
-`C:\Users\rober\AppData\Local\Temp\jarvis-cognee-cross-role-verified\`
+`%TEMP%\jarvis-cognee-cross-role-verified\`
 
 - `pytest.log` and `results.xml`: final real acceptance.
 - `data/source-state.sqlite3`: actual persisted synthetic registry.
@@ -76,7 +76,7 @@ Final runtime artifacts:
 
 Unit XML and failing regression evidence:
 
-`C:\Users\rober\AppData\Local\Temp\jarvis-cognee-heartbeat-20261018-idempotency\`
+`%TEMP%\jarvis-cognee-heartbeat-20261018-idempotency\`
 
 - `final-unit-results.xml`
 - `cross-role-red.xml` and `cross-role-red.log`

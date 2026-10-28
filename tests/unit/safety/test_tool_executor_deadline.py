@@ -143,7 +143,7 @@ def _executor() -> tuple[ToolExecutor, list[ActionExecuted]]:
     bus.subscribe(ActionExecuted, _capture)
     executor = ToolExecutor(
         bus=bus,
-        evaluator=RiskTierEvaluator(SafetyConfig()),
+        evaluator=RiskTierEvaluator(SafetyConfig(approval_mode="ask")),
         approval=_AutoApprove(bus),
     )
     return executor, seen

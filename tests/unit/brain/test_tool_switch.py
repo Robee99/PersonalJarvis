@@ -417,6 +417,9 @@ def _desktop_registry() -> dict[str, Any]:
     tools["computer_use"] = _Tool("computer_use", "Control the screen with mouse and keyboard")
     tools["app_control"] = _Tool("app_control", "Press buttons in a desktop app")
     tools["my_chrome"] = _Tool("my_chrome", "Drive the owner's own Chrome browser")
+    tools["society_browser"] = _Tool(
+        "society_browser", "Use the society browser for web pages"
+    )
     for verb in ("Snapshot", "Click", "Type", "Scroll", "App"):
         name = f"windows-desktop/{verb}"
         tools[name] = _Tool(name, f"{verb} a Windows desktop window app", is_mcp_tool=True)
@@ -440,8 +443,36 @@ def test_the_pc_pilot_is_the_only_desktop_hands(utterance: str) -> None:
 
     on = set(switch.visible())
     assert "pc_pilot" in on
-    assert not {"computer_use", "app_control", "my_chrome"} & on
+    assert not {"computer_use", "app_control", "my_chrome", "society_browser"} & on
     assert not any(n.startswith(("windows-desktop/", "playwright/")) for n in on)
+
+
+@pytest.mark.parametrize("utterance", [
+    "open chrome click on Roberto navigate to YouTube then play Praise the Lord",
+    "open Windows PC settings and go to Apps Startup Apps",
+])
+def test_external_desktop_action_starts_with_only_the_pilot(utterance: str) -> None:
+    tools = _desktop_registry()
+    tools["gmail/search"] = _Tool("gmail/search", "Search Gmail", is_mcp_tool=True)
+    tools["marketplace/browse"] = _Tool(
+        "marketplace/browse", "Browse marketplace", is_mcp_tool=True
+    )
+    surface = one_set_of_hands(tools, utterance)
+    switch = _switch(surface)
+
+    switch.open_turn(utterance, keep=("computer_use",))
+
+    assert set(switch.visible()) == {ENABLE_TOOLS, "pc_pilot"}
+
+
+def test_explicit_computer_use_stays_the_only_desktop_driver() -> None:
+    utterance = "use computer use to click on Roberto"
+    surface = one_set_of_hands(_desktop_registry(), utterance)
+    switch = _switch(surface)
+
+    switch.open_turn(utterance, keep=("computer_use",))
+
+    assert set(switch.visible()) == {ENABLE_TOOLS, "computer_use"}
 
 
 @pytest.mark.parametrize(
@@ -476,6 +507,62 @@ def test_a_request_naming_the_browser_server_keeps_it_beside_the_pilot() -> None
     switch.open_turn("use playwright to open example.com", core=("pc_pilot",))
 
     assert {"pc_pilot", "playwright/browser_navigate"} <= set(switch.visible())
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "use my_chrome to open YouTube",
+        "use my Chrome to open YouTube",
+        "use my browser to open YouTube",
+        "use the browser skill to open YouTube",
+    ],
+)
+def test_explicit_owner_chrome_survives_the_full_pilot_turn(utterance: str) -> None:
+    tools = _desktop_registry()
+    for name in (
+        "playwright/browser_navigate",
+        "playwright/browser_snapshot",
+        "playwright/browser_click",
+    ):
+        tools[name] = _Tool(name, "Control a separate browser", is_mcp_tool=True)
+    switch = _switch(tools)
+
+    switch.open_turn(utterance, core=("navigate", "pc_pilot"))
+
+    visible = set(switch.visible())
+    assert {"my_chrome", "pc_pilot"} <= visible
+    assert not any(name.startswith("playwright/") for name in visible)
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        ("use computer use to click the button", "computer_use"),
+        ("use app_control to click the button", "app_control"),
+        ("use Windows desktop MCP to click the button", "windows-desktop/Click"),
+    ],
+)
+def test_explicit_desktop_backend_survives_the_full_pilot_turn(
+    utterance: str, expected: str,
+) -> None:
+    tools = _desktop_registry()
+    switch = _switch(tools)
+
+    switch.open_turn(utterance, core=("pc_pilot",), keep=("computer_use",))
+
+    visible = set(switch.visible())
+    assert expected in visible
+    if expected == "computer_use":
+        assert "pc_pilot" not in visible
+
+
+def test_explicit_app_control_for_chrome_survives_browser_selection() -> None:
+    request = "use app_control to click the Chrome window"
+    surface = one_set_of_hands(_desktop_registry(), request)
+    switch = _switch(surface)
+    switch.open_turn(request, core=("pc_pilot",))
+    assert "app_control" in switch.visible()
 
 
 def test_with_the_pilot_the_other_hands_leave_the_turn_for_good() -> None:
@@ -523,9 +610,31 @@ def test_without_the_pilot_nothing_is_taken_away() -> None:
 def test_youtube_website_request_does_not_offer_youtube_music_plugin():
     tools = _desktop_registry()
     tools["youtube_music"] = _Tool("youtube_music", "Play music")
+    tools["spotify"] = _Tool("spotify", "Play music")
     utterance = "open chrome click on roberto navigate to youtube then play praise the lord"
-    assert "youtube_music" not in one_set_of_hands(tools, utterance)
-    assert "youtube_music" in one_set_of_hands(tools, "play Praise the Lord in YouTube Music")
+    website_tools = one_set_of_hands(tools, utterance)
+    assert "youtube_music" not in website_tools
+    assert "spotify" not in website_tools
+    music_tools = one_set_of_hands(tools, "play Praise the Lord in YouTube Music")
+    assert "youtube_music" in music_tools
+
+
+def test_chrome_profile_selection_before_navigation_uses_the_desktop_pilot():
+    tools = _desktop_registry()
+    tools["playwright/browser_navigate"] = _Tool(
+        "playwright/browser_navigate", "Open a fresh browser", is_mcp_tool=True
+    )
+    tools["app_ui_click"] = _Tool("app_ui_click", "Click inside Jarvis")
+
+    surface = one_set_of_hands(
+        tools, "open chrome click on Roberto navigate to YouTube then play Praise the Lord"
+    )
+
+    assert "pc_pilot" in surface
+    assert "my_chrome" not in surface
+    assert "computer_use" not in surface
+    assert "app_ui_click" not in surface
+    assert "playwright/browser_navigate" not in surface
 
 
 def test_scroll_followup_on_external_target_does_not_offer_jarvis_ui():

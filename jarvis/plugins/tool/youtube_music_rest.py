@@ -1123,7 +1123,7 @@ class YouTubeMusicRestTool:
         title_match = _PUBLIC_TITLE.search(page, found.end())
         try:
             title = json.loads(f'"{title_match.group(1)}"') if title_match else query
-        except ValueError:
+        except ValueError:  # Malformed title metadata falls back to the user's search query.
             title = query
         started = {
             "type": "song",

@@ -100,7 +100,7 @@ async def fetch_json(url: str, limit: int) -> Any:
 def _number(value: Any) -> float | None:
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError):  # Unusable camera metadata is represented as an unavailable number.
         return None
     return number if number == number and abs(number) != float("inf") else None
 

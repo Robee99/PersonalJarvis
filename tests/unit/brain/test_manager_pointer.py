@@ -75,7 +75,7 @@ def _manager(
 
     manager._resolve_screen_context_turn = _screen_not_requested  # type: ignore[method-assign]
 
-    def _bd(_brain, *, tools_override=None):
+    def _bd(_brain, *, tools_override=None, **_kwargs):
         rec.tools_seen.append(dict(tools_override or {}))
         return rec
 

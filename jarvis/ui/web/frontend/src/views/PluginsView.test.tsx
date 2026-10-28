@@ -70,7 +70,7 @@ function installCatalogFetchMock() {
     fetchMock as unknown as typeof fetch;
 }
 
-function renderPluginsView() {
+function renderPluginsView(armory = false) {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -79,7 +79,7 @@ function renderPluginsView() {
   });
   return render(
     <QueryClientProvider client={client}>
-      <PluginsView />
+      <PluginsView armory={armory} />
     </QueryClientProvider>,
   );
 }
@@ -110,6 +110,21 @@ describe("PluginsView lists the catalog as a table", () => {
     // were never installable in Jarvis — it has been removed entirely.
     expect(screen.queryByRole("button", { name: /^Roadmap\b/i })).toBeNull();
     expect(screen.queryByText("ChatGPT Codex plugins")).toBeNull();
+  });
+});
+
+describe("Apps armory", () => {
+  it("shows apps only and leaves MCPs and skills in the Extensions manager", async () => {
+    installCatalogFetchMock();
+
+    renderPluginsView(true);
+
+    await waitFor(() => expect(screen.getByTestId("armory-card-github")).toBeDefined());
+    expect(screen.getByTestId("armory-card-vercel")).toBeDefined();
+    expect(screen.queryByTestId("armory-mcp-catalogue")).toBeNull();
+    expect(screen.queryByTestId("armory-hermes")).toBeNull();
+    expect(screen.queryByText("Skills")).toBeNull();
+    expect(screen.queryByText(/any MCP URL/i)).toBeNull();
   });
 });
 

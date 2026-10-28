@@ -437,8 +437,8 @@ _ES_ACTION = (
     r"mueve|cambia|navega|amplia|reduce)\w*"
 )
 
-# German separable verbs park the particle at the END of the clause: "mach das
-# Fenster ZU", "mach den Browser AUF", "fahr den Rechner RUNTER". A matcher
+# German separable verbs park the particle at the END of the clause: "mach das (i18n-allow: German speech examples)
+# Fenster ZU", "mach den Browser AUF", "fahr den Rechner RUNTER". A matcher (i18n-allow: German speech examples)
 # anchored on the clause-INITIAL token therefore sees a bare stem, and "mach"
 # on its own is the most generic verb the language has — the particle is what
 # makes the clause a command. Missing that shape read "Schau mal hier. Mach das
@@ -457,12 +457,12 @@ _DE_SEPARABLE_STEM = (  # i18n-allow: German speech-input matching data
 # "los" are deliberately absent: they open ordinary phrases far more often than
 # they close a command.
 _DE_SEPARABLE_PARTICLE = (  # i18n-allow: German speech-input matching data
-    r"(?:auf|zu|an|aus|ein|um|runter|hoch|weg|rein|raus|zurueck)"
+    r"(?:auf|zu|an|aus|ein|um|runter|hoch|weg|rein|raus|zurueck)"  # i18n-allow: German particle vocabulary
 )
 
 # The particle must CLOSE its clause, spoken fillers and a trailing comma
 # aside. Mid-clause the very same token is a preposition, and that is the
-# reading this boundary must never swallow: "Was ist da AUF dem Bildschirm?"
+# reading this boundary must never swallow: "Was ist da AUF dem Bildschirm?" (i18n-allow: German speech example)
 # is a question about the screen, not an order to operate it.
 _DE_PARTICLE_CLAUSE_END = (  # i18n-allow: German speech-input matching data
     r"(?:\s+(?:bitte|mal|kurz|jetzt|nochmal|danke))*\s*(?:$|[,.;:!?])"

@@ -298,7 +298,7 @@ def summarise(payload: Any, day: date, *, now: datetime) -> DayForecast | None:
             at = datetime.fromisoformat(str(row["time"]).replace("Z", "+00:00")).astimezone()
             data = row["data"]
             temp = float(data["instant"]["details"]["air_temperature"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):  # Skip malformed forecast rows and use the next valid reading.
             continue
         if current is None and abs((at - now).total_seconds()) <= 5400:
             current = temp

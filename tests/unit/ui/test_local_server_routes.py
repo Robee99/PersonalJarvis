@@ -93,6 +93,49 @@ def test_without_hermes_the_local_card_gets_the_server(
     assert cfg.brain.providers["local-openai"].base_url == "http://127.0.0.1:11437"
 
 
+def test_direct_selection_bypasses_hermes_even_when_hermes_is_current(
+    saved: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.core import config_writer
+
+    urls: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(config_writer, "set_provider_base_url", lambda p, u: urls.append((p, u)))
+    client, cfg = _app("hermes")
+
+    resp = client.post(
+        "/api/local-servers/use",
+        json={"url": "127.0.0.1:11437", "model": "qwen", "direct": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["brain"] == "local-openai"
+    assert urls == [("local-openai", "http://127.0.0.1:11437")]
+    assert saved == [("local-openai", "qwen")]
+    assert cfg.brain.providers["local-openai"].base_url == "http://127.0.0.1:11437"
+
+
+def test_local_selection_reports_config_permission_error_instead_of_generic_500(
+    saved: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jarvis.core import config_writer
+
+    def denied(_provider: str, _url: str | None) -> None:
+        raise PermissionError("access is denied")
+
+    monkeypatch.setattr(config_writer, "set_provider_base_url", denied)
+    client, cfg = _app("ollama")
+
+    resp = client.post(
+        "/api/local-servers/use",
+        json={"url": "127.0.0.1:11437", "model": "qwen", "direct": True},
+    )
+
+    assert resp.status_code == 500
+    assert "Windows denied Jarvis access" in resp.json()["detail"]
+    assert saved == []
+    assert cfg.brain.providers["local-openai"].base_url == ""
+
+
 def test_a_remote_address_is_refused(saved: list) -> None:
     client, _cfg = _app("hermes")
     resp = client.post("/api/local-servers/use", json={"url": "http://10.0.0.5:8080"})

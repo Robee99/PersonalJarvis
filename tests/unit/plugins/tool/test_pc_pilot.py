@@ -25,6 +25,7 @@ from jarvis.plugins.tool.pc_pilot import (
     PcPilot,
     PilotPolicy,
     best_control,
+    _match_window,
     open_target,
     settings_uri,
 )
@@ -147,16 +148,31 @@ async def test_calculator_buttons_are_pressed_by_their_spoken_names(tmp_path: Pa
     desk = FakeDesk(wins=[], panes={CALC.handle: [_calc_controls()]})
     pilot = _pilot(desk, tmp_path, opens=CALC)
 
-    result = await pilot.execute(
-        {"steps": [{"open": "calculator"}, {"click": "7"}, {"click": "+"}, {"click": "8"},
-                   {"click": "="}]},
-        Ctx(),
-    )
+    results = [
+        await pilot.execute(action, Ctx())
+        for action in (
+            {"open": "calculator"}, {"click": "7"}, {"click": "+"},
+            {"click": "8"}, {"click": "="},
+        )
+    ]
+
+    assert all(result.success for result in results), [result.error for result in results]
+    assert [v for k, v in desk.log if k == "invoke"] == ["Seven", "Plus", "Eight", "Equals"]
+    assert "Display is 15" in str(results[-1].output)
+    assert pilot.pictures == []  # type: ignore[attr-defined]
+
+
+async def test_desktop_audit_steps_carry_the_turn_trace_id(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CALC], panes={CALC.handle: [_calc_controls()]})
+    pilot = _pilot(desk, tmp_path)
+    ctx = Ctx()
+    ctx.trace_id = "trace-browser-123"
+
+    result = await pilot.execute({"app": "calculator", "click": "7"}, ctx)
 
     assert result.success, result.error
-    assert [v for k, v in desk.log if k == "invoke"] == ["Seven", "Plus", "Eight", "Equals"]
-    assert "Display is 15" in str(result.output)
-    assert pilot.pictures == []  # type: ignore[attr-defined]
+    audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(audit[0])["trace_id"] == "trace-browser-123"
 
 
 async def test_input_goes_to_the_target_window_not_jarvis(tmp_path: Path) -> None:
@@ -266,7 +282,8 @@ async def test_a_password_goes_in_only_as_a_secret_and_is_never_echoed(tmp_path:
     ("args", "tier"),
     [
         ({"click": "Delete"}, "ask"),
-        ({"steps": [{"open": "gmail.com"}, {"click": "Send"}]}, "ask"),
+        ({"steps": [{"click": "Send"}]}, "ask"),
+        ({"app": "Chrome", "click": "Send"}, "ask"),
         ({"keys": "alt+f4"}, "ask"),
         ({"window": "close", "app": "notepad"}, "ask"),
         ({"click": "Check for updates"}, "monitor"),
@@ -274,7 +291,9 @@ async def test_a_password_goes_in_only_as_a_secret_and_is_never_echoed(tmp_path:
     ],
 )
 def test_lasting_actions_ask_first(args: dict[str, Any], tier: str) -> None:
-    assert PcPilot(policy=PilotPolicy()).risk_tier_for_args(args) == tier
+    pilot = PcPilot(policy=PilotPolicy())
+    assert pilot.risk_tier_for_args(args) == tier
+    assert pilot.requires_explicit_confirmation_for_args(args) is (tier == "ask")
 
 
 def test_the_owners_policy_file_only_adds_rules(tmp_path: Path) -> None:
@@ -339,6 +358,55 @@ def test_a_page_is_worked_in_the_browser_it_went_to(tmp_path: Path) -> None:
     assert found == CHROME
 
 
+async def test_open_url_reuses_last_verified_browser(tmp_path: Path, monkeypatch) -> None:
+    import jarvis.plugins.tool.pc_pilot as module
+
+    monkeypatch.setattr(module, "_PAGE_WAIT_S", 0)
+    monkeypatch.setattr(module, "_OPEN_SETTLE_S", 0)
+    desk = FakeDesk([TERMINAL, EDGE, CHROME], front=EDGE.handle)
+    pilot = _pilot(desk, tmp_path)
+    pilot._last = CHROME
+    pilot._last_at = 1.0
+
+    def unexpected_launch(*_args):
+        pytest.fail("a verified current browser must be reused before the default")
+
+    monkeypatch.setattr(module, "_launch", unexpected_launch)
+    result = await pilot.execute({"open": "https://example.com"}, Ctx())
+
+    assert result.success
+    assert ("activate", CHROME.title) in desk.log
+    assert ("press", "ctrl+l") in desk.log
+    assert ("type", "https://example.com") in desk.log
+    assert ("press", "enter") in desk.log
+
+
+def test_swiggy_instamart_alias_matches_its_browser_title() -> None:
+    instamart = Window(
+        10, "Online Grocery Store | Instamart - Google Chrome", exe="chrome.exe"
+    )
+    other = Window(11, "Instamart - Google Chrome", exe="chrome.exe")
+
+    assert _match_window([instamart], "Swiggy Instamart") == instamart
+    assert _match_window([instamart, other], "Swiggy Instamart") is None
+    assert _match_window(
+        [instamart, other], "Swiggy Instamart", preferred_handle=other.handle
+    ) == other
+
+
+async def test_multiple_ui_actions_in_one_step_are_rejected(tmp_path: Path) -> None:
+    desk = FakeDesk([CHROME], front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"click": "Search", "wait": 1}]}, Ctx()
+    )
+
+    assert not result.success
+    assert "exactly one UI action" in result.error
+    assert desk.log == []
+
+
 def test_no_browser_window_never_falls_back_to_another_program(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -360,7 +428,20 @@ async def test_malformed_steps_are_rejected_before_any_input(tmp_path, step):
     pilot = _pilot(desk, tmp_path)
     result = await pilot.execute({"steps": [{"click": "Search"}, step]}, Ctx())
     assert not result.success
-    assert "step 2" in result.error.lower()
+    assert "one ui action per call" in result.error.lower()
+    assert desk.log == []
+
+
+async def test_two_ui_actions_inside_one_step_are_rejected_before_input(tmp_path):
+    desk = FakeDesk([NOTEPAD], front=NOTEPAD.handle)
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {"steps": [{"open": "notepad", "click": "File"}]}, Ctx()
+    )
+
+    assert not result.success
+    assert "multiple ui actions" in result.error.lower()
     assert desk.log == []
 
 

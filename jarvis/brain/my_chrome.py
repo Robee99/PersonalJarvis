@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,8 +41,9 @@ MY_CHROME = "my_chrome"
 _CALL_TIMEOUT_S = 45.0
 #: Tokens bsk may spend on one page snapshot (about four characters each).
 _SNAPSHOT_TOKENS = 3000
-#: Seconds a freshly started bsk service gets before the first command.
-_DAEMON_SETTLE_S = 3.0
+#: Seconds a freshly started bsk service gets to accept its first client.
+_DAEMON_START_TIMEOUT_S = 15.0
+_DAEMON_POLL_S = 0.25
 _MAX_PAGE = browser_page.MAX_CHARS
 _ACTIONS = ("open", "read", "click", "type", "press", "tabs", "use_tab", "back", "done")
 _NOT_CONNECTED = (
@@ -64,6 +66,14 @@ class BskError(RuntimeError):
     """bsk answered with an error instead of a result."""
 
 
+class _ActionOutcomeUnknown(BskError):
+    """A browser action may have landed before Chromium detached its CDP call."""
+
+    def __init__(self, message: str, page: str) -> None:
+        super().__init__(message)
+        self.page = page
+
+
 def bsk_path() -> str | None:
     """The bsk executable, or ``None`` when BrowserSkill is not installed."""
     found = shutil.which("bsk")
@@ -81,7 +91,11 @@ async def run_bsk(exe: str, *args: str) -> str:
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, "NO_COLOR": "1"},
+        # The BrowserSkill CLI's automatic startup uses a detached Windows
+        # daemon. Jarvis owns startup instead: detached children are rejected
+        # by some packaged-app Job Objects, while an explicit foreground child
+        # remains attached and can be observed/restarted safely.
+        env={**os.environ, "NO_COLOR": "1", "BSK_AUTO_START": "0"},
         creationflags=NO_WINDOW_CREATIONFLAGS,
     )
     try:
@@ -115,6 +129,7 @@ def start_daemon(exe: str) -> None:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env={**os.environ, "BSK_AUTO_START": "0"},
             creationflags=NO_WINDOW_CREATIONFLAGS,
             close_fds=True,
         )
@@ -200,6 +215,46 @@ def _not_connected(message: str) -> bool:
     return "no browser" in low or "not connected" in low or "no connected" in low
 
 
+def _daemon_not_running(message: str) -> bool:
+    """Only start bsk for an unavailable daemon, not a browser/CDP failure."""
+    low = message.casefold()
+    return "daemon" in low and any(
+        marker in low
+        for marker in (
+            "not running",
+            "connect failed",
+            "connection refused",
+            "automatic daemon startup failed",
+            "automatic daemon startup is disabled",
+            "ensure daemon is running",
+        )
+    )
+
+
+def _session_expired(message: str) -> bool:
+    """Match a dead BrowserSkill session without treating arbitrary errors as one."""
+    low = message.casefold()
+    return any(
+        marker in low
+        for marker in (
+            "session is not active",
+            "session not active",
+            "session not found",
+            "unknown session",
+            "session expired",
+            "no active session",
+        )
+    ) or bool(re.search(r"\bsession(?:\s+\S+)?\s+is\s+not\s+active\b", low))
+
+
+def _cdp_detached(message: str) -> bool:
+    low = message.casefold()
+    return (
+        "browser rejected the underlying cdp call" in low
+        or "detached while handling command" in low
+    )
+
+
 @dataclass
 class MyChromeTool:
     """The owner's real Chrome through BrowserSkill: open, read, click, type."""
@@ -271,11 +326,27 @@ class MyChromeTool:
             return ToolResult(
                 success=False, output=None, error="BrowserSkill (bsk) is not installed."
             )
+        trace_id = str(getattr(ctx, "trace_id", "") or "-")
+        started = time.monotonic()
         try:
-            return ToolResult(success=True, output=await self._do(exe, action, args))
+            output = await self._do(exe, action, args)
+            log.info(
+                "my_chrome action=%s status=ok trace_id=%s elapsed_ms=%d",
+                action, trace_id, int((time.monotonic() - started) * 1000),
+            )
+            return ToolResult(success=True, output=output)
+        except _ActionOutcomeUnknown as exc:
+            log.warning(
+                "my_chrome action=%s status=unknown trace_id=%s elapsed_ms=%d: %s",
+                action, trace_id, int((time.monotonic() - started) * 1000), exc,
+            )
+            return ToolResult(success=False, output=exc.page, error=str(exc))
         except BskError as exc:
             message = str(exc)
-            log.warning("my_chrome %s failed: %s", action, message)
+            log.warning(
+                "my_chrome action=%s status=error trace_id=%s elapsed_ms=%d: %s",
+                action, trace_id, int((time.monotonic() - started) * 1000), message,
+            )
             if _not_connected(message):
                 message = _NOT_CONNECTED
             return ToolResult(success=False, output=None, error=message)
@@ -285,13 +356,31 @@ class MyChromeTool:
             try:
                 answer = await run_bsk(exe, "session", "start", "--json", "--name", "Jarvis")
             except BskError as exc:
-                low = str(exc).lower()
-                if "daemon" not in low or "browser" in low:
+                message = str(exc)
+                if _not_connected(message) or not _daemon_not_running(message):
                     raise
-                # After a reboot nothing runs bsk's service until it is asked for.
+                # After a reboot nothing runs bsk's service until it is asked
+                # for. Start its foreground server explicitly, then poll the
+                # owning daemon using BSK_AUTO_START=0; never rely on the CLI's
+                # detached startup or a single guessed sleep interval.
                 start_daemon(exe)
-                await asyncio.sleep(_DAEMON_SETTLE_S)
-                answer = await run_bsk(exe, "session", "start", "--json", "--name", "Jarvis")
+                deadline = time.monotonic() + _DAEMON_START_TIMEOUT_S
+                while True:
+                    await asyncio.sleep(_DAEMON_POLL_S)
+                    try:
+                        answer = await run_bsk(
+                            exe, "session", "start", "--json", "--name", "Jarvis"
+                        )
+                        break
+                    except BskError as retry_exc:
+                        retry_message = str(retry_exc)
+                        if _not_connected(retry_message) or not _daemon_not_running(retry_message):
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise BskError(
+                                "BrowserSkill daemon did not become ready within "
+                                f"{_DAEMON_START_TIMEOUT_S:.0f} s: {retry_message}"
+                            ) from retry_exc
             self._session = _session_id(answer)
         return self._session
 
@@ -304,11 +393,62 @@ class MyChromeTool:
         try:
             return await self._step(exe, action, args, await self._start(exe))
         except BskError as exc:
-            if "session" not in str(exc).lower():
+            message = str(exc)
+            if _cdp_detached(message):
+                if not self._session:
+                    raise
+                if action == "read":
+                    snapshot = await run_bsk(
+                        exe, "snapshot", "--max-tokens", str(_SNAPSHOT_TOKENS),
+                        "--session", self._session,
+                    )
+                    return self._remember_page(snapshot)
+                try:
+                    snapshot = await run_bsk(
+                        exe, "snapshot", "--max-tokens", str(_SNAPSHOT_TOKENS),
+                        "--session", self._session,
+                    )
+                except BskError as snapshot_exc:
+                    raise BskError(
+                        f"{message}\nThe current page could not be read after the "
+                        f"browser detached: {snapshot_exc}"
+                    ) from snapshot_exc
+                raise _ActionOutcomeUnknown(
+                    f"The browser detached while {action} was in progress. Its outcome "
+                    "is unknown. Inspect this fresh page before deciding whether to "
+                    "repeat the action.",
+                    self._remember_page(snapshot),
+                ) from exc
+            if not _session_expired(message):
                 raise
+            # A click/type/key may have reached the page before its session
+            # expired. Do not blindly replay it; resnapshot and let the brain
+            # decide from the actual page state.
+            if action in {"click", "type", "press", "back", "use_tab"}:
+                self._session = ""
+                sid = await self._start(exe)
+                snapshot = await run_bsk(
+                    exe, "snapshot", "--max-tokens", str(_SNAPSHOT_TOKENS),
+                    "--session", sid,
+                )
+                raise _ActionOutcomeUnknown(
+                    f"The BrowserSkill session expired while {action} was in progress. "
+                    "Its outcome is unknown. Inspect this fresh page before deciding "
+                    "whether to repeat the action.",
+                    self._remember_page(snapshot),
+                ) from exc
             # The session timed out or Chrome restarted: one fresh session.
             self._session = ""
             return await self._step(exe, action, args, await self._start(exe))
+
+    def _remember_page(self, snapshot: str) -> str:
+        page = page_outline(snapshot)
+        self._seen = {
+            m.group(1): line
+            for line in page.splitlines()
+            if (m := re.match(r"^\[(e\d+)\]", line))
+        }
+        return page
 
     async def _step(self, exe: str, action: str, args: dict[str, Any], sid: str) -> str:
         session = ("--session", sid)
@@ -346,13 +486,7 @@ class MyChromeTool:
         snapshot = await run_bsk(
             exe, "snapshot", "--max-tokens", str(_SNAPSHOT_TOKENS), *session
         )
-        page = page_outline(snapshot)
-        self._seen = {
-            m.group(1): line
-            for line in page.splitlines()
-            if (m := re.match(r"^\[(e\d+)\]", line))
-        }
-        return page
+        return self._remember_page(snapshot)
 
 
 def _required_ref(args: dict[str, Any]) -> str:

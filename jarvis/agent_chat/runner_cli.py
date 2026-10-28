@@ -3774,8 +3774,19 @@ async def _run_cli_once(
     # The picked model's own levels when the catalog knows them (``None`` =
     # the provider ladder applies); see ``effort_for_model``.
     model_ladder: list[str] | tuple[str, ...] | None = None
-    # ``None`` = an external agent runtime, planned asynchronously (runner_acp).
-    planner = _PLANNERS.get(runner)
+    # Society runtimes replace the provider's CLI planner: Hermes and
+    # OpenClaw are driven through their managed ACP runtimes for these
+    # sessions. Keep the one-shot Hermes provider planner for sessions that
+    # did not select the society runtime.
+    from jarvis.agent_runtimes import RUNNER_RUNTIMES
+
+    runtime_name = RUNNER_RUNTIMES.get(runner)
+    is_external_runtime = bool(
+        runtime_name
+        and session.surface == "society"
+        and getattr(session, "runtime", "") == runtime_name
+    )
+    planner = None if is_external_runtime else _PLANNERS.get(runner)
     vendor_session: str | None = None
     from jarvis.society.remote import placement_for_session
 

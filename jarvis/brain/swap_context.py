@@ -97,7 +97,7 @@ async def change(ctx: int | None, client: httpx.AsyncClient | None = None) -> di
         res = await http.post(f"{SWAP_ROOT}/{path}", json=body)
         try:
             answer = res.json()
-        except ValueError:
+        except ValueError:  # Preserve a readable service error when its response is not JSON.
             answer = {"ok": False, "error": res.text[:300]}
     except httpx.HTTPError as exc:
         log.warning("swap context: %s failed: %s", path, exc)

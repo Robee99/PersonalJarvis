@@ -87,7 +87,14 @@ def outside_snapshot() -> dict[str, Any]:
     tool and arguments out of band) instead of failing fast as unattended,
     and only the user's own next turn can release it (``_outside_call``).
     """
-    return {"approval_surface": "conversational", "tool_origin": OUTSIDE_ORIGIN}
+    return {
+        "approval_surface": "conversational",
+        "tool_origin": OUTSIDE_ORIGIN,
+        # The app-wide default may bypass confirmations for trusted local
+        # actions. An external agent is not trusted to inherit that setting:
+        # ask-tier calls must always pass the spoken-consent gate below.
+        "require_user_confirmation": True,
+    }
 
 
 def approval_snapshot() -> dict[str, Any]:

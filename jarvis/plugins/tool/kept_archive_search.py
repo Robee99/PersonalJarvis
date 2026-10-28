@@ -66,7 +66,7 @@ class KeptArchiveSearchTool:
         terms = [part.casefold() for part in query.split() if part]
         try:
             limit = max(1, min(10, int(args.get("limit", 5))))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError):  # Invalid caller limits fall back to the bounded default.
             limit = 5
 
         if not terms:
@@ -118,7 +118,7 @@ class KeptArchiveSearchTool:
                         truncated = True
                         break
                     text = resolved.read_text(encoding="utf-8", errors="replace")
-                except (OSError, RuntimeError, ValueError):
+                except (OSError, RuntimeError, ValueError):  # Unreadable or unsafe archive entries are excluded.
                     continue
                 folded = text.casefold()
                 if not all(term in folded for term in terms):

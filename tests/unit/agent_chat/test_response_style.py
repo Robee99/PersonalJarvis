@@ -37,15 +37,15 @@ def test_reply_style_keeps_the_person_oriented_without_a_persona() -> None:
     for phrase in (
         "what is happening now, what is done, and what they can do next",
         "Open with the state in the first words",
-        "Do not send a pre-action promise",
         "real numbers, times and names",
         "exact click path",
         "say sorry once",
         "secure field, never into the chat",
         "No headings, bold labels or bullet walls",
-        "call the required tool before describing intended work",
-        "no reasoning and no tool log, only your messages",
+        "Do not send a pre-action promise or a canned 'On it' message",
+        "Send a progress update only after a tool call has actually started or a step has finished",
         "describe only progress supported by its result",
+        "no reasoning and no tool log, only your messages",
     ):
         assert phrase in CONVERSATIONAL_RESPONSE_STYLE, phrase
     # A general style: no persona, name or flirt register leaks in.

@@ -220,7 +220,15 @@ def _real_bash() -> str | None:
     found = shutil.which("bash")
     if found is None or "system32" in found.lower():  # WSL's launcher, not a POSIX bash
         return None
-    return found if shutil.which("git") else None
+    if shutil.which("git") is None:
+        return None
+    try:
+        probe = subprocess.run(
+            [found, "-c", "exit 0"], capture_output=True, timeout=5, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return found if probe.returncode == 0 else None
 
 
 @pytest.mark.skipif(_real_bash() is None, reason="needs bash and git")

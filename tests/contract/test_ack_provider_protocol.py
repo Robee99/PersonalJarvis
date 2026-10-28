@@ -71,7 +71,8 @@ def _config_for(provider_name: str) -> Any:
         )
     if provider_name == "local-openai":
         return LocalOpenAIAckProviderConfig(
-            model="local-model", endpoint="http://127.0.0.1:11434",
+            model="test-local-model",
+            endpoint="http://127.0.0.1:1234",
             max_output_tokens=_MAX_TOKENS_FIXTURE,
         )
     raise AssertionError(
@@ -153,7 +154,10 @@ class _FakeHTTPResponse:
     status_code: int = 200
     payload: dict[str, Any] = field(
         default_factory=lambda: {
-            "message": {"role": "assistant", "content": "Lass mich kurz nachschauen."}
+            "message": {"role": "assistant", "content": "Lass mich kurz nachschauen."},
+            "choices": [
+                {"message": {"role": "assistant", "content": "Lass mich kurz nachschauen."}}
+            ],
         }
     )
 
@@ -177,7 +181,11 @@ class _FakeAsyncHTTPClient:
         return None
 
     async def post(
-        self, url: str, *, json: dict[str, Any], **_kwargs: Any
+        self,
+        url: str,
+        *,
+        json: dict[str, Any],
+        headers: dict[str, str] | None = None,
     ) -> _FakeHTTPResponse:
         self.post_calls.append((url, json))
         return self.response
@@ -317,19 +325,24 @@ def _wire_adapter(
             ),
         )
     if provider_name == "local-openai":
+        from types import SimpleNamespace
+
         from jarvis.core import config as cfg_module
 
         fake = _install_httpx_fake(monkeypatch)
-        fake.response.payload = {"choices": [{"message": {"content": "Checking."}}]}
         monkeypatch.setattr(
-            cfg_module, "load_config",
-            lambda: SimpleNamespace(brain=SimpleNamespace(providers={})),
+            cfg_module,
+            "load_config",
+            lambda: SimpleNamespace(
+                brain=SimpleNamespace(providers={"local-openai": SimpleNamespace(model="")})
+            ),
         )
         monkeypatch.setattr(
-            cfg_module, "resolve_provider_endpoint",
-            lambda *_args, **_kwargs: SimpleNamespace(credential=None),
+            cfg_module,
+            "resolve_provider_endpoint",
+            lambda *_args, **_kwargs: SimpleNamespace(base_url=None, credential=None),
         )
-        _install_secret_fake(monkeypatch, None)
+        monkeypatch.setattr(cfg_module, "get_secret", lambda *_args, **_kwargs: None)
         adapter = cls(config)
         return _AdapterFixture(
             adapter=adapter,
@@ -375,7 +388,13 @@ def test_every_adapter_satisfies_abstract_protocol(
 def test_registry_contains_all_known_adapter_classes() -> None:
     """Adapter classes are also directly importable — sanity guard against
     accidental removal from the package ``__all__``."""
-    expected = {GeminiFlashAck, GrokFlashAck, OpenAIMiniAck, OllamaFlashAck, LocalOpenAIFlashAck}
+    expected = {
+        GeminiFlashAck,
+        GrokFlashAck,
+        OpenAIMiniAck,
+        OllamaFlashAck,
+        LocalOpenAIFlashAck,
+    }
     assert set(REGISTRY.values()) == expected
 
 

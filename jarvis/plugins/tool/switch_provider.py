@@ -108,6 +108,11 @@ class SwitchProviderTool:
             return self.risk_tier
         return "monitor"
 
+    def requires_explicit_confirmation_for_args(self, args: dict[str, Any]) -> bool:
+        """Provider changes need a human yes even if general prompts are bypassed."""
+        tier = str((args or {}).get("tier", "")).strip().lower()
+        return tier in _TIERS and tier != "brain"
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:  # noqa: ARG002
         if not isinstance(args, dict):
             return ToolResult(

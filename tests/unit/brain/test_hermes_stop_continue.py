@@ -7,7 +7,7 @@ Hermes's API server is played by ``tests/fakes/fake_hermes_api``.
   and says what it stopped, instead of "nothing was running";
 * "continue" starts a run that carries the stopped request, what was already
   said and the tools already run, and the checkpoint is used once;
-* "stop the music" is an order for Hermes, not a cancel;
+* a media stop is not confused with stopping a running Hermes turn;
 * the turn's state goes out on the bus: THINKING, ACTING, INTERRUPTED,
   CANCELLED, RESUMED, COMPLETED.
 """
@@ -252,13 +252,12 @@ async def test_a_spoken_stop_says_it_stopped_hermes_and_continue_finishes(
     assert "Current date" not in resumed.split("My request was:")[1]
 
 
-@pytest.mark.asyncio
-async def test_stop_the_music_is_an_order_for_hermes(hermes_manager: object) -> None:
-    server = FakeHermesApi(say("Paused Spotify."))
-    _manager_brain(hermes_manager, server)
-    reply = await hermes_manager.generate("stop the music", use_history=False)  # type: ignore[attr-defined]
-    assert reply == "Paused Spotify."
-    assert server.runs[0].body["input"].endswith("stop the music")
+def test_stop_the_music_is_not_a_hermes_cancel(hermes_manager: object) -> None:
+    # The PC media reflex may answer this request before the brain runs. Keep
+    # this contract at the cancellation boundary so it is independent of the
+    # host's current playback state and platform media APIs.
+    assert hermes_manager._cancel_is_an_order("stop the music")  # type: ignore[attr-defined]
+    assert not hermes_manager._cancel_is_an_order("stop")  # type: ignore[attr-defined]
 
 
 # --- a typed turn: written prompt, approval card, tool events ----------------

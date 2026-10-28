@@ -334,7 +334,7 @@ boundary and corner flight retain the indicator's existing Wayland limitation.
 
 ## Live computer control by the session's own model (2026-10-03, T3)
 
-Voice sessions operate the screen through `computer` (ADR-0039). The same
+Voice sessions operate the screen through `computer` (ADR-0043). The same
 code runs on every OS through the existing capture and input backends; only
 the readiness check differs. macOS requires Screen Recording to look and
 Accessibility plus Input Control to act, and Secure Input blocks typing.

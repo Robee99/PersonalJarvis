@@ -293,7 +293,7 @@ async def _run(request: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(metadata, str):
                     try:
                         metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError:  # Bad optional metadata contributes no source identifiers.
                         metadata = {}
                 if isinstance(metadata, dict):
                     source_ids.append(str(metadata.get("source_id", "")))

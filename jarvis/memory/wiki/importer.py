@@ -206,9 +206,12 @@ def iter_source_files(source: Path, vault_root: Path) -> Iterator[Path]:
 
 def destination_for(relative: Path, import_root: Path) -> Path:
     """The vault page for a source file at ``relative``, kept inside ``import_root``."""
+    # Treat archive/source paths as slash-separated input on every host.
+    # ``Path.parts`` on Windows interprets a colon in ``a:b`` as a drive and
+    # splits it from the name before our sanitizer can replace it.
     parts = [
         _UNSAFE_NAME.sub("_", part).strip(" .") or "_"
-        for part in relative.parts
+        for part in relative.as_posix().split("/")
         if part not in ("", ".", "..")
     ]
     if not parts:
@@ -485,9 +488,14 @@ def _write(
     indexer: _Indexer,
 ) -> None:
     try:
-        existing = (
-            target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
-        )
+        if target.is_file():
+            # Preserve line endings while comparing. read_text() normalizes
+            # CRLF to LF on Windows, so unchanged imported Markdown looked
+            # different on every pass and was needlessly rewritten/reindexed.
+            with target.open("r", encoding="utf-8", errors="replace", newline="") as fh:
+                existing = fh.read()
+        else:
+            existing = None
         if existing == content:
             progress.unchanged += 1
             return
@@ -557,7 +565,7 @@ def _import_zip(
 
     try:
         archive = zipfile.ZipFile(io.BytesIO(data) if data is not None else path)
-    except (OSError, zipfile.BadZipFile) as exc:
+    except (OSError, zipfile.BadZipFile) as exc:  # Report unreadable archives in the import result and continue.
         _fail(progress, relative, f"not a readable ZIP ({type(exc).__name__})")
         return
     with archive:

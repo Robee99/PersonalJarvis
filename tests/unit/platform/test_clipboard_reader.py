@@ -78,7 +78,16 @@ def test_stalled_reader_process_is_reaped(monkeypatch, tmp_path):
     assert reader.read_with_deadline() is None
     assert time.monotonic() - started < 5
     assert pid_file.exists(), "the helper must have started for this test to prove cleanup"
-    assert not psutil.pid_exists(int(pid_file.read_text()))
+    child_pid = int(pid_file.read_text())
+    if psutil.pid_exists(child_pid):
+        # Windows can recycle a PID before the assertion runs. Confirm that
+        # the original helper (whose command line contains this unique temp
+        # path) is gone, rather than rejecting an unrelated reused PID.
+        try:
+            command_line = " ".join(psutil.Process(child_pid).cmdline())
+        except psutil.NoSuchProcess:
+            command_line = ""
+        assert str(pid_file) not in command_line
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="windowed Windows pipe contract")

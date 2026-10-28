@@ -12,6 +12,7 @@ import { readableModel } from "@/components/providers/CurrentBrainLink";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/events";
+import { listLocalServers, useLocalServer, type LocalServer, type LocalServersResult } from "@/hooks/localServers";
 
 /**
  * The app's one place to choose who answers and with which model.
@@ -53,26 +54,6 @@ import { useEventStore } from "@/store/events";
  * `POST /api/brain/switch`.
  */
 
-export interface LocalServer {
-  url: string;
-  port: number;
-  kind: string;
-  state: "running" | "loading" | "off";
-  models: string[];
-  hermes_provider: string;
-  hermes_model: string;
-  /** The context window the server runs with; null/absent when unknown. */
-  context?: number | null;
-}
-
-interface LocalServersResult {
-  hermes_brain: boolean;
-  selection: string;
-  servers: LocalServer[];
-  /** The smallest context window Hermes accepts (older backends omit it). */
-  hermes_min_context?: number;
-}
-
 /** What Hermes Agent requires when the backend does not say. */
 const HERMES_MIN_CONTEXT = 64_000;
 
@@ -88,23 +69,6 @@ const COVERED = new Set(["hermes", "local-openai"]);
 function directReady(p: ProviderDescriptor): boolean {
   if (p.auth_mode === "codex" && p.tier === "brain") return Boolean(p.codex_brain_ready);
   return p.configured;
-}
-
-export async function listLocalServers(): Promise<LocalServersResult> {
-  const res = await fetch("/api/local-servers");
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as LocalServersResult;
-}
-
-async function connectLocalServer(url: string, model: string): Promise<{ selection: string; brain: string }> {
-  const res = await fetch("/api/local-servers/use", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, model }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.detail ?? `HTTP ${res.status}`);
-  return body;
 }
 
 /** The ids "Hermes decides" is stored as. */
@@ -206,7 +170,7 @@ export function BrainPicker({
   };
 
   const chooseServer = async (url: string, model: string) => {
-    await connectLocalServer(url, model);
+    await useLocalServer(url, model);
     if (!hermes) {
       await switchBrainProvider("local-openai");
       useEventStore.getState().setBrainProvider("local-openai");

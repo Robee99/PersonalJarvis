@@ -26,8 +26,6 @@ import {
 } from "lucide-react";
 import { CommunityTab } from "@/views/PluginsCommunity";
 import { PluginUploadDialog } from "@/views/PluginUploadDialog";
-import { ArmoryStat, HermesArmoryGroup } from "@/views/ArmoryHermes";
-import { ArmoryMcpCatalogue } from "@/views/ArmoryMcpCatalogue";
 import { AddConnectorDialog, AddPluginTabs, type AddPluginMode } from "@/views/AddConnectorDialog";
 import { removeAddedPlugin, takePluginFocus } from "@/lib/customConnector";
 import { fill, translate, useLocaleChunk } from "@/i18n";
@@ -1204,13 +1202,12 @@ export function PluginsView({
   if (armory) {
     return shell(
       <PluginArmory
-        plugins={visible} total={allPlugins.length} connected={connectedCount}
+        plugins={visible} connected={connectedCount}
         query={query} onQuery={setQuery}
         category={filter} categories={categoryOrder}
         onCategory={(value) => { setFilter(value as FilterId); setListFilter("all"); }}
         loading={isLoading} error={error instanceof Error ? error.message : null}
         onOpen={setSelectedId} onConnect={handleConnect}
-        onSection={setActiveSection}
       />,
     );
   }
@@ -1535,19 +1532,14 @@ const ARMORY_STATUS: Record<string, { label: string; className: string }> = {
 };
 
 function PluginArmory({
-  plugins, total, connected, query, onQuery, category, categories, onCategory,
-  loading, error, onOpen, onConnect, onSection,
+  plugins, connected, query, onQuery, category, categories, onCategory,
+  loading, error, onOpen, onConnect,
 }: {
-  plugins: Plugin[]; total: number; connected: number; query: string;
+  plugins: Plugin[]; connected: number; query: string;
   onQuery: (value: string) => void; category: string; categories: string[];
   onCategory: (value: string) => void; loading: boolean; error: string | null;
-  onOpen: (id: string) => void; onSection: (id: "mcps" | "skills") => void;
+  onOpen: (id: string) => void;
 } & Pick<ConnectHandlers, "onConnect">) {
-  const { data: skills } = useQuery({
-    queryKey: ["armory", "skills"],
-    queryFn: async () => (await fetch("/api/skills")).json() as Promise<{ skills?: unknown[] }>,
-    staleTime: 30_000,
-  });
   const sorted = useMemo(
     () => [...plugins].sort((a, b) => Number(b.status === "connected") - Number(a.status === "connected")),
     [plugins],
@@ -1566,40 +1558,14 @@ function PluginArmory({
     >
       <div className="mx-auto w-full max-w-6xl px-6 pb-16 pt-10">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-50">Tool armory</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-50">Apps</h1>
           <span className="font-mono text-xs uppercase tracking-[0.2em] text-emerald-300/80">
             {connected} connected
           </span>
         </div>
         <p className="mt-1 text-sm text-slate-400">
-          Everything the assistant can reach. Connect an app and it uses it mid-conversation.
+          Connect app accounts here. Manage skills and MCP servers together under Skills &amp; Tools.
         </p>
-
-        <section aria-label="Jarvis" className="mt-5">
-          <p className="mb-3 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">
-            Jarvis <span className="normal-case tracking-normal text-slate-600">Jarvis&apos;s own tools</span>
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <ArmoryStat
-              label="Apps"
-              value={`${connected} / ${total}`}
-              hint="connected"
-              onClick={() => {
-                const search = document.getElementById("armory-apps-search");
-                search?.scrollIntoView({ behavior: "smooth", block: "start" });
-                search?.focus({ preventScroll: true });
-              }}
-            />
-            <ArmoryStat
-              label="Skills"
-              value={String(skills?.skills?.length ?? 0)}
-              hint="ready to use"
-              onClick={() => onSection("skills")}
-            />
-          </div>
-        </section>
-        <ArmoryMcpCatalogue />
-        <HermesArmoryGroup />
 
         <label className="mt-6 flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-slate-400 focus-within:border-cyan-300/50">
           <Search className="h-4 w-4 shrink-0" aria-hidden />
@@ -1608,8 +1574,8 @@ function PluginArmory({
             value={query}
             onChange={(event) => onQuery(event.target.value)}
             id="armory-apps-search"
-            placeholder="Search tools (calendar, email, payments, design…)"
-            aria-label="Search tools"
+            placeholder="Search apps (calendar, email, payments, design…)"
+            aria-label="Search apps"
             className="min-w-0 flex-1 bg-transparent text-sm text-slate-100 outline-none placeholder:text-slate-500"
           />
         </label>
@@ -1626,7 +1592,7 @@ function PluginArmory({
             ))}
         </div>
 
-        <p className="mb-3 mt-8 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">Connect directly</p>
+        <p className="mb-3 mt-8 font-mono text-[11px] uppercase tracking-[0.3em] text-slate-500">Apps</p>
         {error && <div role="alert" className="rounded-xl bg-rose-500/10 p-4 text-sm text-rose-200">{error}</div>}
         {loading && <p role="status" className="text-sm text-slate-400">{translate("plugins_view.loading")}</p>}
         <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Apps">
@@ -1635,16 +1601,6 @@ function PluginArmory({
               <ArmoryCard plugin={plugin} onOpen={onOpen} onConnect={onConnect} />
             </li>
           ))}
-          <li>
-            <button
-              type="button"
-              onClick={() => onSection("mcps")}
-              className="flex h-full min-h-[84px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-amber-300/40 text-sm text-amber-200/90 hover:border-amber-300/80 hover:bg-amber-300/5"
-            >
-              <Plus className="h-4 w-4" aria-hidden /> Add your own tool
-              <span className="text-xs text-amber-200/50">(any MCP URL)</span>
-            </button>
-          </li>
         </ul>
         {!loading && plugins.length === 0 && (
           <p className="py-10 text-center text-sm text-slate-400">{translate("plugins_view.no_hits")}</p>

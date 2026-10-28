@@ -292,9 +292,9 @@ export function Sidebar({
   // The SETTINGS destination carries "you are here" for the hub as a whole;
   // the profile button is lit only for its own page.
   const profileActive = active === "profile";
-  // Rows read like the Claude app's column: regular weight, light ink at
-  // rest (muted grey made every entry look disabled), the icon in the same
-  // ink, a lift on hover. Section labels and tail rows stay muted.
+  // Navigation rows use regular weight and bright ink at rest, so entries
+  // remain easy to distinguish. Icons share that ink; hover adds a lift.
+  // Section labels and tail rows stay muted.
   const rowClass = "flex min-h-8 w-full items-center gap-3 rounded-lg px-3 text-base text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
   const renderRow = (raw: NavItem, compact = railed) => {
     const item = presentNavItem(raw, surface);

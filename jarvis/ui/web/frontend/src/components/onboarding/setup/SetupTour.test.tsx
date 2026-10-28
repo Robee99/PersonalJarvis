@@ -27,6 +27,7 @@ let providers = [openai];
 let wakeWord = { phrase: "", enabled: false, engine: "auto" };
 let cliStatus: Record<string, object> = {};
 let loginReplies: Record<string, { status: number; body: unknown }> = {};
+let localServerReply = { hermes_brain: true, selection: "hermes-agent", servers: [] as object[] };
 let calls: Array<{ url: string; method: string; body?: string }> = [];
 
 function stubFetch() {
@@ -40,6 +41,8 @@ function stubFetch() {
         Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(body) });
       if (url === "/api/permissions/status") return reply({ platform: "win32" });
       if (url === "/api/providers") return reply({ providers });
+      if (url === "/api/local-servers" && method === "GET") return reply(localServerReply);
+      if (url === "/api/local-servers/use" && method === "POST") return reply({ ok: true, brain: "local-openai" });
       if (url === "/api/setup/starter-plans") return reply({ plans: [], selected: null, custom_id: "custom" });
       if (url === "/api/settings/wake-word" && method === "PUT") {
         const sent = JSON.parse(String(init?.body)) as { phrase: string };
@@ -97,6 +100,7 @@ beforeEach(() => {
   wakeWord = { phrase: "", enabled: false, engine: "auto" };
   cliStatus = {};
   loginReplies = {};
+  localServerReply = { hermes_brain: true, selection: "hermes-agent", servers: [] };
   _resetProvidersCacheForTests();
   window.sessionStorage.clear();
   useEventStore.getState().setActiveSection("chats");
@@ -153,6 +157,34 @@ it("lists one row per provider, marks a signed-in one as ready and records a ski
   await waitFor(() => expect(screen.getByTestId("setup-sub-claude").dataset.state).toBe("ready"));
   expect(screen.getByTestId("setup-sub-claude").textContent).toContain("a@b.c");
   // Something is connected: Continue moves on without a skip.
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("onboarding-primary"));
+  });
+  await waitFor(() => expect(step()).toBe("voice"));
+  expect(onb.saveStep).toHaveBeenLastCalledWith("voice", []);
+});
+
+it("offers a local model in onboarding and selects Jarvis directly", async () => {
+  localServerReply = {
+    hermes_brain: true,
+    selection: "hermes-agent",
+    servers: [{
+      url: "http://127.0.0.1:11443", port: 11443, kind: "Jarvis local model", state: "running",
+      models: ["gemma-4b-qat"], hermes_provider: "", hermes_model: "",
+    }],
+  };
+  const onb = fakeOnb({ current_step: "connect" });
+  render(<SetupTour onb={onb} preview={false} onFinished={vi.fn()} />);
+
+  fireEvent.click(await screen.findByTestId("setup-local-model-11443-gemma-4b-qat"));
+  await waitFor(() => expect(calls.some((c) => c.url === "/api/brain/switch")).toBe(true));
+  const useCall = calls.find((c) => c.url === "/api/local-servers/use");
+  expect(JSON.parse(useCall!.body!)).toEqual({
+    url: "http://127.0.0.1:11443", model: "gemma-4b-qat", direct: true,
+  });
+  const switchCall = calls.find((c) => c.url === "/api/brain/switch");
+  expect(JSON.parse(switchCall!.body!)).toMatchObject({ provider: "local-openai", persist: true });
+
   await act(async () => {
     fireEvent.click(screen.getByTestId("onboarding-primary"));
   });

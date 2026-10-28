@@ -1650,3 +1650,25 @@ navigation fast path uses it for "open settings and go to the model page".
   fast path.
 - `src/lib/appUi.test.tsx` covers the snapshot, label matching, React-safe
   typing and both refusals.
+
+## Amendment 2026-10-26 — Local PC and memory tools
+
+Five registered tools join `ROUTER_TOOLS`. They are direct capabilities, not
+delegation tools; none is added to a worker tool set. This amendment records
+their exact scope because the factory already exposed them while the exact-set
+regression contract did not.
+
+| Tool | Scope | Risk and boundary |
+|---|---|---|
+| `find-files` | Search file and folder names on an explicitly selected root (default C:); it does not search file contents. | `safe`, read-only. |
+| `pc-pilot` | Open and operate the user's Windows apps and browser, with state returned between one-action calls. | `monitor` by default; policy raises destructive, send, purchase, install, shutdown, sign-out, and credential actions to `ask`. Never a worker capability. |
+| `ai-council` | Start a debate in the user's signed-in Chrome and optionally ask the Kept extension to sync supported chats. | `monitor`; topics are sent as messages through the user's ChatGPT/Gemini/Claude accounts. Never a worker capability. |
+| `kept-archive-search` | Search a separately configured Kept Markdown archive. | `safe`, read-only; disabled until an explicit archive path is configured. |
+| `cognee-source` | Index or forget one Markdown page, selected by a vault-relative path, in the optional local Cognee semantic index. | `monitor`; confined to the configured wiki vault and local adapter. Never a worker capability. |
+
+### Regression guards
+
+- `tests/unit/brain/test_routing.py::test_router_tools_is_pure_dispatcher_set`
+  pins all five names and rejects unreviewed router capabilities.
+- Tool-specific suites cover PC Pilot's per-step policy, AI Council's bounded
+  Chrome handoff, archive path isolation, and Cognee's vault-relative paths.

@@ -47,6 +47,11 @@ export function startableProviders(providers: ProviderDescriptor[]): ProviderDes
     });
 }
 
+/** A selected local brain needs no secret, even if its descriptor exposes an optional key slot. */
+export function hasActiveLocalBrain(providers: ProviderDescriptor[]): boolean {
+  return providers.some((p) => p.tier === "brain" && p.billing === "local" && p.active);
+}
+
 /** Every key the plan needs is saved (dedicated or covered by the family). */
 export function planKeysComplete(plan: StarterPlan, startable: ProviderDescriptor[]): boolean {
   return (

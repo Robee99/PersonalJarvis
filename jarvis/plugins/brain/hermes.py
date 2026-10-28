@@ -162,7 +162,7 @@ def read_live_runs(path: Path) -> dict[str, tuple[str, str]]:
     """The runs a Jarvis process left on disk (run id -> base URL, session)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError):  # Missing or corrupt runtime state means there are no resumable runs.
         return {}
     if not isinstance(data, dict):
         return {}
@@ -1080,7 +1080,7 @@ class HermesBrain:
                     break
                 try:
                     item = await asyncio.wait_for(run.queue.get(), left)
-                except TimeoutError:
+                except TimeoutError:  # Poll again until the run deadline; the queue may still receive output.
                     continue
                 if item is _END or isinstance(item, BaseException):
                     failed = not run.finished

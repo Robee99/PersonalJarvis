@@ -224,7 +224,7 @@ def chrome_profile_dir(name: str, local_state: Path | None = None) -> str:
         local_state = user_data / "Local State"
     try:
         cache = json.loads(local_state.read_text(encoding="utf-8"))["profile"]["info_cache"]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError):  # Missing or corrupt Chrome profile data has no known account.
         return ""
     if not isinstance(cache, dict):
         return ""

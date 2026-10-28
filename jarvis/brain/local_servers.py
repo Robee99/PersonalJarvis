@@ -35,13 +35,17 @@ import httpx
 log = logging.getLogger(__name__)
 
 #: Ports a local model server usually listens on, with what usually runs there.
-#: 11437/11438/11440/11441 are the owner's Qwen, Gemma, Qwen3-VL and UI-Venus
-#: fronts on scripts/windows/model_swap.py.
+#: 11437/11438/11440/11441/11442/11443 are the owner's Qwen, Gemma,
+#: Qwen3-VL, UI-Venus, Nemotron and Gemma 4 E4B fronts on
+#: scripts/windows/model_swap.py. 11443 is also the app's default local
+#: model-server port (jarvis/cli_ctl/local_mode.py).
 KNOWN_PORTS: tuple[tuple[int, str], ...] = (
     (11437, "llama.cpp"),
     (11438, "llama.cpp"),
     (11440, "llama.cpp"),
     (11441, "llama.cpp"),
+    (11442, "llama.cpp"),
+    (11443, "Jarvis local model"),
     (11435, "llama.cpp"),
     (8080, "llama.cpp"),
     (1234, "LM Studio"),

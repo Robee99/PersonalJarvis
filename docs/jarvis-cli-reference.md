@@ -235,7 +235,8 @@ _Generated from the curated command tree by `scripts/ci/gen_cli_reference.py` �
 
 - `jarvis system acceptance --hermes` — Run the ship checks on the running app and write a PASS/FAIL scorecard.
 - `jarvis system audio-devices --output --input` — List audio devices, or pick where the voice plays / which mic listens.
-- `jarvis system free-voice --hermes --check-model --link-memory` — Make Hermes Agent the brain for everything: voice, tools, missions; Hermes
+- `jarvis system free-voice --hermes --check-model --link-memory` — Make Hermes Agent the brain for everything (superseded by ``jarvis system
+- `jarvis system local --server --model` — Run Jarvis on a local model with its own brain and tools: no Hermes,
 - `jarvis system restart --force --yes --dry-run` — Refuse a CLI restart; use the desktop UI's explicit Restart action.
 - `jarvis system status` — Report server reachability + version (GET /api/control/auth/probe).
 

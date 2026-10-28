@@ -92,9 +92,8 @@ async def test_it_spawns_its_own_process(
     assert agent_pane.pty_id != shell_pane.pty_id
     assert shell_pane.status == "live"
     # ...and it is the shell that was started, not a coding CLI.
-    argv = " ".join(fake_pty.spawns[-1]["argv"])
-    assert "claude" not in argv
-    assert "codex" not in argv
+    executable = Path(fake_pty.spawns[-1]["argv"][0]).stem.casefold()
+    assert executable not in {"claude", "codex"}
 
 
 @pytest.mark.asyncio

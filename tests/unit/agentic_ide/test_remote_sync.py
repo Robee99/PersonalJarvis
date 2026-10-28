@@ -23,6 +23,18 @@ from jarvis.computers import remote_os
 
 
 def _posix_shell() -> str | None:
+    def can_run(shell: Path | str) -> bool:
+        try:
+            result = subprocess.run(
+                [str(shell), "-c", "exit 0"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0
+
     if sys.platform == "win32":
         git = shutil.which("git")
         if git is None:
@@ -32,15 +44,19 @@ def _posix_shell() -> str | None:
             *(root / "bin" / "bash.exe" for root in list(roots)[:3]),
             *(root / "usr" / "bin" / "bash.exe" for root in list(roots)[:3]),
         ):
-            if candidate.is_file():
+            if candidate.is_file() and can_run(candidate):
                 return str(candidate)
         return None
-    return shutil.which("bash") or shutil.which("sh")
+    return next(
+        (shell for shell in (shutil.which("bash"), shutil.which("sh")) if shell and can_run(shell)),
+        None,
+    )
 
 
 SHELL = _posix_shell()
 pytestmark = pytest.mark.skipif(
-    SHELL is None or shutil.which("git") is None, reason="needs git and a POSIX shell"
+    SHELL is None or shutil.which("git") is None,
+    reason="needs git and a runnable POSIX shell",
 )
 
 

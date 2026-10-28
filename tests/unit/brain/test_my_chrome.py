@@ -179,12 +179,59 @@ def test_a_click_on_a_buy_button_asks_first(monkeypatch):
 
 
 def test_a_stopped_service_is_started_once(monkeypatch):
-    fake = _FakeBsk(fail={"session": ["daemon is not running (connect failed)"]})
+    fake = _FakeBsk(fail={"session": [
+        "ensure daemon is running: automatic daemon startup is disabled (BSK_AUTO_START=0)",
+        "daemon is not running (connect failed)",
+    ]})
     started: list[str] = []
     monkeypatch.setattr(my_chrome, "start_daemon", started.append)
-    monkeypatch.setattr(my_chrome, "_DAEMON_SETTLE_S", 0)
+    monkeypatch.setattr(my_chrome, "_DAEMON_POLL_S", 0)
+    monkeypatch.setattr(my_chrome, "_DAEMON_START_TIMEOUT_S", 1)
     result = _run(_tool(monkeypatch, fake), action="read")
     assert result.success and started == ["bsk.exe"]
+
+
+def test_bsk_clients_disable_detached_automatic_daemon_start(monkeypatch):
+    seen = {}
+
+    class _Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def create_subprocess_exec(*args, **kwargs):
+        seen["args"] = args
+        seen["env"] = kwargs["env"]
+        return _Process()
+
+    monkeypatch.setattr(my_chrome.asyncio, "create_subprocess_exec", create_subprocess_exec)
+    assert asyncio.run(my_chrome.run_bsk("bsk.exe", "status")) == "ok"
+    assert seen["env"]["BSK_AUTO_START"] == "0"
+
+
+def test_a_detached_click_is_not_replayed_and_returns_a_fresh_page(monkeypatch):
+    fake = _FakeBsk(fail={
+        "click": [
+            "error: browser rejected the underlying CDP call\n"
+            "details: Detached while handling command."
+        ],
+    })
+    result = _run(_tool(monkeypatch, fake), action="click", ref="e3")
+    assert not result.success
+    assert "outcome is unknown" in result.error
+    assert "G-Eazy - I Mean It" in result.output
+    assert sum(call[0] == "click" for call in fake.calls) == 1
+
+
+def test_an_expired_click_session_is_resynced_without_replaying_the_click(monkeypatch):
+    fake = _FakeBsk(fail={"click": ["session s1 is not active"]})
+    result = _run(_tool(monkeypatch, fake), action="click", ref="e3")
+    assert not result.success
+    assert "outcome is unknown" in result.error
+    assert "G-Eazy - I Mean It" in result.output
+    assert sum(call[0] == "click" for call in fake.calls) == 1
+    assert fake.sessions == 2
 
 
 def test_a_denied_daemon_launch_is_reported_as_a_tool_failure(monkeypatch):

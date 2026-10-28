@@ -15,6 +15,7 @@ Nothing here switches the brain provider itself.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -26,6 +27,7 @@ from jarvis.brain.route_policy import hermes_is_main_brain
 router = APIRouter(prefix="/api/local-servers", tags=["local-servers"])
 
 LOCAL_CARD = "local-openai"
+log = logging.getLogger(__name__)
 
 
 def _card(cfg: Any, provider: str) -> Any:
@@ -63,6 +65,7 @@ async def list_local_servers(request: Request) -> dict[str, Any]:
 class UseBody(BaseModel):
     url: str = Field(..., max_length=300)
     model: str = Field(default="", max_length=300)
+    direct: bool = False
 
 
 @router.post("/use")
@@ -83,7 +86,7 @@ async def use_local_server(body: UseBody, request: Request) -> dict[str, Any]:
             detail=f"Nothing answers at {root}. Start the model server there, then try again.",
         )
 
-    if hermes_is_main_brain(cfg):
+    if hermes_is_main_brain(cfg) and not body.direct:
         if server.context is not None and server.context < local_servers.HERMES_MIN_CONTEXT:
             raise HTTPException(
                 status_code=409,
@@ -126,7 +129,18 @@ async def use_local_server(body: UseBody, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="The server lists no model yet.")
     from jarvis.core import config_writer
 
-    await asyncio.to_thread(config_writer.set_provider_base_url, LOCAL_CARD, root)
+    try:
+        await asyncio.to_thread(config_writer.set_provider_base_url, LOCAL_CARD, root)
+    except Exception as exc:  # noqa: BLE001 — persistence failure must reach the UI with context
+        log.exception("Could not save local model server URL for %s", root)
+        if isinstance(exc, PermissionError):
+            detail = (
+                "Windows denied Jarvis access to replace its configuration file. "
+                "Check that the active Jarvis config is writable and not locked, then retry."
+            )
+        else:
+            detail = f"Could not save the local model server URL ({type(exc).__name__}): {exc}"
+        raise HTTPException(status_code=500, detail=detail) from exc
     card = _card(cfg, LOCAL_CARD)
     if card is not None and hasattr(card, "base_url"):
         card.base_url = root

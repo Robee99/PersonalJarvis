@@ -68,7 +68,10 @@ async def test_a_promise_after_a_refusal_is_sent_back_to_the_tool_once() -> None
     executor = _Executor()
     loop = ToolUseLoop(brain, {"search_web": _Tool()}, executor)
 
-    out = await loop.run([BrainMessage(role="user", content="cheapest chicken")])
+    out = await loop.run(
+        [BrainMessage(role="user", content="cheapest chicken")],
+        reply_language="en",
+    )
 
     assert executor.calls == 2
     assert out.text == "BigBasket is cheapest at Rs 240 a kilo."
@@ -79,10 +82,13 @@ async def test_the_nudge_is_given_only_once_per_turn() -> None:
     executor = _Executor(refusals=5)
     loop = ToolUseLoop(brain, {"search_web": _Tool()}, executor)
 
-    out = await loop.run([BrainMessage(role="user", content="cheapest chicken")])
+    out = await loop.run(
+        [BrainMessage(role="user", content="cheapest chicken")],
+        reply_language="en",
+    )
 
     assert executor.calls == 2
-    assert "try again" in out.text
+    assert out.text == "That didn't work just now."
 
 
 class _FailingExecutor:
@@ -148,6 +154,85 @@ async def test_a_failed_call_reported_plainly_ends_the_turn() -> None:
 
     assert executor.calls == 1
     assert "could not check" in out.text
+
+
+class _PromisesAgainAfterFailedRetryBrain:
+    """Retries once, then still promises instead of making or reporting progress."""
+
+    def __init__(self) -> None:
+        self.requests: list[BrainRequest] = []
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        if len(self.requests) == 1:
+            yield BrainDelta(tool_call={
+                "id": "c1", "name": "search_web", "input": {"query": "x"}
+            })
+            yield BrainDelta(finish_reason="tool_use")
+            return
+        yield BrainDelta(content="I will try the next site.")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_second_promise_after_failed_tool_is_replaced_with_failure_report() -> None:
+    brain = _PromisesAgainAfterFailedRetryBrain()
+    executor = _FailingExecutor()
+    loop = ToolUseLoop(brain, {"search_web": _Tool()}, executor)
+
+    out = await loop.run(
+        [BrainMessage(role="user", content="find the cheapest chicken")],
+        reply_language="en",
+    )
+
+    assert executor.calls == 1
+    assert len(brain.requests) == 3  # one tool round, one nudge, one final response
+    assert out.text == "That didn't work just now."
+
+
+class _MissingRefExecutor:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def execute(self, tool: Any, args: dict[str, Any], **_: Any) -> ToolResult:
+        self.calls += 1
+        return ToolResult(
+            success=False,
+            output=None,
+            error="click and type need a ref from the page, e.g. e12",
+        )
+
+
+class _RepeatingBadBrowserBrain:
+    """Repeats a malformed BrowserSkill call with a fresh tool-call id."""
+
+    def __init__(self) -> None:
+        self.requests: list[BrainRequest] = []
+
+    async def complete(self, req: BrainRequest) -> AsyncIterator[BrainDelta]:
+        self.requests.append(req)
+        if req.tools:
+            yield BrainDelta(tool_call={
+                "id": f"c{len(self.requests)}",
+                "name": "my_chrome",
+                "input": {"action": "type"},
+            })
+            yield BrainDelta(finish_reason="tool_use")
+            return
+        yield BrainDelta(content="I could not continue: the browser control was unavailable.")
+        yield BrainDelta(finish_reason="stop")
+
+
+async def test_an_identical_failed_browser_call_is_suppressed_and_ends_cleanly() -> None:
+    brain = _RepeatingBadBrowserBrain()
+    executor = _MissingRefExecutor()
+    loop = ToolUseLoop(brain, {"my_chrome": _Tool()}, executor)
+
+    out = await loop.run([BrainMessage(role="user", content="type a search")])
+
+    assert executor.calls == 1
+    assert len(brain.requests) == 3
+    assert brain.requests[-1].tools == ()
+    assert "could not continue" in out.text
 
 
 class _VolumeTool:

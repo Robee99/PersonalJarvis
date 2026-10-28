@@ -265,6 +265,7 @@ _SHELL_FOLDERS = {
 }
 _BROWSER_EXES = frozenset({"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe",
                            "vivaldi.exe"})
+_SITE_WINDOW_TITLES = {"swiggy instamart": "instamart"}
 _SEARCH_PAGE_TITLE = re.compile(r"\b(?:duckduckgo|google search|bing|yahoo search)\b", re.I)
 #: Windows' own tools and apps people name, and what starts them.
 _SYSTEM_TOOLS: dict[str, str] = {
@@ -422,7 +423,7 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
-        except ValueError as exc:
+        except ValueError as exc:  # Return invalid step descriptions as a user-visible tool error.
             raise ValueError("steps must be valid JSON.") from exc
     steps: list[dict[str, Any]] = []
     if raw is not None:
@@ -459,6 +460,13 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
             "Use one UI action per call. Review the returned window and controls "
             "before sending the next action."
         )
+    for number, step in enumerate(steps, 1):
+        actions = [key for key in _ACTIONS if key != "app" and key in step]
+        if len(actions) > 1:
+            raise ValueError(
+                f"Step {number} contains multiple UI actions ({', '.join(actions)}). "
+                "Use exactly one UI action per call and inspect the returned state before continuing."
+            )
     return steps
 
 
@@ -682,11 +690,20 @@ class PcPilot:
             return "monitor"  # execute() reports malformed input without taking action
         return "ask" if any(policy.needs_yes(s) for s in steps) else "monitor"
 
+    def requires_explicit_confirmation_for_args(self, args: dict[str, Any]) -> bool:
+        """The pilot's destructive-action policy cannot be disabled by app defaults."""
+        policy = self._policy_now()
+        try:
+            steps = _steps(args or {})
+        except ValueError:
+            return False  # execute() returns the validation error without taking action
+        return any(policy.needs_yes(step) for step in steps)
+
     # -- run ------------------------------------------------------------------
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         try:
             steps = _steps(args or {})
-        except ValueError as exc:
+        except ValueError as exc:  # Return invalid step descriptions as a user-visible tool error.
             return ToolResult(False, None, f"Invalid steps: {exc}")
         if not steps:
             return ToolResult(False, None, "Give at least one step: open, click, type, keys ...")
@@ -694,12 +711,22 @@ class PcPilot:
                    "secret", "on", "to", "value"}
         for number, step in enumerate(steps, 1):
             unknown = set(step) - allowed
-            if unknown or not any(action in step for action in _ACTIONS):
+            actions = [
+                action for action in _ACTIONS
+                if action in step and action not in ("app",)
+            ]
+            if unknown or not actions:
                 return ToolResult(
                     False, None,
                     f"Invalid step {number}: "
                     + (f"unknown keys {', '.join(sorted(unknown))}. " if unknown else "no action. ")
                     + "Use open, click, type, keys or scroll; type contains the text itself.",
+                )
+            if len(actions) > 1:
+                return ToolResult(
+                    False, None,
+                    f"Invalid step {number}: use exactly one UI action per call "
+                    "and inspect its returned state before the next action.",
                 )
         desk = self._desk_now()
         if desk is None:
@@ -707,6 +734,7 @@ class PcPilot:
         policy = self._policy_now()
         run = _Run(want_picture=bool(args.get("see")))
         error = ""
+        trace_id = getattr(ctx, "trace_id", None)
         for number, step in enumerate(steps, 1):
             step_started = time.monotonic()
             failure_type = ""
@@ -714,7 +742,7 @@ class PcPilot:
             try:
                 run.want_picture = run.want_picture or bool(step.get("see"))
                 await self._step(desk, policy, run, step, ctx)
-            except StepFailed as exc:
+            except StepFailed as exc:  # The run result below reports the failed step and reason.
                 failure_type = type(exc).__name__
                 failure_reason = (
                     "[redacted secret action]" if step.get("secret") else str(exc)[:300]
@@ -739,6 +767,8 @@ class PcPilot:
                     "ok": not failure_type,
                     "elapsed_ms": max(0, int((time.monotonic() - step_started) * 1000)),
                 }
+                if trace_id is not None:
+                    audit_entry["trace_id"] = str(trace_id)
                 if failure_type:
                     audit_entry["failure_type"] = failure_type
                     audit_entry["failure_reason"] = failure_reason
@@ -790,9 +820,11 @@ class PcPilot:
 
     async def _do_open(self, desk: Desk, run: _Run, what: str, ctx: Any) -> None:
         kind, value = open_target(what)
+        before_windows = await asyncio.to_thread(desk.windows)
+        before = {w.handle for w in before_windows}
+        previous_targets = (run.window, self._last)
         self._target_unresolved = True
         self._last, self._last_at = None, 0.0
-        before = {w.handle for w in await asyncio.to_thread(desk.windows)}
         web_for = ""
         if kind == "app":
             opener = self._open_app_now()
@@ -807,20 +839,25 @@ class PcPilot:
                 web_for, kind, value = value, "url", web_lookup_url(value)
         # Resolve this after the app-name-to-URL fallback above: services such
         # as Instamart first look like app names, then become browser URLs.
-        existing_browser = (
-            run.window
-            if kind == "url"
-            and run.window is not None
-            and run.window.exe.casefold() in _BROWSER_EXES
-            and desk.is_window(run.window.handle)
-            else None
-        )
+        existing_browser = None
+        if kind == "url":
+            for target in previous_targets:
+                if target is None or target.exe.casefold() not in _BROWSER_EXES:
+                    continue
+                if not desk.is_window(target.handle):
+                    continue
+                existing_browser = next(
+                    (w for w in before_windows if w.handle == target.handle), None
+                )
+                if existing_browser is not None:
+                    break
         browser = ""
         if kind == "url" and existing_browser is not None:
             # Stay in the window the user asked for (especially when Chrome is
             # open but is not Windows' default browser). Ctrl+L avoids querying
             # Chromium's sometimes unstable accessibility tree just to find the
             # address bar.
+            run.window = existing_browser
             await asyncio.to_thread(self._front, desk, existing_browser)
             await asyncio.to_thread(desk.press, "ctrl+l")
             await asyncio.to_thread(desk.type_text, value)
@@ -968,7 +1005,10 @@ class PcPilot:
     def _target(self, desk: Desk, run: _Run, app: Any) -> Window | None:
         wins = desk.windows()
         if app:
-            found = _match_window(wins, str(app))
+            preferred = run.window.handle if run.window is not None else (
+                self._last.handle if self._last is not None else None
+            )
+            found = _match_window(wins, str(app), preferred_handle=preferred)
             if found is not None:
                 self._last = found
                 self._target_unresolved = False
@@ -1260,8 +1300,21 @@ def win_center(found: list[Control]) -> tuple[int, int]:
     return 960, 540
 
 
-def _match_window(wins: list[Window], name: str) -> Window | None:
-    want = _norm(name)
+def _match_window(
+    wins: list[Window], name: str, *, preferred_handle: int | None = None,
+) -> Window | None:
+    original_want = _norm(name)
+    site_title = _SITE_WINDOW_TITLES.get(original_want)
+    if site_title:
+        matches = [
+            win for win in wins
+            if win.exe.casefold() in _BROWSER_EXES and site_title in _norm(win.title)
+        ]
+        preferred = next((w for w in matches if w.handle == preferred_handle), None)
+        if preferred is not None:
+            return preferred
+        return matches[0] if len(matches) == 1 else None
+    want = original_want
     want = {"calc": "calculator", "file explorer": "explorer", "explorer": "explorer",
             "settings": "settings", "windows settings": "settings"}.get(want, want)
     stem = want.removesuffix(".exe")

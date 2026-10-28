@@ -175,6 +175,7 @@ def rig(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> _Rig:
 async def _ask(rig: _Rig, clock: _Clock, args: dict[str, Any] = SEND) -> str:
     body, is_error = await rig.call("gmail", dict(args))
     assert not is_error
+    assert isinstance(body, dict), f"expected a JSON consent response, got {body!r}"
     assert body["needs_confirmation"] is True
     assert body["executed"] is False
     clock.tick()
@@ -188,6 +189,7 @@ async def test_ask_tier_without_token_asks_and_does_not_run(rig: _Rig, clock: _C
     body, is_error = await rig.call("gmail", dict(SEND))
 
     assert not is_error
+    assert isinstance(body, dict), f"expected a JSON consent response, got {body!r}"
     assert body["needs_confirmation"] is True
     assert body["confirm_token"]
     assert "send an email to bob@example.org" in body["question"]

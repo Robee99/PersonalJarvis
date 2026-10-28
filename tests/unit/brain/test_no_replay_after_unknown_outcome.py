@@ -59,6 +59,7 @@ class _ReadClock:
 
     name = "read_clock"
     risk_tier = "safe"
+    read_only = True
     schema: dict[str, Any] = {}
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:

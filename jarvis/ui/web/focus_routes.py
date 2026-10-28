@@ -65,7 +65,7 @@ async def lock(request: Request) -> dict:
 
 
 @router.post("/goal")
-async def goal(body: GoalBody, request: Request) -> dict:
+def goal(body: GoalBody, request: Request) -> dict:
     session = _session(request)
     return {"text": session.set_goal(body.goal), **session.snapshot()}
 

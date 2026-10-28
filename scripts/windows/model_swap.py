@@ -140,6 +140,13 @@ def _load_settings() -> None:
     for profile, value in (saved.get("ctx") or {}).items():
         if value in CTX_CHOICES.get(profile, ()):
             CTX[profile] = int(value)
+        elif profile in CTX_CHOICES:
+            log.warning(
+                "ignoring unsupported context setting for %s: %r; using %s",
+                profile,
+                value,
+                CTX[profile],
+            )
 
 
 def _save_settings() -> None:
@@ -618,7 +625,7 @@ class Swapper:
     def start_gemma_4b(self) -> None:
         model = GEMMA_4B_DIR / "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
         mmproj = GEMMA_4B_DIR / "mmproj-F16.gguf"
-        missing = [str(path) for path in (RUNTIME, model) if not path.is_file()]
+        missing = [str(path) for path in (RUNTIME, model, mmproj) if not path.is_file()]
         if missing:
             raise FileNotFoundError("Gemma 4B startup files are missing: " + ", ".join(missing))
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -644,8 +651,11 @@ class Swapper:
             "yarn",
             "--rope-scale",
             "1.953125",
+            # A fixed all-layer request disables llama.cpp's automatic fit.
+            # On the 8 GB laptop GPU that produced "failed to fit params" and
+            # left the 131k-context server stuck before it became healthy.
             "-ngl",
-            "99",
+            "auto",
             "-ctk",
             "q8_0",
             "-ctv",

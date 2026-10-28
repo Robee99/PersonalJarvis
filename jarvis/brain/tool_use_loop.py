@@ -21,7 +21,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID, uuid4
 
-from jarvis.brain.action_honesty import action_not_started_phrase
+from jarvis.brain.action_honesty import (
+    action_not_started_phrase,
+    has_unbacked_action_claim,
+)
 from jarvis.brain.cu_gate import (
     CU_BLOCKED_MODEL_FEEDBACK,
     CU_VEHICLE_TOOL_NAMES,
@@ -252,6 +255,17 @@ _DUPLICATE_CALL_FINAL_DIRECTIVE = (
     "evidence. Do not call any more tools."
 )
 
+# BrowserSkill's live trace repeated the same invalid ``my_chrome`` call ten
+# times with fresh call ids. Call-id deduplication alone cannot stop that
+# model loop. Once an identical name+arguments call has failed, allow a retry
+# only if its arguments change; suppress a repeated failure and force an
+# honest final answer instead of burning a minute on the same error.
+_REPEATED_FAILED_CALL_FINAL_DIRECTIVE = (
+    "[repeated tool failure] The identical tool call has already failed. "
+    "Do not call it again. Answer from the evidence above and state clearly "
+    "what could not be completed."
+)
+
 
 def _cap_tool_result_json(serialized: str) -> str:
     """Truncate an over-long serialized tool result, leaving an honest marker so
@@ -303,6 +317,12 @@ def _tool_call_signature(call: dict[str, Any]) -> tuple[str, str]:
         str(call.get("name") or ""),
         json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str),
     )
+
+
+def _missing_browser_ref_error(error: str) -> bool:
+    """Whether the same browser call cannot work until it has a fresh ref."""
+    low = str(error or "").casefold()
+    return "need a ref from the page" in low or "requires a ref from the page" in low
 
 
 def _images_from_artifacts(artifacts: object) -> list[ImageBlock]:
@@ -569,6 +589,16 @@ _ANTI_SILENCE_PHRASES: dict[str, str] = {
     ),
     "en": "I can't do that right now — I'm missing the right tool for it.",
     "es": "Ahora mismo no puedo hacerlo — me falta la herramienta adecuada.",
+}
+
+# Keep this local rather than importing jarvis.voice.action_phrases: importing
+# a voice submodule runs jarvis.voice.__init__, which pulls the full voice and
+# self-modification graph into this low-level loop (and creates a cycle in
+# lightweight runtimes). These match the shared action_failed_generic phrase.
+_ACTION_FAILED_PHRASES: dict[str, str] = {
+    "de": "Das hat gerade nicht geklappt.",  # i18n-allow: localized failure reply
+    "en": "That didn't work just now.",
+    "es": "Eso no funcionó ahora mismo.",
 }
 
 # Meta-/debug feedback acknowledgement. Must NOT narrate background bookkeeping
@@ -1180,6 +1210,8 @@ class ToolUseLoop:
         loop_started = time.monotonic()
         deadline_forced = False
         seen_call_ids: set[str] = set()
+        failed_call_attempts: dict[tuple[str, str], int] = {}
+        failed_call_errors: dict[tuple[str, str], str] = {}
         tool_log: list[ToolRecord] = []
         #: The last call's schema refusal, while no later call has run.
         refused_call = ""
@@ -1410,6 +1442,27 @@ class ToolUseLoop:
                         reply_language,
                     )
                     break
+                if (
+                    retry_nudged
+                    and any(not record.ok for record in tool_log)
+                    and (
+                        promised
+                        or has_unbacked_action_claim(agg.text or "")
+                    )
+                ):
+                    # One retry was already granted after a real tool failure.
+                    # If the model closes with another promise/false completion
+                    # instead of a call or a report, do not let the turn sound
+                    # as if the task is continuing in the background.
+                    log.info(
+                        "tool_use_loop: post-failure action promise replaced"
+                    )
+                    final_agg.text = _localized_phrase(
+                        _ACTION_FAILED_PHRASES,
+                        user_utterance or _last_user_text(current_messages),
+                        reply_language,
+                    )
+                    break
                 outcome = await self._run_verify(
                     user_utterance or _last_user_text(current_messages),
                     final_agg.text,
@@ -1527,6 +1580,7 @@ class ToolUseLoop:
             # end the turn when nothing else in it produced a result.
             meta_debug_ack: str | None = None
             unknown_tool_requested = False
+            repeated_failed_call = False
             for tc in agg.tool_calls:
                 tool_name = tc.get("name", "")
                 tool_args = tc.get("input", {})
@@ -1553,11 +1607,35 @@ class ToolUseLoop:
                 tool, tool_name, tool_args = self._reroute_music_tool(
                     tool, tool_name, tool_args, user_utterance
                 )
+                call_signature = _tool_call_signature({
+                    "name": tool_name,
+                    "input": tool_args,
+                })
                 stt_blocked, stt_reason = (
                     _is_stt_hallucinated(tool_name, tool_args)
                     if tool is not None else (False, "")
                 )
+                prior_failures = failed_call_attempts.get(call_signature, 0)
+                prior_error = failed_call_errors.get(call_signature, "")
                 if (
+                    prior_failures >= 2
+                    or (prior_failures and _missing_browser_ref_error(prior_error))
+                ):
+                    repeated_failed_call = True
+                    log.warning(
+                        "tool_use_loop: suppressed repeated failed call %s (same arguments)",
+                        tool_name,
+                    )
+                    tool_result_payload = {
+                        "success": False,
+                        "output": None,
+                        "error": (
+                            "This exact tool call already failed earlier in this turn. "
+                            "It was not repeated. Inspect the earlier error and report "
+                            "what remains incomplete."
+                        ),
+                    }
+                elif (
                     tool is not None
                     and _is_instructional_question(user_utterance)
                     and _is_side_effect_tool(tool)
@@ -1953,6 +2031,13 @@ class ToolUseLoop:
                     name=tool_name,
                 ))
                 refusal = str(tool_result_payload.get("error") or "")
+                if not tool_result_payload.get("success"):
+                    failed_call_attempts[call_signature] = (
+                        failed_call_attempts.get(call_signature, 0) + 1
+                    )
+                    failed_call_errors[call_signature] = (
+                        refusal or str(tool_result_payload.get("output") or "")
+                    )[:400]
                 refused_call = refusal if refusal.startswith(INVALID_ARGUMENTS_PREFIX) else ""
                 failed_call = (
                     ""
@@ -2040,6 +2125,20 @@ class ToolUseLoop:
                 suppress_output = _anti_silence_phrase(
                     user_utterance, reply_language
                 )
+
+            # A model may retry a malformed action with a fresh call id
+            # indefinitely. The second identical failure is a hard stop: give
+            # it one tool-less synthesis round over the error evidence, never
+            # another chance to issue the same action again.
+            if repeated_failed_call and not deadline_forced:
+                log.warning(
+                    "tool_use_loop: repeated failed call; forcing an honest final answer"
+                )
+                deadline_forced = True
+                tools_payload = []
+                current_messages.append(BrainMessage(
+                    role="user", content=_REPEATED_FAILED_CALL_FINAL_DIRECTIVE,
+                ))
 
             # Budget check after execution: the results of this round are
             # already in the history — force ONE final tool-less answer round

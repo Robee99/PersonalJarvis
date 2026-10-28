@@ -373,24 +373,36 @@ async def _run(current: RuntimeJob, argv: list[str], env: dict[str, str] | None 
                 code = -1
                 current.message = "Stopped after 30 minutes."
         current.exit_code = code
-        current.state = "done" if code == 0 else "failed"
         if code != 0 and not current.message:
             current.message = _failure_message(target.label, current.kind, code, current.runtime)
     except OSError as exc:
-        current.state = "failed"
+        current.exit_code = None
         current.message = missing or f"Could not start the {current.kind}: {exc}"
         log.warning("agent runtimes: %s %s could not start: %s", current.runtime, current.kind, exc)
     finally:
         tree.close()
-        current.finished_ms = int(time.time() * 1000)
-        if current.state == "running":
-            # Cancelled (app shutdown): never leave a job that looks alive.
-            current.state = "failed"
-            current.message = current.message or f"The {current.kind} was interrupted."
     # What the installer registered on the persistent PATH is visible from now
     # on (never a Jarvis agent folder); ``--version`` spawns: off the loop.
-    await asyncio.to_thread(_refresh_path)
-    await asyncio.to_thread(target.detect, refresh=True)
+    try:
+        await asyncio.to_thread(_refresh_path)
+        await asyncio.to_thread(target.detect, refresh=True)
+    except Exception as exc:  # noqa: BLE001 - report that setup verification did not finish
+        current.message = current.message or f"Could not verify the {current.kind}: {exc}"
+        log.warning(
+            "agent runtimes: %s %s status refresh failed (%s)",
+            current.runtime,
+            current.kind,
+            type(exc).__name__,
+        )
+    finally:
+        if current.state == "running":
+            # A setup job is complete only after its post-install status probe.
+            # This prevents clients from seeing a false `done` while detection
+            # and PATH refresh are still in flight.
+            current.state = "done" if current.exit_code == 0 and not current.message else "failed"
+            if current.state == "failed" and not current.message:
+                current.message = f"The {current.kind} was interrupted."
+        current.finished_ms = int(time.time() * 1000)
 
 
 def _refresh_path() -> None:

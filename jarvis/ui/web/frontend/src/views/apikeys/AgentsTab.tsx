@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FlaskConical, Loader2, LogIn, LogOut } from "lucide-react";
-import { listLocalServers, type LocalServer } from "@/components/providers/BrainPicker";
+import { listLocalServers, type LocalServer } from "@/hooks/localServers";
 import { ProviderLogo } from "@/components/providers/ProviderLogo";
 import { ProviderTestControl } from "@/components/providers/ProviderTierSection";
 import { Button } from "@/components/ui/button";

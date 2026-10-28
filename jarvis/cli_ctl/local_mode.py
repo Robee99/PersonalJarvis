@@ -88,7 +88,7 @@ def probe_local(
         return False, f"{server} did not answer: {type(exc).__name__}: {exc}"
     try:
         text = str(reply["choices"][0]["message"]["content"] or "").strip()
-    except (KeyError, IndexError, TypeError):
+    except (KeyError, IndexError, TypeError):  # The caller gets the malformed completion in this error result.
         return False, f"{server} answered without a chat completion: {str(reply)[:120]}"
     if not text:
         return False, f"{server} answered with empty text"
@@ -116,9 +116,9 @@ def _move_chats(client: Any, model: str, denied: list[str]) -> tuple[str, str, s
             try:
                 _call(client, "PATCH", f"/api/agent-chat/sessions/{session['session_id']}", seat)
                 moved += 1
-            except ApiError:
+            except ApiError:  # Count one vanished session and continue moving the remaining chats.
                 failed += 1
-    except ApiError as exc:
+    except ApiError as exc:  # Return the service failure directly to the command caller.
         return ("chat", "failed", str(exc))
     detail = f"new chats and {moved} earlier chat(s) answer on {model}"
     if failed:

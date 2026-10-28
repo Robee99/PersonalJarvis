@@ -15,13 +15,14 @@
 import { Check, ChevronRight, Copy, Loader2, Lock } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
+import { LocalProviderPicker } from "@/components/onboarding/setup/LocalProviderPicker";
 import { providerFamily, ProviderLogo } from "@/components/providers/ProviderLogo";
 import { Button } from "@/components/ui/button";
 import { switchBrainProvider, useProviders, type ProviderDescriptor } from "@/hooks/useProviders";
 import { applyStarterPlan, getStarterPlans, selectStarterPlan, type StarterPlan } from "@/hooks/useStarterPlans";
 import { fill, useT } from "@/i18n";
 import { cn } from "@/lib/utils";
-import { planKeysComplete, primarySlot, slotConfigured, slotEffective, startableProviders } from "../brainPlans";
+import { hasActiveLocalBrain, planKeysComplete, primarySlot, slotConfigured, slotEffective, startableProviders } from "../brainPlans";
 
 /** How a subscription reads its CLI login, and when it counts as signed in. */
 export interface SubscriptionSpec {
@@ -438,7 +439,7 @@ export function useKeyActivation(providers: ProviderDescriptor[]): KeyActivation
   const withKey = providers.filter((p) => (p.secret_keys?.length ?? 0) > 0 && slotEffective(p));
   const startableNow = startableProviders(providers);
   const liveVoice = plans.some((p) => p.mode === "realtime" && planKeysComplete(p, startableNow));
-  const localBrain = providers.some((p) => p.tier === "brain" && p.active && (p.secret_keys?.length ?? 0) === 0);
+  const localBrain = hasActiveLocalBrain(providers);
   const hasKey = startableNow.some(slotEffective) || localBrain;
 
   useEffect(() => {
@@ -489,12 +490,13 @@ export function ConnectStep({ onConnectedChange }: { onConnectedChange: (any: bo
   const activation = useKeyActivation(providers);
   const startable = useMemo(() => startableProviders(providers), [providers]);
   const [ready, setReady] = useState<Record<string, boolean>>({});
+  const [localConnected, setLocalConnected] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const onReady = useCallback((id: string, ok: boolean) => {
     setReady((prev) => (prev[id] === ok ? prev : { ...prev, [id]: ok }));
   }, []);
   const onKeyChanged = useCallback(() => void refetch(), [refetch]);
-  const anything = Object.values(ready).some(Boolean) || activation.hasKey;
+  const anything = Object.values(ready).some(Boolean) || activation.hasKey || localConnected;
 
   useEffect(() => {
     onConnectedChange(anything);
@@ -504,9 +506,16 @@ export function ConnectStep({ onConnectedChange }: { onConnectedChange: (any: bo
   const keyFor = (family: string) => startable.find((p) => providerFamily(p.id) === family);
   const others = startable.filter((p) => !rowFamilies.has(providerFamily(p.id) ?? ""));
   const { connecting, connected, partial, liveVoice, hasKey } = activation;
+  const localProvider = providers.find((p) => p.id === "local-openai");
 
   return (
     <div className="space-y-1.5">
+      <LocalProviderPicker
+        active={Boolean(localProvider?.active)}
+        activeUrl={localProvider?.base_url}
+        onConnected={() => setLocalConnected(true)}
+        onChanged={onKeyChanged}
+      />
       {PROVIDER_ROWS.map((spec) => (
         <ProviderRow
           key={spec.id}

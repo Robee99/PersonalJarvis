@@ -370,8 +370,30 @@ def update(onto: str, mode: str, resolver_cmd: str, cwd: Path = REPO_ROOT) -> di
                 check=False,
             )
             if env_result.returncode != 0 and not conflicted_files(cwd):
-                # An emptied commit: its change already landed on main.
-                git("rebase", "--skip", check=False, cwd=cwd)
+                # A failed editor/commit must never be mistaken for an empty
+                # cherry-pick: skipping here used to discard the whole feature
+                # commit after Git failed to launch `core.editor=true`.
+                output = f"{env_result.stdout}\n{env_result.stderr}".casefold()
+                index_is_empty = (
+                    git("diff", "--cached", "--quiet", check=False, cwd=cwd).returncode
+                    == 0
+                )
+                empty_commit = index_is_empty and any(
+                    marker in output
+                    for marker in (
+                        "previous cherry-pick is now empty",
+                        "no changes - did you forget to use 'git add'",
+                        "nothing to commit",
+                    )
+                )
+                if empty_commit:
+                    git("rebase", "--skip", check=False, cwd=cwd)
+                else:
+                    git("rebase", "--abort", check=False, cwd=cwd)
+                    return {
+                        "status": "conflict",
+                        "unresolved": ["<rebase --continue>"],
+                    }
     if regen:
         outcome = regenerate_and_commit(regen, cwd)
         if outcome is None:
