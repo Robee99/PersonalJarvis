@@ -30,10 +30,10 @@ def _reachable_javascript() -> str:
     return "\n".join(javascript)
 
 
-def test_delivered_frontend_contains_the_plugin_window_and_all_local_logos():
+def test_delivered_frontend_contains_the_chat_tool_picker_and_all_local_logos():
     javascript = _reachable_javascript()
-    assert "plugin-catalog-dialog" in javascript, (
-        "The shipped bundle predates the plugin window. Build the current checkout."
+    assert "tool-picker-row" in javascript, (
+        "The shipped bundle does not contain the current chat tool picker. Build the current checkout."
     )
     missing = [
         path.name

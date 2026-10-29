@@ -116,7 +116,7 @@ class RecommendedModel:
 #: ``tests/integration/test_ollama_catalog_is_current.py``: a review older
 #: than twelve months fails the suite, because AGENTS.md §4 forbids shipping a
 #: year-old local default. Bump it in the same commit that refreshes the list.
-CURATED_REVIEWED_ON = datetime.date(2026, 8, 24)
+CURATED_REVIEWED_ON = datetime.date(2026, 10, 29)
 
 #: How old the review above may get before the guard fails.
 CURATED_MAX_AGE_DAYS = 365
@@ -182,8 +182,8 @@ RECOMMENDED_MODELS: tuple[RecommendedModel, ...] = (
     ),
     # ── vision fallback (Screen Context / Computer-Use below 3 GB) ──────────
     RecommendedModel(
-        id="qwen3-vl:2b",
-        label="Qwen 3 VL 2B",
+        id="qwen3-vl:2b-instruct",
+        label="Qwen 3 VL 2B Instruct",
         size_gb=1.9,
         purpose="Sees your screen on a machine too small for a multimodal chat model.",
         role="vision",

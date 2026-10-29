@@ -12,7 +12,7 @@
  */
 
 import { choiceTag } from "./composerChips";
-import { browseToolRows, type ToolChoice } from "./toolChoices";
+import { browseToolRows, type ToolBrowseScope, type ToolChoice } from "./toolChoices";
 
 export interface TypeaheadItem {
   /** What lands after the trigger character — `commit`, `github:issue`, `src/app.py`. */
@@ -109,8 +109,12 @@ export function filterItems(items: readonly TypeaheadItem[], query: string): Typ
  * and with its rules: connectors, not the skills behind them, and nothing
  * disconnected until someone types a name.
  */
-export function toolTypeaheadItems(rows: readonly ToolChoice[], query: string): TypeaheadItem[] {
-  return browseToolRows([...rows], query).map((row) => ({
+export function toolTypeaheadItems(
+  rows: readonly ToolChoice[],
+  query: string,
+  scope: ToolBrowseScope = "all",
+): TypeaheadItem[] {
+  return browseToolRows([...rows], query, scope).map((row) => ({
     value: choiceTag(row),
     label: row.label,
     hint: row.description,

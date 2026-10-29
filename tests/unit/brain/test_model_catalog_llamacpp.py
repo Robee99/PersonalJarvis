@@ -128,6 +128,41 @@ async def test_router_mode_declaration_is_kept_without_a_probe() -> None:
     assert client.calls == []
 
 
+async def test_router_mode_jinja_declares_thinking_switch_per_model() -> None:
+    """A multi-model router must expose the no-thinking capability for the
+    specific model preset that enables llama.cpp's Jinja template."""
+    client = _PropsClient(None)
+    payload = {
+        "data": [
+            {
+                "id": "local-qwen36",
+                "owned_by": "llamacpp",
+                "architecture": {"input_modalities": ["text"]},
+                "meta": {"n_ctx": 262144},
+                "status": {
+                    "args": ["--jinja"],
+                    "preset": "[local-qwen36]\\njinja = true\\nctx-size = 262144\\n",
+                },
+            },
+            {
+                "id": "plain-model",
+                "owned_by": "llamacpp",
+                "architecture": {"input_modalities": ["text"]},
+                "status": {"args": [], "preset": "[plain-model]\\njinja = false\\n"},
+            },
+        ]
+    }
+
+    models = await _enrich(client, payload)
+    by_id = {model.id: model for model in models}
+
+    assert by_id["local-qwen36"].input_modalities == ("text",)
+    assert by_id["local-qwen36"].context_length == 262144
+    assert "chat_template_kwargs" in (by_id["local-qwen36"].supported_parameters or ())
+    assert "chat_template_kwargs" not in (by_id["plain-model"].supported_parameters or ())
+    assert client.calls == []
+
+
 async def test_unreachable_props_stays_unknown() -> None:
     [model] = await _enrich(_PropsClient(None), _single())
 

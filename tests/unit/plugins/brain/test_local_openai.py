@@ -282,9 +282,9 @@ async def test_thinking_switch_is_learned_after_auto_pick(
     monkeypatch, tmp_path, fake_models
 ) -> None:
     _thinking_cache(monkeypatch, tmp_path, ["chat_template_kwargs"])
+    _with_base_url("http://localhost:8000", monkeypatch)
     fake_models.payload = {"data": [{"id": "qwen3.6-35b-a3b"}]}
     brain = LocalOpenAIBrain()
-    brain._server_root = "http://localhost:8000"
     assert brain.supports_thinking_switch is False
 
     await brain._resolve_model()

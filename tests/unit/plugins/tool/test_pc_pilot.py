@@ -14,6 +14,7 @@ a fake desk (no Windows needed):
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -234,6 +235,87 @@ async def test_enter_key_alias_is_folded_into_top_level_typing(tmp_path: Path) -
     assert ("press", "enter") in desk.log
 
 
+async def test_model_text_alias_types_into_named_field_instead_of_looking(tmp_path: Path) -> None:
+    search = Control("Search for groceries and more", "Edit", (0, 0, 200, 30))
+    desk = FakeDesk(
+        wins=[CHROME], panes={CHROME.handle: [[search]]}, front=CHROME.handle
+    )
+    pilot = _pilot(desk, tmp_path)
+
+    result = await pilot.execute(
+        {
+            "app": "Chrome",
+            "into": "Search for groceries and more",
+            "text": "ice cream",
+            "see": True,
+        },
+        Ctx(),
+    )
+
+    assert result.success, result.error
+    assert ("type", "ice cream") in desk.log
+
+
+async def test_visual_coordinates_map_from_screenshot_to_desktop_pixels(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CHROME], panes={CHROME.handle: [[]]}, front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+    # The screenshot was downscaled to 320x180 from a desktop surface whose
+    # physical coordinates begin at (100, 50) and span 640x360 pixels.
+    geometry = {
+        "image_width": 320,
+        "image_height": 180,
+        "left": 100,
+        "top": 50,
+        "width": 640,
+        "height": 360,
+    }
+    pilot._last_screen_geometry = geometry
+    pilot._last_screen_geometry_at = time.monotonic()
+
+    async def see_with_geometry(_ctx: Any) -> dict[str, Any]:
+        return {"mime": "image/png", "data": "AAAA", "_screen_geometry": geometry}
+
+    pilot._see_screen = see_with_geometry
+
+    result = await pilot.execute({"app": "Chrome", "click": "160,90"}, Ctx())
+
+    assert result.success, result.error
+    assert ("click", (420, 230, "left", 1)) in desk.log
+    assert "320x180" in result.output["description"]
+
+
+async def test_visual_coordinates_outside_screenshot_are_refused(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CHROME], panes={CHROME.handle: [[]]}, front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+    pilot._last_screen_geometry = {
+        "image_width": 320, "image_height": 180,
+        "left": 0, "top": 0, "width": 1280, "height": 720,
+    }
+    pilot._last_screen_geometry_at = time.monotonic()
+
+    result = await pilot.execute({"app": "Chrome", "click": "580,450"}, Ctx())
+
+    assert not result.success
+    assert "outside" in (result.error or "").lower()
+    assert not any(action == "click" for action, _ in desk.log)
+
+
+async def test_stale_screenshot_coordinates_are_refused(tmp_path: Path) -> None:
+    desk = FakeDesk(wins=[CHROME], panes={CHROME.handle: [[]]}, front=CHROME.handle)
+    pilot = _pilot(desk, tmp_path)
+    pilot._last_screen_geometry = {
+        "image_width": 320, "image_height": 180,
+        "left": 0, "top": 0, "width": 1280, "height": 720,
+    }
+    pilot._last_screen_geometry_at = time.monotonic() - 61
+
+    result = await pilot.execute({"app": "Chrome", "click": "160,90"}, Ctx())
+
+    assert not result.success
+    assert "stale" in (result.error or "").lower()
+    assert not any(action == "click" for action, _ in desk.log)
+
+
 async def test_a_drag_goes_from_one_control_to_another(tmp_path: Path) -> None:
     desk = FakeDesk(wins=[CALC], panes={CALC.handle: [[_button("Card", x=0), _button("Done", x=300),
                                                        _button("A"), _button("B")]]})
@@ -441,17 +523,21 @@ def test_swiggy_instamart_alias_matches_its_browser_title() -> None:
     ) == other
 
 
-async def test_multiple_ui_actions_in_one_step_are_rejected(tmp_path: Path) -> None:
-    desk = FakeDesk([CHROME], front=CHROME.handle)
+async def test_compound_step_sends_only_first_action_and_reads_screen(tmp_path: Path) -> None:
+    desk = FakeDesk(
+        [CALC], panes={CALC.handle: [_calc_controls()]}, front=CALC.handle
+    )
     pilot = _pilot(desk, tmp_path)
 
     result = await pilot.execute(
-        {"steps": [{"click": "Search", "wait": 1}]}, Ctx()
+        {"steps": [{"click": "Seven", "wait": 1}]}, Ctx()
     )
 
-    assert not result.success
-    assert "exactly one UI action" in result.error
-    assert desk.log == []
+    assert result.success, result.error
+    assert [value for kind, value in desk.log if kind == "invoke"] == ["Seven"]
+    assert not any(kind == "wait" for kind, _ in desk.log)
+    assert "Only the first of 2 requested actions was sent" in str(result.output)
+    assert "Controls (click them by name)" in str(result.output)
 
 
 async def test_multiple_steps_send_only_first_and_return_observation(tmp_path: Path) -> None:
@@ -493,17 +579,18 @@ async def test_malformed_steps_are_rejected_before_any_input(tmp_path, step):
     assert desk.log == []
 
 
-async def test_two_ui_actions_inside_one_step_are_rejected_before_input(tmp_path):
-    desk = FakeDesk([NOTEPAD], front=NOTEPAD.handle)
-    pilot = _pilot(desk, tmp_path)
+async def test_compound_open_and_click_only_opens_then_returns_observation(tmp_path):
+    desk = FakeDesk(wins=[])
+    pilot = _pilot(desk, tmp_path, opens=NOTEPAD)
 
     result = await pilot.execute(
         {"steps": [{"open": "notepad", "click": "File"}]}, Ctx()
     )
 
-    assert not result.success
-    assert "multiple ui actions" in result.error.lower()
-    assert desk.log == []
+    assert result.success, result.error
+    assert NOTEPAD in desk.wins
+    assert not any(kind == "invoke" for kind, _ in desk.log)
+    assert "Only the first of 2 requested actions was sent" in str(result.output)
 
 
 @pytest.mark.parametrize("new_window", [False, True])

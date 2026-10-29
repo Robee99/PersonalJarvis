@@ -40,10 +40,10 @@ pytestmark = pytest.mark.integration
 _REGISTRY = "https://registry.ollama.ai/v2/library"
 _ACCEPT = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
 
-#: Every tag the 2026-08-24 shortlist refresh names, listed here so a retired
+#: Every tag the 2026-10-29 shortlist refresh names, listed here so a retired
 #: one fails by NAME even if someone trims it from RECOMMENDED_MODELS without
 #: reading this file. Verified against the registry manifests on that date.
-_SHORTLIST_2026_08_24 = (
+_SHORTLIST_2026_10_29 = (
     "granite4.1:3b",
     "qwen3.5:4b",
     "lfm2.5",
@@ -52,7 +52,7 @@ _SHORTLIST_2026_08_24 = (
     "gemma4:26b-a4b-it-qat",
     "qwen3.8:27b",
     "nemotron-3.5-lightning",
-    "qwen3-vl:2b",
+    "qwen3-vl:2b-instruct",
     "ornith:9b",
     "qwen3.6:27b",
     "muse-glimmer:30b",
@@ -62,7 +62,7 @@ _SHORTLIST_2026_08_24 = (
 _RUNTIME_OLLAMA_MODELS = tuple(
     sorted(
         {
-            *_SHORTLIST_2026_08_24,
+            *_SHORTLIST_2026_10_29,
             AckBrainConfig().providers.ollama.model,
             next(f.default_model for f in POLISH_FAMILIES if f.id == "ollama"),
             *(tier.brain_model for tier in tiers.TIERS),
@@ -164,7 +164,7 @@ def test_the_shortlist_was_reviewed_within_twelve_months() -> None:
 
 def test_the_shortlist_names_every_registered_tag() -> None:
     """The registry list above and RECOMMENDED_MODELS must move together."""
-    assert {entry.id for entry in RECOMMENDED_MODELS} == set(_SHORTLIST_2026_08_24)
+    assert {entry.id for entry in RECOMMENDED_MODELS} == set(_SHORTLIST_2026_10_29)
 
 
 def test_every_role_still_offers_something() -> None:

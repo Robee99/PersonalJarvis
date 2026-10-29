@@ -27,6 +27,9 @@ _DELEGATION_TIMEOUT_S = 240.0
 REPORT_START_TIMEOUT_S = 20.0
 REPORT_FINISH_TIMEOUT_S = 90.0
 REPORT_REASONING_TIMEOUT_S = 240.0
+# Let adjacent corrections enter the accepted request queue before launching
+# another inference. Initial requests and application reports stay immediate.
+_FOLLOWUP_SETTLE_S = 0.075
 # Operating the screen takes one reasoning round per look (ADR-0039). Once the
 # model uses the computer tool, the request may run this many extra rounds and
 # up to ``[computer_use].mission_timeout_s``.
@@ -227,6 +230,7 @@ class SubscriptionLiveVoiceSession(LiveVoiceSession):
                     prompt,
                     revision=revision,
                     application_event=bool(event.get("application_event")),
+                    coalesce_followup=following_up,
                 ),
                 name="live-subscription-delegation",
             )
@@ -411,6 +415,9 @@ class SubscriptionLiveVoiceSession(LiveVoiceSession):
 
     async def _run_client_delegation(self, identifier: str, prompt: str, **kwargs: Any) -> None:
         try:
+            coalesce_followup = bool(kwargs.pop("coalesce_followup", False))
+            if coalesce_followup:
+                await asyncio.sleep(_FOLLOWUP_SETTLE_S)
             if kwargs.get("application_event"):
                 async with asyncio.timeout(REPORT_REASONING_TIMEOUT_S):
                     await self._delegate(identifier, prompt, **kwargs)

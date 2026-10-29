@@ -434,8 +434,14 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
             raise ValueError("Every item in steps must be an action object.")
         steps = [dict(s) for s in raw]
     else:
-        single = {k: args[k] for k in ("app", "into", "enter", "submit", "clear", "button", "double", "see",
-                                       "secret", "on", "to", "value") if k in args}
+        single = {
+            k: args[k]
+            for k in (
+                "app", "into", "enter", "submit", "clear", "button", "double", "see",
+                "secret", "on", "to", "value",
+            )
+            if k in args
+        }
         fold_enter_key = (
             args.get("type") is not None
             and isinstance(args.get("keys"), str)
@@ -447,8 +453,17 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
                        "scroll", "window", "wait", "look"):
             if action == "keys" and fold_enter_key:
                 continue
-            if args.get(action) not in (None, "", False):
-                action_value = args[action]
+            action_value = args.get(action)
+            if (
+                action == "type"
+                and action_value in (None, "", False)
+                and isinstance(args.get("text"), str)
+            ):
+                # Some local models describe a typing action as ``text``.
+                # Without this alias, an accompanying ``see=true`` silently
+                # turns the intended input into a successful screen-only read.
+                action_value = args["text"]
+            if action_value not in (None, "", False):
                 step_options = single
                 if (
                     action == "type"
@@ -461,6 +476,10 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
         if not steps and (args.get("app") or args.get("see")):
             steps.append({**single, "look": True})
     for step in steps:
+        if "text" in step:
+            if "type" in step:
+                raise ValueError("Use either type or text for a typing step, not both.")
+            step["type"] = step.pop("text")
         if (
             _norm(str(step.get("type", ""))) in {"type", "text"}
             and isinstance(step.get("value"), str)
@@ -502,10 +521,19 @@ def _steps(args: dict[str, Any]) -> list[dict[str, Any]]:
                 + "Use open, click, type, keys or scroll; type contains the text itself."
             )
         if len(actions) > 1:
-            raise ValueError(
-                f"Step {number} contains multiple UI actions ({', '.join(actions)}). "
-                "Use exactly one UI action per call and inspect the returned state before continuing."
-            )
+            first_action = actions[0]
+            action_options = {
+                "open": {"app"},
+                "click": {"button", "double"},
+                "set": {"value"},
+                "drag": {"to"},
+                "type": {"into", "enter", "clear", "secret", "value"},
+                "scroll": {"on"},
+            }
+            keep = {"app", "see", first_action, *action_options.get(first_action, set())}
+            for key in tuple(step):
+                if key not in keep:
+                    step.pop(key)
     # A small model may ignore maxItems=1 and send a whole plan. Run only its
     # first action so the desktop is inspected between actions.
     return steps[:_MAX_STEPS]
@@ -518,7 +546,31 @@ def _requested_step_count(args: dict[str, Any]) -> int:
             raw = json.loads(raw)
         except ValueError:
             return 0  # _steps() reports the actionable parse error.
-    return len(raw) if isinstance(raw, list) else 0
+
+    def action_count(step: Any) -> int:
+        if not isinstance(step, dict):
+            return 0
+        count = 0
+        for action in _ACTIONS:
+            if action == "app":
+                continue
+            value = step.get(action)
+            if action == "type" and value in (None, "", False):
+                value = step.get("text")
+            if (
+                action == "keys"
+                and step.get("type") not in (None, "", False)
+                and isinstance(value, str)
+                and _norm(value).replace(" ", "") in {"enter", "return"}
+            ):
+                continue
+            if value not in (None, "", False):
+                count += 1
+        return count or int(bool(step.get("app") or step.get("see")))
+
+    if isinstance(raw, list):
+        return sum(action_count(step) for step in raw)
+    return action_count(args)
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +680,7 @@ class PcPilot:
         "uniquely identified product control in separate calls. If repeated controls "
         "share a name, specify a unique target or use see=true with visible x,y coordinates. "
         "Adding to a cart is fine, paying is asked first. A name not on screen is scrolled to. "
-        "Step keys: open or navigate (app, page, folder or URL; navigate reuses the current browser "
+        "Step keys: open or navigate (app, page, folder or URL; navigate reuses the current "
         "window), app (which window to act in), "
         "click (a control's name, or 'x,y'), type (text; add into=field name, "
         "enter=true or submit=true to press Enter, secret=true for a password), "
@@ -657,11 +709,23 @@ class PcPilot:
                         "open": {"type": "string"},
                         "navigate": {
                             "type": "string",
-                            "description": "Open a URL in the current browser window; alias for open",
+                            "description": (
+                                "Open a URL in the current browser window; alias for open"
+                            ),
                         },
                         "app": {"type": "string"},
-                        "click": {"type": "string"},
+                        "click": {
+                            "type": "string",
+                            "description": (
+                                "Control name or x,y pixel coordinates "
+                                "in the most recent screenshot"
+                            ),
+                        },
                         "type": {"type": "string"},
+                        "text": {
+                            "type": "string",
+                            "description": "Alias for type when entering text into a field",
+                        },
                         "set": {"type": "string"},
                         "drag": {"type": "string"},
                         "to": {"type": "string"},
@@ -693,8 +757,17 @@ class PcPilot:
                 "description": "Open a URL in the current browser window; alias for open",
             },
             "app": {"type": "string", "description": "The window to act in, e.g. 'Calculator'"},
-            "click": {"type": "string"},
+            "click": {
+                "type": "string",
+                "description": (
+                    "Control name or x,y pixel coordinates in the most recent screenshot"
+                ),
+            },
             "type": {"type": "string"},
+            "text": {
+                "type": "string",
+                "description": "Alias for type when entering text into a field",
+            },
             "set": {"type": "string"},
             "drag": {"type": "string"},
             "to": {"type": "string"},
@@ -739,6 +812,8 @@ class PcPilot:
         self._last: Window | None = None
         self._last_at = 0.0
         self._target_unresolved = False
+        self._last_screen_geometry: dict[str, int] | None = None
+        self._last_screen_geometry_at = 0.0
 
     @property
     def has_recent_target(self) -> bool:
@@ -846,7 +921,8 @@ class PcPilot:
             "Actions sent: " + "; ".join(run.done) + "." if run.done else "",
             (
                 f"Only the first of {requested_step_count} requested actions was sent; "
-                "the remaining actions were not run. Inspect this screen before choosing the next action."
+                "the remaining actions were not run. "
+                "Inspect this screen before choosing the next action."
                 if requested_step_count > 1 else ""
             ),
             error,
@@ -857,7 +933,18 @@ class PcPilot:
         if run.want_picture or few:
             picture = await self._picture(ctx)
             if picture is not None:
+                geometry = _valid_screen_geometry(picture.get("_screen_geometry"))
+                # Coordinates from a visual retry are expressed in the image
+                # pixels. Keep the capture's transform so Win32 receives the
+                # corresponding physical virtual-desktop coordinate.
+                self._last_screen_geometry = geometry
+                self._last_screen_geometry_at = time.monotonic() if geometry else 0.0
+                if geometry is not None:
+                    text = "\n".join(filter(None, (text, _screen_geometry_note(geometry))))
                 output = {"description": text, "_image": picture}
+            else:
+                self._last_screen_geometry = None
+                self._last_screen_geometry_at = 0.0
         if error:
             return ToolResult(False, output, error)
         if run.window is not None:
@@ -1147,7 +1234,30 @@ class PcPilot:
         return control
 
     def _point(self, desk: Desk, run: _Run, target: str) -> tuple[int, int]:
-        return _coords(target) or self._find(desk, run, target).center()
+        point = _coords(target)
+        if point is None:
+            return self._find(desk, run, target).center()
+        geometry = self._last_screen_geometry
+        if geometry is None:
+            return point
+        if time.monotonic() - self._last_screen_geometry_at > 60.0:
+            raise StepFailed(
+                "The screenshot coordinates are stale. Read the current screen "
+                "with see=true, then click using that fresh image."
+            )
+        x, y = point
+        image_width = geometry["image_width"]
+        image_height = geometry["image_height"]
+        if not (0 <= x < image_width and 0 <= y < image_height):
+            raise StepFailed(
+                f"Visual coordinates {x},{y} are outside the most recent screenshot "
+                f"bounds ({image_width}x{image_height}). Read the screen again."
+            )
+        desktop_x = geometry["left"] + round(x * geometry["width"] / image_width)
+        desktop_y = geometry["top"] + round(y * geometry["height"] / image_height)
+        desktop_x = min(geometry["left"] + geometry["width"] - 1, desktop_x)
+        desktop_y = min(geometry["top"] + geometry["height"] - 1, desktop_y)
+        return desktop_x, desktop_y
 
     def _act(self, desk: Desk, policy: PilotPolicy, run: _Run, step: dict[str, Any]) -> None:
         win = run.window
@@ -1207,8 +1317,8 @@ class PcPilot:
             target = str(step["click"])
             button = str(step.get("button") or "left")
             count = 2 if step.get("double") else 1
-            point = _coords(target)
-            if point is not None:
+            if _coords(target) is not None:
+                point = self._point(desk, run, target)
                 desk.click(*point, button=button, count=count)
                 run.done.append(f"clicked at {point[0]},{point[1]}")
             else:
@@ -1288,7 +1398,9 @@ class PcPilot:
                 for c in self._look(desk, run)
             }
             if after == before:
-                raise StepFailed("Scroll input was sent, but visible movement could not be verified.")
+                raise StepFailed(
+                    "Scroll input was sent, but visible movement could not be verified."
+                )
             run.done.append(f"scrolled {'up' if notches > 0 else 'down'}")
         if "look" in step:
             run.done.append(f"read '{win.title}'")
@@ -1475,7 +1587,7 @@ def _data_dir() -> Path:
     return user_data_dir() / "data"
 
 
-async def _see_screen(ctx: Any) -> dict[str, str] | None:
+async def _see_screen(ctx: Any) -> dict[str, Any] | None:
     """One privacy-filtered screen frame, the same capture screen_snapshot uses."""
     import base64  # noqa: PLC0415
 
@@ -1490,7 +1602,44 @@ async def _see_screen(ctx: Any) -> dict[str, str] | None:
     if image is None:
         return None
     await record_turn_capture(image, bus=bus, trigger="tool")
-    return {"mime": image.mime, "data": base64.b64encode(image.image).decode("ascii")}
+    left, top, width, height = image.target.bbox
+    return {
+        "mime": image.mime,
+        "data": base64.b64encode(image.image).decode("ascii"),
+        "_screen_geometry": {
+            "image_width": image.size[0],
+            "image_height": image.size[1],
+            "left": left,
+            "top": top,
+            "width": width,
+            "height": height,
+        },
+    }
+
+
+def _valid_screen_geometry(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    keys = ("image_width", "image_height", "left", "top", "width", "height")
+    if any(not isinstance(value.get(key), int) for key in keys):
+        return None
+    geometry = {key: value[key] for key in keys}
+    if min(
+        geometry["image_width"], geometry["image_height"],
+        geometry["width"], geometry["height"],
+    ) <= 0:
+        return None
+    return geometry
+
+
+def _screen_geometry_note(geometry: dict[str, int]) -> str:
+    return (
+        "Screenshot coordinate space: "
+        f"{geometry['image_width']}x{geometry['image_height']} image pixels, "
+        "origin at the top-left; coordinates are mapped to Windows desktop "
+        f"bounds x={geometry['left']}, y={geometry['top']}, "
+        f"width={geometry['width']}, height={geometry['height']}."
+    )
 
 
 __all__ = ["PILOT", "PcPilot", "PilotPolicy", "best_control", "open_target", "settings_uri",

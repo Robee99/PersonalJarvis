@@ -2224,6 +2224,53 @@ class ModelCatalog:
         return [m for m in probed if m is not None]
 
     @staticmethod
+    def _enrich_llamacpp_router_entry(entry: dict, model: ModelInfo) -> ModelInfo:
+        """Keep per-model metadata exposed by llama.cpp router mode.
+
+        Router-mode ``/v1/models`` entries carry their own architecture,
+        context and preset. ``/props`` describes only the currently loaded
+        model, so it must not be attributed to every row in a multi-model
+        catalog. A preset that enables Jinja can safely advertise
+        ``chat_template_kwargs`` to the request builder.
+        """
+        if entry.get("owned_by") != "llamacpp":
+            return model
+        architecture = entry.get("architecture")
+        architecture = architecture if isinstance(architecture, dict) else {}
+        input_modalities = architecture.get("input_modalities")
+        output_modalities = architecture.get("output_modalities")
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        n_ctx = meta.get("n_ctx")
+
+        status = entry.get("status") if isinstance(entry.get("status"), dict) else {}
+        args = status.get("args") if isinstance(status.get("args"), list) else []
+        preset = status.get("preset") if isinstance(status.get("preset"), str) else ""
+        jinja_enabled = "--jinja" in args or bool(
+            re.search(r"(?im)^\s*jinja\s*=\s*(?:true|yes|1)\s*(?:#.*)?$", preset)
+        )
+        params = list(model.supported_parameters or ())
+        if jinja_enabled and "chat_template_kwargs" not in params:
+            params.append("chat_template_kwargs")
+
+        return replace(
+            model,
+            input_modalities=(
+                tuple(str(value) for value in input_modalities)
+                if isinstance(input_modalities, list)
+                else model.input_modalities
+            ),
+            output_modalities=(
+                tuple(str(value) for value in output_modalities)
+                if isinstance(output_modalities, list)
+                else model.output_modalities
+            ),
+            context_length=(
+                n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else model.context_length
+            ),
+            supported_parameters=tuple(params) if params else model.supported_parameters,
+        )
+
+    @staticmethod
     async def _enrich_llamacpp_capabilities(
         client: httpx.AsyncClient,
         models_url: str,
@@ -2248,11 +2295,23 @@ class ModelCatalog:
         keeps the entry unknown, exactly as before.
         """
         entries = payload.get("data") if isinstance(payload, dict) else None
-        if not isinstance(entries, list) or len(entries) != 1 or len(models) != 1:
+        if not isinstance(entries, list) or len(entries) != len(models):
             return models
+        if len(entries) > 1:
+            # Router metadata is per-model; /props would describe only the
+            # loaded model and would give the other catalog rows false claims.
+            return [
+                ModelCatalog._enrich_llamacpp_router_entry(
+                    entry if isinstance(entry, dict) else {}, model
+                )
+                for entry, model in zip(entries, models, strict=True)
+            ]
         entry = entries[0] if isinstance(entries[0], dict) else {}
-        if entry.get("owned_by") != "llamacpp" or models[0].input_modalities is not None:
+        if entry.get("owned_by") != "llamacpp":
             return models
+        model = ModelCatalog._enrich_llamacpp_router_entry(entry, models[0])
+        if model.input_modalities is not None:
+            return [model]
         root = models_url[: -len("/v1/models")] if models_url.endswith("/v1/models") else models_url
         try:
             resp = await client.get(f"{root}/props", headers=headers, params={})
@@ -2260,10 +2319,10 @@ class ModelCatalog:
             props = resp.json()
         except Exception as exc:  # noqa: BLE001 — unknown stays unknown (fail-open)
             log.debug("llama.cpp: /props probe failed at %s: %s", root, exc)
-            return models
+            return [model]
         mods = props.get("modalities") if isinstance(props, dict) else None
         if not isinstance(mods, dict):
-            return models
+            return [model]
         declared = ["text"]
         if mods.get("vision") is True:
             declared.append("image")
@@ -2285,10 +2344,10 @@ class ModelCatalog:
             n_ctx = settings.get("n_ctx") if isinstance(settings, dict) else None
         return [
             replace(
-                models[0],
+                model,
                 input_modalities=tuple(declared),
                 context_length=n_ctx if isinstance(n_ctx, int) and n_ctx > 0 else None,
-                supported_parameters=models[0].supported_parameters or tuple(params),
+                supported_parameters=model.supported_parameters or tuple(params),
             )
         ]
 

@@ -174,6 +174,11 @@ class _FakeVisionProvider:
 
 def _build_router_config() -> JarvisConfig:
     cfg = JarvisConfig()
+    # These router tests exercise the fake full-screen vision provider below,
+    # not AI Pointer.  Leaving pointer enabled lets deictic test utterances
+    # query the real Windows UIA element under the mouse, which can crash the
+    # native accessibility layer instead of producing a unit-test result.
+    cfg.pointer.enabled = False
     cfg.brain.providers["fake"] = BrainProviderConfig(
         model="fake-model", deep_model="fake-model"
     )

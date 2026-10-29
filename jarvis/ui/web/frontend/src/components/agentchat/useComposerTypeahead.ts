@@ -62,7 +62,9 @@ async function jarvisMentions(seat: Seat, query: string, signal: AbortSignal): P
   if (agents.status === "rejected" && tools.status === "rejected") throw agents.reason;
   return [
     ...(agents.status === "fulfilled" ? agents.value.items : []),
-    ...(tools.status === "fulfilled" ? toolTypeaheadItems(tools.value.items, query) : []),
+    ...(tools.status === "fulfilled"
+      ? toolTypeaheadItems(tools.value.items, query, "computer")
+      : []),
   ];
 }
 

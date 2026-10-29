@@ -225,8 +225,22 @@ describe("composer typeahead", () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/typeahead"))).toBe(false);
   });
 
-  it("names agents and connected plugins after @ in the Jarvis chat, and a picked plugin becomes its chip", async () => {
+  it("names agents and PC controls after @ in the Jarvis chat, and hides unrelated connectors", async () => {
     const tools = [
+      { id: "tool:pc_pilot", label: "PC Pilot", description: "Operate the desktop", category: "system", group: "system",
+        brand: "", available: true, tool_names: ["pc_pilot"], skill: "" },
+      { id: "mcp:filesystem", label: "Filesystem", description: "Read local files", category: "mcp", group: "filesystem",
+        brand: "", available: true, tool_names: ["filesystem/read_file"], skill: "" },
+      { id: "mcp:windows", label: "Windows MCP", description: "Control Windows", category: "mcp", group: "windows",
+        brand: "", available: true, tool_names: ["windows/list_windows"], skill: "" },
+      { id: "mcp:browser-harness", label: "Browser harness", description: "Control Chrome", category: "mcp", group: "browser-harness",
+        brand: "", available: true, tool_names: ["browser-harness/browser_navigate"], skill: "" },
+      { id: "mcp:gev", label: "God's Eye View", description: "Navigate the globe", category: "mcp", group: "gev",
+        brand: "", available: true, tool_names: ["gev/show_in_gods_eye_view"], skill: "" },
+      { id: "tool:world_globe", label: "World globe", description: "Control the God's Eye globe", category: "system", group: "system",
+        brand: "", available: true, tool_names: ["world_globe"], skill: "" },
+      { id: "skill:tencent-browser-skill", label: "Tencent BrowserSkill", description: "Browser assistance", category: "skills", group: "skills",
+        brand: "", available: true, tool_names: ["run-skill"], skill: "tencent-browser-skill" },
       { id: "plugin:gmail", label: "Gmail", description: "Read and send mail", category: "plugins", group: "plugins",
         brand: "gmail", available: true, tool_names: [], skill: "" },
       { id: "plugin:notion", label: "Notion", description: "Pages", category: "plugins", group: "plugins",
@@ -236,7 +250,7 @@ describe("composer typeahead", () => {
       const u = String(url);
       if (u.includes("/api/agent-chat/typeahead")) {
         return { ok: true, status: 200, json: async () => ({ trigger: "@", truncated: false,
-          items: [{ value: "Mailbox", label: "Mailbox", hint: "Gmail agent", kind: "agent", group: "teammates" }] }) } as Response;
+          items: [{ value: "Mailbox", label: "Mailbox", hint: "Mail assistant", kind: "agent", group: "teammates" }] }) } as Response;
       }
       if (u.includes("/api/agent-chat/tools")) {
         return { ok: true, status: 200, json: async () => ({ items: tools, mode: "browse", total: tools.length }) } as Response;
@@ -253,19 +267,27 @@ describe("composer typeahead", () => {
     );
     type("ask @");
 
-    await waitFor(() => expect(screen.getAllByTestId("composer-typeahead-item")).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByTestId("composer-typeahead-item")).toHaveLength(8));
     const rows = screen.getAllByTestId("composer-typeahead-item").map((r) => r.textContent);
-    // The agent first, then the connected plugin; the disconnected one waits for a search.
+    // The agent comes first, followed by the retained desktop controls.
     expect(rows[0]).toContain("@Mailbox");
     // An agent wears its face, not a generic robot glyph.
     expect(screen.getAllByTestId("composer-typeahead-item")[0].querySelector("svg.lucide-bot")).toBeNull();
-    expect(rows[1]).toContain("Gmail");
+    expect(rows[1]).toContain("PC Pilot");
+    expect(rows.some((row) => row?.includes("Filesystem"))).toBe(true);
+    expect(rows.some((row) => row?.includes("Windows MCP"))).toBe(true);
+    expect(rows.some((row) => row?.includes("Browser harness"))).toBe(true);
+    expect(rows.some((row) => row?.includes("God's Eye View"))).toBe(true);
+    expect(rows.some((row) => row?.includes("World globe"))).toBe(true);
+    expect(rows.some((row) => row?.includes("Tencent BrowserSkill"))).toBe(true);
+    expect(rows.some((row) => row?.includes("Gmail"))).toBe(false);
+    expect(rows.some((row) => row?.includes("Notion"))).toBe(false);
     expect(screen.getByTestId("composer-typeahead").textContent).toContain("Agents");
     const asked = fetchMock.mock.calls.map((c) => String(c[0]));
     expect(asked.some((u) => u.includes("/api/agent-chat/typeahead") && u.includes("surface=jarvis"))).toBe(true);
 
     fireEvent.click(screen.getAllByTestId("composer-typeahead-item")[1]);
-    await waitFor(() => expect(box().querySelector('[data-tool-chip][data-tool-id="plugin:gmail"]')).toBeTruthy());
+    await waitFor(() => expect(box().querySelector('[data-tool-chip][data-tool-id="tool:pc_pilot"]')).toBeTruthy());
   });
 });
 
