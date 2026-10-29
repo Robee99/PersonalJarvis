@@ -132,7 +132,7 @@ def test_smoke_skips_cleanly_without_an_engine(monkeypatch) -> None:
     reason="RapidOCR (the [ocr] extra) or Pillow is not installed",
 )
 def test_smoke_reads_a_generated_image_with_rapidocr() -> None:
-    result = smoke.run_adapter_smoke()
+    result = smoke.run_adapter_smoke(force_rapidocr=True)
     assert result.status == "pass", result.detail
 
 

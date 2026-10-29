@@ -46,22 +46,38 @@ def _render(text: str):
     return image
 
 
-def run_adapter_smoke() -> SmokeResult:
-    """Run the OCR adapter once over a rendered image."""
+def run_adapter_smoke(*, force_rapidocr: bool = False) -> SmokeResult:
+    """Run the OCR adapter once over a rendered image.
+
+    ``force_rapidocr`` skips Windows' built-in engine for the recognition call,
+    while still probing it first. That verifies the packaged RapidOCR fallback
+    and its DLL load order on the same Windows process.
+    """
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from jarvis.screen_context.models import DegradationCode  # noqa: PLC0415
-    from jarvis.screen_context.uitext import (  # noqa: PLC0415
-        ocr_engine_status,
-        ocr_supplement_with_regions,
-    )
+    from jarvis.screen_context import uitext  # noqa: PLC0415
 
-    ready, reason = ocr_engine_status()
+    if force_rapidocr:
+        import importlib.util  # noqa: PLC0415
+        from unittest.mock import patch  # noqa: PLC0415
+
+        if importlib.util.find_spec("rapidocr") is None:
+            return SmokeResult("skip", "RapidOCR is not installed")
+        with patch.object(uitext, "_windows_ocr_words", return_value=None):
+            return _run_adapter_smoke(uitext)
+    return _run_adapter_smoke(uitext)
+
+
+def _run_adapter_smoke(uitext) -> SmokeResult:
+    from jarvis.screen_context.models import DegradationCode  # noqa: PLC0415
+
+    ready, reason = uitext.ocr_engine_status()
+
     try:
         image = _render(SMOKE_TEXT)
     except ImportError as exc:
         return SmokeResult("skip", f"Pillow is not installed ({exc})")
-    result = ocr_supplement_with_regions(image)
+    result = uitext.ocr_supplement_with_regions(image)
     code = result.degradation.code if result.degradation is not None else None
     if not ready:
         if code is not DegradationCode.OCR_UNAVAILABLE:
@@ -126,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"PASS bundle: {args.bundle}")
         failed = bool(problems)
 
-    result = run_adapter_smoke()
+    result = run_adapter_smoke(force_rapidocr=True)
     print(f"{result.status.upper()} ocr: {result.detail}")
     failed = failed or result.status == "fail"
     return 1 if failed else 0

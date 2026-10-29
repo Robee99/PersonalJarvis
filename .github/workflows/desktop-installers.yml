@@ -116,11 +116,11 @@ jobs:
           # A release build never restores a cache another run could have written.
           package-manager-cache: false
 
-      - name: Install Personal Jarvis (desktop + dev)
+      - name: Install Personal Jarvis (desktop + dev + OCR)
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python scripts/pip_install.py -e ".[desktop,dev]"
+          python scripts/pip_install.py -e ".[desktop,dev,ocr]"
           # Echo cancellation for voice barge-in (jarvis/audio/echo_canceller.py):
           # livekit's WebRTC audio processing module, Apache-2.0. Installed here
           # rather than in [desktop] until uv.lock can be regenerated with it.

@@ -27,8 +27,9 @@ The candidates compared:
 2. RapidOCR's own line filter is turned off (`text_score=0`), so an uncertain
    line still reaches the redaction geometry.
 3. Only the bundled models are used, so nothing is downloaded at run time.
-4. The install stays optional and is probed like pytesseract.
-   `ocr_engine_status()` is the single availability check, used by the
+4. The install stays optional and is probed like pytesseract. Install it with
+   `personal-jarvis[ocr]`; the Windows installer and `[full]` profile include
+   it. `ocr_engine_status()` is the single availability check, used by the
    Settings route and the accuracy gate.
 
 ## Consequences

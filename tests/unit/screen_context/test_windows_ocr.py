@@ -85,7 +85,11 @@ def _fresh_engines(monkeypatch) -> None:
         ("_WINDOWS_OCR_FAILURE", None),
         ("_RAPIDOCR_ENGINE", None),
         ("_RAPIDOCR_FAILURE", None),
+        ("_RAPIDOCR_ORT_DLL_DIRECTORY", None),
+        ("_RAPIDOCR_ORT_DLL", None),
+        ("_RAPIDOCR_ORT_DLL_ATTEMPTED", False),
         ("_NO_ENGINE_LOGGED", False),
+        ("_prepare_rapidocr_onnx_dlls", lambda: None),
     ):
         monkeypatch.setattr(uitext, name, value)
     monkeypatch.setitem(sys.modules, "rapidocr", SimpleNamespace(RapidOCR=_RapidOcrStarted))
@@ -147,6 +151,28 @@ def test_no_ocr_language_falls_through_to_the_optional_engines(monkeypatch) -> N
 
     assert uitext.windows_ocr_ready() is False
     assert uitext.ocr_supplement_with_regions(object()).text == "Hello"
+
+
+def test_rapidocr_runtime_is_preloaded_before_windows_ocr_activation(monkeypatch) -> None:
+    order: list[str] = []
+
+    ocr = ModuleType("winrt.windows.media.ocr")
+    ocr.OcrEngine = SimpleNamespace(
+        try_create_from_user_profile_languages=lambda: (
+            order.append("windows-ocr") or _Engine(_LINES)
+        )
+    )
+    monkeypatch.setitem(sys.modules, "winrt.windows.media.ocr", ocr)
+    monkeypatch.setattr(uitext.sys, "platform", "win32")
+    monkeypatch.setattr(
+        uitext,
+        "_prepare_rapidocr_onnx_dlls",
+        lambda: order.append("rapidocr-onnx"),
+        raising=False,
+    )
+
+    assert uitext.windows_ocr_ready() is True
+    assert order == ["rapidocr-onnx", "windows-ocr"]
 
 
 def test_off_windows_the_built_in_engine_is_never_tried(monkeypatch) -> None:

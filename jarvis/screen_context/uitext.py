@@ -299,6 +299,46 @@ class _OcrWord:
 _WINDOWS_OCR_ENGINE: Any = None
 #: Why Windows' OCR cannot run in this process; set once, then skipped.
 _WINDOWS_OCR_FAILURE: str | None = None
+_RAPIDOCR_ORT_DLL_DIRECTORY: Any = None
+_RAPIDOCR_ORT_DLL: Any = None
+_RAPIDOCR_ORT_DLL_ATTEMPTED = False
+
+
+def _prepare_rapidocr_onnx_dlls() -> None:
+    """Load RapidOCR's ONNX DLL before Windows.Media.Ocr activates its runtime.
+
+    On Windows, the system OCR engine and the Python ONNX Runtime can ship
+    different ``onnxruntime.dll`` versions. Windows resolves an already-loaded
+    DLL by basename, so activating Windows OCR first can make RapidOCR's later
+    inference fail while importing its native extension. Pin the Python wheel's
+    DLL by absolute path before WinRT activation; keep both handles alive for
+    this process. This is a no-op when RapidOCR or its runtime is absent.
+    """
+    global _RAPIDOCR_ORT_DLL_DIRECTORY, _RAPIDOCR_ORT_DLL  # noqa: PLW0603
+    global _RAPIDOCR_ORT_DLL_ATTEMPTED  # noqa: PLW0603
+    if _RAPIDOCR_ORT_DLL_ATTEMPTED or sys.platform != "win32":
+        return
+    _RAPIDOCR_ORT_DLL_ATTEMPTED = True
+
+    import ctypes  # noqa: PLC0415 - Windows-only native loader
+    import importlib.util  # noqa: PLC0415 - keep OCR optional
+    import os  # noqa: PLC0415 - Windows-only DLL search path
+    from pathlib import Path  # noqa: PLC0415
+
+    try:
+        if importlib.util.find_spec("rapidocr") is None:
+            return
+        runtime_spec = importlib.util.find_spec("onnxruntime")
+        if runtime_spec is None or not runtime_spec.origin:
+            return
+        capi = Path(runtime_spec.origin).parent / "capi"
+        runtime_dll = capi / "onnxruntime.dll"
+        if not runtime_dll.is_file() or not hasattr(os, "add_dll_directory"):
+            return
+        _RAPIDOCR_ORT_DLL_DIRECTORY = os.add_dll_directory(str(capi))
+        _RAPIDOCR_ORT_DLL = ctypes.WinDLL(str(runtime_dll), winmode=0x1100)
+    except (ImportError, OSError, ValueError) as exc:
+        log.warning("screen_context: RapidOCR ONNX runtime preload failed (%s).", exc)
 
 
 def _windows_ocr_engine() -> Any:
@@ -308,6 +348,7 @@ def _windows_ocr_engine() -> Any:
         return _WINDOWS_OCR_ENGINE
     if _WINDOWS_OCR_FAILURE is not None or sys.platform != "win32":
         return None
+    _prepare_rapidocr_onnx_dlls()
     try:
         from winrt.windows.media.ocr import OcrEngine  # noqa: PLC0415 - Windows only
     except ImportError as exc:  # the WinRT OCR wheels are absent: try the next engine
